@@ -28,8 +28,25 @@ jobs:
       - name: Build
         run: ./gradlew build
 
-      # Roadmap phase 0 exit criterion: grow this into a TestKit matrix
-      # {Gradle 8.0, 8.14, 9.latest} x {config cache on/off}.
+  build-floor:
+    name: Build & test (Gradle 8.14 floor)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      # The support floor runs Gradle's embedded Kotlin 2.0 stdlib — the apiVersion
+      # pin (architecture §2 rule 10) is only proven by actually testing on it.
+      - name: Build on floor Gradle
+        run: gradle build
 
   server-image:
     name: Server OCI image

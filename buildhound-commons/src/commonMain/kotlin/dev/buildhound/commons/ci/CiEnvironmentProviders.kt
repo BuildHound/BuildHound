@@ -118,8 +118,10 @@ object CiEnvironment {
         env: Map<String, String>,
         extraProviders: List<CiEnvironmentProvider> = emptyList(),
     ): CiContext? {
-        for (provider in builtIns) provider.detect(env)?.let { return it }
-        for (provider in extraProviders) provider.detect(env)?.let { return it }
+        // A throwing provider (third-party SPI) must not abort detection for the rest.
+        for (provider in builtIns + extraProviders) {
+            runCatching { provider.detect(env) }.getOrNull()?.let { return it }
+        }
         return generic.detect(env)
     }
 }

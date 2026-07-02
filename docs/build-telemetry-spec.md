@@ -50,7 +50,7 @@ Repos/modules: `buildhound-commons` (kotlinx-serialization payload models, share
 
 ### 3.1 Application & compatibility
 
-Settings plugin: `plugins { id("dev.buildhound") version "x" }` in `settings.gradle.kts`. Compatibility contract: Gradle 8.0+ and 9.x, config cache on/off both green, `isolated-projects` best-effort (CI job tracks it, non-blocking). Java 11+ runtime for the plugin. No internal Gradle APIs in v1; the v1.x cache-origin feature gets an isolated `internal-adapters` module, feature-flagged per Gradle version, degrading to "unknown origin" gracefully.
+Settings plugin: `plugins { id("dev.buildhound") version "x" }` in `settings.gradle.kts`. Compatibility contract: Gradle 8.14+ and 9.x (floor from the JVM-21 owner decision and `BuildFeatures`; see architecture decision log), config cache on/off both green, `isolated-projects` best-effort (CI job tracks it, non-blocking). JDK 21+ runtime for the plugin (owner decision superseding the original Java 11+). No internal Gradle APIs in v1; the v1.x cache-origin feature gets an isolated `internal-adapters` module, feature-flagged per Gradle version, degrading to "unknown origin" gracefully.
 
 ### 3.2 Collection pipeline
 

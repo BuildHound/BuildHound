@@ -81,12 +81,14 @@ internal object PayloadAssembler {
     }
 
     /**
-     * Only §4-declared fields ride at the top level; PR correlation goes into the
-     * declared `attributes` map. `agentName` is dropped entirely (plan 005).
+     * Only §4-declared fields ride at the top level; PR correlation and provider
+     * extras go into the declared `attributes` map (our derived keys win on clash).
+     * `agentName` is dropped entirely (plan 005).
      */
     fun ciInfo(ci: CollectedCi?): CiInfo? {
         if (ci == null) return null
         val attributes = buildMap {
+            putAll(ci.attributes)
             ci.pipelineId?.let { put("pipelineId", it) }
             ci.stageId?.let { put("stageId", it) }
             ci.pullRequestId?.let { put("pullRequestId", it) }
@@ -97,8 +99,13 @@ internal object PayloadAssembler {
             runId = ci.runId,
             pipelineName = ci.pipelineName,
             jobId = ci.jobId,
-            buildUrl = ci.buildUrl,
+            // Central gate: the generic provider and SPI extras are not scheme-checked,
+            // and this URL will be rendered as a hyperlink downstream.
+            buildUrl = ci.buildUrl?.takeIf(::isHttpUrl),
             attributes = attributes,
         )
     }
+
+    private fun isHttpUrl(url: String): Boolean =
+        url.startsWith("https://", ignoreCase = true) || url.startsWith("http://", ignoreCase = true)
 }

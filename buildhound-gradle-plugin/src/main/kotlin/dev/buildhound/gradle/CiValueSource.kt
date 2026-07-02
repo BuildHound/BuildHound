@@ -25,6 +25,8 @@ data class CollectedCi(
     val pullRequestId: String? = null,
     val targetBranch: String? = null,
     val buildUrl: String? = null,
+    /** Provider-specific extras (spec §3.3) — third-party SPI values pass through. */
+    val attributes: Map<String, String> = emptyMap(),
 ) : Serializable
 
 /**
@@ -57,6 +59,7 @@ abstract class CiValueSource : ValueSource<CollectedCi, CiValueSource.Parameters
                     pullRequestId = context.pullRequestId,
                     targetBranch = context.targetBranch,
                     buildUrl = context.buildUrl,
+                    attributes = context.attributes,
                 )
             }
         }.onFailure {

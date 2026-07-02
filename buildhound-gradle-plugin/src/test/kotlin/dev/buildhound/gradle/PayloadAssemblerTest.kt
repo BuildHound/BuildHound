@@ -65,6 +65,22 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `provider attributes pass through but derived keys win`() {
+        val info = PayloadAssembler.ciInfo(
+            ci.copy(attributes = mapOf("queue" to "hosted", "pullRequestId" to "spoofed")),
+        )!!
+
+        assertEquals("hosted", info.attributes["queue"])
+        assertEquals("7", info.attributes["pullRequestId"])
+    }
+
+    @Test
+    fun `non http build urls are dropped centrally`() {
+        assertNull(PayloadAssembler.ciInfo(ci.copy(buildUrl = "javascript:alert(1)"))?.buildUrl)
+        assertEquals(ci.buildUrl, PayloadAssembler.ciInfo(ci)?.buildUrl)
+    }
+
+    @Test
     fun `agent name never reaches the payload`() {
         // CollectedCi has no agentName field by design (plan 005); pin the payload shape too.
         val json = dev.buildhound.commons.payload.BuildHoundJson.payload.encodeToString(

@@ -71,10 +71,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // Master switch (spec §3.4): nothing is probed, assembled, or logged when off —
             // the value-source providers are never queried, so no salt is created either.
             if (!parameters.enabled.getOrElse(true)) return@runCatching
+            val configuredMode = parameters.mode.getOrElse(TelemetryMode.AUTO)
+            // disabled behaves like enabled=false: nothing is probed (spec §3.4).
+            if (configuredMode == TelemetryMode.DISABLED) return@runCatching
 
             val ci = parameters.ci.orNull
-            val mode = PayloadAssembler.resolveMode(parameters.mode.getOrElse(TelemetryMode.AUTO), ci)
-                ?: return@runCatching // mode = disabled
+            val mode = PayloadAssembler.resolveMode(configuredMode, ci) ?: return@runCatching
 
             val tasks = parameters.collector.get().snapshot()
             val ccState = configurationCacheState(parameters.configurationCacheRequested.getOrElse(false), execution)
@@ -99,12 +101,26 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             logger.lifecycle(
                 "[buildhound] build {}: {} task(s) {}, mode={}, cc={}, hitRate={}",
                 payload.outcome, tasks.size, byOutcome, mode, ccState,
-                payload.derived?.cacheableHitRate?.let { "%.2f".format(it) },
+                payload.derived?.cacheableHitRate?.let { "%.2f".format(java.util.Locale.ROOT, it) } ?: "n/a",
             )
             logger.lifecycle("[buildhound] payload written: {} (buildId={})", payloadFile, payload.buildId)
             // TODO(phase 1): HTML artifact, gzip upload with spool/retry.
-        }.onFailure {
-            logger.warn("[buildhound] telemetry finalization failed (build unaffected): {}", it.message)
+        }.onFailure { failure ->
+            logger.warn("[buildhound] telemetry finalization failed (build unaffected): {}", failure.message)
+            parameters.writeFailureMarker(failure)
+        }
+    }
+
+    /**
+     * Spec §3.2: failures leave a marker so CI can surface "telemetry was lost" without
+     * the build ever failing. Sibling of the output dir so it works when the output dir
+     * itself is the problem; best effort, never throws.
+     */
+    private fun Parameters.writeFailureMarker(failure: Throwable) {
+        runCatching {
+            val marker = File(outputDir.get() + "-failure.marker")
+            marker.parentFile?.mkdirs()
+            marker.writeText("telemetry finalization failed: ${failure::class.java.name}\n")
         }
     }
 

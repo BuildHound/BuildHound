@@ -64,8 +64,16 @@ incl. `ServiceLoader`), §3.4 (mode), §4 (payload).
 
 - Schema stays untouched (assembly only) — golden files unaffected.
 - CC: `CollectedCi` Serializable via provider params only; env read inside ValueSource.
-- Privacy: payload content is exactly the §4-declared fields; agentName dropped;
-  no paths (task paths are project-relative task identifiers, declared in §4).
+- Privacy: payload fields are exactly the §4-declared ones; agentName dropped. BUT
+  `executionReasons` text comes verbatim from Gradle and routinely embeds absolute
+  paths (review finding) — acceptable while the payload is a local file only.
+
+## Hard blockers for the upload chunk (from review)
+
+1. The §3.7 scrubber must exist and cover `executionReasons` (and future failure
+   text) before any payload leaves the machine — or `executionReasons` is dropped
+   from uploaded payloads until it does.
+2. `localBuilds` opt-in (spec §3.4) gates local-build uploads.
 
 ## Exit criteria
 

@@ -219,6 +219,27 @@ class BuildHoundSettingsPluginFunctionalTest {
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
         assertFalse(result.output.contains("[buildhound] build "), result.output)
         assertFalse(File(projectDir, "build/buildhound").exists(), "disabled mode must not write payloads")
+        assertFalse(File(projectDir, ".gradle/buildhound").exists(), "disabled mode must not create a salt")
+    }
+
+    @Test
+    fun `finalization failure never fails the build and leaves a marker`() {
+        setUpProject()
+        // Occupy the output dir path with a file so the payload write must fail.
+        File(projectDir, "build").mkdirs()
+        File(projectDir, "build/buildhound").writeText("in the way")
+
+        val result = runner("hello", "--configuration-cache").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        assertTrue(
+            result.output.contains("[buildhound] telemetry finalization failed (build unaffected)"),
+            result.output,
+        )
+        assertTrue(
+            File(projectDir, "build/buildhound-failure.marker").isFile,
+            "expected a failure marker next to the output dir",
+        )
     }
 
     @Test
