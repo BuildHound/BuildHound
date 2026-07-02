@@ -20,11 +20,15 @@ COPY buildhound-gradle-plugin/build.gradle.kts buildhound-gradle-plugin/
 COPY buildhound-report/build.gradle.kts buildhound-report/
 # -Pbuildhound.toolchain=21: bytecode is release-21 either way; skipping the per-image
 # JDK 26 download removes a network dependency (the other CI jobs prove the 26 path).
-RUN ./gradlew --no-daemon -Pbuildhound.toolchain=21 :buildhound-server:dependencies --quiet > /dev/null || true
+# The BuildKit cache mount keeps the Gradle user home (dependency downloads, wrapper
+# dist) across builds even when these layers invalidate; requires BuildKit/buildx.
+RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
+    ./gradlew --no-daemon -Pbuildhound.toolchain=21 :buildhound-server:dependencies --quiet > /dev/null || true
 
 COPY buildhound-commons/ buildhound-commons/
 COPY buildhound-server/ buildhound-server/
-RUN ./gradlew --no-daemon -Pbuildhound.toolchain=21 :buildhound-server:installDist
+RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
+    ./gradlew --no-daemon -Pbuildhound.toolchain=21 :buildhound-server:installDist
 
 FROM eclipse-temurin:21-jre-jammy
 

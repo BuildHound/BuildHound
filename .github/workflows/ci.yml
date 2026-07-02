@@ -21,9 +21,13 @@ jobs:
           distribution: temurin
           java-version: 26
 
+      # Caches the Gradle user home (dependencies, local build cache, provisioned
+      # JDKs). Write from every branch — the long-lived feature branches never run
+      # on main, so the default main-only policy would leave the cache empty.
       - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "9.6.1"
+          cache-read-only: false
 
       # Runs unit tests, TestKit functional tests, and plugin validation, with the
       # configuration cache enabled (gradle.properties). The plugin's test tasks use
@@ -50,6 +54,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.14.4"
+          cache-read-only: false
 
       # The support floor runs Gradle's embedded Kotlin 2.0 stdlib — the apiVersion
       # pin (architecture §2 rule 10) is only proven by actually testing on it.
@@ -62,8 +67,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: docker/setup-buildx-action@v3
+
+      # BuildKit layer cache persisted in the GitHub Actions cache: the dependency
+      # layers (wrapper + build scripts, Dockerfile lines up to the priming RUN)
+      # only rebuild when the build configuration changes. load: true keeps the
+      # image in the local daemon for the smoke test below.
       - name: Build image
-        run: docker build -f buildhound-server/Dockerfile -t buildhound-server:${{ github.sha }} .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: buildhound-server/Dockerfile
+          tags: buildhound-server:${{ github.sha }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Smoke test image
         run: |
