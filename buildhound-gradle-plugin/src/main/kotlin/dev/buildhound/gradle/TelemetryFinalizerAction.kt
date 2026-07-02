@@ -1,5 +1,6 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.payload.ConfigurationCacheState
 import org.gradle.api.flow.FlowAction
 import org.gradle.api.flow.FlowParameters
 import org.gradle.api.logging.Logging
@@ -20,6 +21,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
         @get:Input
         val buildFailed: Property<Boolean>
+
+        @get:Input
+        val environment: Property<CollectedEnvironment>
+
+        @get:Input
+        val configurationCacheRequested: Property<Boolean>
     }
 
     override fun execute(parameters: Parameters) {
@@ -28,11 +35,28 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             val byOutcome = tasks.groupingBy { it.outcome }.eachCount()
             val outcome = if (parameters.buildFailed.get()) "FAILED" else "SUCCESS"
             logger.lifecycle("[buildhound] captured {} task event(s), build {}, outcomes: {}", tasks.size, outcome, byOutcome)
+
+            val execution = DaemonState.executionRan()
+            val ccState = configurationCacheState(parameters.configurationCacheRequested.getOrElse(false), execution)
+            val env = parameters.environment.orNull
+            // Identity fields are deliberately never logged (spec §3.7).
+            logger.lifecycle(
+                "[buildhound] environment: os={}/{}, cores={}, ramMb={}, gradle={}, jdk={}, daemonReused={}, cc={}",
+                env?.os, env?.arch, env?.cores, env?.ramMb, env?.gradleVersion, env?.jdkVersion,
+                execution.daemonReused, ccState,
+            )
             // TODO(phase 1): payload assembly, derived metrics, HTML artifact, spool + upload.
         }.onFailure {
             logger.warn("[buildhound] telemetry finalization failed (build unaffected): {}", it.message)
         }
     }
+
+    private fun configurationCacheState(requested: Boolean, execution: DaemonState.Execution): ConfigurationCacheState =
+        when {
+            !requested -> ConfigurationCacheState.DISABLED
+            execution.configuredThisBuild -> ConfigurationCacheState.MISS_STORED
+            else -> ConfigurationCacheState.HIT
+        }
 
     private companion object {
         val logger = Logging.getLogger(TelemetryFinalizerAction::class.java)

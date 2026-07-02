@@ -41,6 +41,14 @@ environment stays fresh on hits. Daemon counters live in a plugin `object`
 (per-classloader; documented as heuristic). All failure paths degrade to `warn` + null
 fields, never fail the build.
 
+## Divergence from the first draft
+
+Salt IO moved from apply time into `EnvironmentValueSource.obtain()` (execution time):
+configuration-phase file access is tracked as a CC fingerprint input, so creating the
+salt during apply invalidated the very next build's cache entry (caught by the
+CC store→hit functional test). Architecture doc §2 gained a rule for this. Bonus: the
+salt is now only created when `pseudonymize=true` actually needs it.
+
 ## Test strategy
 
 - Unit: `IdentityHashing` (stable for same salt+input, differs across salts, prefix +

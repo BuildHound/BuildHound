@@ -65,6 +65,12 @@ These are the rules every plugin change is reviewed against:
 8. **Extension points are public contracts.** `CiEnvironmentProvider` lives in
    `buildhound-commons`, is documented, and loadable via `ServiceLoader` — "add your CI in ~30
    lines" is an advertised feature.
+9. **File access in `apply()` is a CC fingerprint input.** Gradle tracks every
+   configuration-phase file read (even `File.isFile`), and existence changes invalidate
+   the next build's cache entry — creating a file at apply time guarantees a miss on the
+   following build. External state (marker files, salts, spool dirs) is read/created
+   inside a `ValueSource` or at execution time instead. (Found by the plan-003
+   functional test: the identity salt created during apply invalidated CC reuse.)
 
 ## 3. Kotlin Multiplatform best practices (binding)
 
