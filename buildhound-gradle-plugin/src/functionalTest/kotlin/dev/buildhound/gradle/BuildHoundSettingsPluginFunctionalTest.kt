@@ -240,6 +240,11 @@ class BuildHoundSettingsPluginFunctionalTest {
             assertFalse(reason.contains(absoluteRoot), "absolute path leaked: $reason")
             assertFalse(reason.contains(projectDir.absolutePath), "absolute path leaked: $reason")
         }
+        // Relativization must actually happen — not everything collapsing to <path>.
+        assertTrue(
+            reasons.any { it.contains("input.txt") && !it.contains("/input.txt") },
+            "expected a relativized input path in: $reasons",
+        )
         // The artifact embeds the same scrubbed payload.
         val html = File(projectDir, "build/buildhound/buildhound-report.html").readText()
         assertFalse(html.contains(absoluteRoot), "absolute path leaked into the artifact")

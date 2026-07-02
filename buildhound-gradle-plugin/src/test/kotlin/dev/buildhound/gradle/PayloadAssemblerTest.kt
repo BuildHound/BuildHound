@@ -150,6 +150,7 @@ class PayloadAssemblerTest {
         daemonReused = true,
         tags = mapOf("team" to "mobile"),
         nowMs = nowMs,
+        projectRoots = emptyList(),
     )
 
     private fun task(path: String, startMs: Long, durationMs: Long, outcome: TaskOutcome) =

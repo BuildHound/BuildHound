@@ -101,7 +101,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 daemonReused = execution.daemonReused,
                 tags = parameters.tags.getOrElse(emptyMap()),
                 nowMs = System.currentTimeMillis(),
-                projectRoot = parameters.rootDir.orNull,
+                projectRoots = scrubRoots(parameters.rootDir.orNull),
             )
 
             val payloadFile = writePayload(payload, parameters.outputDir.get())
@@ -139,6 +139,13 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             marker.parentFile?.mkdirs()
             marker.writeText("telemetry finalization failed: ${failure::class.java.name}\n")
         }
+    }
+
+    /** Plain and canonical forms: reason text may carry either on symlinked checkouts. */
+    private fun scrubRoots(rootDir: String?): List<String> {
+        if (rootDir == null) return emptyList()
+        val canonical = runCatching { File(rootDir).canonicalPath }.getOrNull()
+        return listOfNotNull(rootDir, canonical).distinct()
     }
 
     private fun writePayload(payload: BuildPayload, outputDir: String): File {

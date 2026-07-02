@@ -91,6 +91,70 @@ class PayloadScrubberTest {
     }
 
     @Test
+    fun snake_case_secret_keys_are_redacted() {
+        assertEquals("GITHUB_TOKEN=<redacted>", PayloadScrubber.scrubText("GITHUB_TOKEN=ghp_AbCd1234", root))
+        assertEquals("access_token=<redacted>", PayloadScrubber.scrubText("access_token: abc123", root))
+        assertEquals("AWS_SECRET_ACCESS_KEY=<redacted>", PayloadScrubber.scrubText("AWS_SECRET_ACCESS_KEY=wJalr/K7MD", root))
+        assertEquals("GITHUB_PAT=<redacted>", PayloadScrubber.scrubText("GITHUB_PAT=xyz", root))
+        assertEquals("PAT=<redacted>", PayloadScrubber.scrubText("PAT=xyz", root))
+    }
+
+    @Test
+    fun classpath_keys_are_not_mistaken_for_pat_secrets() {
+        assertEquals("classpath=lib.jar", PayloadScrubber.scrubText("classpath=lib.jar", root))
+    }
+
+    @Test
+    fun jwts_and_url_credentials_and_aws_keys_are_redacted() {
+        val jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+        assertEquals("got <redacted> back", PayloadScrubber.scrubText("got $jwt back", root))
+        assertEquals(
+            "fetch https://<redacted>@git.example.com/repo.git failed",
+            PayloadScrubber.scrubText("fetch https://ci-user:S3cr3t@git.example.com/repo.git failed", root),
+        )
+        assertEquals("key <redacted> used", PayloadScrubber.scrubText("key AKIAIOSFODNN7EXAMPLE used", root))
+    }
+
+    @Test
+    fun long_camel_case_identifiers_survive() {
+        val text = "Value of input property 'transformClassesWithDexBuilderForDebugStuff' has changed."
+        assertEquals(text, PayloadScrubber.scrubText(text, root))
+    }
+
+    @Test
+    fun unc_paths_are_redacted() {
+        assertEquals("file <path> changed", PayloadScrubber.scrubText("file \\\\server\\share\\users\\dylan\\f.txt changed", root))
+    }
+
+    @Test
+    fun quoted_multi_word_secrets_vanish_whole() {
+        assertEquals("password=<redacted>", PayloadScrubber.scrubText("password = \"hunter two words\"", root))
+    }
+
+    @Test
+    fun in_project_paths_with_spaces_relativize_via_literal_root_pass() {
+        val spacedRoot = "/Users/John Doe/project"
+        assertEquals(
+            "file src/A.kt changed",
+            PayloadScrubber.scrubText("file /Users/John Doe/project/src/A.kt changed", spacedRoot),
+        )
+    }
+
+    @Test
+    fun degenerate_roots_never_relativize_the_filesystem() {
+        assertEquals("file <path> changed", PayloadScrubber.scrubText("file /etc/passwd changed", "/"))
+        assertEquals("file <path> changed", PayloadScrubber.scrubText("file C:\\Windows\\secret changed", "C:\\"))
+    }
+
+    @Test
+    fun canonical_root_alternates_relativize_too() {
+        assertEquals(
+            "file src/A.kt changed",
+            PayloadScrubber.scrubText("file /private/tmp/proj/src/A.kt changed", listOf("/tmp/proj", "/private/tmp/proj")),
+        )
+    }
+
+    @Test
     fun secret_containing_a_path_is_redacted_as_a_secret() {
         val scrubbed = PayloadScrubber.scrubText("token=/home/dylan/.ssh/id_rsa", root)
 

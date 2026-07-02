@@ -40,7 +40,7 @@ internal object PayloadAssembler {
         daemonReused: Boolean,
         tags: Map<String, String>,
         nowMs: Long,
-        projectRoot: String? = null,
+        projectRoots: List<String>,
     ): BuildPayload {
         val startedAt = tasks.minOfOrNull { it.startMs } ?: nowMs
         val finishedAt = (tasks.maxOfOrNull { it.startMs + it.durationMs } ?: nowMs).coerceAtLeast(startedAt)
@@ -72,7 +72,7 @@ internal object PayloadAssembler {
             derived = DerivedMetricsCalculator.compute(tasks, environment?.cores),
         )
         // Spec §3.7: one scrubbed payload everywhere — local file, artifact, upload.
-        return PayloadScrubber.scrub(payload, projectRoot)
+        return PayloadScrubber.scrub(payload, projectRoots)
     }
 
     /** Git wins; CI context fills the gaps (detached HEAD on CI has no branch name). */

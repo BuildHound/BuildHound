@@ -37,6 +37,19 @@ as a "relativized" fragment). Conservative bias: over-redaction of free text is
 acceptable (a 40-char sha in reason text may be redacted; the `vcs.sha` *field* is
 untouched — only free-text fields are scrubbed).
 
+## Hardening round (review findings, fixed pre-merge)
+
+Both clean-context reviews attacked the regexes empirically; fixed: snake_case
+secret keys (`GITHUB_TOKEN=`, the common CI shape — `\b` cannot match after `_`),
+bare JWTs, URL-embedded credentials (`https://user:pass@host`), AWS access-key ids,
+UNC paths, quoted multi-word secret values, base64-with-`/` blobs, camelCase
+false positive (blob now requires a digit), degenerate roots (`/`, bare drive)
+never relativize, multi-root support (plain + canonical for symlinked checkouts)
+with a boundary-guarded literal-root pre-pass so in-project paths with spaces
+relativize. Accepted limitations recorded in the scrubber KDoc: out-of-project
+space-path tails, sub-32 keyless tokens, `--token abc` flag shapes — revisit
+before failure-text collection lands.
+
 ## Test strategy
 
 - commons unit: unix/windows path redaction, project-root relativization (incl. root
