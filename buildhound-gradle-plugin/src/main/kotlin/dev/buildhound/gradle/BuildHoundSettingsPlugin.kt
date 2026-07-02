@@ -27,6 +27,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         extension.enabled.convention(true)
         extension.mode.convention(TelemetryMode.AUTO)
         extension.identity.pseudonymize.convention(true)
+        extension.htmlReport.enabled.convention(true)
 
         // In a composite, only the root build observes: task events from included builds
         // already reach the root's listener, and a second flow action would consume the
@@ -80,6 +81,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.projectKey.set(settings.providers.provider { settings.rootProject.name })
             spec.parameters.requestedTasks.set(settings.startParameter.taskNames.toList())
             spec.parameters.outputDir.set(File(settings.rootDir, "build/buildhound").absolutePath)
+            spec.parameters.htmlReportEnabled.set(extension.htmlReport.enabled)
         }
     }
 

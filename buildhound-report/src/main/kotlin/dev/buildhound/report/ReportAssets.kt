@@ -15,5 +15,11 @@ object ReportAssets {
             "report-template.html missing from buildhound-report resources"
         }.readBytes().decodeToString()
 
-    fun render(payloadJson: String): String = template().replace(DATA_PLACEHOLDER, payloadJson)
+    /**
+     * Embeds the payload into the template's script element. `<` is escaped to `\\u003c`
+     * (valid inside JSON strings) so payload content like `</script>` can never
+     * terminate the script element — payload strings are untrusted in an HTML context.
+     */
+    fun render(payloadJson: String): String =
+        template().replace(DATA_PLACEHOLDER, payloadJson.replace("<", "\\u003c"))
 }

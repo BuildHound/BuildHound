@@ -28,6 +28,15 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     val identity: IdentitySpec = objects.newInstance(IdentitySpec::class.java)
 
     fun identity(action: Action<IdentitySpec>) = action.execute(identity)
+
+    val htmlReport: HtmlReportSpec = objects.newInstance(HtmlReportSpec::class.java)
+
+    fun htmlReport(action: Action<HtmlReportSpec>) = action.execute(htmlReport)
+}
+
+/** `htmlReport { ... }` (spec §3.4/§3.8). Output dir is fixed next to the payload for now (plan 006). */
+abstract class HtmlReportSpec {
+    abstract val enabled: Property<Boolean>
 }
 
 /**

@@ -211,6 +211,32 @@ class BuildHoundSettingsPluginFunctionalTest {
     }
 
     @Test
+    fun `html artifact is written next to the payload`() {
+        setUpProject()
+
+        runner("hello", "--configuration-cache").build()
+
+        val html = File(projectDir, "build/buildhound/buildhound-report.html")
+        assertTrue(html.isFile, "expected the standalone report artifact")
+        val content = html.readText()
+        assertTrue(content.startsWith("<!DOCTYPE html>"), "artifact must stay a full HTML document")
+        assertTrue(content.contains(readPayload().buildId), "artifact must embed the payload data")
+    }
+
+    @Test
+    fun `html artifact can be disabled via dsl`() {
+        setUpProject(extraDsl = "htmlReport { enabled = false }")
+
+        runner("hello", "--configuration-cache").build()
+
+        assertTrue(File(projectDir, "build/buildhound/build-payload.json").isFile, "payload still written")
+        assertFalse(
+            File(projectDir, "build/buildhound/buildhound-report.html").exists(),
+            "report must be skippable",
+        )
+    }
+
+    @Test
     fun `mode disabled writes no payload`() {
         setUpProject(extraDsl = "mode = dev.buildhound.gradle.TelemetryMode.DISABLED")
 

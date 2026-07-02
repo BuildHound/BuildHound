@@ -6,29 +6,96 @@
     <title>BuildHound Build Report</title>
     <!-- Fully standalone: all CSS/JS is inlined, no external requests (locked decision #4). -->
     <style>
-        body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a2e; }
-        header { border-bottom: 2px solid #e0e0e8; padding-bottom: 1rem; margin-bottom: 1.5rem; }
+        :root { color-scheme: light dark; }
+        body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; color: #1a1a2e; }
+        @media (prefers-color-scheme: dark) { body { color: #e8e8f0; background: #14141c; } }
+        header { border-bottom: 2px solid #8884; padding-bottom: 1rem; margin-bottom: 1.5rem; }
+        h1 { margin: 0 0 .25rem; font-size: 1.4rem; }
+        #meta { color: #888; margin: 0; font-size: .9rem; }
         .placeholder { color: #888; font-style: italic; }
+        .chips { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; padding: 0; list-style: none; }
+        .chips li { border: 1px solid #8884; border-radius: 1rem; padding: .25rem .75rem; font-size: .85rem; }
+        .chips b { font-weight: 600; }
+        table { border-collapse: collapse; width: 100%; font-size: .875rem; }
+        th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #8883; }
+        td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        .badge { border-radius: .25rem; padding: .1rem .4rem; font-size: .75rem; font-weight: 600; }
+        .EXECUTED { background: #fde68a; color: #713f12; }
+        .FROM_CACHE { background: #bbf7d0; color: #14532d; }
+        .UP_TO_DATE { background: #bfdbfe; color: #1e3a8a; }
+        .SKIPPED, .NO_SOURCE { background: #e5e7eb; color: #374151; }
+        .FAILED { background: #fecaca; color: #7f1d1d; }
+        .ok { color: #15803d; } .fail { color: #b91c1c; }
     </style>
 </head>
 <body>
 <header>
     <h1>BuildHound Build Report</h1>
+    <p id="meta" class="placeholder">No build data embedded.</p>
 </header>
 <main id="app">
-    <p class="placeholder">
-        Scaffold template. Phase 1 adds: task timeline by worker lane, sortable task table,
-        cache summary, Kotlin panel, tests summary, process snapshot (spec §3.8).
-    </p>
+    <ul id="summary" class="chips" hidden></ul>
+    <section>
+        <h2>Tasks</h2>
+        <table id="tasks" hidden>
+            <thead><tr><th>Task</th><th>Outcome</th><th class="num">Duration</th><th>Incremental</th></tr></thead>
+            <tbody></tbody>
+        </table>
+        <p id="no-tasks" class="placeholder" hidden>No task events captured.</p>
+    </section>
 </main>
 <script>
-    // The plugin replaces the placeholder below with the build payload JSON at report time,
-    // so the artifact doubles as an offline payload copy.
+    // The plugin replaces the placeholder below with the build payload JSON at report
+    // time, so the artifact doubles as an offline payload copy. All payload strings are
+    // untrusted: they only ever reach the DOM via textContent, never innerHTML.
     const buildhoundData = /*__BUILDHOUND_DATA__*/ null;
-    if (buildhoundData) {
-        document.getElementById("app").textContent =
-            `Build ${buildhoundData.buildId} — ${buildhoundData.outcome}, ${buildhoundData.tasks.length} task(s)`;
-    }
+
+    (function render(d) {
+        if (!d) return;
+        const el = (tag, text, className) => {
+            const node = document.createElement(tag);
+            if (text !== undefined && text !== null) node.textContent = String(text);
+            if (className) node.className = className;
+            return node;
+        };
+        const ms = n => n >= 60000 ? (n / 60000).toFixed(1) + " min" : n >= 1000 ? (n / 1000).toFixed(1) + " s" : n + " ms";
+
+        const meta = document.getElementById("meta");
+        meta.classList.remove("placeholder");
+        meta.textContent = "";
+        meta.append(el("span", d.outcome, d.outcome === "SUCCESS" ? "ok" : "fail"));
+        meta.append(el("span", " · " + ms(d.finishedAt - d.startedAt) + " · mode " + d.mode
+            + (d.vcs && d.vcs.branch ? " · " + d.vcs.branch : "")
+            + (d.vcs && d.vcs.sha ? " @ " + d.vcs.sha.slice(0, 10) : "")
+            + " · " + d.buildId));
+
+        const chips = document.getElementById("summary");
+        const chip = (label, value) => { const li = el("li"); li.append(el("b", label + " ")); li.append(el("span", value)); chips.append(li); };
+        chip("tasks", d.tasks.length);
+        if (d.derived && d.derived.cacheableHitRate != null) chip("hit rate", Math.round(d.derived.cacheableHitRate * 100) + "%");
+        if (d.environment) {
+            if (d.environment.configurationCache) chip("config cache", d.environment.configurationCache);
+            if (d.environment.daemonReused != null) chip("daemon reused", d.environment.daemonReused);
+        }
+        if (d.toolchain && d.toolchain.gradle) chip("gradle", d.toolchain.gradle);
+        if (d.toolchain && d.toolchain.jdk) chip("jdk", d.toolchain.jdk);
+        chips.hidden = false;
+
+        const table = document.getElementById("tasks");
+        const body = table.querySelector("tbody");
+        const tasks = [...d.tasks].sort((a, b) => b.durationMs - a.durationMs);
+        for (const t of tasks) {
+            const row = el("tr");
+            row.append(el("td", t.path));
+            const outcomeCell = el("td");
+            outcomeCell.append(el("span", t.outcome, "badge " + t.outcome));
+            row.append(outcomeCell);
+            row.append(el("td", ms(t.durationMs), "num"));
+            row.append(el("td", t.incremental ? "yes" : ""));
+            body.append(row);
+        }
+        if (tasks.length) table.hidden = false; else document.getElementById("no-tasks").hidden = false;
+    })(buildhoundData);
 </script>
 </body>
 </html>

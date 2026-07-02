@@ -3,6 +3,7 @@ package dev.buildhound.gradle
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.ConfigurationCacheState
+import dev.buildhound.report.ReportAssets
 import java.io.File
 import java.util.UUID
 import kotlinx.serialization.json.Json
@@ -61,6 +62,9 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
         @get:Input
         val outputDir: Property<String>
+
+        @get:Input
+        val htmlReportEnabled: Property<Boolean>
     }
 
     override fun execute(parameters: Parameters) {
@@ -97,6 +101,14 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             )
 
             val payloadFile = writePayload(payload, parameters.outputDir.get())
+            if (parameters.htmlReportEnabled.getOrElse(true)) {
+                // Wire-format JSON (not the pretty file) — the artifact doubles as an
+                // offline payload copy (spec §3.8); render() escapes for the HTML context.
+                val html = ReportAssets.render(BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload))
+                val htmlFile = File(payloadFile.parentFile, "buildhound-report.html")
+                htmlFile.writeText(html)
+                logger.lifecycle("[buildhound] report written: {}", htmlFile)
+            }
             val byOutcome = tasks.groupingBy { it.outcome }.eachCount()
             logger.lifecycle(
                 "[buildhound] build {}: {} task(s) {}, mode={}, cc={}, hitRate={}",

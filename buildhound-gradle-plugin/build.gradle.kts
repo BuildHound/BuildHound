@@ -20,6 +20,9 @@ kotlin {
 
 dependencies {
     implementation(projects.buildhoundCommons)
+    // Report template + renderer; the publishing chunk decides shading vs. resource
+    // embedding (plan 006) — a module dependency is correct for now.
+    implementation(projects.buildhoundReport)
 
     testImplementation(kotlin("test"))
     testRuntimeOnly(libs.junit.platform.launcher)

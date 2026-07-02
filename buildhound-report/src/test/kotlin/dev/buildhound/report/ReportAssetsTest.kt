@@ -29,5 +29,14 @@ class ReportAssetsTest {
 
         assertTrue(rendered.contains("""{"buildId":"abc"}"""))
         assertFalse(rendered.contains(ReportAssets.DATA_PLACEHOLDER))
+        assertTrue(rendered.startsWith("<!DOCTYPE html>"))
+    }
+
+    @Test
+    fun `render escapes script breakouts in payload strings`() {
+        val rendered = ReportAssets.render("""{"branch":"</script><script>alert(1)//"}""")
+
+        assertFalse(rendered.contains("</script><script>"), "payload must not escape the script element")
+        assertTrue(rendered.contains("\\u003c/script>\\u003cscript>alert(1)//"))
     }
 }
