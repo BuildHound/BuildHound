@@ -14,33 +14,40 @@ jobs:
     name: Build & test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 26
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.6.1"
 
       # Runs unit tests, TestKit functional tests, and plugin validation, with the
-      # configuration cache enabled (gradle.properties).
+      # configuration cache enabled (gradle.properties). The plugin's test tasks use
+      # a JDK 21 launcher (plan 011) — the toolchain resolver provisions it.
       - name: Build
-        run: ./gradlew build
+        run: gradle build
 
   build-floor:
     name: Build & test (Gradle 8.14 floor)
     # 8.14.4+: KGP requires it when compiling with a JDK 26 toolchain (plan 011).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-java@v4
+      # Gradle 8.14 cannot RUN on JDK 26 (plan 011) — install 26 for the build
+      # toolchain, and 21 LAST so it stays JAVA_HOME and launches Gradle.
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 21
+          java-version: |
+            26
+            21
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.14.4"
 
@@ -53,7 +60,7 @@ jobs:
     name: Server OCI image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build image
         run: docker build -f buildhound-server/Dockerfile -t buildhound-server:${{ github.sha }} .
