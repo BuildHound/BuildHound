@@ -1,0 +1,52 @@
+# 011 — Build with a JDK 26 toolchain, target Java 21
+
+## Source
+
+Owner request (2026-07-02): "update the gradle toolchain to jdk 26 but set source and
+target compatibility to java21 for the gradle plugin; for kotlin compilation use
+`-Xjdk-release=21` and `-jvm-target 21`".
+
+## Scope
+
+**In:**
+
+- All JVM modules build with a **JDK 26 toolchain** (`jvmToolchain(26)`); the
+  `org.gradle.toolchains.foojay-resolver-convention` settings plugin (1.0.0, latest on
+  the Plugin Portal today) auto-provisions it where no local JDK 26 exists.
+- **Compatibility stays Java 21** — the consumer floor (Gradle daemons on JDK 21+) and
+  the server's JRE-21 runtime image are unchanged:
+  - Kotlin: `jvmTarget = JVM_21` + `-Xjdk-release=21` (caps the visible JDK API surface
+    at 21, the Kotlin analog of javac `--release`) in every JVM compilation.
+  - The Gradle plugin module additionally sets `java.sourceCompatibility` /
+    `targetCompatibility = VERSION_21` (as requested).
+- Escape hatch: the toolchain version resolves from the `buildhound.toolchain` gradle
+  property (default 26). Environments that cannot provision 26 (this sandbox's egress
+  policy blocks api.foojay.io; only JDK 21 is installed) set `buildhound.toolchain=21`
+  in their **user-home** gradle.properties — never committed. Emitted bytecode is
+  identical either way (release 21); CI proves the real 26 toolchain.
+- CI keeps launching Gradle on JDK 21 (the floor job's Gradle 8.14.3 cannot *run* on
+  26); the toolchain is provisioned by foojay on the runners. Dockerfile unchanged
+  (build stage provisions the toolchain the same way).
+- CLAUDE.md conventions + architecture decision log updated.
+
+**Out:** raising the JVM floor (stays 21); JDK-26-only language/API features (blocked
+by release 21 anyway); base-image changes.
+
+## Risks
+
+- Supply chain: the foojay resolver plugin is a new settings-classpath dependency —
+  official Gradle org, pinned version.
+- Gradle 8.14 (floor) must *compile with* a 26 toolchain while running on 21 —
+  validated by the CI floor job; Kotlin 2.4 daemons support running on JDK 26.
+- `-Xjdk-release` + `jvmTarget` guarantee no >21 API/bytecode sneaks in; the plugin's
+  functional tests still run on the host Gradle/JDK (21) as the real consumer check.
+
+## Test strategy
+
+Existing full suite on both CI jobs (now compiling via the 26 toolchain); locally via
+the 21 override. No behavior change expected — bytecode target identical.
+
+## Exit criteria
+
+CI green on both jobs with the 26 toolchain; `javap`-level check that emitted class
+files are major version 65 (Java 21); local builds keep working via the override.
