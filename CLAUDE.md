@@ -102,5 +102,9 @@ special event.
 - Placeholder coordinates (`io.example.btp`, plugin id `io.example.buildtelemetry`) until
   naming decision #6 — do not brand anything yet.
 - Version catalog (`gradle/libs.versions.toml`) is the only place versions live.
+- **When adding a dependency, check what the latest released version is and use that** —
+  query Maven Central (`https://repo.maven.apache.org/maven2/<group-path>/<artifact>/maven-metadata.xml`)
+  or the Gradle Plugin Portal; never copy a version from memory, an old example, or
+  another project. Same applies to tool upgrades (Gradle wrapper, base images).
 - Commit messages: imperative mood, scoped prefix when useful
   (`plugin:`, `server:`, `commons:`, `docs:`, `plan:`).
