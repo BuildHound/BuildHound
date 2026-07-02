@@ -149,6 +149,8 @@ class BuildHoundSettingsPluginFunctionalTest {
         File(projectDir, "untracked.txt").writeText("x")
         val dirty = runner("hello", "--configuration-cache").build()
         assertTrue(vcsLine(dirty.output).contains("dirty=true"))
+        // Freshness must come from re-executing the source on reuse, not from a CC miss.
+        assertTrue(environmentLine(dirty.output).contains("cc=HIT"))
     }
 
     @Test

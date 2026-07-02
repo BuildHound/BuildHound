@@ -56,6 +56,10 @@ abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Paramet
             spec.standardOutput = stdout
             spec.errorOutput = ByteArrayOutputStream() // discard; may contain paths
             spec.environment("GIT_TERMINAL_PROMPT", "0")
+            // Never take optional .git/index locks from a telemetry read.
+            spec.environment("GIT_OPTIONAL_LOCKS", "0")
+            // Never discover an enclosing, unrelated repository above the project.
+            workDir.parentFile?.let { spec.environment("GIT_CEILING_DIRECTORIES", it.absolutePath) }
             spec.isIgnoreExitValue = true
         }
         if (result.exitValue == 0) stdout.toString(Charsets.UTF_8) else null
@@ -72,7 +76,7 @@ abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Paramet
             raw.trim().takeIf { it.isNotEmpty() && it != "HEAD" }
 
         fun parseSha(raw: String): String? =
-            raw.trim().takeIf { it.matches(Regex("[0-9a-f]{40,64}")) }
+            raw.trim().takeIf { it.matches(Regex("[0-9a-f]{40}|[0-9a-f]{64}")) }
 
         fun parseDirty(raw: String): Boolean = raw.isNotBlank()
     }

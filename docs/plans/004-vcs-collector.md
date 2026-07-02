@@ -13,8 +13,10 @@ Roadmap Phase 1 (EnvironmentCollector scope). Spec §3.2: "ValueSources for git
   `git rev-parse --abbrev-ref HEAD`, `git rev-parse HEAD`, and
   `git status --porcelain` in the root project directory; returns a Serializable
   `CollectedVcs(branch, sha, dirty)`.
-- Degradations (never fail the build): git binary missing, not a repository, empty
-  repo (no HEAD) → null fields. Detached HEAD (`HEAD` from abbrev-ref, typical on CI)
+- Degradations (never fail the build): git binary missing, not a repository → null
+  fields; empty repo (no HEAD) → null branch/sha, `dirty` still reported (status
+  succeeds there). `GIT_CEILING_DIRECTORIES=<rootDir parent>` prevents discovering an
+  enclosing, unrelated repository (review finding). Detached HEAD (`HEAD` from abbrev-ref, typical on CI)
   → `branch = null`; payload assembly (next chunk) fills branch from the CI context.
 - Gated on `buildhound { enabled }` like the environment source.
 - Finalizer logs a `[buildhound] vcs: …` summary line; sha is public build metadata
@@ -42,8 +44,10 @@ probes individually guarded. Working directory passed as an absolute-path String
 
 ## Risks
 
-- `git` exec could theoretically hang → bounded output reads, no interactive prompts
-  (`GIT_TERMINAL_PROMPT=0`); accepted residual risk, documented.
+- `git` exec could theoretically hang → no interactive prompts
+  (`GIT_TERMINAL_PROMPT=0`), no optional index locks (`GIT_OPTIONAL_LOCKS=0`); no exec
+  timeout and stdout capture is unbounded — accepted residual risk (review finding),
+  revisit with a `waitFor(timeout)` variant if it ever bites.
 - Spawning three processes per build is negligible next to any real build; measured
   stance can change if profiling says otherwise.
 - Privacy: branch names and shas are declared in spec §4 (`vcs` block); no paths, no
