@@ -33,6 +33,19 @@ EnvironmentCollector chunk, when `CiInfo` enters the payload); GitLab/Bitrise/Je
 CircleCI built-ins (v1 backlog, spec lists them but Phase 1 names Azure + GitHub +
 generic); DSL override `ci.provider`.
 
+## Divergences from the first draft (review findings, fixed pre-merge)
+
+- Azure `pipelineName`: prefer documented `BUILD_DEFINITIONNAME`, fall back to
+  `SYSTEM_DEFINITIONNAME` (spec §3.3 corrected in the same PR).
+- Azure PR builds: logical branch from `SYSTEM_PULLREQUEST_SOURCEBRANCH` (ref-stripped),
+  so `refs/pull/N/merge` never surfaces as the branch; `pullRequestId` falls back to
+  `SYSTEM_PULLREQUEST_PULLREQUESTNUMBER` (set for GitHub-hosted repos built on Azure).
+- GitHub `pipelineId`: mapped from `GITHUB_WORKFLOW_REF` with the unstable `@<ref>`
+  suffix stripped (not in the first plan draft).
+- Composed build URLs: base URL must be http(s) (an env-controlled `javascript:` scheme
+  must never reach a payload) and path/query segments are percent-encoded (Azure project
+  names contain spaces).
+
 ## Design
 
 Pure functions over `Map<String, String>` — no Gradle/JVM APIs, KMP-common, ~30 lines
@@ -53,6 +66,9 @@ beat generic; generic last).
   variables (spec §3.3 pins the Azure list).
 - No secrets: providers only read the named non-secret variables, never dump `env`.
   `attributes` stays empty in this chunk.
+- `agentName` (`AGENT_NAME`/`RUNNER_NAME`) can be a personal hostname on self-hosted
+  agents. In-spec (§3.3), but the payload-wiring chunk must decide how it behaves under
+  `identity { pseudonymize/strict }` and record that decision.
 
 ## Exit criteria
 

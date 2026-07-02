@@ -8,7 +8,7 @@ private val azurePushEnv = mapOf(
     "TF_BUILD" to "True",
     "BUILD_BUILDID" to "20260702",
     "SYSTEM_DEFINITIONID" to "17",
-    "SYSTEM_DEFINITIONNAME" to "android-ci",
+    "BUILD_DEFINITIONNAME" to "android-ci",
     "SYSTEM_JOBID" to "8f6a1c2e-job",
     "SYSTEM_STAGENAME" to "Build",
     "BUILD_SOURCEBRANCH" to "refs/heads/main",
@@ -64,22 +64,66 @@ class AzureDevOpsCiEnvironmentProviderTest {
     }
 
     @Test
-    fun maps_pull_request_fields() {
+    fun falls_back_to_system_definition_name() {
+        val context = provider.detect(
+            azurePushEnv - "BUILD_DEFINITIONNAME" + mapOf("SYSTEM_DEFINITIONNAME" to "legacy-name"),
+        )!!
+
+        assertEquals("legacy-name", context.pipelineName)
+    }
+
+    @Test
+    fun maps_pull_request_fields_with_logical_branch() {
         val context = provider.detect(
             azurePushEnv + mapOf(
                 "BUILD_SOURCEBRANCH" to "refs/pull/7/merge",
+                "SYSTEM_PULLREQUEST_SOURCEBRANCH" to "refs/heads/feature/speedup",
                 "SYSTEM_PULLREQUEST_PULLREQUESTID" to "7",
                 "SYSTEM_PULLREQUEST_TARGETBRANCH" to "refs/heads/main",
             ),
         )!!
 
+        // The synthetic refs/pull/7/merge ref must not surface as the branch.
+        assertEquals("feature/speedup", context.branch)
         assertEquals("7", context.pullRequestId)
         assertEquals("main", context.targetBranch)
     }
 
     @Test
+    fun falls_back_to_pull_request_number_for_github_hosted_repos() {
+        val context = provider.detect(
+            azurePushEnv + mapOf("SYSTEM_PULLREQUEST_PULLREQUESTNUMBER" to "41"),
+        )!!
+
+        assertEquals("41", context.pullRequestId)
+    }
+
+    @Test
+    fun strips_tag_refs() {
+        val context = provider.detect(azurePushEnv + mapOf("BUILD_SOURCEBRANCH" to "refs/tags/v1.0"))!!
+
+        assertEquals("v1.0", context.branch)
+    }
+
+    @Test
+    fun percent_encodes_project_names_in_build_url() {
+        val context = provider.detect(azurePushEnv + mapOf("SYSTEM_TEAMPROJECT" to "My Project"))!!
+
+        assertEquals("https://dev.azure.com/acme/My%20Project/_build/results?buildId=20260702", context.buildUrl)
+    }
+
+    @Test
     fun build_url_is_omitted_when_components_are_missing() {
         val context = provider.detect(azurePushEnv - "SYSTEM_TEAMPROJECT")!!
+
+        assertNull(context.buildUrl)
+    }
+
+    @Test
+    fun build_url_is_omitted_for_non_http_collection_uri() {
+        val context = provider.detect(
+            azurePushEnv + mapOf("SYSTEM_COLLECTIONURI" to "javascript:alert(1)//"),
+        )!!
 
         assertNull(context.buildUrl)
     }
@@ -101,6 +145,8 @@ class GitHubActionsCiEnvironmentProviderTest {
         val context = provider.detect(gitHubPullRequestEnv)!!
 
         assertEquals("github-actions", context.provider)
+        // The @<ref> suffix is unstable across runs and must be stripped.
+        assertEquals("acme/app/.github/workflows/ci.yml", context.pipelineId)
         assertEquals("CI", context.pipelineName)
         assertEquals("28594986517", context.runId)
         assertEquals("build", context.jobId)
@@ -123,6 +169,32 @@ class GitHubActionsCiEnvironmentProviderTest {
         assertEquals("main", context.branch)
         assertNull(context.pullRequestId)
         assertNull(context.targetBranch)
+    }
+
+    @Test
+    fun treats_empty_head_ref_as_absent() {
+        val context = provider.detect(
+            gitHubPullRequestEnv +
+                mapOf("GITHUB_HEAD_REF" to "", "GITHUB_REF" to "refs/heads/main", "GITHUB_REF_NAME" to "main"),
+        )!!
+
+        assertEquals("main", context.branch)
+    }
+
+    @Test
+    fun build_url_is_omitted_when_components_are_missing() {
+        val context = provider.detect(gitHubPullRequestEnv - "GITHUB_REPOSITORY")!!
+
+        assertNull(context.buildUrl)
+    }
+
+    @Test
+    fun build_url_is_omitted_for_non_http_server_url() {
+        val context = provider.detect(
+            gitHubPullRequestEnv + mapOf("GITHUB_SERVER_URL" to "javascript:alert(1)//"),
+        )!!
+
+        assertNull(context.buildUrl)
     }
 }
 
