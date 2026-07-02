@@ -42,9 +42,17 @@ class RateLimitTest {
             setBody(payloadJson(buildId))
         }
 
+    // Throttle tests share a 60 s determinism window: a stall longer than the refill
+    // period between two requests refills (or evicts) the bucket and un-throttles the
+    // last assertion. Accepted: Ktor 3.2.2's eviction compares against hardwired wall
+    // time, so an injectable limiter clock cannot close this window (and a fake clock
+    // makes eviction fire instantly, silently disabling throttling).
+
     @Test
     fun `ingest is throttled per token with a Retry-After`() = testApplication {
-        application { buildHoundModule(stores("pilot" to "tok-a"), RateLimits(ingestPerMinute = 2, queryPerMinute = 0)) }
+        application {
+            buildHoundModule(stores("pilot" to "tok-a"), RateLimits(ingestPerMinute = 2, queryPerMinute = 0))
+        }
 
         assertEquals(HttpStatusCode.Accepted, ingest("tok-a", "00000000-0000-0000-0000-000000000001").status)
         assertEquals(HttpStatusCode.Accepted, ingest("tok-a", "00000000-0000-0000-0000-000000000002").status)
@@ -69,7 +77,9 @@ class RateLimitTest {
 
     @Test
     fun `query limiter is independent of the exhausted ingest limiter`() = testApplication {
-        application { buildHoundModule(stores("pilot" to "tok-a"), RateLimits(ingestPerMinute = 1, queryPerMinute = 10)) }
+        application {
+            buildHoundModule(stores("pilot" to "tok-a"), RateLimits(ingestPerMinute = 1, queryPerMinute = 10))
+        }
 
         repeat(2) { ingest("tok-a", "00000000-0000-0000-0000-00000000000$it") }
         val read = client.get("/v1/builds") { header("Authorization", "Bearer tok-a") }
@@ -78,7 +88,12 @@ class RateLimitTest {
 
     @Test
     fun `limit zero disables the limiter`() = testApplication {
-        application { buildHoundModule(stores("pilot" to "tok-a"), RateLimits(ingestPerMinute = 0, queryPerMinute = 0)) }
+        application {
+            buildHoundModule(
+                stores("pilot" to "tok-a"),
+                RateLimits(ingestPerMinute = 0, queryPerMinute = 0, perHostPerMinute = 0),
+            )
+        }
 
         repeat(5) {
             assertNotEquals(HttpStatusCode.TooManyRequests, ingest("tok-a", "00000000-0000-0000-0000-00000000000$it").status)
@@ -87,11 +102,45 @@ class RateLimitTest {
 
     @Test
     fun `credential-less requests are throttled before token resolution`() = testApplication {
-        application { buildHoundModule(stores("pilot" to "tok-a"), RateLimits(ingestPerMinute = 2, queryPerMinute = 0)) }
+        application {
+            buildHoundModule(stores("pilot" to "tok-a"), RateLimits(ingestPerMinute = 2, queryPerMinute = 0))
+        }
 
         assertEquals(HttpStatusCode.Unauthorized, ingest(null, "x").status)
         assertEquals(HttpStatusCode.Unauthorized, ingest(null, "x").status)
         assertEquals(HttpStatusCode.TooManyRequests, ingest(null, "x").status)
+    }
+
+    @Test
+    fun `rotating garbage tokens are capped by the per-host layer`() = testApplication {
+        application {
+            // Per-token limits are generous; only the host layer can stop a flood
+            // where every request mints a fresh token bucket.
+            buildHoundModule(
+                stores("pilot" to "tok-a"),
+                RateLimits(ingestPerMinute = 100, queryPerMinute = 0, perHostPerMinute = 2),
+            )
+        }
+
+        assertEquals(HttpStatusCode.Unauthorized, ingest("garbage-1", "x").status)
+        assertEquals(HttpStatusCode.Unauthorized, ingest("garbage-2", "x").status)
+        val flooded = ingest("garbage-3", "x")
+        assertEquals(HttpStatusCode.TooManyRequests, flooded.status)
+        assertNotNull(flooded.headers["Retry-After"])
+    }
+
+    @Test
+    fun `host layer also bounds authenticated traffic`() = testApplication {
+        application {
+            buildHoundModule(
+                stores("pilot" to "tok-a"),
+                RateLimits(ingestPerMinute = 100, queryPerMinute = 0, perHostPerMinute = 2),
+            )
+        }
+
+        assertEquals(HttpStatusCode.Accepted, ingest("tok-a", "00000000-0000-0000-0000-000000000001").status)
+        assertEquals(HttpStatusCode.Accepted, ingest("tok-a", "00000000-0000-0000-0000-000000000002").status)
+        assertEquals(HttpStatusCode.TooManyRequests, ingest("tok-a", "00000000-0000-0000-0000-000000000003").status)
     }
 
     @Test
@@ -106,10 +155,23 @@ class RateLimitTest {
 
     @Test
     fun `defaults come from the environment with a disable escape hatch`() {
-        assertEquals(RateLimits(60, 120), rateLimitsFromEnvironment(emptyMap()))
+        assertEquals(RateLimits(60, 120, 600), rateLimitsFromEnvironment(emptyMap()))
         assertEquals(
-            RateLimits(5, 0),
-            rateLimitsFromEnvironment(mapOf("BUILDHOUND_INGEST_RPM" to "5", "BUILDHOUND_QUERY_RPM" to "0")),
+            RateLimits(5, 0, 30),
+            rateLimitsFromEnvironment(
+                mapOf("BUILDHOUND_INGEST_RPM" to "5", "BUILDHOUND_QUERY_RPM" to "0", "BUILDHOUND_HOST_RPM" to "30"),
+            ),
+        )
+    }
+
+    @Test
+    fun `invalid environment values fall back to the default, never to disabled`() {
+        // A typo must not silently turn limiting off; only an explicit 0 disables.
+        assertEquals(
+            RateLimits(60, 120, 600),
+            rateLimitsFromEnvironment(
+                mapOf("BUILDHOUND_INGEST_RPM" to "abc", "BUILDHOUND_QUERY_RPM" to "-5", "BUILDHOUND_HOST_RPM" to ""),
+            ),
         )
     }
 }

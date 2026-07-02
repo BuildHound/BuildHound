@@ -26,13 +26,24 @@ services:
       # is only sound for random tokens.
       BUILDHOUND_BOOTSTRAP_PROJECT: "pilot"
       BUILDHOUND_BOOTSTRAP_TOKEN: "buildhound-local-dev-token"
-      # Per-token requests/minute (plan 013); defaults 60/120, 0 disables.
+      # Rate limits, requests/minute (plan 013); 0 disables. HOST_RPM is the outer
+      # per-source-IP layer — it keys on the direct TCP peer, so behind a reverse
+      # proxy ALL traffic shares one bucket: raise/disable it there (and never
+      # install XForwardedHeaders without revisiting the limiter key).
       # BUILDHOUND_INGEST_RPM: "60"
       # BUILDHOUND_QUERY_RPM: "120"
+      # BUILDHOUND_HOST_RPM: "600"
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
+    # CallLogging emits a line per request (incl. unlimited /health) — cap the log
+    # files so a GET flood can't fill the disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
 
   db:
     # Pin to a digest before any shared/production use.

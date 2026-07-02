@@ -132,8 +132,14 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
   interface, migrations via Flyway, tested with Testcontainers.
 - **Multi-tenancy from the first real table**: every row carries `project_id`; queries are
   always tenant-filtered; tokens hashed at rest; ingest **and** query rate-limited per
-  token (spec §8, plan 013) — buckets keyed by the token's SHA-256, credential-less
-  requests keyed by remote host so they're throttled before token resolution.
+  token (spec §8, plan 013) — buckets keyed by the token's SHA-256. Per-token buckets
+  alone cannot stop a rotating-token flood (each garbage token mints a fresh bucket and
+  reaches token resolution), so an outer **per-source-host** limiter caps everything a
+  single source can send to `/v1/*` — including bucket-minting and pre-auth DB lookups.
+  Residual risk (recorded in plan 013): floods distributed across many source IPs get
+  one host budget each — that's an infra/WAF concern, not an application one. The host
+  key is the direct TCP peer; installing `XForwardedHeaders` would make it
+  attacker-controlled — don't, without revisiting the limiter key.
 - **Idempotency**: ingest dedupes on `buildId` — already part of the `BuildStore` contract.
 - **Stateless horizontally**: no local state outside the DB; the image can scale out.
   Deliberate exception: rate-limiter buckets are instance-local (a shared-store limiter

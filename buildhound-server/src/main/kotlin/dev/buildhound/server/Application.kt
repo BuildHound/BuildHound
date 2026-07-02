@@ -22,15 +22,36 @@ import org.slf4j.LoggerFactory
 class ServerStores(val builds: BuildStore, val tokens: TokenStore)
 
 /**
- * Per-token request ceilings (spec §8), per minute; 0 disables a limiter.
- * State is deliberately instance-local — see plan 013 / architecture §5.
+ * Request ceilings (spec §8), per minute; 0 disables a limiter. The per-host limiter
+ * is the outer coarse layer: per-token buckets alone can't stop a rotating-token
+ * flood (every garbage token would mint its own fresh bucket and still reach token
+ * resolution), so the host layer caps what any single source can do — including
+ * bucket-minting itself. State is deliberately instance-local — plan 013 / arch §5.
  */
-data class RateLimits(val ingestPerMinute: Int = 60, val queryPerMinute: Int = 120)
-
-fun rateLimitsFromEnvironment(env: Map<String, String>): RateLimits = RateLimits(
-    ingestPerMinute = env["BUILDHOUND_INGEST_RPM"]?.toIntOrNull() ?: 60,
-    queryPerMinute = env["BUILDHOUND_QUERY_RPM"]?.toIntOrNull() ?: 120,
+data class RateLimits(
+    val ingestPerMinute: Int = 60,
+    val queryPerMinute: Int = 120,
+    val perHostPerMinute: Int = 600,
 )
+
+fun rateLimitsFromEnvironment(env: Map<String, String>): RateLimits {
+    // Invalid values (non-numeric, negative) fall back to the default with a warning —
+    // a typo must never silently disable limiting; only an explicit 0 does.
+    fun rpm(key: String, default: Int): Int {
+        val raw = env[key] ?: return default
+        val parsed = raw.toIntOrNull()
+        if (parsed == null || parsed < 0) {
+            applicationLogger.warn("{}='{}' is not a non-negative integer — using default {}", key, raw, default)
+            return default
+        }
+        return parsed
+    }
+    return RateLimits(
+        ingestPerMinute = rpm("BUILDHOUND_INGEST_RPM", 60),
+        queryPerMinute = rpm("BUILDHOUND_QUERY_RPM", 120),
+        perHostPerMinute = rpm("BUILDHOUND_HOST_RPM", 600),
+    )
+}
 
 fun main() {
     val env = System.getenv()
@@ -48,8 +69,10 @@ fun main() {
  * pilot project + token hash idempotently. Without any token source, ingest is
  * 401-everything — fail closed.
  */
+private val applicationLogger = LoggerFactory.getLogger("dev.buildhound.server.Application")
+
 fun storesFromEnvironment(env: Map<String, String>): ServerStores {
-    val logger = LoggerFactory.getLogger("dev.buildhound.server.Application")
+    val logger = applicationLogger
     val dbUrl = env["BUILDHOUND_DB_URL"]
     val stores = if (dbUrl != null) {
         val dataSource = createDataSource(
@@ -83,6 +106,7 @@ fun storesFromEnvironment(env: Map<String, String>): ServerStores {
     return stores
 }
 
+private val HOST_LIMIT = RateLimitName("per-host")
 private val INGEST_LIMIT = RateLimitName("ingest")
 private val QUERY_LIMIT = RateLimitName("query")
 
@@ -94,26 +118,46 @@ fun Application.buildHoundModule(
     install(ContentNegotiation) {
         json(BuildHoundJson.payload)
     }
-    if (rateLimits.ingestPerMinute > 0 || rateLimits.queryPerMinute > 0) {
+    val hostOn = rateLimits.perHostPerMinute > 0
+    val ingestOn = rateLimits.ingestPerMinute > 0
+    val queryOn = rateLimits.queryPerMinute > 0
+    if (hostOn || ingestOn || queryOn) {
+        // NOTE: the limiter's clock is NOT injectable here on purpose. Ktor 3.2.2's
+        // key-eviction coroutine compares the limiter's refillAt against real wall
+        // time (io.ktor.util.date.getTimeMillis, hardwired), so a fake clock makes
+        // eviction fire instantly and silently disables throttling.
         install(RateLimit) {
-            if (rateLimits.ingestPerMinute > 0) register(INGEST_LIMIT) { perTokenLimiter(rateLimits.ingestPerMinute) }
-            if (rateLimits.queryPerMinute > 0) register(QUERY_LIMIT) { perTokenLimiter(rateLimits.queryPerMinute) }
+            if (hostOn) register(HOST_LIMIT) {
+                rateLimiter(limit = rateLimits.perHostPerMinute, refillPeriod = 60.seconds)
+                requestKey { call -> "h:" + call.request.origin.remoteHost }
+            }
+            if (ingestOn) register(INGEST_LIMIT) { perTokenLimiter(rateLimits.ingestPerMinute) }
+            if (queryOn) register(QUERY_LIMIT) { perTokenLimiter(rateLimits.queryPerMinute) }
         }
     }
+    // "Limiting off" must be distinguishable from "limiting on" in the logs.
+    applicationLogger.info(
+        "rate limits/min: ingest={} query={} per-host={} (0 = disabled)",
+        rateLimits.ingestPerMinute, rateLimits.queryPerMinute, rateLimits.perHostPerMinute,
+    )
 
     routing {
         healthRoutes()
         dashboardRoutes()
-        maybeRateLimited(rateLimits.ingestPerMinute > 0, INGEST_LIMIT) { ingestRoutes(stores.builds, stores.tokens) }
-        maybeRateLimited(rateLimits.queryPerMinute > 0, QUERY_LIMIT) { queryRoutes(stores.builds, stores.tokens) }
+        // Nested limiters compose (each rateLimit() collects its ancestors' providers):
+        // the host layer sees every /v1 request first, then the per-token layer.
+        maybeRateLimited(hostOn, HOST_LIMIT) {
+            maybeRateLimited(ingestOn, INGEST_LIMIT) { ingestRoutes(stores.builds, stores.tokens) }
+            maybeRateLimited(queryOn, QUERY_LIMIT) { queryRoutes(stores.builds, stores.tokens) }
+        }
     }
 }
 
 /**
  * Buckets are keyed by the token's SHA-256 (the auth-lookup hash — the plaintext
  * never enters the limiter's key map). Credential-less or non-Bearer requests
- * share a per-remote-host bucket, so invalid-token floods are throttled before
- * they reach token resolution.
+ * share a per-remote-host bucket. A rotating-token flood mints a fresh bucket per
+ * request and is NOT stopped by this layer — that's the outer [HOST_LIMIT]'s job.
  */
 private fun RateLimitProviderConfig.perTokenLimiter(perMinute: Int) {
     rateLimiter(limit = perMinute, refillPeriod = 60.seconds)
