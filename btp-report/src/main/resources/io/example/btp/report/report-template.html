@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Build Telemetry Report</title>
+    <!-- Fully standalone: all CSS/JS is inlined, no external requests (locked decision #4). -->
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a2e; }
+        header { border-bottom: 2px solid #e0e0e8; padding-bottom: 1rem; margin-bottom: 1.5rem; }
+        .placeholder { color: #888; font-style: italic; }
+    </style>
+</head>
+<body>
+<header>
+    <h1>Build Telemetry Report</h1>
+</header>
+<main id="app">
+    <p class="placeholder">
+        Scaffold template. Phase 1 adds: task timeline by worker lane, sortable task table,
+        cache summary, Kotlin panel, tests summary, process snapshot (spec §3.8).
+    </p>
+</main>
+<script>
+    // The plugin replaces the placeholder below with the build payload JSON at report time,
+    // so the artifact doubles as an offline payload copy.
+    const btpData = /*__BTP_DATA__*/ null;
+    if (btpData) {
+        document.getElementById("app").textContent =
+            `Build ${btpData.buildId} — ${btpData.outcome}, ${btpData.tasks.length} task(s)`;
+    }
+</script>
+</body>
+</html>

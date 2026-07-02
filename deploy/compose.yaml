@@ -1,0 +1,44 @@
+# Self-host / local development stack (spec §5: one server image + Postgres/TimescaleDB).
+#
+#   docker compose -f deploy/compose.yaml up --build
+#
+# The scaffold server does not talk to the database yet (in-memory store); the service is
+# provisioned here so phase 1 lands against a running TimescaleDB from day one.
+
+name: btp
+
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: btp-server/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      BTP_PORT: "8080"
+      BTP_DB_URL: "jdbc:postgresql://db:5432/btp"
+      BTP_DB_USER: "btp"
+      # Local development only — use a secret manager for real deployments.
+      BTP_DB_PASSWORD: "btp-local-dev"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    # Pin to a digest before any shared/production use.
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_DB: "btp"
+      POSTGRES_USER: "btp"
+      POSTGRES_PASSWORD: "btp-local-dev"
+    volumes:
+      - btp-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U btp -d btp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  btp-db-data:

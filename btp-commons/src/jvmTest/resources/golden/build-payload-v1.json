@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "buildId": "3f9d3c1e-8f3a-4a5e-9b2d-0c8f4a7d6e21",
+  "projectKey": "pilot-android",
+  "startedAt": 1751450000000,
+  "finishedAt": 1751450042000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["assembleDebug"],
+  "mode": "ci",
+  "environment": {
+    "os": "Linux",
+    "arch": "amd64",
+    "cores": 8,
+    "ramMb": 32768,
+    "hostnameHash": "h_2f7c9ab1",
+    "userId": "u_9e1b44c0",
+    "daemonReused": true,
+    "configurationCache": "HIT"
+  },
+  "toolchain": {
+    "gradle": "8.14.3",
+    "jdk": "21.0.10",
+    "agp": "8.9.0",
+    "kgp": "2.2.20",
+    "ksp": "2.2.20-2.0.2"
+  },
+  "vcs": {
+    "branch": "main",
+    "sha": "cfb5b38c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a",
+    "dirty": false
+  },
+  "ci": {
+    "provider": "azure-devops",
+    "runId": "20260702.1",
+    "pipelineName": "android-ci",
+    "jobId": "Build",
+    "buildUrl": "https://dev.azure.com/example/project/_build/results?buildId=1234",
+    "attributes": {}
+  },
+  "tags": { "team": "mobile" },
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileDebugKotlin",
+      "module": ":app",
+      "type": "KotlinCompile",
+      "startMs": 1751450001000,
+      "durationMs": 8000,
+      "outcome": "FROM_CACHE",
+      "cacheable": true,
+      "incremental": false,
+      "worker": 3,
+      "executionReasons": []
+    },
+    {
+      "path": ":app:testDebugUnitTest",
+      "module": ":app",
+      "type": "Test",
+      "startMs": 1751450010000,
+      "durationMs": 21000,
+      "outcome": "EXECUTED",
+      "cacheable": true,
+      "incremental": false,
+      "worker": 1,
+      "executionReasons": ["Output property 'binaryResultsDirectory' file has been removed."]
+    }
+  ],
+  "derived": {
+    "cacheableHitRate": 0.5,
+    "avoidedMs": 8000,
+    "criticalPathMs": 30000,
+    "parallelUtilization": 0.62,
+    "configurationMs": 900
+  }
+}

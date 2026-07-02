@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+# Metric CLI scaffold (spec §7): report a custom measure from any CI step, no JVM required.
+#
+#   btp-metric --name sign.duration --value 42 --unit s
+#
+# Correlation (provider + run id) is read from CI env vars using the same mappings as the
+# plugin's CiEnvironmentProvider SPI. Phase 2 wires this to POST /v1/metrics.
+set -eu
+
+echo "btp-metric: scaffold placeholder — POST /v1/metrics arrives with roadmap phase 2" >&2
+exit 1
