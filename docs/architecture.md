@@ -131,9 +131,14 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
   scaffold is in-memory; phase 1 replaces it with Postgres + TimescaleDB behind the same
   interface, migrations via Flyway, tested with Testcontainers.
 - **Multi-tenancy from the first real table**: every row carries `project_id`; queries are
-  always tenant-filtered; tokens hashed at rest; ingest rate-limited per token (spec §8).
+  always tenant-filtered; tokens hashed at rest; ingest **and** query rate-limited per
+  token (spec §8, plan 013) — buckets keyed by the token's SHA-256, credential-less
+  requests keyed by remote host so they're throttled before token resolution.
 - **Idempotency**: ingest dedupes on `buildId` — already part of the `BuildStore` contract.
 - **Stateless horizontally**: no local state outside the DB; the image can scale out.
+  Deliberate exception: rate-limiter buckets are instance-local (a shared-store limiter
+  adds a hot write per request), so N replicas mean an N× effective ceiling — revisit
+  when the server actually scales out; the pilot runs one instance.
 
 ## 6. Security & privacy design rules
 

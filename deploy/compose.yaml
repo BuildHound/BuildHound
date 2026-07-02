@@ -26,6 +26,9 @@ services:
       # is only sound for random tokens.
       BUILDHOUND_BOOTSTRAP_PROJECT: "pilot"
       BUILDHOUND_BOOTSTRAP_TOKEN: "buildhound-local-dev-token"
+      # Per-token requests/minute (plan 013); defaults 60/120, 0 disables.
+      # BUILDHOUND_INGEST_RPM: "60"
+      # BUILDHOUND_QUERY_RPM: "120"
     depends_on:
       db:
         condition: service_healthy
