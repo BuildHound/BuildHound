@@ -47,6 +47,40 @@ Spec §6. Consumes the plan-010 query API; last Phase-1 chunk.
   in URLs; a wrong-scope token surfaces the server's 403 message.
 - No new server dependencies.
 
+## Hardening round (review findings, fixed pre-merge)
+
+- **CSP tightened**: `frame-ancestors 'none'` + `X-Frame-Options: DENY` (the page hosts
+  token entry — classic clickjacking-on-credential-entry target), `base-uri 'none'`,
+  and the inline `<style>` block is **hash-pinned** (`style-src 'sha256-…'`, computed
+  at startup from the served bytes) instead of `'unsafe-inline'` — no `unsafe-*`
+  source remains, pinned by test. `Cache-Control: no-cache` on both resources so a
+  server upgrade can't leave stale JS against a changed API.
+- **The node smoke harness is now a repo test** (`DashboardScriptTest` +
+  `test/resources/web/dashboard-smoke.js`): drives all three views plus a
+  minimal-payload detail and the error path through a DOM/fetch stub in a real JS
+  engine. The plan's "syntax-checked locally" was a manual step, i.e. not regression
+  coverage (review MEDIUM); it skips when node is absent, and CI runners have node.
+- **JS robustness**: `decodeURIComponent` moved inside the router's try (it throws
+  synchronously on malformed hashes — before any promise exists to `.catch`); a
+  render-generation counter stops a slow stale fetch from appending under a newer
+  view; outcome strings go through a `badgeClass` allowlist before becoming CSS
+  class names (server allowlists them too — defense in depth for future enum
+  values); the token input is cleared after "Use"; the detail mode chip uppercases
+  the payload's lowercase serial name to match the list's enum-name casing.
+
+### Recorded deferrals / accepted trade-offs
+
+- **Roadmap's build-detail "timeline" deferred**: task entries carry `durationMs`
+  but no start offsets (schema v1), so a timeline needs an additive schema field
+  first — same bucket as the pipeline filter above.
+- Filter/paging/trend-range state lives in function arguments, not the hash: back
+  navigation or refresh resets to defaults. Accepted for v0; hash-encoded state is
+  the natural follow-up when the dashboard grows a pipeline filter.
+- Paging shows "Older →" whenever a full page returns (one dead click on exact
+  multiples of 50), and the server clamps `offset` at 10 000. Accepted at pilot scale.
+- The builds/day bar is painted red when the day has ≥1 failure (count in hover
+  title) rather than stacking failure bars. Deliberate v0 simplification.
+
 ## Exit criteria
 
 Server tests green; a compose-stack user can open `/`, paste the bootstrap token,

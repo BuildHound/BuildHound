@@ -23,9 +23,25 @@ class DashboardRoutesTest {
 
         assertEquals(HttpStatusCode.OK, response.status)
         assertEquals(ContentType.Text.Html.withCharset(Charsets.UTF_8), response.contentType())
-        assertEquals(DASHBOARD_CSP, response.headers["Content-Security-Policy"])
+        assertEquals(DashboardAssets.csp, response.headers["Content-Security-Policy"])
         assertEquals("nosniff", response.headers["X-Content-Type-Options"])
+        assertEquals("DENY", response.headers["X-Frame-Options"])
+        assertEquals("no-cache", response.headers["Cache-Control"])
         assertTrue(response.bodyAsText().contains("BuildHound"))
+    }
+
+    @Test
+    fun `CSP locks scripts to self, pins the inline style by hash, and forbids framing`() {
+        val csp = DashboardAssets.csp
+
+        assertTrue(csp.contains("default-src 'none'"))
+        assertTrue(csp.contains("script-src 'self'"))
+        assertTrue(csp.contains("connect-src 'self'"))
+        assertTrue(csp.contains("frame-ancestors 'none'"))
+        assertTrue(csp.contains("base-uri 'none'"))
+        // The style block is hash-pinned; no 'unsafe-*' source anywhere in the policy.
+        assertTrue(Regex("style-src 'sha256-[A-Za-z0-9+/=]+'").containsMatchIn(csp), csp)
+        assertFalse(csp.contains("unsafe"), csp)
     }
 
     @Test
@@ -53,7 +69,7 @@ class DashboardRoutesTest {
         assertEquals(HttpStatusCode.OK, response.status)
         assertEquals(ContentType.parse("text/javascript"), response.contentType()?.withoutParameters())
         assertEquals(Charsets.UTF_8, response.contentType()?.charset())
-        assertEquals(DASHBOARD_CSP, response.headers["Content-Security-Policy"])
+        assertEquals(DashboardAssets.csp, response.headers["Content-Security-Policy"])
         assertTrue(response.bodyAsText().contains("use strict"))
     }
 

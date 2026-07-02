@@ -9,10 +9,20 @@
     const token = () => sessionStorage.getItem("buildhound.token") || "";
 
     document.getElementById("token-save").addEventListener("click", () => {
-        sessionStorage.setItem("buildhound.token", document.getElementById("token-input").value.trim());
+        const input = document.getElementById("token-input");
+        sessionStorage.setItem("buildhound.token", input.value.trim());
+        input.value = ""; // don't leave the token sitting in the live DOM
         tokenBar.hidden = true;
         route();
     });
+
+    // Outcome strings come from the server but are untrusted in principle; only
+    // allowlisted values may become CSS class names (everything else renders unstyled).
+    const BADGE_CLASSES = ["SUCCESS", "FAILED", "EXECUTED", "UP_TO_DATE", "FROM_CACHE", "SKIPPED", "NO_SOURCE"];
+    const badgeClass = outcome => BADGE_CLASSES.includes(outcome) ? outcome : "";
+
+    // Views are async; only the most recently started render may touch the DOM.
+    let renderSeq = 0;
 
     const el = (tag, text, className) => {
         const node = document.createElement(tag);
@@ -66,10 +76,12 @@
     };
 
     async function buildsView(filter, offset) {
+        const seq = ++renderSeq;
         const params = query(filter);
         params.set("limit", "50");
         params.set("offset", String(offset));
         const builds = await api("/v1/builds?" + params);
+        if (seq !== renderSeq) return;
 
         app.textContent = "";
         app.append(filterControls(filter, next => buildsView(next, 0).catch(fail)));
@@ -80,7 +92,7 @@
         for (const build of builds) {
             const row = el("tr", null, "row");
             row.append(el("td", when(build.startedAt)));
-            row.append(el("td", build.outcome, build.outcome));
+            row.append(el("td", build.outcome, badgeClass(build.outcome)));
             const durationCell = el("td", ms(build.durationMs), "num");
             row.append(durationCell);
             row.append(el("td", build.mode));
@@ -106,7 +118,9 @@
     }
 
     async function detailView(buildId) {
+        const seq = ++renderSeq;
         const build = await api("/v1/builds/" + encodeURIComponent(buildId));
+        if (seq !== renderSeq) return;
         app.textContent = "";
         const back = el("a", "← all builds");
         back.href = "#/builds";
@@ -117,7 +131,7 @@
         const chip = (label, value) => { const item = el("li"); item.append(el("b", label + " ")); item.append(el("span", value)); chips.append(item); };
         chip("outcome", build.outcome);
         chip("duration", ms(build.finishedAt - build.startedAt));
-        chip("mode", build.mode);
+        chip("mode", String(build.mode || "").toUpperCase()); // payload serial names are lowercase; the list shows enum names
         const tasks = build.tasks || [];
         chip("tasks", tasks.length);
         const derived = build.derived || {};
@@ -135,7 +149,7 @@
         const summary = el("ul", null, "chips");
         for (const outcomeName of Object.keys(counts).sort()) {
             const item = el("li");
-            item.append(el("span", outcomeName + " ", "badge " + outcomeName));
+            item.append(el("span", outcomeName + " ", "badge " + badgeClass(outcomeName)));
             item.append(el("span", counts[outcomeName]));
             summary.append(item);
         }
@@ -149,7 +163,7 @@
             const row = el("tr");
             row.append(el("td", task.path));
             const outcomeCell = el("td");
-            outcomeCell.append(el("span", task.outcome, "badge " + task.outcome));
+            outcomeCell.append(el("span", task.outcome, "badge " + badgeClass(task.outcome)));
             row.append(outcomeCell);
             row.append(el("td", ms(task.durationMs), "num"));
             row.append(el("td", task.incremental ? "yes" : ""));
@@ -190,9 +204,11 @@
     }
 
     async function trendsView(filter, days) {
+        const seq = ++renderSeq;
         const params = query(filter);
         params.set("days", String(days));
         const points = await api("/v1/trends?" + params);
+        if (seq !== renderSeq) return;
 
         app.textContent = "";
         app.append(filterControls(filter, next => trendsView(next, days).catch(fail)));
@@ -239,12 +255,19 @@
     }
 
     function route() {
-        const hash = location.hash || "#/builds";
-        const detail = hash.match(/^#\/build\/(.+)$/);
-        const run = detail
-            ? detailView(decodeURIComponent(detail[1]))
-            : hash.startsWith("#/trends") ? trendsView({}, 30) : buildsView({}, 0);
-        run.catch(fail);
+        // decodeURIComponent throws synchronously on malformed input (Firefox returns
+        // location.hash pre-decoded, so a stored %xx can arrive re-broken) — the try
+        // must cover it, not just the promise.
+        try {
+            const hash = location.hash || "#/builds";
+            const detail = hash.match(/^#\/build\/(.+)$/);
+            const run = detail
+                ? detailView(decodeURIComponent(detail[1]))
+                : hash.startsWith("#/trends") ? trendsView({}, 30) : buildsView({}, 0);
+            run.catch(fail);
+        } catch (err) {
+            fail(err);
+        }
     }
 
     window.addEventListener("hashchange", route);
