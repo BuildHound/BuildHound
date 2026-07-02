@@ -28,6 +28,8 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         extension.mode.convention(TelemetryMode.AUTO)
         extension.identity.pseudonymize.convention(true)
         extension.htmlReport.enabled.convention(true)
+        extension.localBuilds.enabled.convention(true)
+        extension.localBuilds.requireOptInFile.convention(true)
 
         // In a composite, only the root build observes: task events from included builds
         // already reach the root's listener, and a second flow action would consume the
@@ -83,6 +85,10 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.outputDir.set(File(settings.rootDir, "build/buildhound").absolutePath)
             spec.parameters.htmlReportEnabled.set(extension.htmlReport.enabled)
             spec.parameters.rootDir.set(settings.rootDir.absolutePath)
+            spec.parameters.serverUrl.set(extension.server.url)
+            spec.parameters.serverToken.set(extension.server.token)
+            spec.parameters.localBuildsEnabled.set(extension.localBuilds.enabled)
+            spec.parameters.requireOptInFile.set(extension.localBuilds.requireOptInFile)
         }
     }
 

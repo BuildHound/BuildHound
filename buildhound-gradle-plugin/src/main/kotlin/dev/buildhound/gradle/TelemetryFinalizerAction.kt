@@ -68,6 +68,20 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
         @get:Input
         val rootDir: Property<String>
+
+        @get:Input
+        @get:Optional
+        val serverUrl: Property<String>
+
+        @get:Input
+        @get:Optional
+        val serverToken: Property<String>
+
+        @get:Input
+        val localBuildsEnabled: Property<Boolean>
+
+        @get:Input
+        val requireOptInFile: Property<Boolean>
     }
 
     override fun execute(parameters: Parameters) {
@@ -121,7 +135,31 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 payload.derived?.cacheableHitRate?.let { "%.2f".format(java.util.Locale.ROOT, it) } ?: "n/a",
             )
             logger.lifecycle("[buildhound] payload written: {} (buildId={})", payloadFile, payload.buildId)
-            // TODO(phase 1): gzip upload with spool/retry.
+
+            val decision = UploadGate.decide(
+                enabled = true, // enabled/disabled already short-circuited above
+                serverUrl = parameters.serverUrl.orNull,
+                mode = mode,
+                localBuildsEnabled = parameters.localBuildsEnabled.getOrElse(true),
+                requireOptInFile = parameters.requireOptInFile.getOrElse(true),
+                optInFileExists = optInMarkerExists(),
+            )
+            when (decision) {
+                is UploadGate.Decision.Upload -> {
+                    val uploader = PayloadUploader(
+                        baseUrl = decision.url,
+                        token = parameters.serverToken.orNull,
+                        spoolDir = File(parameters.outputDir.get(), "spool"),
+                    )
+                    uploader.drainSpool()
+                    uploader.uploadOrSpool(
+                        payload.buildId,
+                        BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload),
+                    )
+                }
+                is UploadGate.Decision.Skip ->
+                    logger.info("[buildhound] upload skipped: {}", decision.reason)
+            }
         }.onFailure { failure ->
             logger.warn("[buildhound] telemetry finalization failed (build unaffected): {}", failure.message)
             parameters.writeFailureMarker(failure)
@@ -140,6 +178,10 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             marker.writeText("telemetry finalization failed: ${failure::class.java.name}\n")
         }
     }
+
+    private fun optInMarkerExists(): Boolean = runCatching {
+        File(System.getProperty("user.home"), ".buildhound/optin").exists()
+    }.getOrDefault(false)
 
     /** Plain and canonical forms: reason text may carry either on symlinked checkouts. */
     private fun scrubRoots(rootDir: String?): List<String> {

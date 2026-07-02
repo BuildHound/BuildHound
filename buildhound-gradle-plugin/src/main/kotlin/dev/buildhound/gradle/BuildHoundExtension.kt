@@ -14,12 +14,6 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     /** Master switch; telemetry is skipped entirely when false. */
     abstract val enabled: Property<Boolean>
 
-    /** Base URL of the BuildHound server, e.g. `https://buildhound.example.com`. Unset = offline/artifact-only. */
-    abstract val serverUrl: Property<String>
-
-    /** Ingest token. Wire from an environment variable provider, never hardcode. */
-    abstract val serverToken: Property<String>
-
     abstract val mode: Property<TelemetryMode>
 
     /** Low-cardinality dimensions attached to every build, e.g. `tags.put("team", "mobile")`. */
@@ -32,6 +26,32 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     val htmlReport: HtmlReportSpec = objects.newInstance(HtmlReportSpec::class.java)
 
     fun htmlReport(action: Action<HtmlReportSpec>) = action.execute(htmlReport)
+
+    val server: ServerSpec = objects.newInstance(ServerSpec::class.java)
+
+    fun server(action: Action<ServerSpec>) = action.execute(server)
+
+    val localBuilds: LocalBuildsSpec = objects.newInstance(LocalBuildsSpec::class.java)
+
+    fun localBuilds(action: Action<LocalBuildsSpec>) = action.execute(localBuilds)
+}
+
+/** `server { ... }` (spec §3.4). Unset url = offline/artifact-only. */
+abstract class ServerSpec {
+    /** Base URL, e.g. `https://buildhound.example.com`. */
+    abstract val url: Property<String>
+
+    /** Ingest token. Wire from an environment variable provider, never hardcode. */
+    abstract val token: Property<String>
+}
+
+/**
+ * `localBuilds { ... }` (spec §3.4): local-mode uploads are opt-in — by default they
+ * additionally require the `~/.buildhound/optin` marker file (spec §3.7).
+ */
+abstract class LocalBuildsSpec {
+    abstract val enabled: Property<Boolean>
+    abstract val requireOptInFile: Property<Boolean>
 }
 
 /** `htmlReport { ... }` (spec §3.4/§3.8). Output dir is fixed next to the payload for now (plan 006). */
