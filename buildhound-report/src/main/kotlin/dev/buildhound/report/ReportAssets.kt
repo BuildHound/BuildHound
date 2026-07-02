@@ -8,7 +8,8 @@ package dev.buildhound.report
  */
 object ReportAssets {
 
-    const val DATA_PLACEHOLDER: String = "/*__BUILDHOUND_DATA__*/"
+    /** Includes the `null` fallback so the template is valid JS before AND after render. */
+    const val DATA_PLACEHOLDER: String = "/*__BUILDHOUND_DATA__*/null"
 
     fun template(): String =
         checkNotNull(ReportAssets::class.java.getResourceAsStream("/dev/buildhound/report/report-template.html")) {

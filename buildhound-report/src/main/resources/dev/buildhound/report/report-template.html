@@ -3,6 +3,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- Defense-in-depth: even an escaping regression must not be able to fetch or exfiltrate. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
     <title>BuildHound Build Report</title>
     <!-- Fully standalone: all CSS/JS is inlined, no external requests (locked decision #4). -->
     <style>
@@ -48,7 +50,7 @@
     // The plugin replaces the placeholder below with the build payload JSON at report
     // time, so the artifact doubles as an offline payload copy. All payload strings are
     // untrusted: they only ever reach the DOM via textContent, never innerHTML.
-    const buildhoundData = /*__BUILDHOUND_DATA__*/ null;
+    const buildhoundData = /*__BUILDHOUND_DATA__*/null;
 
     (function render(d) {
         if (!d) return;

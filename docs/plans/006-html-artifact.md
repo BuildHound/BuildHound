@@ -30,6 +30,17 @@ data, zero network)". Spec §3.8 (locked decision #4: fully self-contained, no C
 panels (need their collectors), dashboard link (needs server config plumbed), custom
 output dir.
 
+## Divergences after review
+
+- The placeholder now includes the `null` sentinel (`/*__BUILDHOUND_DATA__*/null`):
+  replacing only the comment left `{…} null;` — a SyntaxError that blanked every
+  rendered report (HIGH review finding; tests now assert the exact assignment).
+- `executionReasons` are stripped from the *embedded* payload copy: the artifact is
+  designed for publication (CI artifact viewers), which voids plan 005's
+  "local-file-only" acceptance of unscrubbed reason text. They remain in the local
+  `build-payload.json` until the §3.7 scrubber lands.
+- CSP meta tag (`default-src 'none'`) added as defense-in-depth.
+
 ## Test strategy
 
 - report unit: template has placeholder + no external requests (existing, kept);

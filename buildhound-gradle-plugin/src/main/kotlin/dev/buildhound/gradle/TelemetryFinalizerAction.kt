@@ -104,7 +104,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             if (parameters.htmlReportEnabled.getOrElse(true)) {
                 // Wire-format JSON (not the pretty file) — the artifact doubles as an
                 // offline payload copy (spec §3.8); render() escapes for the HTML context.
-                val html = ReportAssets.render(BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload))
+                // executionReasons are stripped: the artifact is MADE to be published and
+                // Gradle's reason text embeds absolute paths — they stay in the local
+                // payload file only until the §3.7 scrubber lands (plans 005/006).
+                val publishable = payload.copy(tasks = payload.tasks.map { it.copy(executionReasons = emptyList()) })
+                val html = ReportAssets.render(BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), publishable))
                 val htmlFile = File(payloadFile.parentFile, "buildhound-report.html")
                 htmlFile.writeText(html)
                 logger.lifecycle("[buildhound] report written: {}", htmlFile)
@@ -116,7 +120,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 payload.derived?.cacheableHitRate?.let { "%.2f".format(java.util.Locale.ROOT, it) } ?: "n/a",
             )
             logger.lifecycle("[buildhound] payload written: {} (buildId={})", payloadFile, payload.buildId)
-            // TODO(phase 1): HTML artifact, gzip upload with spool/retry.
+            // TODO(phase 1): gzip upload with spool/retry.
         }.onFailure { failure ->
             logger.warn("[buildhound] telemetry finalization failed (build unaffected): {}", failure.message)
             parameters.writeFailureMarker(failure)

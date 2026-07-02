@@ -19,15 +19,17 @@ class ReportAssetsTest {
         val template = ReportAssets.template()
 
         // Locked decision #4: fully standalone artifact, zero CDN/network access.
-        assertFalse(template.contains("http://"), "template must not reference external resources")
-        assertFalse(template.contains("https://"), "template must not reference external resources")
+        for (marker in listOf("http://", "https://", "url(", "@import", "<link", "<img", "fetch(", "XMLHttpRequest", "import(")) {
+            assertFalse(template.contains(marker), "template must not reference external resources: $marker")
+        }
     }
 
     @Test
     fun `render embeds the payload json`() {
         val rendered = ReportAssets.render("""{"buildId":"abc"}""")
 
-        assertTrue(rendered.contains("""{"buildId":"abc"}"""))
+        // The whole assignment must be syntactically valid JS: no trailing null sentinel.
+        assertTrue(rendered.contains("""const buildhoundData = {"buildId":"abc"};"""))
         assertFalse(rendered.contains(ReportAssets.DATA_PLACEHOLDER))
         assertTrue(rendered.startsWith("<!DOCTYPE html>"))
     }
