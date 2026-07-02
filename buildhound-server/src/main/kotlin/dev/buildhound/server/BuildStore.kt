@@ -59,12 +59,24 @@ interface BuildStore {
     fun trends(projectId: String, filter: BuildFilter, days: Int, nowMs: Long): List<TrendPoint>
 }
 
+/** Token scopes (spec §5): a leaked CI ingest token must not read history. */
+object TokenScope {
+    const val INGEST = "ingest"
+    const val READ = "read"
+    const val ALL = "all"
+
+    fun allowsIngest(scope: String): Boolean = scope == INGEST || scope == ALL
+    fun allowsRead(scope: String): Boolean = scope == READ || scope == ALL
+}
+
+data class TokenPrincipal(val project: ProjectRef, val scope: String)
+
 /** Token lookups by hash — plaintext tokens never reach a store (spec §8). */
 interface TokenStore {
-    fun resolveProject(tokenHash: String): ProjectRef?
+    fun resolve(tokenHash: String): TokenPrincipal?
 
     /** Idempotent pilot bootstrap: create the project and attach the token hash. */
-    fun ensureProjectWithToken(projectKey: String, tokenHash: String): ProjectRef
+    fun ensureProjectWithToken(projectKey: String, tokenHash: String, scope: String = TokenScope.ALL): ProjectRef
 }
 
 class InMemoryBuildStore : BuildStore {
@@ -89,7 +101,8 @@ class InMemoryBuildStore : BuildStore {
 
     override fun list(projectId: String, filter: BuildFilter, limit: Int, offset: Int): List<BuildSummary> =
         matching(projectId, filter)
-            .sortedByDescending { it.startedAt }
+            // buildId tiebreak keeps pagination deterministic on equal timestamps.
+            .sortedWith(compareByDescending<BuildPayload> { it.startedAt }.thenByDescending { it.buildId })
             .drop(offset)
             .take(limit)
             .map { payload ->
@@ -117,7 +130,7 @@ class InMemoryBuildStore : BuildStore {
                     day = day.toString(),
                     builds = dayBuilds.size,
                     failures = dayBuilds.count { it.outcome.name == "FAILED" },
-                    avgDurationMs = durations.average().toLong(),
+                    avgDurationMs = Math.round(durations.average()),
                     maxDurationMs = durations.max(),
                     avgHitRate = hitRates.takeIf { it.isNotEmpty() }?.average(),
                 )
@@ -127,19 +140,20 @@ class InMemoryBuildStore : BuildStore {
 
 class InMemoryTokenStore : TokenStore {
     private val projects = ConcurrentHashMap<String, ProjectRef>() // key -> project
-    private val tokens = ConcurrentHashMap<String, String>() // tokenHash -> projectId
+    private val tokens = ConcurrentHashMap<String, Pair<String, String>>() // tokenHash -> (projectId, scope)
 
-    override fun resolveProject(tokenHash: String): ProjectRef? {
-        val projectId = tokens[tokenHash] ?: return null
-        return projects.values.firstOrNull { it.id == projectId }
+    override fun resolve(tokenHash: String): TokenPrincipal? {
+        val (projectId, scope) = tokens[tokenHash] ?: return null
+        val project = projects.values.firstOrNull { it.id == projectId } ?: return null
+        return TokenPrincipal(project, scope)
     }
 
-    override fun ensureProjectWithToken(projectKey: String, tokenHash: String): ProjectRef {
+    override fun ensureProjectWithToken(projectKey: String, tokenHash: String, scope: String): ProjectRef {
         val project = projects.computeIfAbsent(projectKey) {
             ProjectRef(id = java.util.UUID.randomUUID().toString(), key = projectKey)
         }
-        val existing = tokens.putIfAbsent(tokenHash, project.id)
-        check(existing == null || existing == project.id) {
+        val existing = tokens.putIfAbsent(tokenHash, project.id to scope)
+        check(existing == null || existing.first == project.id) {
             "token is already bound to another project — refusing silent cross-tenant reuse"
         }
         return project

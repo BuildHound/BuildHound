@@ -64,11 +64,16 @@ class PostgresStoresIntegrationTest {
         val second = tokens.ensureProjectWithToken("pilot", sha256Hex("secret-1"))
 
         assertEquals(first.id, second.id, "bootstrap must be idempotent")
-        assertEquals("pilot", tokens.resolveProject(sha256Hex("secret-1"))?.key)
-        assertNull(tokens.resolveProject(sha256Hex("wrong")), "unknown hash resolves nothing")
+        assertEquals("pilot", tokens.resolve(sha256Hex("secret-1"))?.project?.key)
+        assertNull(tokens.resolve(sha256Hex("wrong")), "unknown hash resolves nothing")
         // Reusing the same token for a different project must fail boot, not misroute.
         val reuse = runCatching { tokens.ensureProjectWithToken("other-project", sha256Hex("secret-1")) }
         assertTrue(reuse.isFailure, "cross-project token reuse must never be silent")
+
+        // Scopes persist and resolve (spec §5).
+        tokens.ensureProjectWithToken("pilot", sha256Hex("ingest-only"), TokenScope.INGEST)
+        assertEquals(TokenScope.INGEST, tokens.resolve(sha256Hex("ingest-only"))?.scope)
+        assertEquals(TokenScope.ALL, tokens.resolve(sha256Hex("secret-1"))?.scope)
     }
 
     @Test
@@ -94,6 +99,13 @@ class PostgresStoresIntegrationTest {
         assertEquals(1, trends.sumOf { it.failures })
         assertTrue(trends.all { it.avgDurationMs == 60_000L }, trends.toString())
         assertTrue(trends.zipWithNext().all { (a, b) -> a.day < b.day }, "oldest first")
+
+        // Window exclusion + filtered trends (the param-index arithmetic under test).
+        builds.save(project.id, payload("q-ancient", startedAt = now - 10 * 86_400_000))
+        assertEquals(3, builds.trends(project.id, BuildFilter(), days = 7, nowMs = now).sumOf { it.builds })
+        val filtered = builds.trends(project.id, BuildFilter(branch = "main", outcome = "FAILED"), days = 7, nowMs = now)
+        assertEquals(1, filtered.sumOf { it.builds })
+        assertEquals(1, filtered.sumOf { it.failures })
     }
 
     @Test

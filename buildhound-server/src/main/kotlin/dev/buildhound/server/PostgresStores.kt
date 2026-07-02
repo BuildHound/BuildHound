@@ -105,7 +105,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 """
                 SELECT build_id, started_at, duration_ms, outcome, mode, branch, hit_rate
                 FROM builds WHERE project_id = ?$clauses
-                ORDER BY started_at DESC LIMIT ? OFFSET ?
+                ORDER BY started_at DESC, build_id DESC LIMIT ? OFFSET ?
                 """.trimIndent(),
             ).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
@@ -177,11 +177,11 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
 
 class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
 
-    override fun resolveProject(tokenHash: String): ProjectRef? =
+    override fun resolve(tokenHash: String): TokenPrincipal? =
         dataSource.connection.use { connection ->
             connection.prepareStatement(
                 """
-                SELECT p.id, p.project_key FROM api_tokens t
+                SELECT p.id, p.project_key, t.scope FROM api_tokens t
                 JOIN projects p ON p.id = t.project_id
                 WHERE t.token_hash = ? AND t.revoked_at IS NULL
                 """.trimIndent(),
@@ -189,12 +189,15 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
                 statement.setString(1, tokenHash)
                 statement.executeQuery().use { rows ->
                     if (!rows.next()) null
-                    else ProjectRef(id = rows.getString(1), key = rows.getString(2))
+                    else TokenPrincipal(
+                        project = ProjectRef(id = rows.getString(1), key = rows.getString(2)),
+                        scope = rows.getString(3),
+                    )
                 }
             }
         }
 
-    override fun ensureProjectWithToken(projectKey: String, tokenHash: String): ProjectRef =
+    override fun ensureProjectWithToken(projectKey: String, tokenHash: String, scope: String): ProjectRef =
         dataSource.connection.use { connection ->
             connection.prepareStatement(
                 "INSERT INTO projects (project_key) VALUES (?) ON CONFLICT (project_key) DO NOTHING",
@@ -212,10 +215,11 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
                 }
             }
             val inserted = connection.prepareStatement(
-                "INSERT INTO api_tokens (project_id, token_hash) VALUES (?, ?) ON CONFLICT (token_hash) DO NOTHING",
+                "INSERT INTO api_tokens (project_id, token_hash, scope) VALUES (?, ?, ?) ON CONFLICT (token_hash) DO NOTHING",
             ).use { statement ->
                 statement.setObject(1, UUID.fromString(project.id))
                 statement.setString(2, tokenHash)
+                statement.setString(3, scope)
                 statement.executeUpdate() == 1
             }
             if (!inserted) {

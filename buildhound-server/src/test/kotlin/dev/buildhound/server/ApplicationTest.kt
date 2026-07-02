@@ -1,5 +1,6 @@
 package dev.buildhound.server
 
+import dev.buildhound.commons.payload.BuildHoundJson
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -271,28 +272,72 @@ class ApplicationTest {
     }
 
     @Test
-    fun `query api trends bucket by day`() = testApplication {
-        val fixture = fixture()
-        appWith(fixture)
-        val now = System.currentTimeMillis()
-        for (p in listOf(
-            richPayload("t-1", now - 86_400_000, "SUCCESS", "main"),
-            richPayload("t-2", now - 86_400_000 + 3_600_000, "FAILED", "main"),
-            richPayload("t-3", now - 3_600_000, "SUCCESS", "main"),
+    fun `query api trends bucket by day`() {
+        // Store-level with fixed timestamps: bucketing itself must be assertable
+        // without UTC-midnight flakiness.
+        val store = InMemoryBuildStore()
+        val day1 = 1751328000000 // 2025-07-01T00:00:00Z
+        val day2 = day1 + 86_400_000
+        for ((id, at, outcome) in listOf(
+            Triple("t-1", day1 + 1_000, "SUCCESS"),
+            Triple("t-2", day1 + 2_000, "FAILED"),
+            Triple("t-3", day2 + 1_000, "SUCCESS"),
         )) {
-            client.post("/v1/builds") {
-                header("Authorization", "Bearer test-token")
-                contentType(ContentType.Application.Json)
-                setBody(p)
-            }
+            store.save(
+                "p1",
+                BuildHoundJson.payload.decodeFromString(
+                    dev.buildhound.commons.payload.BuildPayload.serializer(),
+                    richPayload(id, at, outcome, "main"),
+                ),
+            )
         }
 
-        val response = client.get("/v1/trends?days=7") { header("Authorization", "Bearer test-token") }
-        assertEquals(HttpStatusCode.OK, response.status)
-        val body = response.bodyAsText()
-        val buildCounts = Regex("\"builds\":(\\d+)").findAll(body).map { it.groupValues[1].toInt() }.toList()
-        assertEquals(3, buildCounts.sum(), body)
-        assertTrue(body.contains("\"failures\":1"), body)
+        val trends = store.trends("p1", BuildFilter(), days = 7, nowMs = day2 + 10_000)
+        assertEquals(2, trends.size, trends.toString())
+        assertEquals(listOf(2, 1), trends.map { it.builds })
+        assertEquals(listOf(1, 0), trends.map { it.failures })
+
+        // Window exclusion: a build older than the cutoff disappears.
+        assertEquals(1, store.trends("p1", BuildFilter(), days = 1, nowMs = day2 + 10_000).sumOf { it.builds })
+    }
+
+    @Test
+    fun `read routes reject unauthenticated and over-limit requests`() = testApplication {
+        appWith(fixture())
+
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/builds/some-id").status)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/trends").status)
+        // limit clamps rather than erroring
+        val clamped = client.get("/v1/builds?limit=99999") { header("Authorization", "Bearer test-token") }
+        assertEquals(HttpStatusCode.OK, clamped.status)
+    }
+
+    @Test
+    fun `token scopes separate ingest from read`() = testApplication {
+        val stores = ServerStores(InMemoryBuildStore(), InMemoryTokenStore())
+        stores.tokens.ensureProjectWithToken("pilot", sha256Hex("ingest-token"), TokenScope.INGEST)
+        stores.tokens.ensureProjectWithToken("pilot", sha256Hex("read-token"), TokenScope.READ)
+        application { buildHoundModule(stores) }
+
+        val ingestWithIngest = client.post("/v1/builds") {
+            header("Authorization", "Bearer ingest-token")
+            contentType(ContentType.Application.Json)
+            setBody(payloadJson(buildId = "scoped-1"))
+        }
+        assertEquals(HttpStatusCode.Accepted, ingestWithIngest.status)
+
+        val readWithIngest = client.get("/v1/builds") { header("Authorization", "Bearer ingest-token") }
+        assertEquals(HttpStatusCode.Forbidden, readWithIngest.status, "a leaked CI token must not read history")
+
+        val readWithRead = client.get("/v1/builds") { header("Authorization", "Bearer read-token") }
+        assertEquals(HttpStatusCode.OK, readWithRead.status)
+
+        val ingestWithRead = client.post("/v1/builds") {
+            header("Authorization", "Bearer read-token")
+            contentType(ContentType.Application.Json)
+            setBody(payloadJson(buildId = "scoped-2"))
+        }
+        assertEquals(HttpStatusCode.Forbidden, ingestWithRead.status)
     }
 
     @Test

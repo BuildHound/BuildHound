@@ -31,6 +31,24 @@ hit-rate trend charts with pipeline/branch/mode filters." Spec §5 (query API),
 as a hot column — additive migration later), p50/p95 percentiles, retention, rate
 limiting (still a pre-pilot blocker), CSV export.
 
+## Hardening round (review findings, fixed pre-merge)
+
+- **Token scopes implemented** (spec §5): additive `scope` column ('ingest'|'read'|
+  'all', default 'all' keeps bootstrap tokens working); ingest requires
+  ingest/all, reads require read/all → 403 otherwise. A leaked CI ingest token can
+  no longer read the project's history. Scoped token issuance UX lands with the
+  admin API; bootstrap stays single-'all'-token for the pilot.
+- Read routes classify storage failures as 503 (parity with ingest — a bare 500
+  would poison the plugin's spool logic if ever applied to uploads, and hides
+  outages); offset clamped ≤ 10 000; deterministic pagination via buildId
+  tiebreaker in both stores; filter allowlists derive from the schema enums
+  (additive enum values stay filterable); avg rounding parity (Math.round).
+- The rate-limiting pre-pilot blocker explicitly covers the query routes too
+  (trends is the first cheap-request/expensive-aggregation endpoint).
+- Test gaps closed: scope separation, 401 on all read routes, limit clamp,
+  days-window exclusion (both stores), filtered trends on real SQL (the
+  param-index arithmetic), fixed-timestamp day bucketing.
+
 ## Test strategy
 
 - `testApplication` + in-memory: list ordering/filter/limit-cap/pagination, detail

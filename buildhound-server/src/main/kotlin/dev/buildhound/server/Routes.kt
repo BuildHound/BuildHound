@@ -1,12 +1,15 @@
 package dev.buildhound.server
 
 import dev.buildhound.commons.payload.BuildHoundJson
+import dev.buildhound.commons.payload.BuildMode
+import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.header
 import io.ktor.server.request.receiveChannel
 import io.ktor.server.response.respond
+import io.ktor.server.util.getOrFail
 import io.ktor.utils.io.readAvailable
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -45,7 +48,7 @@ fun Route.healthRoutes() {
 fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore) {
     route("/v1") {
         post("/builds") {
-            val project = call.authenticatedProject(tokens) ?: return@post
+            val project = call.authenticatedProject(tokens, TokenScope::allowsIngest) ?: return@post
 
             // Bounded read: the body must never be fully buffered before the cap check
             // (authenticated OOM DoS otherwise — review finding, plan 009).
@@ -104,54 +107,80 @@ fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore) {
 fun Route.queryRoutes(store: BuildStore, tokens: TokenStore) {
     route("/v1") {
         get("/builds") {
-            val project = call.authenticatedProject(tokens) ?: return@get
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val filter = call.buildFilterOrNull()
                 ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
             val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 200)
-            val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
-            call.respond(store.list(project.id, filter, limit, offset))
+            val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceIn(0, 10_000)
+            call.respondQuery { store.list(project.id, filter, limit, offset) }
         }
 
         get("/builds/{buildId}") {
-            val project = call.authenticatedProject(tokens) ?: return@get
-            val buildId = call.parameters["buildId"]
-                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("missing buildId"))
-            val payload = store.findById(project.id, buildId)
-                ?: return@get call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
-            call.respond(payload)
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val buildId = call.parameters.getOrFail("buildId")
+            val payload = call.runQuery { store.findById(project.id, buildId) } ?: return@get
+            payload.value
+                ?.let { call.respond(it) }
+                ?: call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
         }
 
         get("/trends") {
-            val project = call.authenticatedProject(tokens) ?: return@get
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val filter = call.buildFilterOrNull()
                 ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
             val days = (call.request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)
-            call.respond(store.trends(project.id, filter, days, System.currentTimeMillis()))
+            call.respondQuery { store.trends(project.id, filter, days, System.currentTimeMillis()) }
         }
     }
 }
 
-/** 401s and returns null when the bearer token is missing or unknown. */
-private suspend fun ApplicationCall.authenticatedProject(tokens: TokenStore): ProjectRef? {
+private class QueryResult<T>(val value: T)
+
+/** Same outage classification as ingest: storage failures are 503, never a bare 500. */
+private suspend fun <T> ApplicationCall.runQuery(block: () -> T): QueryResult<T>? =
+    try {
+        QueryResult(block())
+    } catch (e: SQLException) {
+        ingestLogger.warn("storage unavailable: {}", e::class.java.simpleName)
+        respond(HttpStatusCode.ServiceUnavailable, ApiError("storage unavailable"))
+        null
+    }
+
+private suspend inline fun <reified T : Any> ApplicationCall.respondQuery(noinline block: () -> T) {
+    runQuery(block)?.let { respond(it.value) }
+}
+
+/**
+ * 401s and returns null when the bearer token is missing/unknown; 403 when the
+ * token's scope does not permit the operation (spec §5: ingest vs read scopes).
+ */
+private suspend fun ApplicationCall.authenticatedProject(
+    tokens: TokenStore,
+    scopeCheck: (String) -> Boolean,
+): ProjectRef? {
     val token = bearerToken()
     if (token == null) {
         respond(HttpStatusCode.Unauthorized, ApiError("missing bearer token"))
         return null
     }
-    val project = tokens.resolveProject(sha256Hex(token))
-    if (project == null) {
+    val principal = tokens.resolve(sha256Hex(token))
+    if (principal == null) {
         respond(HttpStatusCode.Unauthorized, ApiError("unknown token"))
         return null
     }
-    return project
+    if (!scopeCheck(principal.scope)) {
+        respond(HttpStatusCode.Forbidden, ApiError("token scope does not permit this operation"))
+        return null
+    }
+    return principal.project
 }
 
-/** Filter values are allowlisted against the stored enum names — never free text. */
+/** Filter values are allowlisted against the schema enum names — never free text. */
 private fun ApplicationCall.buildFilterOrNull(): BuildFilter? {
     val mode = request.queryParameters["mode"]?.uppercase()
-    if (mode != null && mode !in setOf("CI", "LOCAL", "BENCHMARK")) return null
+    if (mode != null && mode !in BuildMode.entries.map { it.name }) return null
     val outcome = request.queryParameters["outcome"]?.uppercase()
-    if (outcome != null && outcome !in setOf("SUCCESS", "FAILED")) return null
+    if (outcome != null && outcome !in BuildOutcome.entries.map { it.name }) return null
     return BuildFilter(branch = request.queryParameters["branch"], mode = mode, outcome = outcome)
 }
 
