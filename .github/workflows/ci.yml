@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Runs unit tests, TestKit functional tests, and plugin validation, with the
+      # configuration cache enabled (gradle.properties).
+      - name: Build
+        run: ./gradlew build
+
+      # Roadmap phase 0 exit criterion: grow this into a TestKit matrix
+      # {Gradle 8.0, 8.14, 9.latest} x {config cache on/off}.
+
+  server-image:
+    name: Server OCI image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -f btp-server/Dockerfile -t btp-server:${{ github.sha }} .
+
+      - name: Smoke test image
+        run: |
+          docker run -d --rm --name btp-server -p 8080:8080 btp-server:${{ github.sha }}
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8080/health; then exit 0; fi
+            sleep 1
+          done
+          echo "server did not become healthy" >&2
+          docker logs btp-server >&2
+          exit 1

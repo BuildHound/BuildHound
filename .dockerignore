@@ -1,0 +1,8 @@
+.git
+.gradle
+.kotlin
+**/build
+docs
+btp-ci-assets
+deploy
+*.md
