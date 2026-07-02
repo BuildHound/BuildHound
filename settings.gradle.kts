@@ -5,6 +5,12 @@ pluginManagement {
     }
 }
 
+plugins {
+    // Auto-provisions the JDK 26 build toolchain (plan 011). Environments that cannot
+    // reach api.foojay.io set buildhound.toolchain=21 in their user gradle.properties.
+    id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
+}
+
 dependencyResolutionManagement {
     repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
     repositories {

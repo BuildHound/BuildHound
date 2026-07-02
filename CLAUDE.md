@@ -100,7 +100,9 @@ special event.
 ## Conventions
 
 - JVM 21 floor for **all** modules (owner decision, see architecture decision log); the
-  plugin therefore requires Gradle running on JDK 21+.
+  plugin therefore requires Gradle running on JDK 21+. The build itself uses a JDK 26
+  toolchain (auto-provisioned; bytecode/API stay 21 via `-Xjdk-release=21`) — set
+  `buildhound.toolchain=21` in your user gradle.properties if 26 can't be provisioned.
 - Coordinates (naming decision #6): Maven group `dev.buildhound`, plugin id
   `dev.buildhound`, packages `dev.buildhound.*`, env-var prefix `BUILDHOUND_`.
   Casing: **BuildHound** in prose/class names, `buildhound` in ids/modules/DSL.

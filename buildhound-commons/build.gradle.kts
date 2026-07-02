@@ -5,6 +5,9 @@ plugins {
 
 description = "Shared payload schema and CI-provider SPI, shared between the Gradle plugin and the server"
 
+// JDK 26 builds the code; bytecode/API stay Java 21 (plan 011).
+val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26
+
 kotlin {
     // This code rides the Gradle settings classpath and runs on Gradle's *embedded*
     // Kotlin stdlib (2.0 on Gradle 8.14, the support floor) — newer stdlib APIs throw
@@ -13,9 +16,14 @@ kotlin {
         apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
     }
 
-    jvmToolchain(21)
+    jvmToolchain(buildToolchain)
 
-    jvm()
+    jvm {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+            freeCompilerArgs.add("-Xjdk-release=21")
+        }
+    }
     // Future targets: js() for buildhound-report, native for the metric CLI (buildhound-ci-assets).
 
     sourceSets {

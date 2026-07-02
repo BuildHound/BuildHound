@@ -5,17 +5,26 @@ plugins {
 
 description = "Settings plugin collecting build/task telemetry (configuration-cache safe)"
 
+// JDK 26 builds the code; bytecode/API stay Java 21 (plan 011).
+val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26
+
+java {
+    // Consumer floor (owner request, plan 011): Gradle daemons on JDK 21+.
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
 kotlin {
     // This code rides the Gradle settings classpath and runs on Gradle's *embedded*
     // Kotlin stdlib (2.0 on Gradle 8.14, the support floor) — newer stdlib APIs throw
     // NoSuchMethodError at runtime (architecture §2 rule 10).
     compilerOptions {
         apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        freeCompilerArgs.add("-Xjdk-release=21")
     }
 
-    // Java 21 floor for the whole platform (decision log 2026-07-02): the plugin requires
-    // Gradle running on JDK 21+.
-    jvmToolchain(21)
+    jvmToolchain(buildToolchain)
 }
 
 dependencies {

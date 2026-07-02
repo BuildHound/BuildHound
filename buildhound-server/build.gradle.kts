@@ -6,8 +6,16 @@ plugins {
 
 description = "Multi-tenant ingestion service and dashboard backend (Ktor)"
 
+// JDK 26 builds the code; bytecode/API stay Java 21 (plan 011).
+val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26
+
 kotlin {
-    jvmToolchain(21)
+    jvmToolchain(buildToolchain)
+    compilerOptions {
+        // The OCI runtime image stays JRE 21.
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+        freeCompilerArgs.add("-Xjdk-release=21")
+    }
 }
 
 application {
