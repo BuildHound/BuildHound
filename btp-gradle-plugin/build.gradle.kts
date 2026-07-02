@@ -1,5 +1,3 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-
 plugins {
     alias(libs.plugins.kotlin.jvm)
     `java-gradle-plugin`
@@ -8,16 +6,9 @@ plugins {
 description = "Settings plugin collecting build/task telemetry (configuration-cache safe)"
 
 kotlin {
+    // Java 21 floor for the whole platform (decision log 2026-07-02): the plugin requires
+    // Gradle running on JDK 21+.
     jvmToolchain(21)
-    compilerOptions {
-        // Compatibility contract (spec §3.1): the plugin runs on Java 11+ inside Gradle 8.0+.
-        jvmTarget = JvmTarget.JVM_11
-    }
-}
-
-java {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
 }
 
 dependencies {

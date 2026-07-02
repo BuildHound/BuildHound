@@ -19,10 +19,10 @@ CI assets. Apache-2.0.
 
 - `btp-commons` — KMP shared module: payload schema v1 (kotlinx-serialization) +
   `CiEnvironmentProvider` SPI. The contract everything builds against; golden-file tests
-  pin every schema version. JVM 11 floor.
+  pin every schema version.
 - `btp-gradle-plugin` — settings plugin (`io.example.buildtelemetry`, placeholder id).
   Collector `BuildService`, Flow-API finalizer, `buildTelemetry {}` DSL. TestKit tests in
-  the `functionalTest` source set. JVM 11 floor, must stay configuration-cache safe.
+  the `functionalTest` source set. Must stay configuration-cache safe.
 - `btp-server` — Ktor ingest service (`POST /v1/builds`, `/health`), storage behind
   `BuildStore`. OCI image via `btp-server/Dockerfile`, local stack via
   `deploy/compose.yaml` (TimescaleDB). JVM 21.
@@ -99,6 +99,8 @@ special event.
 
 ## Conventions
 
+- JVM 21 floor for **all** modules (owner decision, see architecture decision log); the
+  plugin therefore requires Gradle running on JDK 21+.
 - Placeholder coordinates (`io.example.btp`, plugin id `io.example.buildtelemetry`) until
   naming decision #6 — do not brand anything yet.
 - Version catalog (`gradle/libs.versions.toml`) is the only place versions live.

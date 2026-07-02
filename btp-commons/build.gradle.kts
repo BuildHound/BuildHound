@@ -8,12 +8,7 @@ description = "Shared payload schema and CI-provider SPI, shared between the Gra
 kotlin {
     jvmToolchain(21)
 
-    jvm {
-        // The Gradle plugin consumes this module and must run on Java 11+ (spec §3.1).
-        compilerOptions {
-            jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11
-        }
-    }
+    jvm()
     // Future targets: js() for btp-report, native for the metric CLI (btp-ci-assets).
 
     sourceSets {

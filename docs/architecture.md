@@ -20,19 +20,20 @@
 
 | Module | Type | JVM floor | Role |
 |---|---|---|---|
-| `btp-commons` | Kotlin Multiplatform (jvm today; js/native later) | 11 | Payload schema (kotlinx-serialization), `CiEnvironmentProvider` SPI — the contract everything builds against |
-| `btp-gradle-plugin` | Kotlin/JVM + `java-gradle-plugin` | 11 | Settings plugin: collectors, finalizer, uploader |
+| `btp-commons` | Kotlin Multiplatform (jvm today; js/native later) | 21 | Payload schema (kotlinx-serialization), `CiEnvironmentProvider` SPI — the contract everything builds against |
+| `btp-gradle-plugin` | Kotlin/JVM + `java-gradle-plugin` | 21 | Settings plugin: collectors, finalizer, uploader |
 | `btp-server` | Kotlin/JVM + Ktor, `application` | 21 | Ingest API, storage, rollups, regression engine, dashboard |
-| `btp-report` | Kotlin/JVM (js candidate) | 11 | Standalone HTML artifact template + renderer, embedded into the plugin |
+| `btp-report` | Kotlin/JVM (js candidate) | 21 | Standalone HTML artifact template + renderer, embedded into the plugin |
 | `btp-ci-assets` | not a Gradle module | none | Azure YAML template, metric CLI (shell), profiler scenarios |
 
 **Dependency rule:** `btp-commons` has no dependency on any other module and no Gradle API
 types. The plugin and server never share code except through `btp-commons`. `btp-report`
 depends on nothing but the payload JSON shape.
 
-**JVM floors:** the plugin must run inside Gradle 8.0+ on Java 11 (spec §3.1), so
-`btp-commons`, `btp-gradle-plugin`, and `btp-report` target JVM 11. The server is ours to
-run and targets 21.
+**JVM floors:** every module targets JVM 21 (owner decision, deviating from spec §3.1's
+Java 11+; see decision log). Consequence for the compatibility matrix: the plugin
+requires consumers to run Gradle on JDK 21+ — the TestKit matrix tests Gradle versions on
+a 21+ daemon JVM only.
 
 ## 2. Gradle plugin best practices (binding)
 
@@ -131,5 +132,6 @@ The server ships as an OCI image (`btp-server/Dockerfile`, compose in `deploy/`)
 | 2026-07-02 | `btp-ci-assets` is not a Gradle module | Its consumers are CI steps without a JVM |
 | 2026-07-02 | Flow API + `ServiceReference` validated against Gradle 8.14 + CC (incl. reuse) | TestKit functional tests green — riskiest assumption of the roadmap spike confirmed |
 | 2026-07-02 | Wrapper `distributionUrl` kept on services.gradle.org | Standard, checksum-verifiable path |
+| 2026-07-02 | JVM 21 floor for **all** modules, superseding spec §3.1's "Java 11+ runtime for the plugin" | Owner decision: build with at least Java 21. Plugin consumers must run Gradle on JDK 21+ |
 
 *Add a row (or a docs/plans entry) whenever an architectural decision is made or reversed.*
