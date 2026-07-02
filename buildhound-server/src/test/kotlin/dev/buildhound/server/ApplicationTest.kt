@@ -179,6 +179,29 @@ class ApplicationTest {
     }
 
     @Test
+    fun `oversized bodies are rejected with 413`() = testApplication {
+        appWith(fixture())
+
+        val response = client.post("/v1/builds") {
+            header("Authorization", "Bearer test-token")
+            contentType(ContentType.Application.Json)
+            setBody(ByteArray(MAX_COMPRESSED_BYTES + 1))
+        }
+
+        assertEquals(HttpStatusCode.PayloadTooLarge, response.status)
+    }
+
+    @Test
+    fun `reusing a token for another project fails loudly`() {
+        val tokens = InMemoryTokenStore()
+        tokens.ensureProjectWithToken("team-a", sha256Hex("shared"))
+
+        val failure = runCatching { tokens.ensureProjectWithToken("team-b", sha256Hex("shared")) }
+
+        assertTrue(failure.isFailure, "cross-project token reuse must never be silent")
+    }
+
+    @Test
     fun `zip bomb protection caps decompressed size`() {
         // 100 MB of zeros compresses tiny; the bounded gunzip must refuse to inflate it.
         val bomb = gzip("0".repeat(1024 * 1024)) // 1 MB plain, but use a tiny limit to prove the guard

@@ -53,7 +53,10 @@ class InMemoryTokenStore : TokenStore {
         val project = projects.computeIfAbsent(projectKey) {
             ProjectRef(id = java.util.UUID.randomUUID().toString(), key = projectKey)
         }
-        tokens.putIfAbsent(tokenHash, project.id)
+        val existing = tokens.putIfAbsent(tokenHash, project.id)
+        check(existing == null || existing == project.id) {
+            "token is already bound to another project — refusing silent cross-tenant reuse"
+        }
         return project
     }
 }

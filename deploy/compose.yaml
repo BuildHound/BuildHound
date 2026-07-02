@@ -21,6 +21,9 @@ services:
       # Local development only — use a secret manager for real deployments.
       BUILDHOUND_DB_PASSWORD: "buildhound-local-dev"
       # Pilot tenancy bootstrap (plan 009): creates the project + token hash on boot.
+      # Local development only — real deployments must use a HIGH-ENTROPY token
+      # (e.g. `openssl rand -hex 32`); tokens are stored as unsalted SHA-256, which
+      # is only sound for random tokens.
       BUILDHOUND_BOOTSTRAP_PROJECT: "pilot"
       BUILDHOUND_BOOTSTRAP_TOKEN: "buildhound-local-dev-token"
     depends_on:

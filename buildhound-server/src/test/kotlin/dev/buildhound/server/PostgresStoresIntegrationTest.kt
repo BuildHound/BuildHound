@@ -65,6 +65,9 @@ class PostgresStoresIntegrationTest {
         assertEquals(first.id, second.id, "bootstrap must be idempotent")
         assertEquals("pilot", tokens.resolveProject(sha256Hex("secret-1"))?.key)
         assertNull(tokens.resolveProject(sha256Hex("wrong")), "unknown hash resolves nothing")
+        // Reusing the same token for a different project must fail boot, not misroute.
+        val reuse = runCatching { tokens.ensureProjectWithToken("other-project", sha256Hex("secret-1")) }
+        assertTrue(reuse.isFailure, "cross-project token reuse must never be silent")
     }
 
     @Test

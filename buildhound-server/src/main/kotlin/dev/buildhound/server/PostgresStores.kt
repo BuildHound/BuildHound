@@ -4,7 +4,9 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
-import java.sql.Timestamp
+import java.time.Instant
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.util.UUID
 import javax.sql.DataSource
 import org.flywaydb.core.Flyway
@@ -44,8 +46,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             ).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setString(2, payload.buildId)
-                statement.setTimestamp(3, Timestamp(payload.startedAt))
-                statement.setTimestamp(4, Timestamp(payload.finishedAt))
+                statement.setObject(3, OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC))
+                statement.setObject(4, OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.finishedAt), ZoneOffset.UTC))
                 statement.setString(5, payload.outcome.name)
                 statement.setString(6, payload.mode.name)
                 statement.setString(7, payload.vcs?.branch)
@@ -123,12 +125,25 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
                     ProjectRef(id = rows.getString(1), key = rows.getString(2))
                 }
             }
-            connection.prepareStatement(
+            val inserted = connection.prepareStatement(
                 "INSERT INTO api_tokens (project_id, token_hash) VALUES (?, ?) ON CONFLICT (token_hash) DO NOTHING",
             ).use { statement ->
                 statement.setObject(1, UUID.fromString(project.id))
                 statement.setString(2, tokenHash)
-                statement.executeUpdate()
+                statement.executeUpdate() == 1
+            }
+            if (!inserted) {
+                // The hash exists — it must belong to THIS project, or boot must fail:
+                // silently resolving another tenant would be cross-tenant misdirection.
+                val owner = connection.prepareStatement(
+                    "SELECT project_id FROM api_tokens WHERE token_hash = ?",
+                ).use { statement ->
+                    statement.setString(1, tokenHash)
+                    statement.executeQuery().use { rows -> if (rows.next()) rows.getString(1) else null }
+                }
+                check(owner == project.id) {
+                    "token is already bound to another project — refusing silent cross-tenant reuse"
+                }
             }
             project
         }

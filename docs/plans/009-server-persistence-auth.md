@@ -45,6 +45,24 @@ Flyway + Testcontainers).
 per token (spec §8 — recorded as a pre-pilot blocker), admin/token-management API,
 retention jobs, hypertable conversion.
 
+## Hardening round (review findings, fixed pre-merge)
+
+- Bounded body read (`receiveBounded`): Content-Length pre-check + capped streaming —
+  `receive<ByteArray>()` buffered unbounded before the cap (authenticated OOM DoS).
+- Persistence errors classified: SQLSTATE 22xxx (data-shaped, e.g. `\u0000` in jsonb)
+  → 400 so the plugin drops; other SQL failures → 503 so the plugin spools — a 500
+  would have poison-blocked the plugin's spool drain forever.
+- Cross-project token reuse fails boot loudly (both stores): `ON CONFLICT DO NOTHING`
+  silently resolved the *other* tenant on operator misconfiguration.
+- `BUILDHOUND_DEV_TOKEN` is in-memory-only (a stray env var in DB mode must not
+  persist a weak credential) and implies project `dev` per the plan.
+- Timestamps written as UTC `OffsetDateTime` (no default-zone dependence); DB password
+  required (no silent empty default); payload `projectKey` mismatch logs a warning.
+- Accepted with notes: unsalted SHA-256 is sound only for high-entropy tokens —
+  compose documents `openssl rand -hex 32`; server-generated tokens (and a possible
+  pepper) land with the admin API. Retention is unbounded until the retention chunk —
+  pilot decision recorded here. Rate limiting stays a pre-pilot blocker.
+
 ## Test strategy
 
 - `testApplication` + in-memory stores: 401 without/with unknown token; 202 with

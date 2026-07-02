@@ -35,7 +35,9 @@ fun storesFromEnvironment(env: Map<String, String>): ServerStores {
         val dataSource = createDataSource(
             jdbcUrl = dbUrl,
             user = env["BUILDHOUND_DB_USER"] ?: "buildhound",
-            password = env["BUILDHOUND_DB_PASSWORD"] ?: "",
+            password = requireNotNull(env["BUILDHOUND_DB_PASSWORD"]) {
+                "BUILDHOUND_DB_PASSWORD is required when BUILDHOUND_DB_URL is set"
+            },
         )
         migrate(dataSource)
         logger.info("storage: postgres ({})", dbUrl.substringBefore('?'))
@@ -45,13 +47,18 @@ fun storesFromEnvironment(env: Map<String, String>): ServerStores {
         ServerStores(InMemoryBuildStore(), InMemoryTokenStore())
     }
 
-    val bootstrapProject = env["BUILDHOUND_BOOTSTRAP_PROJECT"]
-    val bootstrapToken = env["BUILDHOUND_BOOTSTRAP_TOKEN"] ?: env["BUILDHOUND_DEV_TOKEN"]
+    // BUILDHOUND_DEV_TOKEN is an in-memory-only convenience: in DB mode a stray dev
+    // env var must never silently persist a (likely weak) credential (review finding).
+    val devToken = env["BUILDHOUND_DEV_TOKEN"].takeIf { dbUrl == null }
+    val bootstrapToken = env["BUILDHOUND_BOOTSTRAP_TOKEN"] ?: devToken
+    val bootstrapProject = env["BUILDHOUND_BOOTSTRAP_PROJECT"] ?: "dev".takeIf { devToken != null }
     if (bootstrapProject != null && !bootstrapToken.isNullOrBlank()) {
         stores.tokens.ensureProjectWithToken(bootstrapProject, sha256Hex(bootstrapToken))
         logger.info("bootstrap project '{}' ready (token hash stored)", bootstrapProject)
+    } else if (dbUrl != null) {
+        logger.info("no bootstrap configured — relying on tokens already present in the database")
     } else {
-        logger.warn("no bootstrap project/token configured — ingest will reject all requests")
+        logger.warn("no token configured — ingest will reject all requests")
     }
     return stores
 }
