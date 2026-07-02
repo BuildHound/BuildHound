@@ -201,6 +201,100 @@ class ApplicationTest {
         assertTrue(failure.isFailure, "cross-project token reuse must never be silent")
     }
 
+    private fun richPayload(buildId: String, startedAt: Long, outcome: String, branch: String) = """
+        {
+          "schemaVersion": 1,
+          "buildId": "$buildId",
+          "startedAt": $startedAt,
+          "finishedAt": ${startedAt + 60_000},
+          "outcome": "$outcome",
+          "mode": "ci",
+          "vcs": {"branch": "$branch"},
+          "derived": {"cacheableHitRate": 0.5}
+        }
+    """.trimIndent()
+
+    @Test
+    fun `query api lists filters and pages builds`() = testApplication {
+        val fixture = fixture()
+        appWith(fixture)
+        val now = System.currentTimeMillis()
+        val payloads = listOf(
+            richPayload("b-old", now - 3 * 86_400_000, "SUCCESS", "main"),
+            richPayload("b-mid", now - 86_400_000, "FAILED", "main"),
+            richPayload("b-new", now - 3_600_000, "SUCCESS", "feature/x"),
+        )
+        for (p in payloads) {
+            client.post("/v1/builds") {
+                header("Authorization", "Bearer test-token")
+                contentType(ContentType.Application.Json)
+                setBody(p)
+            }
+        }
+
+        val unauthorized = client.get("/v1/builds")
+        assertEquals(HttpStatusCode.Unauthorized, unauthorized.status)
+
+        val all = client.get("/v1/builds") { header("Authorization", "Bearer test-token") }
+        assertEquals(HttpStatusCode.OK, all.status)
+        val ids = Regex("\"buildId\":\"([^\"]+)\"").findAll(all.bodyAsText()).map { it.groupValues[1] }.toList()
+        assertEquals(listOf("b-new", "b-mid", "b-old"), ids, "newest first")
+
+        val mainOnly = client.get("/v1/builds?branch=main&limit=1&offset=1") {
+            header("Authorization", "Bearer test-token")
+        }
+        val mainIds = Regex("\"buildId\":\"([^\"]+)\"").findAll(mainOnly.bodyAsText()).map { it.groupValues[1] }.toList()
+        assertEquals(listOf("b-old"), mainIds, "branch filter + paging")
+
+        val badFilter = client.get("/v1/builds?mode=bogus") { header("Authorization", "Bearer test-token") }
+        assertEquals(HttpStatusCode.BadRequest, badFilter.status)
+    }
+
+    @Test
+    fun `query api detail is tenant scoped`() = testApplication {
+        val stores = ServerStores(InMemoryBuildStore(), InMemoryTokenStore())
+        stores.tokens.ensureProjectWithToken("team-a", sha256Hex("token-a"))
+        stores.tokens.ensureProjectWithToken("team-b", sha256Hex("token-b"))
+        application { buildHoundModule(stores) }
+        client.post("/v1/builds") {
+            header("Authorization", "Bearer token-a")
+            contentType(ContentType.Application.Json)
+            setBody(payloadJson(buildId = "detail-1"))
+        }
+
+        val own = client.get("/v1/builds/detail-1") { header("Authorization", "Bearer token-a") }
+        assertEquals(HttpStatusCode.OK, own.status)
+        assertTrue(own.bodyAsText().contains("detail-1"))
+
+        val foreign = client.get("/v1/builds/detail-1") { header("Authorization", "Bearer token-b") }
+        assertEquals(HttpStatusCode.NotFound, foreign.status, "cross-tenant reads must 404")
+    }
+
+    @Test
+    fun `query api trends bucket by day`() = testApplication {
+        val fixture = fixture()
+        appWith(fixture)
+        val now = System.currentTimeMillis()
+        for (p in listOf(
+            richPayload("t-1", now - 86_400_000, "SUCCESS", "main"),
+            richPayload("t-2", now - 86_400_000 + 3_600_000, "FAILED", "main"),
+            richPayload("t-3", now - 3_600_000, "SUCCESS", "main"),
+        )) {
+            client.post("/v1/builds") {
+                header("Authorization", "Bearer test-token")
+                contentType(ContentType.Application.Json)
+                setBody(p)
+            }
+        }
+
+        val response = client.get("/v1/trends?days=7") { header("Authorization", "Bearer test-token") }
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = response.bodyAsText()
+        val buildCounts = Regex("\"builds\":(\\d+)").findAll(body).map { it.groupValues[1].toInt() }.toList()
+        assertEquals(3, buildCounts.sum(), body)
+        assertTrue(body.contains("\"failures\":1"), body)
+    }
+
     @Test
     fun `zip bomb protection caps decompressed size`() {
         // 100 MB of zeros compresses tiny; the bounded gunzip must refuse to inflate it.

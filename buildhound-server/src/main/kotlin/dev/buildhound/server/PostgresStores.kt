@@ -87,6 +87,92 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.executeQuery().use { rows -> rows.next(); rows.getLong(1) }
             }
         }
+
+    /** Fixed column comparisons only; every value is a bound parameter. */
+    private fun filterSql(filter: BuildFilter): Pair<String, List<String>> {
+        val clauses = StringBuilder()
+        val params = mutableListOf<String>()
+        filter.branch?.let { clauses.append(" AND branch = ?"); params.add(it) }
+        filter.mode?.let { clauses.append(" AND mode = ?"); params.add(it) }
+        filter.outcome?.let { clauses.append(" AND outcome = ?"); params.add(it) }
+        return clauses.toString() to params
+    }
+
+    override fun list(projectId: String, filter: BuildFilter, limit: Int, offset: Int): List<BuildSummary> =
+        dataSource.connection.use { connection ->
+            val (clauses, params) = filterSql(filter)
+            connection.prepareStatement(
+                """
+                SELECT build_id, started_at, duration_ms, outcome, mode, branch, hit_rate
+                FROM builds WHERE project_id = ?$clauses
+                ORDER BY started_at DESC LIMIT ? OFFSET ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                params.forEachIndexed { index, value -> statement.setString(index + 2, value) }
+                statement.setInt(params.size + 2, limit)
+                statement.setInt(params.size + 3, offset)
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                BuildSummary(
+                                    buildId = rows.getString("build_id"),
+                                    startedAt = rows.getObject("started_at", OffsetDateTime::class.java)
+                                        .toInstant().toEpochMilli(),
+                                    durationMs = rows.getLong("duration_ms"),
+                                    outcome = rows.getString("outcome"),
+                                    mode = rows.getString("mode"),
+                                    branch = rows.getString("branch"),
+                                    hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    override fun trends(projectId: String, filter: BuildFilter, days: Int, nowMs: Long): List<TrendPoint> =
+        dataSource.connection.use { connection ->
+            val (clauses, params) = filterSql(filter)
+            connection.prepareStatement(
+                """
+                SELECT (started_at AT TIME ZONE 'UTC')::date AS day,
+                       count(*) AS builds,
+                       count(*) FILTER (WHERE outcome = 'FAILED') AS failures,
+                       avg(duration_ms)::bigint AS avg_duration,
+                       max(duration_ms) AS max_duration,
+                       avg(hit_rate) AS avg_hit_rate
+                FROM builds
+                WHERE project_id = ? AND started_at >= ?$clauses
+                GROUP BY day ORDER BY day
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(
+                    2,
+                    OffsetDateTime.ofInstant(Instant.ofEpochMilli(nowMs - days.toLong() * 86_400_000), ZoneOffset.UTC),
+                )
+                params.forEachIndexed { index, value -> statement.setString(index + 3, value) }
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                TrendPoint(
+                                    day = rows.getDate("day").toLocalDate().toString(),
+                                    builds = rows.getInt("builds"),
+                                    failures = rows.getInt("failures"),
+                                    avgDurationMs = rows.getLong("avg_duration"),
+                                    maxDurationMs = rows.getLong("max_duration"),
+                                    avgHitRate = rows.getDouble("avg_hit_rate").takeUnless { rows.wasNull() },
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
 }
 
 class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {

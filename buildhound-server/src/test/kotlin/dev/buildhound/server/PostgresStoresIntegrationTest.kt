@@ -41,21 +41,22 @@ class PostgresStoresIntegrationTest {
         tokens = PostgresTokenStore(dataSource)
     }
 
-    private fun payload(buildId: String) = BuildHoundJson.payload.decodeFromString(
-        BuildPayload.serializer(),
-        """
-        {
-          "schemaVersion": 1,
-          "buildId": "$buildId",
-          "startedAt": 1751450000000,
-          "finishedAt": 1751450042000,
-          "outcome": "SUCCESS",
-          "mode": "ci",
-          "vcs": {"branch": "main"},
-          "derived": {"cacheableHitRate": 0.5}
-        }
-        """.trimIndent(),
-    )
+    private fun payload(buildId: String, startedAt: Long = 1751450000000, outcome: String = "SUCCESS", branch: String = "main") =
+        BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            """
+            {
+              "schemaVersion": 1,
+              "buildId": "$buildId",
+              "startedAt": $startedAt,
+              "finishedAt": ${startedAt + 60000},
+              "outcome": "$outcome",
+              "mode": "ci",
+              "vcs": {"branch": "$branch"},
+              "derived": {"cacheableHitRate": 0.5}
+            }
+            """.trimIndent(),
+        )
 
     @Test
     fun `bootstrap is idempotent and tokens resolve by hash`() {
@@ -68,6 +69,31 @@ class PostgresStoresIntegrationTest {
         // Reusing the same token for a different project must fail boot, not misroute.
         val reuse = runCatching { tokens.ensureProjectWithToken("other-project", sha256Hex("secret-1")) }
         assertTrue(reuse.isFailure, "cross-project token reuse must never be silent")
+    }
+
+    @Test
+    fun `list and trends aggregate over real sql`() {
+        val project = tokens.ensureProjectWithToken("query-project", sha256Hex("q"))
+        val now = System.currentTimeMillis()
+        builds.save(project.id, payload("q-old", startedAt = now - 3 * 86_400_000))
+        builds.save(project.id, payload("q-fail", startedAt = now - 86_400_000, outcome = "FAILED"))
+        builds.save(project.id, payload("q-new", startedAt = now - 3_600_000, branch = "feature/x"))
+
+        val all = builds.list(project.id, BuildFilter(), limit = 50, offset = 0)
+        assertEquals(listOf("q-new", "q-fail", "q-old"), all.map { it.buildId }, "newest first")
+        assertEquals(60_000, all.first().durationMs)
+
+        val mainOnly = builds.list(project.id, BuildFilter(branch = "main"), limit = 50, offset = 0)
+        assertEquals(listOf("q-fail", "q-old"), mainOnly.map { it.buildId })
+
+        val failed = builds.list(project.id, BuildFilter(outcome = "FAILED"), limit = 50, offset = 0)
+        assertEquals(listOf("q-fail"), failed.map { it.buildId })
+
+        val trends = builds.trends(project.id, BuildFilter(), days = 7, nowMs = now)
+        assertEquals(3, trends.sumOf { it.builds })
+        assertEquals(1, trends.sumOf { it.failures })
+        assertTrue(trends.all { it.avgDurationMs == 60_000L }, trends.toString())
+        assertTrue(trends.zipWithNext().all { (a, b) -> a.day < b.day }, "oldest first")
     }
 
     @Test

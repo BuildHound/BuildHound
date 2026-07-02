@@ -72,5 +72,6 @@ fun Application.buildHoundModule(stores: ServerStores = ServerStores(InMemoryBui
     routing {
         healthRoutes()
         ingestRoutes(stores.builds, stores.tokens)
+        queryRoutes(stores.builds, stores.tokens)
     }
 }

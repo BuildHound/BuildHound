@@ -45,10 +45,7 @@ fun Route.healthRoutes() {
 fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore) {
     route("/v1") {
         post("/builds") {
-            val token = call.bearerToken()
-                ?: return@post call.respond(HttpStatusCode.Unauthorized, ApiError("missing bearer token"))
-            val project = tokens.resolveProject(sha256Hex(token))
-                ?: return@post call.respond(HttpStatusCode.Unauthorized, ApiError("unknown token"))
+            val project = call.authenticatedProject(tokens) ?: return@post
 
             // Bounded read: the body must never be fully buffered before the cap check
             // (authenticated OOM DoS otherwise — review finding, plan 009).
@@ -97,6 +94,65 @@ fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore) {
             )
         }
     }
+}
+
+/**
+ * Query API (plan 010): same token, same tenant scoping as ingest. Rollups are
+ * computed on read over the indexed hot columns; materialized aggregates come when
+ * volume demands them.
+ */
+fun Route.queryRoutes(store: BuildStore, tokens: TokenStore) {
+    route("/v1") {
+        get("/builds") {
+            val project = call.authenticatedProject(tokens) ?: return@get
+            val filter = call.buildFilterOrNull()
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
+            val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 200)
+            val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
+            call.respond(store.list(project.id, filter, limit, offset))
+        }
+
+        get("/builds/{buildId}") {
+            val project = call.authenticatedProject(tokens) ?: return@get
+            val buildId = call.parameters["buildId"]
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("missing buildId"))
+            val payload = store.findById(project.id, buildId)
+                ?: return@get call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
+            call.respond(payload)
+        }
+
+        get("/trends") {
+            val project = call.authenticatedProject(tokens) ?: return@get
+            val filter = call.buildFilterOrNull()
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
+            val days = (call.request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)
+            call.respond(store.trends(project.id, filter, days, System.currentTimeMillis()))
+        }
+    }
+}
+
+/** 401s and returns null when the bearer token is missing or unknown. */
+private suspend fun ApplicationCall.authenticatedProject(tokens: TokenStore): ProjectRef? {
+    val token = bearerToken()
+    if (token == null) {
+        respond(HttpStatusCode.Unauthorized, ApiError("missing bearer token"))
+        return null
+    }
+    val project = tokens.resolveProject(sha256Hex(token))
+    if (project == null) {
+        respond(HttpStatusCode.Unauthorized, ApiError("unknown token"))
+        return null
+    }
+    return project
+}
+
+/** Filter values are allowlisted against the stored enum names — never free text. */
+private fun ApplicationCall.buildFilterOrNull(): BuildFilter? {
+    val mode = request.queryParameters["mode"]?.uppercase()
+    if (mode != null && mode !in setOf("CI", "LOCAL", "BENCHMARK")) return null
+    val outcome = request.queryParameters["outcome"]?.uppercase()
+    if (outcome != null && outcome !in setOf("SUCCESS", "FAILED")) return null
+    return BuildFilter(branch = request.queryParameters["branch"], mode = mode, outcome = outcome)
 }
 
 private val ingestLogger = LoggerFactory.getLogger("dev.buildhound.server.Ingest")
