@@ -65,6 +65,9 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
         @get:Input
         val htmlReportEnabled: Property<Boolean>
+
+        @get:Input
+        val rootDir: Property<String>
     }
 
     override fun execute(parameters: Parameters) {
@@ -98,17 +101,15 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 daemonReused = execution.daemonReused,
                 tags = parameters.tags.getOrElse(emptyMap()),
                 nowMs = System.currentTimeMillis(),
+                projectRoot = parameters.rootDir.orNull,
             )
 
             val payloadFile = writePayload(payload, parameters.outputDir.get())
             if (parameters.htmlReportEnabled.getOrElse(true)) {
                 // Wire-format JSON (not the pretty file) — the artifact doubles as an
                 // offline payload copy (spec §3.8); render() escapes for the HTML context.
-                // executionReasons are stripped: the artifact is MADE to be published and
-                // Gradle's reason text embeds absolute paths — they stay in the local
-                // payload file only until the §3.7 scrubber lands (plans 005/006).
-                val publishable = payload.copy(tasks = payload.tasks.map { it.copy(executionReasons = emptyList()) })
-                val html = ReportAssets.render(BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), publishable))
+                // The payload is already scrubbed at assembly (§3.7, plan 007).
+                val html = ReportAssets.render(BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload))
                 val htmlFile = File(payloadFile.parentFile, "buildhound-report.html")
                 htmlFile.writeText(html)
                 logger.lifecycle("[buildhound] report written: {}", htmlFile)

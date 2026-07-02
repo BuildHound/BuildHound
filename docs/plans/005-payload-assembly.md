@@ -70,9 +70,9 @@ incl. `ServiceLoader`), §3.4 (mode), §4 (payload).
 
 ## Hard blockers for the upload chunk (from review)
 
-1. The §3.7 scrubber must exist and cover `executionReasons` (and future failure
-   text) before any payload leaves the machine — or `executionReasons` is dropped
-   from uploaded payloads until it does.
+1. ~~The §3.7 scrubber must exist and cover `executionReasons`~~ — **resolved by
+   plan 007**: payloads are scrubbed at assembly time (paths relativized/redacted,
+   secret-shaped values removed).
 2. `localBuilds` opt-in (spec §3.4) gates local-build uploads.
 
 ## Exit criteria

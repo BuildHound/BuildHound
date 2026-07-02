@@ -211,6 +211,41 @@ class BuildHoundSettingsPluginFunctionalTest {
     }
 
     @Test
+    fun `execution reasons are scrubbed of absolute paths`() {
+        setUpProject()
+        File(projectDir, "input.txt").writeText("one")
+        File(projectDir, "build.gradle.kts").appendText(
+            """
+
+            abstract class Sum : DefaultTask() {
+                @get:InputFile abstract val source: RegularFileProperty
+                @get:OutputFile abstract val target: RegularFileProperty
+                @TaskAction fun run() { target.get().asFile.writeText(source.get().asFile.readText()) }
+            }
+            tasks.register<Sum>("sum") {
+                source = layout.projectDirectory.file("input.txt")
+                target = layout.buildDirectory.file("out.txt")
+            }
+            """.trimIndent(),
+        )
+
+        runner("sum", "--configuration-cache").build()
+        File(projectDir, "input.txt").writeText("two")
+        runner("sum", "--configuration-cache").build()
+
+        val reasons = readPayload().tasks.single { it.path == ":sum" }.executionReasons
+        assertTrue(reasons.isNotEmpty(), "expected an execution reason for the changed input")
+        val absoluteRoot = projectDir.canonicalPath
+        for (reason in reasons) {
+            assertFalse(reason.contains(absoluteRoot), "absolute path leaked: $reason")
+            assertFalse(reason.contains(projectDir.absolutePath), "absolute path leaked: $reason")
+        }
+        // The artifact embeds the same scrubbed payload.
+        val html = File(projectDir, "build/buildhound/buildhound-report.html").readText()
+        assertFalse(html.contains(absoluteRoot), "absolute path leaked into the artifact")
+    }
+
+    @Test
     fun `html artifact is written next to the payload`() {
         setUpProject()
 

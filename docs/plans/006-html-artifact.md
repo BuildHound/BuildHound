@@ -35,10 +35,9 @@ output dir.
 - The placeholder now includes the `null` sentinel (`/*__BUILDHOUND_DATA__*/null`):
   replacing only the comment left `{…} null;` — a SyntaxError that blanked every
   rendered report (HIGH review finding; tests now assert the exact assignment).
-- `executionReasons` are stripped from the *embedded* payload copy: the artifact is
-  designed for publication (CI artifact viewers), which voids plan 005's
-  "local-file-only" acceptance of unscrubbed reason text. They remain in the local
-  `build-payload.json` until the §3.7 scrubber lands.
+- `executionReasons` were stripped from the *embedded* payload copy as an interim;
+  since plan 007 the payload is scrubbed at assembly, so the artifact embeds the same
+  scrubbed payload (stripping removed).
 - CSP meta tag (`default-src 'none'`) added as defense-in-depth.
 
 ## Test strategy

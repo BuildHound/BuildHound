@@ -7,6 +7,7 @@ import dev.buildhound.commons.payload.CiInfo
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
 import dev.buildhound.commons.payload.EnvironmentInfo
+import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.ToolchainInfo
 import dev.buildhound.commons.payload.VcsInfo
@@ -39,10 +40,11 @@ internal object PayloadAssembler {
         daemonReused: Boolean,
         tags: Map<String, String>,
         nowMs: Long,
+        projectRoot: String? = null,
     ): BuildPayload {
         val startedAt = tasks.minOfOrNull { it.startMs } ?: nowMs
         val finishedAt = (tasks.maxOfOrNull { it.startMs + it.durationMs } ?: nowMs).coerceAtLeast(startedAt)
-        return BuildPayload(
+        val payload = BuildPayload(
             buildId = buildId,
             projectKey = projectKey,
             startedAt = startedAt,
@@ -69,6 +71,8 @@ internal object PayloadAssembler {
             tasks = tasks,
             derived = DerivedMetricsCalculator.compute(tasks, environment?.cores),
         )
+        // Spec §3.7: one scrubbed payload everywhere — local file, artifact, upload.
+        return PayloadScrubber.scrub(payload, projectRoot)
     }
 
     /** Git wins; CI context fills the gaps (detached HEAD on CI has no branch name). */

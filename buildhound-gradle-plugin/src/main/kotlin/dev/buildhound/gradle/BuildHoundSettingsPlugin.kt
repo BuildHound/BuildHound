@@ -82,6 +82,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.requestedTasks.set(settings.startParameter.taskNames.toList())
             spec.parameters.outputDir.set(File(settings.rootDir, "build/buildhound").absolutePath)
             spec.parameters.htmlReportEnabled.set(extension.htmlReport.enabled)
+            spec.parameters.rootDir.set(settings.rootDir.absolutePath)
         }
     }
 
