@@ -140,6 +140,13 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
 - Local-build identity is pseudonymized by default (HMAC with per-project salt); `strict`
   mode sends nothing.
 - The HTML artifact makes zero external requests (locked decision #4) — enforced by test.
+- **Ingest tokens are wired from `providers.environmentVariable(...)` only.** A DSL
+  literal (or `gradleProperty`) value would be serialized into the configuration-cache
+  entry on disk (encrypted since Gradle 8.6, but still at rest); the env provider is
+  stored as a reference and re-read at execution. Uploads over non-loopback plaintext
+  http log a warning. Spool files carry only the (scrubbed) payload, never the token;
+  anything that can write the spool dir already executes code in the build (same trust
+  domain).
 - Every feature PR gets a dedicated security **and** privacy review (see CLAUDE.md).
 
 ## 7. Decision log

@@ -21,7 +21,7 @@ internal class PayloadUploader(
     private val token: String?,
     private val spoolDir: File,
     private val timeout: Duration = Duration.ofSeconds(15),
-) {
+) : AutoCloseable {
 
     private val client: HttpClient = HttpClient.newBuilder()
         .connectTimeout(timeout)
@@ -29,17 +29,42 @@ internal class PayloadUploader(
         .followRedirects(HttpClient.Redirect.NEVER)
         .build()
 
-    /** Uploads the current build's payload; spools it on any failure. */
-    fun uploadOrSpool(buildId: String, payloadJson: String) {
-        val body = gzip(payloadJson.encodeToByteArray())
-        if (post(body)) {
-            logger.lifecycle("[buildhound] payload uploaded ({} bytes gzip)", body.size)
-        } else {
-            spool(buildId, body)
+    init {
+        // Loopback http is normal for compose/dev; anything else cleartexts the token.
+        val host = runCatching { URI.create(baseUrl).host }.getOrNull()
+        if (baseUrl.startsWith("http://", ignoreCase = true) &&
+            host !in setOf("localhost", "127.0.0.1", "::1", "[::1]")
+        ) {
+            logger.warn("[buildhound] server url uses plaintext http — the ingest token and telemetry are unencrypted")
         }
     }
 
-    /** Retries previously spooled payloads, oldest first, bounded per build. */
+    private enum class Outcome { SENT, REJECTED, UNREACHABLE }
+
+    override fun close() {
+        runCatching { client.close() }
+    }
+
+    /**
+     * Uploads the current build's payload. Transient failures (transport, 5xx, 408/429)
+     * spool for the next build; permanent rejections (other 4xx: bad token, bad payload)
+     * are dropped with a warning — retrying them can never succeed.
+     */
+    fun uploadOrSpool(buildId: String, payloadJson: String) {
+        val body = gzip(payloadJson.encodeToByteArray())
+        when (post(body)) {
+            Outcome.SENT -> logger.lifecycle("[buildhound] payload uploaded ({} bytes gzip)", body.size)
+            Outcome.UNREACHABLE -> spool(buildId, body)
+            Outcome.REJECTED ->
+                logger.warn("[buildhound] server rejected the payload (4xx) — dropped, check token/config")
+        }
+    }
+
+    /**
+     * Retries previously spooled payloads, oldest first, bounded per build. A rejected
+     * (4xx) file is deleted and must not block younger files — only an unreachable
+     * server stops the drain.
+     */
     fun drainSpool(maxFiles: Int = 10) {
         val spooled = runCatching {
             spoolDir.listFiles { file -> file.name.endsWith(".json.gz") }?.sortedBy { it.lastModified() }
@@ -47,15 +72,27 @@ internal class PayloadUploader(
         if (spooled.isEmpty()) return
         var sent = 0
         for (file in spooled.take(maxFiles)) {
+            if (file.length() > MAX_SPOOL_FILE_BYTES) {
+                runCatching { file.delete() } // never load an absurd file into daemon heap
+                continue
+            }
             val body = runCatching { file.readBytes() }.getOrNull() ?: continue
-            if (!post(body)) break // server still unreachable; keep the rest for next time
-            runCatching { file.delete() }
-            sent++
+            when (post(body)) {
+                Outcome.SENT -> {
+                    runCatching { file.delete() }
+                    sent++
+                }
+                Outcome.REJECTED -> {
+                    runCatching { file.delete() }
+                    logger.warn("[buildhound] server rejected spooled payload {} — dropped", file.name)
+                }
+                Outcome.UNREACHABLE -> return // keep the rest for next time
+            }
         }
         if (sent > 0) logger.lifecycle("[buildhound] drained {} spooled payload(s)", sent)
     }
 
-    private fun post(gzipBody: ByteArray): Boolean = runCatching {
+    private fun post(gzipBody: ByteArray): Outcome = runCatching {
         val request = HttpRequest.newBuilder(URI.create("$baseUrl/v1/builds"))
             .timeout(timeout)
             .header("Content-Type", "application/json")
@@ -63,12 +100,19 @@ internal class PayloadUploader(
             .apply { token?.takeIf { it.isNotBlank() }?.let { header("Authorization", "Bearer $it") } }
             .POST(HttpRequest.BodyPublishers.ofByteArray(gzipBody))
             .build()
-        val response = client.send(request, HttpResponse.BodyHandlers.discarding())
-        response.statusCode() in 200..299
+        when (val code = client.send(request, HttpResponse.BodyHandlers.discarding()).statusCode()) {
+            in 200..299 -> Outcome.SENT
+            408, 429 -> Outcome.UNREACHABLE // retryable server states
+            in 400..499 -> Outcome.REJECTED
+            else -> {
+                logger.info("[buildhound] upload attempt got {}", code)
+                Outcome.UNREACHABLE
+            }
+        }
     }.onFailure {
         // Class name only: connection failures can embed hosts/paths, never a token though.
         logger.info("[buildhound] upload attempt failed: {}", it::class.java.simpleName)
-    }.getOrDefault(false)
+    }.getOrDefault(Outcome.UNREACHABLE)
 
     private fun spool(buildId: String, gzipBody: ByteArray) {
         runCatching {
@@ -97,6 +141,7 @@ internal class PayloadUploader(
 
     internal companion object {
         val logger = Logging.getLogger(PayloadUploader::class.java)
+        const val MAX_SPOOL_FILE_BYTES: Long = 8L * 1024 * 1024
 
         fun gzip(bytes: ByteArray): ByteArray {
             val out = ByteArrayOutputStream()

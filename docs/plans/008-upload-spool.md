@@ -37,6 +37,22 @@ Roadmap Phase 1: "gzip upload with spool/retry, foreground-on-CI". Spec §3.4 (D
   deferred: today's payloads are KBs. Blocker note for the pilot rollout, not for
   this chunk.
 
+## Hardening round (review findings, fixed pre-merge)
+
+- 4xx responses (except 408/429) are permanent rejections: dropped with a warning,
+  never spooled/retried — a poison spool file must not block younger files forever
+  (drain deletes rejected files and continues; only an unreachable server stops it).
+- `HttpClient` closed per build (AutoCloseable, JDK 21); non-loopback plaintext-http
+  uploads warn; spool files larger than 8 MB are dropped unread.
+- Opt-in marker path overridable via the `buildhound.optin.file` gradle property —
+  the daemon resets `user.home`, so tests pin the marker to the fixture (also an
+  advanced escape hatch). Tests never touch the developer's real home.
+- Timeout semantics: 15s is per attempt (connect + request each), so a hanging server
+  costs up to ~60s of build-end time across drain + upload — bounded, accepted.
+- Tests forced CI mode via the DSL, not `BUILDHOUND_CI` env (divergence from the
+  original test strategy — env-based detection is already covered elsewhere).
+- Token-at-rest nuance and env-provider-only rule recorded in architecture §6.
+
 ## Test strategy
 
 - Unit: `UploadGate` decision matrix; endpoint building (trailing slash); gzip

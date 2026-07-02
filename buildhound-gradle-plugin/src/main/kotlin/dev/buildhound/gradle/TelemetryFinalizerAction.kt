@@ -82,6 +82,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
         @get:Input
         val requireOptInFile: Property<Boolean>
+
+        /** Override for the opt-in marker path (`buildhound.optin.file`); default ~/.buildhound/optin. */
+        @get:Input
+        @get:Optional
+        val optInFile: Property<String>
     }
 
     override fun execute(parameters: Parameters) {
@@ -142,20 +147,21 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 mode = mode,
                 localBuildsEnabled = parameters.localBuildsEnabled.getOrElse(true),
                 requireOptInFile = parameters.requireOptInFile.getOrElse(true),
-                optInFileExists = optInMarkerExists(),
+                optInFileExists = optInMarkerExists(parameters.optInFile.orNull),
             )
             when (decision) {
                 is UploadGate.Decision.Upload -> {
-                    val uploader = PayloadUploader(
+                    PayloadUploader(
                         baseUrl = decision.url,
                         token = parameters.serverToken.orNull,
                         spoolDir = File(parameters.outputDir.get(), "spool"),
-                    )
-                    uploader.drainSpool()
-                    uploader.uploadOrSpool(
-                        payload.buildId,
-                        BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload),
-                    )
+                    ).use { uploader ->
+                        uploader.drainSpool()
+                        uploader.uploadOrSpool(
+                            payload.buildId,
+                            BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload),
+                        )
+                    }
                 }
                 is UploadGate.Decision.Skip ->
                     logger.info("[buildhound] upload skipped: {}", decision.reason)
@@ -179,8 +185,10 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         }
     }
 
-    private fun optInMarkerExists(): Boolean = runCatching {
-        File(System.getProperty("user.home"), ".buildhound/optin").exists()
+    private fun optInMarkerExists(overridePath: String?): Boolean = runCatching {
+        val marker = overridePath?.let(::File)
+            ?: File(System.getProperty("user.home"), ".buildhound/optin")
+        marker.exists()
     }.getOrDefault(false)
 
     /** Plain and canonical forms: reason text may carry either on symlinked checkouts. */

@@ -89,6 +89,8 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.serverToken.set(extension.server.token)
             spec.parameters.localBuildsEnabled.set(extension.localBuilds.enabled)
             spec.parameters.requireOptInFile.set(extension.localBuilds.requireOptInFile)
+            // Test seam + advanced override; default (~/.buildhound/optin) resolves at execution.
+            spec.parameters.optInFile.set(settings.providers.gradleProperty("buildhound.optin.file"))
         }
     }
 
