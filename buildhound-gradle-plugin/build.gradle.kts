@@ -20,7 +20,7 @@ dependencies {
 
 // TestKit-based functional tests, kept apart from unit tests so a Gradle-version
 // matrix (roadmap phase 0) can later run them against multiple distributions.
-val functionalTest: SourceSet by sourceSets.creating
+val functionalTest: SourceSet = sourceSets.create("functionalTest")
 
 dependencies {
     // Custom source sets are outside KGP's automatic kotlin("test") version management,

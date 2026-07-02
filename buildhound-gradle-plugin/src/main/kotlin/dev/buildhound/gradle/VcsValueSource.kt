@@ -42,9 +42,9 @@ abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Paramet
         if (!parameters.enabled.getOrElse(true)) return CollectedVcs()
         val workDir = File(parameters.rootDir.orNull ?: return CollectedVcs())
         return CollectedVcs(
-            branch = git(workDir, "rev-parse", "--abbrev-ref", "HEAD")?.let(::parseBranch),
-            sha = git(workDir, "rev-parse", "HEAD")?.let(::parseSha),
-            dirty = git(workDir, "status", "--porcelain")?.let(::parseDirty),
+            branch = git(workDir, "rev-parse", "--abbrev-ref", "HEAD")?.let(VcsParsing::parseBranch),
+            sha = git(workDir, "rev-parse", "HEAD")?.let(VcsParsing::parseSha),
+            dirty = git(workDir, "status", "--porcelain")?.let(VcsParsing::parseDirty),
         )
     }
 
@@ -68,16 +68,7 @@ abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Paramet
         logger.info("[buildhound] git probe unavailable: {}", it::class.java.simpleName)
     }.getOrNull()
 
-    internal companion object {
+    private companion object {
         val logger = Logging.getLogger(VcsValueSource::class.java)
-
-        /** `HEAD` means detached (typical CI checkout) — no meaningful branch name. */
-        fun parseBranch(raw: String): String? =
-            raw.trim().takeIf { it.isNotEmpty() && it != "HEAD" }
-
-        fun parseSha(raw: String): String? =
-            raw.trim().takeIf { it.matches(Regex("[0-9a-f]{40}|[0-9a-f]{64}")) }
-
-        fun parseDirty(raw: String): Boolean = raw.isNotBlank()
     }
 }
