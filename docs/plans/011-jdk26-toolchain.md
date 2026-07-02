@@ -41,6 +41,18 @@ by release 21 anyway); base-image changes.
 - `-Xjdk-release` + `jvmTarget` guarantee no >21 API/bytecode sneaks in; the plugin's
   functional tests still run on the host Gradle/JDK (21) as the real consumer check.
 
+## CI fallout, fixed post-push
+
+- The toolchain drives the `org.gradle.jvm.version` variant attribute: modules
+  advertised "requires JVM 26" and every 21-JVM daemon refused to resolve them →
+  `targetCompatibility=21` on JVM modules + explicit `TargetJvmVersion` attribute on
+  the KMP jvm target.
+- KGP requires Gradle ≥ 8.14.4 to compile with a JDK 26 toolchain → floor job bumped
+  from 8.14.3 (patch-level, floor stays "8.14").
+- TestKit spawns the fixture Gradle on the test JVM; with tests executing on the 26
+  toolchain, the floor Gradle (8.14) failed to run at all → the plugin's test tasks
+  now use a JDK 21 launcher, which is also the truthful consumer floor.
+
 ## Test strategy
 
 Existing full suite on both CI jobs (now compiling via the 26 toolchain); locally via

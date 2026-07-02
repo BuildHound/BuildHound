@@ -79,4 +79,8 @@ tasks.check {
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
+    // TestKit spawns the fixture Gradle on the test JVM, and the floor Gradle (8.14)
+    // cannot RUN on JDK 26 — consumers run on 21+, so tests execute on the real
+    // consumer floor while compilation stays on the 26 toolchain (plan 011).
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) })
 }
