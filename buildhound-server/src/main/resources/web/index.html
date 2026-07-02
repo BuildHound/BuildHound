@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BuildHound</title>
+    <style>
+        :root { color-scheme: light dark; }
+        body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 76rem; padding: 0 1rem; color: #1a1a2e; }
+        @media (prefers-color-scheme: dark) { body { color: #e8e8f0; background: #14141c; } }
+        header { display: flex; align-items: baseline; gap: 1rem; border-bottom: 2px solid #8884; padding-bottom: 1rem; margin-bottom: 1rem; }
+        h1 { margin: 0; font-size: 1.3rem; }
+        nav a { margin-right: .75rem; }
+        .muted { color: #888; font-size: .85rem; }
+        .filters { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; align-items: center; }
+        input, select, button { font: inherit; padding: .3rem .5rem; border-radius: .3rem; border: 1px solid #8886; background: inherit; color: inherit; }
+        table { border-collapse: collapse; width: 100%; font-size: .875rem; }
+        th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #8883; }
+        td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        tr.row { cursor: pointer; }
+        tr.row:hover { background: #8882; }
+        .badge { border-radius: .25rem; padding: .1rem .4rem; font-size: .75rem; font-weight: 600; }
+        .EXECUTED { background: #fde68a; color: #713f12; }
+        .FROM_CACHE { background: #bbf7d0; color: #14532d; }
+        .UP_TO_DATE { background: #bfdbfe; color: #1e3a8a; }
+        .SKIPPED, .NO_SOURCE { background: #e5e7eb; color: #374151; }
+        .SUCCESS { color: #15803d; font-weight: 600; }
+        .FAILED { background: #fecaca; color: #7f1d1d; }
+        .chips { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; padding: 0; list-style: none; }
+        .chips li { border: 1px solid #8884; border-radius: 1rem; padding: .25rem .75rem; font-size: .85rem; }
+        svg { width: 100%; height: auto; }
+        #token-bar { background: #8881; border: 1px solid #8884; border-radius: .4rem; padding: .75rem; margin-bottom: 1rem; }
+        .error { color: #b91c1c; }
+    </style>
+</head>
+<body>
+<header>
+    <h1>BuildHound</h1>
+    <nav>
+        <a href="#/builds">Builds</a>
+        <a href="#/trends">Trends</a>
+    </nav>
+    <span class="muted">buildhound.dev</span>
+</header>
+<div id="token-bar" hidden>
+    <label>Read token: <input id="token-input" type="password" size="40" autocomplete="off"></label>
+    <button id="token-save">Use</button>
+    <span class="muted">Kept in this tab only (sessionStorage); needs read scope.</span>
+</div>
+<main id="app"><p class="muted">Loading…</p></main>
+<script src="/dashboard.js"></script>
+</body>
+</html>
