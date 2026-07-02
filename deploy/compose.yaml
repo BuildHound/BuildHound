@@ -20,6 +20,9 @@ services:
       BUILDHOUND_DB_USER: "buildhound"
       # Local development only — use a secret manager for real deployments.
       BUILDHOUND_DB_PASSWORD: "buildhound-local-dev"
+      # Pilot tenancy bootstrap (plan 009): creates the project + token hash on boot.
+      BUILDHOUND_BOOTSTRAP_PROJECT: "pilot"
+      BUILDHOUND_BOOTSTRAP_TOKEN: "buildhound-local-dev-token"
     depends_on:
       db:
         condition: service_healthy
