@@ -16,6 +16,9 @@ import org.gradle.api.tasks.Input
 class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters> {
 
     interface Parameters : FlowParameters {
+        @get:Input
+        val enabled: Property<Boolean>
+
         @get:ServiceReference
         val collector: Property<TaskEventCollector>
 
@@ -31,12 +34,18 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
     override fun execute(parameters: Parameters) {
         runCatching {
+            // Consume the heuristic mark first, unconditionally: a stale mark would make
+            // the next build in this daemon misreport its CC state.
+            val execution = DaemonState.executionRan()
+            // Master switch (spec §3.4): nothing is probed, assembled, or logged when off —
+            // the environment provider is never queried, so no salt is created either.
+            if (!parameters.enabled.getOrElse(true)) return@runCatching
+
             val tasks = parameters.collector.get().snapshot()
             val byOutcome = tasks.groupingBy { it.outcome }.eachCount()
             val outcome = if (parameters.buildFailed.get()) "FAILED" else "SUCCESS"
             logger.lifecycle("[buildhound] captured {} task event(s), build {}, outcomes: {}", tasks.size, outcome, byOutcome)
 
-            val execution = DaemonState.executionRan()
             val ccState = configurationCacheState(parameters.configurationCacheRequested.getOrElse(false), execution)
             val env = parameters.environment.orNull
             // Identity fields are deliberately never logged (spec §3.7).

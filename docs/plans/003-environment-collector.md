@@ -61,13 +61,24 @@ salt is now only created when `pseudonymize=true` actually needs it.
 ## Risks
 
 - CC safety: no `Project`/`Settings` capture in the ValueSource or FlowAction;
-  only Serializable params. Salt read at apply time (config phase file IO is fine),
-  value carried via provider.
+  only Serializable params. Salt IO at execution time inside the ValueSource (see
+  Divergence — config-phase file IO is a CC fingerprint input).
 - Privacy: salt + plaintext identity must never appear in logs or payloads when
   pseudonymize=true; RAM via `OperatingSystemMXBean` guarded (com.sun.management may
   be absent on exotic JVMs → null).
 - Heuristics can misreport in daemons shared across builds — accepted for v0, spec
   allows refinement later.
+
+## Notes for chunk 4 (payload assembly)
+
+- `enabled=false` now gates the finalizer and the environment probe (incl. salt
+  creation); full mode gating (`local` opt-in file, `strict` identity) must land with
+  payload assembly, before anything is uploaded.
+- With `pseudonymize=false`, plaintext currently flows through fields *named*
+  `hostnameHash`/`userId` — decide the wire representation in chunk 4 (agentName
+  handling from plan 002 lands there too).
+- Accepted: `daemonReused` is not asserted in functional tests (daemon allocation is
+  TestKit-controlled and would be flaky).
 
 ## Exit criteria
 

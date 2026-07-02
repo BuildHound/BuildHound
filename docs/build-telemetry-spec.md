@@ -112,7 +112,7 @@ End-of-build (Finalizer): enumerate JVMs via `ProcessHandle`/`jps` matching main
 
 ### 3.7 Privacy & identity
 
-Local builds: `userId = base64(hmacSha256(projectSalt, username@hostname))`; salt generated per project on the server, fetched once and cached. `pseudonymize=false` sends plaintext (team choice); `strict` sends nothing. Payloads never include absolute paths outside the project, env dumps, or tokens; a scrubber strips values matching secret-like patterns from execution reasons/failure text.
+Identity fields: `userId = "u_" + hex12(hmacSha256(projectSalt, "user:" + username + "@" + hostname))`, `hostnameHash = "h_" + hex12(hmacSha256(projectSalt, "host:" + hostname))` — first 12 hex chars, domain-separated inputs; enumeration resistance rests on salt secrecy, not digest length, so truncation is safe. Salt generated per project on the server, fetched once and cached (interim until tenancy lands: generated locally into `.gradle/buildhound/identity.salt`, see plan 003). `pseudonymize=false` sends plaintext (team choice); `strict` sends nothing. Payloads never include absolute paths outside the project, env dumps, or tokens; a scrubber strips values matching secret-like patterns from execution reasons/failure text.
 
 ### 3.8 Standalone HTML artifact (locked: no CDN)
 

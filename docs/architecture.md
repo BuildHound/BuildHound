@@ -57,7 +57,9 @@ These are the rules every plugin change is reviewed against:
    configuration time that doesn't have to be.
 6. **Compatibility is tested, not assumed.** TestKit functional tests live in a dedicated
    `functionalTest` source set so CI can run them as a matrix:
-   {Gradle 8.0, 8.14, 9.latest} × {config cache on/off} (roadmap phase 0). Isolated
+   {Gradle 8.14, 9.latest} × {config cache on/off} (roadmap phase 0). The floor is
+   8.5+ (`BuildFeatures` injection) and in practice 8.14+ for the JDK-21 requirement.
+   Isolated
    Projects runs as a non-blocking CI job from phase 1.
 7. **Identity & hygiene:** plugin id `dev.buildhound`, Maven group `dev.buildhound`
    (decision #6); `gradlePlugin {}` metadata kept publish-ready; `validatePlugins` runs

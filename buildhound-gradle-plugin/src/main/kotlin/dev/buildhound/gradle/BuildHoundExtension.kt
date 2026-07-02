@@ -5,7 +5,6 @@ import org.gradle.api.Action
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
-import org.gradle.api.tasks.Nested
 
 /**
  * `buildhound { ... }` DSL (spec §3.4). Scaffold exposes the core knobs; nested blocks
@@ -26,7 +25,6 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     /** Low-cardinality dimensions attached to every build, e.g. `tags.put("team", "mobile")`. */
     abstract val tags: MapProperty<String, String>
 
-    @get:Nested
     val identity: IdentitySpec = objects.newInstance(IdentitySpec::class.java)
 
     fun identity(action: Action<IdentitySpec>) = action.execute(identity)

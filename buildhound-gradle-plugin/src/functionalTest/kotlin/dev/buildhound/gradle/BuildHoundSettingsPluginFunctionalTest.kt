@@ -123,5 +123,24 @@ class BuildHoundSettingsPluginFunctionalTest {
         val result = runner("hello", "--configuration-cache").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        assertFalse(
+            File(projectDir, ".gradle/buildhound/identity.salt").exists(),
+            "plaintext mode must not create a salt",
+        )
+    }
+
+    @Test
+    fun `enabled false disables collection and salt creation`() {
+        setUpProject(extraDsl = "enabled = false")
+
+        val result = runner("hello", "--configuration-cache").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        assertFalse(result.output.contains("[buildhound] captured"), result.output)
+        assertFalse(result.output.contains("[buildhound] environment:"), result.output)
+        assertFalse(
+            File(projectDir, ".gradle/buildhound").exists(),
+            "enabled=false must not touch the identity salt",
+        )
     }
 }

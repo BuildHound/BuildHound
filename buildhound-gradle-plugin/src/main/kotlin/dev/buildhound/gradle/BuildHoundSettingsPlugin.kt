@@ -7,6 +7,7 @@ import org.gradle.api.configuration.BuildFeatures
 import org.gradle.api.flow.FlowProviders
 import org.gradle.api.flow.FlowScope
 import org.gradle.api.initialization.Settings
+import org.gradle.api.logging.Logging
 import org.gradle.build.event.BuildEventsListenerRegistry
 
 /**
@@ -22,12 +23,20 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
 ) : Plugin<Settings> {
 
     override fun apply(settings: Settings) {
-        DaemonState.configurationRan()
-
         val extension = settings.extensions.create("buildhound", BuildHoundExtension::class.java)
         extension.enabled.convention(true)
         extension.mode.convention(TelemetryMode.AUTO)
         extension.identity.pseudonymize.convention(true)
+
+        // In a composite, only the root build observes: task events from included builds
+        // already reach the root's listener, and a second flow action would consume the
+        // DaemonState mark twice and emit duplicate summaries (review finding, plan 003).
+        if (settings.gradle.parent != null) {
+            logger.info("[buildhound] applied in an included build; the root build's plugin collects")
+            return
+        }
+
+        DaemonState.configurationRan()
 
         val collector = settings.gradle.sharedServices.registerIfAbsent(
             TaskEventCollector.SERVICE_NAME,
@@ -40,6 +49,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // access is a CC fingerprint input, and creating the salt at apply time would
         // invalidate the next build's cache entry. Only the path is captured here.
         val environment = settings.providers.of(EnvironmentValueSource::class.java) { spec ->
+            spec.parameters.enabled.set(extension.enabled)
             spec.parameters.pseudonymize.set(extension.identity.pseudonymize)
             spec.parameters.identitySaltFile.set(File(settings.rootDir, SALT_PATH).absolutePath)
         }
@@ -47,6 +57,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // Flow API is the CC-safe "build finished" hook (spec §3.2). The finalizer will later
         // assemble the payload, write the HTML artifact, and upload; it must never fail the build.
         flowScope.always(TelemetryFinalizerAction::class.java) { spec ->
+            spec.parameters.enabled.set(extension.enabled)
             spec.parameters.collector.set(collector)
             spec.parameters.buildFailed.set(flowProviders.buildWorkResult.map { it.failure.isPresent })
             spec.parameters.environment.set(environment)
@@ -56,5 +67,6 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
 
     private companion object {
         const val SALT_PATH = ".gradle/buildhound/identity.salt"
+        val logger = Logging.getLogger(BuildHoundSettingsPlugin::class.java)
     }
 }
