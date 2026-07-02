@@ -18,11 +18,13 @@ COPY buildhound-commons/build.gradle.kts buildhound-commons/
 COPY buildhound-server/build.gradle.kts buildhound-server/
 COPY buildhound-gradle-plugin/build.gradle.kts buildhound-gradle-plugin/
 COPY buildhound-report/build.gradle.kts buildhound-report/
-RUN ./gradlew --no-daemon :buildhound-server:dependencies --quiet > /dev/null || true
+# -Pbuildhound.toolchain=21: bytecode is release-21 either way; skipping the per-image
+# JDK 26 download removes a network dependency (the other CI jobs prove the 26 path).
+RUN ./gradlew --no-daemon -Pbuildhound.toolchain=21 :buildhound-server:dependencies --quiet > /dev/null || true
 
 COPY buildhound-commons/ buildhound-commons/
 COPY buildhound-server/ buildhound-server/
-RUN ./gradlew --no-daemon :buildhound-server:installDist
+RUN ./gradlew --no-daemon -Pbuildhound.toolchain=21 :buildhound-server:installDist
 
 FROM eclipse-temurin:21-jre-jammy
 

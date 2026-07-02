@@ -24,8 +24,20 @@ kotlin {
         freeCompilerArgs.add("-Xjdk-release=21")
     }
 
-    jvmToolchain(buildToolchain)
+    jvmToolchain {
+        languageVersion.set(JavaLanguageVersion.of(buildToolchain))
+        // Shrink foojay's resolution space on the default path; overrides stay
+        // vendor-free so any locally installed JDK can serve them.
+        if (buildToolchain == 26) vendor.set(JvmVendorSpec.ADOPTIUM)
+    }
 }
+
+tasks.withType<JavaCompile>().configureEach {
+    // Kotlin is API-capped by -Xjdk-release; this is the javac equivalent so the first
+    // .java file added can't silently link against >21 APIs (review finding).
+    options.release.set(21)
+}
+
 
 dependencies {
     implementation(projects.buildhoundCommons)

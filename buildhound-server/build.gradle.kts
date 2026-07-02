@@ -10,18 +10,28 @@ description = "Multi-tenant ingestion service and dashboard backend (Ktor)"
 val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26
 
 java {
-    // Keeps the variant attribute at JVM 21: consumers on a 21 daemon must resolve us.
+    // Keeps the variant attribute at JVM 21 — the runtime image is a JRE 21.
     sourceCompatibility = JavaVersion.VERSION_21
     targetCompatibility = JavaVersion.VERSION_21
 }
 
 kotlin {
-    jvmToolchain(buildToolchain)
+    jvmToolchain {
+        languageVersion.set(JavaLanguageVersion.of(buildToolchain))
+        if (buildToolchain == 26) vendor.set(JvmVendorSpec.ADOPTIUM)
+    }
     compilerOptions {
         // The OCI runtime image stays JRE 21.
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
         freeCompilerArgs.add("-Xjdk-release=21")
     }
+}
+
+
+tasks.withType<JavaCompile>().configureEach {
+    // Kotlin is API-capped by -Xjdk-release; this is the javac equivalent so the first
+    // .java file added can't silently link against >21 APIs (review finding).
+    options.release.set(21)
 }
 
 application {

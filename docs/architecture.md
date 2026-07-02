@@ -82,6 +82,9 @@ These are the rules every plugin change is reviewed against:
     the oldest supported Gradle); bump it only when the support floor moves. The pin
     does NOT cover prebuilt dependencies (kotlinx-serialization declares stdlib 2.2) —
     only running the test suite on the floor Gradle does, so CI keeps a floor job.
+    Shelf life: Kotlin 2.4 already deprecates `apiVersion 2.0`; when a future KGP drops
+    it, the response is raising the Gradle floor to 9.x and moving the pin to 2.2 —
+    the CI floor job survives that transition and remains the true backstop.
 
 ## 3. Kotlin Multiplatform best practices (binding)
 

@@ -16,7 +16,10 @@ kotlin {
         apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
     }
 
-    jvmToolchain(buildToolchain)
+    jvmToolchain {
+        languageVersion.set(JavaLanguageVersion.of(buildToolchain))
+        if (buildToolchain == 26) vendor.set(JvmVendorSpec.ADOPTIUM)
+    }
 
     jvm {
         compilerOptions {

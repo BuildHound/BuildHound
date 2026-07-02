@@ -53,6 +53,21 @@ by release 21 anyway); base-image changes.
   toolchain, the floor Gradle (8.14) failed to run at all → the plugin's test tasks
   now use a JDK 21 launcher, which is also the truthful consumer floor.
 
+## Review round (fixed post-merge of the fallout)
+
+- `options.release=21` on all JavaCompile tasks: Kotlin was API-capped but javac was
+  not — the first .java file would have silently reopened the >21-API hole; this also
+  makes the toolchain escape hatch provably artifact-neutral.
+- Toolchain vendor pinned to Adoptium on the default 26 path (shrinks foojay's
+  resolution space); overrides stay vendor-free for local JDKs.
+- Docker build uses `-Pbuildhound.toolchain=21` (release-21 bytecode either way; drops
+  the per-image JDK download and its network dependency).
+- Architecture rule 10 gained the KGP apiVersion-2.0 shelf-life contingency.
+- Noted for a future build-infra chunk: the per-module toolchain/compat blocks now
+  repeat 4x — the architecture's convention-plugin threshold is met.
+- Accepted: the javap major-version check stays a manual/one-off verification (the
+  compile flags make it near-tautological); the escape hatch is CI-unexercised.
+
 ## Test strategy
 
 Existing full suite on both CI jobs (now compiling via the 26 toolchain); locally via
