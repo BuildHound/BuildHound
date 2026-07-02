@@ -6,6 +6,13 @@ plugins {
 description = "Settings plugin collecting build/task telemetry (configuration-cache safe)"
 
 kotlin {
+    // This code rides the Gradle settings classpath and runs on Gradle's *embedded*
+    // Kotlin stdlib (2.0 on Gradle 8.14, the support floor) — newer stdlib APIs throw
+    // NoSuchMethodError at runtime (architecture §2 rule 10).
+    compilerOptions {
+        apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
+    }
+
     // Java 21 floor for the whole platform (decision log 2026-07-02): the plugin requires
     // Gradle running on JDK 21+.
     jvmToolchain(21)
@@ -25,6 +32,8 @@ val functionalTest: SourceSet = sourceSets.create("functionalTest")
 dependencies {
     // Custom source sets are outside KGP's automatic kotlin("test") version management,
     // so the test stack is declared explicitly here.
+    "functionalTestImplementation"(projects.buildhoundCommons)
+    "functionalTestImplementation"(libs.kotlinx.serialization.json)
     "functionalTestImplementation"(libs.kotlin.test.junit5)
     "functionalTestImplementation"(libs.junit.jupiter)
     "functionalTestImplementation"(gradleTestKit())

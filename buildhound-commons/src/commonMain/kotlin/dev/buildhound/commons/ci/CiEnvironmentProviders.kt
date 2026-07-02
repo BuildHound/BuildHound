@@ -117,7 +117,9 @@ object CiEnvironment {
     fun detect(
         env: Map<String, String>,
         extraProviders: List<CiEnvironmentProvider> = emptyList(),
-    ): CiContext? =
-        (builtIns.asSequence() + extraProviders.asSequence() + sequenceOf(generic))
-            .firstNotNullOfOrNull { it.detect(env) }
+    ): CiContext? {
+        for (provider in builtIns) provider.detect(env)?.let { return it }
+        for (provider in extraProviders) provider.detect(env)?.let { return it }
+        return generic.detect(env)
+    }
 }

@@ -1,23 +1,38 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.payload.BuildHoundJson
+import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.ConfigurationCacheState
+import java.io.File
+import java.util.UUID
+import kotlinx.serialization.json.Json
 import org.gradle.api.flow.FlowAction
 import org.gradle.api.flow.FlowParameters
 import org.gradle.api.logging.Logging
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.services.ServiceReference
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Optional
 
 /**
- * Runs once, after the build finished (spec §3.2). Will assemble the payload, write the
- * standalone HTML artifact, and upload. Hard rule: never fails the build — every error is
- * logged at warn and swallowed.
+ * Runs once, after the build finished (spec §3.2): assembles the schema-v1 payload and
+ * writes it to `build/buildhound/build-payload.json` (HTML artifact + upload build on
+ * it in later chunks). Hard rule: never fails the build — every error is logged at
+ * warn and swallowed.
  */
 class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters> {
 
     interface Parameters : FlowParameters {
         @get:Input
         val enabled: Property<Boolean>
+
+        @get:Input
+        val mode: Property<TelemetryMode>
+
+        @get:Input
+        val tags: MapProperty<String, String>
 
         @get:ServiceReference
         val collector: Property<TaskEventCollector>
@@ -32,7 +47,20 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         val vcs: Property<CollectedVcs>
 
         @get:Input
+        @get:Optional
+        val ci: Property<CollectedCi>
+
+        @get:Input
         val configurationCacheRequested: Property<Boolean>
+
+        @get:Input
+        val projectKey: Property<String>
+
+        @get:Input
+        val requestedTasks: ListProperty<String>
+
+        @get:Input
+        val outputDir: Property<String>
     }
 
     override fun execute(parameters: Parameters) {
@@ -41,29 +69,50 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // the next build in this daemon misreport its CC state.
             val execution = DaemonState.executionRan()
             // Master switch (spec §3.4): nothing is probed, assembled, or logged when off —
-            // the environment provider is never queried, so no salt is created either.
+            // the value-source providers are never queried, so no salt is created either.
             if (!parameters.enabled.getOrElse(true)) return@runCatching
 
-            val tasks = parameters.collector.get().snapshot()
-            val byOutcome = tasks.groupingBy { it.outcome }.eachCount()
-            val outcome = if (parameters.buildFailed.get()) "FAILED" else "SUCCESS"
-            logger.lifecycle("[buildhound] captured {} task event(s), build {}, outcomes: {}", tasks.size, outcome, byOutcome)
+            val ci = parameters.ci.orNull
+            val mode = PayloadAssembler.resolveMode(parameters.mode.getOrElse(TelemetryMode.AUTO), ci)
+                ?: return@runCatching // mode = disabled
 
+            val tasks = parameters.collector.get().snapshot()
             val ccState = configurationCacheState(parameters.configurationCacheRequested.getOrElse(false), execution)
-            val env = parameters.environment.orNull
-            // Identity fields are deliberately never logged (spec §3.7).
-            logger.lifecycle(
-                "[buildhound] environment: os={}/{}, cores={}, ramMb={}, gradle={}, jdk={}, daemonReused={}, cc={}",
-                env?.os, env?.arch, env?.cores, env?.ramMb, env?.gradleVersion, env?.jdkVersion,
-                execution.daemonReused, ccState,
+            val payload = PayloadAssembler.assemble(
+                buildId = UUID.randomUUID().toString(),
+                projectKey = parameters.projectKey.orNull,
+                mode = mode,
+                buildFailed = parameters.buildFailed.get(),
+                requestedTasks = parameters.requestedTasks.getOrElse(emptyList()),
+                tasks = tasks,
+                environment = parameters.environment.orNull,
+                vcs = parameters.vcs.orNull,
+                ci = ci,
+                configurationCache = ccState,
+                daemonReused = execution.daemonReused,
+                tags = parameters.tags.getOrElse(emptyMap()),
+                nowMs = System.currentTimeMillis(),
             )
-            val vcs = parameters.vcs.orNull
-            // Branch and sha are declared payload metadata (spec §4 vcs block); paths never surface.
-            logger.lifecycle("[buildhound] vcs: branch={}, sha={}, dirty={}", vcs?.branch, vcs?.sha, vcs?.dirty)
-            // TODO(phase 1): payload assembly, derived metrics, HTML artifact, spool + upload.
+
+            val payloadFile = writePayload(payload, parameters.outputDir.get())
+            val byOutcome = tasks.groupingBy { it.outcome }.eachCount()
+            logger.lifecycle(
+                "[buildhound] build {}: {} task(s) {}, mode={}, cc={}, hitRate={}",
+                payload.outcome, tasks.size, byOutcome, mode, ccState,
+                payload.derived?.cacheableHitRate?.let { "%.2f".format(it) },
+            )
+            logger.lifecycle("[buildhound] payload written: {} (buildId={})", payloadFile, payload.buildId)
+            // TODO(phase 1): HTML artifact, gzip upload with spool/retry.
         }.onFailure {
             logger.warn("[buildhound] telemetry finalization failed (build unaffected): {}", it.message)
         }
+    }
+
+    private fun writePayload(payload: BuildPayload, outputDir: String): File {
+        val dir = File(outputDir).apply { mkdirs() }
+        val file = File(dir, "build-payload.json")
+        file.writeText(prettyJson.encodeToString(BuildPayload.serializer(), payload))
+        return file
     }
 
     private fun configurationCacheState(requested: Boolean, execution: DaemonState.Execution): ConfigurationCacheState =
@@ -75,5 +124,8 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
     private companion object {
         val logger = Logging.getLogger(TelemetryFinalizerAction::class.java)
+
+        /** Wire format stays [BuildHoundJson.payload]; pretty printing is for the local file only. */
+        val prettyJson = Json(from = BuildHoundJson.payload) { prettyPrint = true }
     }
 }

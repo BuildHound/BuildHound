@@ -1,10 +1,16 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.payload.BuildHoundJson
+import dev.buildhound.commons.payload.BuildMode
+import dev.buildhound.commons.payload.BuildOutcome
+import dev.buildhound.commons.payload.BuildPayload
 import java.io.File
 import java.net.InetAddress
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
@@ -45,70 +51,81 @@ class BuildHoundSettingsPluginFunctionalTest {
             .withPluginClasspath()
             .withArguments(*arguments)
 
-    private fun environmentLine(output: String): String =
-        output.lineSequence().single { it.startsWith("[buildhound] environment:") }
+    private fun summaryLine(output: String): String =
+        output.lineSequence().single { it.startsWith("[buildhound] build ") }
+
+    private fun readPayload(): BuildPayload {
+        val file = File(projectDir, "build/buildhound/build-payload.json")
+        assertTrue(file.isFile, "expected payload at $file")
+        return BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), file.readText())
+    }
 
     @Test
-    fun `plugin applies cleanly and captures task events with configuration cache`() {
+    fun `plugin applies cleanly and writes a schema v1 payload`() {
         setUpProject()
 
         val result = runner("hello", "--configuration-cache").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
-        assertTrue(result.output.contains("[buildhound] captured"), "expected telemetry summary in:\n${result.output}")
+        val payload = readPayload()
+        assertEquals(BuildPayload.SCHEMA_VERSION, payload.schemaVersion)
+        assertEquals(BuildOutcome.SUCCESS, payload.outcome)
+        assertEquals("buildhound-fixture", payload.projectKey)
+        assertEquals(listOf("hello"), payload.requestedTasks)
+        assertEquals(mapOf("team" to "mobile"), payload.tags)
+        assertTrue(payload.tasks.any { it.path == ":hello" }, "expected :hello in ${payload.tasks}")
+        assertTrue(payload.finishedAt >= payload.startedAt)
+        assertNotNull(payload.environment, "environment block missing")
+        assertNotNull(payload.toolchain?.gradle, "toolchain.gradle missing")
+        assertNotNull(payload.derived, "derived metrics missing")
     }
 
     @Test
-    fun `plugin keeps collecting on configuration cache reuse`() {
+    fun `payload keeps flowing on configuration cache reuse`() {
         setUpProject()
 
         runner("hello", "--configuration-cache").build()
         val secondRun = runner("hello", "--configuration-cache").build()
 
-        assertTrue(
-            secondRun.output.contains("[buildhound] captured"),
-            "telemetry must survive configuration-cache reuse:\n${secondRun.output}",
-        )
+        assertTrue(summaryLine(secondRun.output).contains("cc=HIT"), summaryLine(secondRun.output))
+        assertTrue(readPayload().tasks.isNotEmpty(), "telemetry must survive configuration-cache reuse")
     }
 
     @Test
-    fun `environment is collected and cc state tracks store then hit`() {
+    fun `cc state tracks store then hit and disabled`() {
         setUpProject()
 
         val firstRun = runner("hello", "--configuration-cache").build()
         val secondRun = runner("hello", "--configuration-cache").build()
+        val noCcRun = runner("hello", "--no-configuration-cache").build()
 
-        val firstLine = environmentLine(firstRun.output)
-        assertTrue(firstLine.contains("cc=MISS_STORED"), firstLine)
-        assertTrue(firstLine.contains("gradle="), firstLine)
-        assertTrue(firstLine.contains("cores="), firstLine)
-
-        // ValueSources re-execute on reuse, so the summary must still be present and fresh.
-        val secondLine = environmentLine(secondRun.output)
-        assertTrue(secondLine.contains("cc=HIT"), secondLine)
+        assertTrue(summaryLine(firstRun.output).contains("cc=MISS_STORED"), summaryLine(firstRun.output))
+        assertTrue(summaryLine(secondRun.output).contains("cc=HIT"), summaryLine(secondRun.output))
+        assertTrue(summaryLine(noCcRun.output).contains("cc=DISABLED"), summaryLine(noCcRun.output))
     }
 
     @Test
-    fun `cc state is disabled without configuration cache`() {
-        setUpProject()
-
-        val result = runner("hello", "--no-configuration-cache").build()
-
-        assertTrue(environmentLine(result.output).contains("cc=DISABLED"))
-    }
-
-    @Test
-    fun `pseudonymized environment leaks neither username nor hostname`() {
+    fun `pseudonymized identity never leaks plaintext`() {
         setUpProject()
 
         val result = runner("hello", "--configuration-cache").build()
 
-        val line = environmentLine(result.output)
         val username = System.getProperty("user.name")
         val hostname = runCatching { InetAddress.getLocalHost().hostName }.getOrNull()
-        assertFalse(line.contains(username), "plaintext username in: $line")
+        val environment = readPayload().environment
+        assertNotNull(environment)
+        environment.userId?.let { userId ->
+            assertTrue(userId.matches(Regex("u_[0-9a-f]{12}")), "unexpected userId shape: $userId")
+        }
+        environment.hostnameHash?.let { hash ->
+            assertTrue(hash.matches(Regex("h_[0-9a-f]{12}")), "unexpected hostnameHash shape: $hash")
+        }
+        // Neither the log nor the payload may carry the plaintext identity.
+        val payloadText = File(projectDir, "build/buildhound/build-payload.json").readText()
+        assertFalse(payloadText.contains("\"$username\""), "plaintext username in payload")
         if (!hostname.isNullOrEmpty()) {
-            assertFalse(line.contains(hostname), "plaintext hostname in: $line")
+            assertFalse(payloadText.contains("\"$hostname\""), "plaintext hostname in payload")
+            assertFalse(result.output.lineSequence().any { it.startsWith("[buildhound]") && it.contains(hostname) })
         }
         assertTrue(
             File(projectDir, ".gradle/buildhound/identity.salt").isFile,
@@ -120,9 +137,9 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `identity pseudonymize can be disabled via dsl`() {
         setUpProject(extraDsl = "identity { pseudonymize = false }")
 
-        val result = runner("hello", "--configuration-cache").build()
+        runner("hello", "--configuration-cache").build()
 
-        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        assertEquals(System.getProperty("user.name"), readPayload().environment?.userId)
         assertFalse(
             File(projectDir, ".gradle/buildhound/identity.salt").exists(),
             "plaintext mode must not create a salt",
@@ -140,36 +157,68 @@ class BuildHoundSettingsPluginFunctionalTest {
         exec("git", "add", ".")
         exec("git", "commit", "-m", "init")
 
-        val clean = runner("hello", "--configuration-cache").build()
-        val cleanLine = vcsLine(clean.output)
-        assertTrue(cleanLine.contains("branch=main"), cleanLine)
-        assertTrue(Regex("sha=[0-9a-f]{40}").containsMatchIn(cleanLine), cleanLine)
-        assertTrue(cleanLine.contains("dirty=false"), cleanLine)
+        runner("hello", "--configuration-cache").build()
+        val clean = readPayload().vcs
+        assertEquals("main", clean?.branch)
+        assertTrue(clean?.sha.orEmpty().matches(Regex("[0-9a-f]{40}")), "sha: ${clean?.sha}")
+        assertEquals(false, clean?.dirty)
 
         File(projectDir, "untracked.txt").writeText("x")
-        val dirty = runner("hello", "--configuration-cache").build()
-        assertTrue(vcsLine(dirty.output).contains("dirty=true"))
+        val dirtyRun = runner("hello", "--configuration-cache").build()
+        assertEquals(true, readPayload().vcs?.dirty)
         // Freshness must come from re-executing the source on reuse, not from a CC miss.
-        assertTrue(environmentLine(dirty.output).contains("cc=HIT"))
+        assertTrue(summaryLine(dirtyRun.output).contains("cc=HIT"))
     }
 
     @Test
-    fun `non git projects degrade to null vcs fields`() {
+    fun `non git projects degrade to a null vcs block`() {
         setUpProject()
+
+        runner("hello", "--configuration-cache").build()
+
+        val payload = readPayload()
+        if (payload.ci == null) {
+            assertNull(payload.vcs, "expected no vcs block without git or CI: ${payload.vcs}")
+        } else {
+            assertNull(payload.vcs?.dirty, "dirty must never come from CI context")
+        }
+    }
+
+    @Test
+    fun `generic ci detection resolves mode and fills the ci block`() {
+        setUpProject()
+
+        val cleanedEnv = System.getenv().filterKeys { it != "GITHUB_ACTIONS" && it != "TF_BUILD" }
+        runner("hello", "--configuration-cache")
+            // Fresh daemon: an inherited-env daemon from earlier tests would not see
+            // the injected variables (daemon selection ignores env differences).
+            .withTestKitDir(File(projectDir, "testkit"))
+            .withEnvironment(
+                cleanedEnv + mapOf(
+                    "BUILDHOUND_CI" to "true",
+                    "BUILDHOUND_CI_PROVIDER" to "my-inhouse-ci",
+                    "BUILDHOUND_CI_RUN_ID" to "42",
+                    "BUILDHOUND_CI_BRANCH" to "main",
+                ),
+            )
+            .build()
+
+        val payload = readPayload()
+        assertEquals(BuildMode.CI, payload.mode)
+        assertEquals("my-inhouse-ci", payload.ci?.provider)
+        assertEquals("42", payload.ci?.runId)
+        assertEquals("main", payload.vcs?.branch, "CI context must fill vcs gaps")
+    }
+
+    @Test
+    fun `mode disabled writes no payload`() {
+        setUpProject(extraDsl = "mode = dev.buildhound.gradle.TelemetryMode.DISABLED")
 
         val result = runner("hello", "--configuration-cache").build()
 
-        val line = vcsLine(result.output)
-        assertTrue(line.contains("branch=null") && line.contains("sha=null") && line.contains("dirty=null"), line)
-    }
-
-    private fun vcsLine(output: String): String =
-        output.lineSequence().single { it.startsWith("[buildhound] vcs:") }
-
-    private fun exec(vararg command: String) {
-        val process = ProcessBuilder(*command).directory(projectDir).redirectErrorStream(true).start()
-        val output = process.inputStream.readBytes().decodeToString()
-        check(process.waitFor() == 0) { "command ${command.joinToString(" ")} failed:\n$output" }
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        assertFalse(result.output.contains("[buildhound] build "), result.output)
+        assertFalse(File(projectDir, "build/buildhound").exists(), "disabled mode must not write payloads")
     }
 
     @Test
@@ -179,11 +228,17 @@ class BuildHoundSettingsPluginFunctionalTest {
         val result = runner("hello", "--configuration-cache").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
-        assertFalse(result.output.contains("[buildhound] captured"), result.output)
-        assertFalse(result.output.contains("[buildhound] environment:"), result.output)
+        assertFalse(result.output.contains("[buildhound] build "), result.output)
         assertFalse(
             File(projectDir, ".gradle/buildhound").exists(),
             "enabled=false must not touch the identity salt",
         )
+        assertFalse(File(projectDir, "build/buildhound").exists())
+    }
+
+    private fun exec(vararg command: String) {
+        val process = ProcessBuilder(*command).directory(projectDir).redirectErrorStream(true).start()
+        val output = process.inputStream.readBytes().decodeToString()
+        check(process.waitFor() == 0) { "command ${command.joinToString(" ")} failed:\n$output" }
     }
 }

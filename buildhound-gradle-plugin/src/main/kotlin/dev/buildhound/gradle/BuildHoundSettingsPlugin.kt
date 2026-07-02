@@ -59,15 +59,27 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.rootDir.set(settings.rootDir.absolutePath)
         }
 
-        // Flow API is the CC-safe "build finished" hook (spec §3.2). The finalizer will later
-        // assemble the payload, write the HTML artifact, and upload; it must never fail the build.
+        val ci = settings.providers.of(CiValueSource::class.java) { spec ->
+            spec.parameters.enabled.set(extension.enabled)
+        }
+
+        // Flow API is the CC-safe "build finished" hook (spec §3.2). The finalizer
+        // assembles the payload and writes it next to the build outputs; the HTML
+        // artifact and upload chunks build on it. It must never fail the build.
         flowScope.always(TelemetryFinalizerAction::class.java) { spec ->
             spec.parameters.enabled.set(extension.enabled)
+            spec.parameters.mode.set(extension.mode)
+            spec.parameters.tags.set(extension.tags)
             spec.parameters.collector.set(collector)
             spec.parameters.buildFailed.set(flowProviders.buildWorkResult.map { it.failure.isPresent })
             spec.parameters.environment.set(environment)
             spec.parameters.vcs.set(vcs)
+            spec.parameters.ci.set(ci)
             spec.parameters.configurationCacheRequested.set(buildFeatures.configurationCache.requested.getOrElse(false))
+            // Lazy: the settings script sets rootProject.name after apply() runs.
+            spec.parameters.projectKey.set(settings.providers.provider { settings.rootProject.name })
+            spec.parameters.requestedTasks.set(settings.startParameter.taskNames.toList())
+            spec.parameters.outputDir.set(File(settings.rootDir, "build/buildhound").absolutePath)
         }
     }
 

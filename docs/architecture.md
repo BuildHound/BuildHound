@@ -74,6 +74,13 @@ These are the rules every plugin change is reviewed against:
    inside a `ValueSource` or at execution time instead. (Found by the plan-003
    functional test: the identity salt created during apply invalidated CC reuse.)
 
+10. **Plugin-classpath code runs on Gradle's embedded Kotlin stdlib.** The compiler
+    ships stdlib 2.4 but Gradle 8.14 runs plugins on its embedded 2.0 stdlib, so a
+    newer-stdlib API compiles fine and throws `NoSuchMethodError` at runtime (found
+    when a 2.4-only `sequenceOf` overload broke CI detection). `buildhound-commons`,
+    the plugin, and `buildhound-report` pin `apiVersion = 2.0` (the embedded stdlib of
+    the oldest supported Gradle); bump it only when the support floor moves.
+
 ## 3. Kotlin Multiplatform best practices (binding)
 
 1. **`buildhound-commons` is the only shared-code channel.** Models are pure data + 
@@ -142,6 +149,7 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
 | 2026-07-02 | Flow API + `ServiceReference` validated against Gradle 8.14 + CC (incl. reuse) | TestKit functional tests green — riskiest assumption of the roadmap spike confirmed |
 | 2026-07-02 | Wrapper `distributionUrl` kept on services.gradle.org | Standard, checksum-verifiable path |
 | 2026-07-02 | JVM 21 floor for **all** modules, superseding spec §3.1's "Java 11+ runtime for the plugin" | Owner decision: build with at least Java 21. Plugin consumers must run Gradle on JDK 21+ |
+| 2026-07-02 | Kotlin `apiVersion` pinned to 2.0 for commons/plugin/report | Plugin-classpath code executes on Gradle's embedded Kotlin stdlib (2.0 on Gradle 8.14); newer stdlib APIs are runtime `NoSuchMethodError`s |
 | 2026-07-02 | Naming decision #6: product **BuildHound**, domain **buildhound.dev**, plugin id + Maven group `dev.buildhound`, modules `buildhound-*`, DSL `buildhound {}`, env prefix `BUILDHOUND_` | Owner decision; pre-release so renamed with no compatibility shim. Research doc + old plans keep the BTP working name as historical records |
 
 *Add a row (or a docs/plans entry) whenever an architectural decision is made or reversed.*
