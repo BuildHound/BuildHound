@@ -9,6 +9,12 @@ description = "Multi-tenant ingestion service and dashboard backend (Ktor)"
 // JDK 26 builds the code; bytecode/API stay Java 21 (plan 011).
 val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26
 
+java {
+    // Keeps the variant attribute at JVM 21: consumers on a 21 daemon must resolve us.
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
 kotlin {
     jvmToolchain(buildToolchain)
     compilerOptions {

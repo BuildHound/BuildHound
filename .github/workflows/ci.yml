@@ -30,6 +30,7 @@ jobs:
 
   build-floor:
     name: Build & test (Gradle 8.14 floor)
+    # 8.14.4+: KGP requires it when compiling with a JDK 26 toolchain (plan 011).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +42,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.14.3"
+          gradle-version: "8.14.4"
 
       # The support floor runs Gradle's embedded Kotlin 2.0 stdlib — the apiVersion
       # pin (architecture §2 rule 10) is only proven by actually testing on it.

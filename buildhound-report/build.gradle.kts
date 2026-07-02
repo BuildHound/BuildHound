@@ -7,6 +7,12 @@ description = "Standalone HTML build-report artifact: template + renderer, embed
 // JDK 26 builds the code; bytecode/API stay Java 21 (plan 011).
 val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26
 
+java {
+    // Keeps the variant attribute at JVM 21: consumers on a 21 daemon must resolve us.
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
 kotlin {
     // This code rides the Gradle settings classpath and runs on Gradle's *embedded*
     // Kotlin stdlib (2.0 on Gradle 8.14, the support floor) — newer stdlib APIs throw

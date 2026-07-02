@@ -23,6 +23,10 @@ kotlin {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
             freeCompilerArgs.add("-Xjdk-release=21")
         }
+        // Keeps the variant attribute at JVM 21: consumers on a 21 daemon must resolve us.
+        attributes {
+            attribute(TargetJvmVersion.TARGET_JVM_VERSION_ATTRIBUTE, 21)
+        }
     }
     // Future targets: js() for buildhound-report, native for the metric CLI (buildhound-ci-assets).
 
