@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Build Telemetry Platform (working name **BTP**): an open-source Develocity alternative —
+**BuildHound** (buildhound.dev): an open-source Develocity alternative —
 a Gradle settings plugin that collects build/task/cache/test telemetry, a multi-tenant
 Ktor ingestion service shipped as an OCI image, a standalone per-build HTML artifact, and
 CI assets. Apache-2.0.
@@ -17,28 +17,28 @@ CI assets. Apache-2.0.
 
 ## Modules
 
-- `btp-commons` — KMP shared module: payload schema v1 (kotlinx-serialization) +
+- `buildhound-commons` — KMP shared module: payload schema v1 (kotlinx-serialization) +
   `CiEnvironmentProvider` SPI. The contract everything builds against; golden-file tests
   pin every schema version.
-- `btp-gradle-plugin` — settings plugin (`io.example.buildtelemetry`, placeholder id).
-  Collector `BuildService`, Flow-API finalizer, `buildTelemetry {}` DSL. TestKit tests in
+- `buildhound-gradle-plugin` — settings plugin (id `dev.buildhound`).
+  Collector `BuildService`, Flow-API finalizer, `buildhound {}` DSL. TestKit tests in
   the `functionalTest` source set. Must stay configuration-cache safe.
-- `btp-server` — Ktor ingest service (`POST /v1/builds`, `/health`), storage behind
-  `BuildStore`. OCI image via `btp-server/Dockerfile`, local stack via
+- `buildhound-server` — Ktor ingest service (`POST /v1/builds`, `/health`), storage behind
+  `BuildStore`. OCI image via `buildhound-server/Dockerfile`, local stack via
   `deploy/compose.yaml` (TimescaleDB). JVM 21.
-- `btp-report` — standalone HTML artifact (zero network — enforced by test), embedded
+- `buildhound-report` — standalone HTML artifact (zero network — enforced by test), embedded
   into the plugin at build time.
-- `btp-ci-assets` — deliberately **not** a Gradle module: Azure YAML template, shell
+- `buildhound-ci-assets` — deliberately **not** a Gradle module: Azure YAML template, shell
   metric CLI.
 
 ## Commands
 
 ```bash
 ./gradlew build                          # everything: compile, unit + functional tests
-./gradlew :btp-gradle-plugin:functionalTest   # TestKit tests only
-./gradlew :btp-server:test               # server tests only
-./gradlew :btp-server:run                # run the server locally (port 8080)
-docker build -f btp-server/Dockerfile -t btp-server .   # OCI image (from repo root!)
+./gradlew :buildhound-gradle-plugin:functionalTest   # TestKit tests only
+./gradlew :buildhound-server:test               # server tests only
+./gradlew :buildhound-server:run                # run the server locally (port 8080)
+docker build -f buildhound-server/Dockerfile -t buildhound-server .   # OCI image (from repo root!)
 docker compose -f deploy/compose.yaml up --build        # server + TimescaleDB
 ```
 
@@ -101,8 +101,9 @@ special event.
 
 - JVM 21 floor for **all** modules (owner decision, see architecture decision log); the
   plugin therefore requires Gradle running on JDK 21+.
-- Placeholder coordinates (`io.example.btp`, plugin id `io.example.buildtelemetry`) until
-  naming decision #6 — do not brand anything yet.
+- Coordinates (naming decision #6): Maven group `dev.buildhound`, plugin id
+  `dev.buildhound`, packages `dev.buildhound.*`, env-var prefix `BUILDHOUND_`.
+  Casing: **BuildHound** in prose/class names, `buildhound` in ids/modules/DSL.
 - Version catalog (`gradle/libs.versions.toml`) is the only place versions live.
 - **When adding a dependency, check what the latest released version is and use that** —
   query Maven Central (`https://repo.maven.apache.org/maven2/<group-path>/<artifact>/maven-metadata.xml`)

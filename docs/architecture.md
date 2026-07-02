@@ -1,7 +1,7 @@
 # Architecture & Best Practices
 
-> **Living document.** This is the working architecture design for the Build Telemetry
-> Platform. It is expected to be updated and improved continuously during development:
+> **Living document.** This is the working architecture design for BuildHound. It is
+> expected to be updated and improved continuously during development:
 > whenever an implementation, review, or retro produces a better insight, this document
 > changes in the same PR. The product requirements live in
 > [build-telemetry-spec.md](build-telemetry-spec.md); this document describes *how* we
@@ -10,24 +10,24 @@
 ## 1. System overview
 
 ```
- btp-gradle-plugin (settings plugin, runs inside every Gradle build)
+ buildhound-gradle-plugin (settings plugin, runs inside every Gradle build)
         │  BuildPayload (schema v1, gzip JSON)
         ▼
- btp-server (Ktor, multi-tenant, OCI image) ──► Postgres + TimescaleDB
+ buildhound-server (Ktor, multi-tenant, OCI image) ──► Postgres + TimescaleDB
         │
         └─► dashboard SPA (phase 1) / query API
 ```
 
 | Module | Type | JVM floor | Role |
 |---|---|---|---|
-| `btp-commons` | Kotlin Multiplatform (jvm today; js/native later) | 21 | Payload schema (kotlinx-serialization), `CiEnvironmentProvider` SPI — the contract everything builds against |
-| `btp-gradle-plugin` | Kotlin/JVM + `java-gradle-plugin` | 21 | Settings plugin: collectors, finalizer, uploader |
-| `btp-server` | Kotlin/JVM + Ktor, `application` | 21 | Ingest API, storage, rollups, regression engine, dashboard |
-| `btp-report` | Kotlin/JVM (js candidate) | 21 | Standalone HTML artifact template + renderer, embedded into the plugin |
-| `btp-ci-assets` | not a Gradle module | none | Azure YAML template, metric CLI (shell), profiler scenarios |
+| `buildhound-commons` | Kotlin Multiplatform (jvm today; js/native later) | 21 | Payload schema (kotlinx-serialization), `CiEnvironmentProvider` SPI — the contract everything builds against |
+| `buildhound-gradle-plugin` | Kotlin/JVM + `java-gradle-plugin` | 21 | Settings plugin: collectors, finalizer, uploader |
+| `buildhound-server` | Kotlin/JVM + Ktor, `application` | 21 | Ingest API, storage, rollups, regression engine, dashboard |
+| `buildhound-report` | Kotlin/JVM (js candidate) | 21 | Standalone HTML artifact template + renderer, embedded into the plugin |
+| `buildhound-ci-assets` | not a Gradle module | none | Azure YAML template, metric CLI (shell), profiler scenarios |
 
-**Dependency rule:** `btp-commons` has no dependency on any other module and no Gradle API
-types. The plugin and server never share code except through `btp-commons`. `btp-report`
+**Dependency rule:** `buildhound-commons` has no dependency on any other module and no Gradle API
+types. The plugin and server never share code except through `buildhound-commons`. `buildhound-report`
 depends on nothing but the payload JSON shape.
 
 **JVM floors:** every module targets JVM 21 (owner decision, deviating from spec §3.1's
@@ -59,18 +59,19 @@ These are the rules every plugin change is reviewed against:
    `functionalTest` source set so CI can run them as a matrix:
    {Gradle 8.0, 8.14, 9.latest} × {config cache on/off} (roadmap phase 0). Isolated
    Projects runs as a non-blocking CI job from phase 1.
-7. **Identity & hygiene:** plugin id/coordinates are placeholders until decision #6;
-   `gradlePlugin {}` metadata kept publish-ready; `validatePlugins` runs in `check`.
+7. **Identity & hygiene:** plugin id `dev.buildhound`, Maven group `dev.buildhound`
+   (decision #6); `gradlePlugin {}` metadata kept publish-ready; `validatePlugins` runs
+   in `check`.
 8. **Extension points are public contracts.** `CiEnvironmentProvider` lives in
-   `btp-commons`, is documented, and loadable via `ServiceLoader` — "add your CI in ~30
+   `buildhound-commons`, is documented, and loadable via `ServiceLoader` — "add your CI in ~30
    lines" is an advertised feature.
 
 ## 3. Kotlin Multiplatform best practices (binding)
 
-1. **`btp-commons` is the only shared-code channel.** Models are pure data + 
+1. **`buildhound-commons` is the only shared-code channel.** Models are pure data + 
    kotlinx-serialization; no platform types, no I/O, no Gradle/Ktor types leak in.
 2. **Additive schema only.** New fields get defaults so old servers/plugins keep working;
-   `ignoreUnknownKeys` on the shared `BtpJson`. Golden-file tests pin every historical
+   `ignoreUnknownKeys` on the shared `BuildHoundJson`. Golden-file tests pin every historical
    schema version and are never edited, only added to.
 3. **Targets grow with need, not speculatively.** jvm-only today; `js()` when the report
    frontend moves to Kotlin/JS, native when the metric CLI justifies it. Hierarchical
@@ -84,7 +85,7 @@ These are the rules every plugin change is reviewed against:
 
 ## 4. OCI / container image best practices (binding)
 
-The server ships as an OCI image (`btp-server/Dockerfile`, compose in `deploy/`):
+The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `deploy/`):
 
 1. **Multi-stage builds**: JDK + Gradle only in the build stage; runtime stage is JRE-only.
    Evaluate `jlink`/distroless once the dependency set stabilizes.
@@ -103,7 +104,7 @@ The server ships as an OCI image (`btp-server/Dockerfile`, compose in `deploy/`)
 
 ## 5. Server architecture
 
-- **Ktor** with plain function routing (`Routes.kt`), one module function (`btpModule`)
+- **Ktor** with plain function routing (`Routes.kt`), one module function (`buildHoundModule`)
   usable by both `main()` and `testApplication` — keep it that way so every route is
   testable without a socket.
 - **Persistence boundary**: all storage behind `BuildStore` (and future stores). The
@@ -129,9 +130,10 @@ The server ships as an OCI image (`btp-server/Dockerfile`, compose in `deploy/`)
 | Date | Decision | Why |
 |---|---|---|
 | 2026-07-02 | Version catalog + per-module plugin aliases; no `build-logic` yet | Three modules; convention plugins add classloader complexity before they pay off |
-| 2026-07-02 | `btp-ci-assets` is not a Gradle module | Its consumers are CI steps without a JVM |
+| 2026-07-02 | `buildhound-ci-assets` is not a Gradle module | Its consumers are CI steps without a JVM |
 | 2026-07-02 | Flow API + `ServiceReference` validated against Gradle 8.14 + CC (incl. reuse) | TestKit functional tests green — riskiest assumption of the roadmap spike confirmed |
 | 2026-07-02 | Wrapper `distributionUrl` kept on services.gradle.org | Standard, checksum-verifiable path |
 | 2026-07-02 | JVM 21 floor for **all** modules, superseding spec §3.1's "Java 11+ runtime for the plugin" | Owner decision: build with at least Java 21. Plugin consumers must run Gradle on JDK 21+ |
+| 2026-07-02 | Naming decision #6: product **BuildHound**, domain **buildhound.dev**, plugin id + Maven group `dev.buildhound`, modules `buildhound-*`, DSL `buildhound {}`, env prefix `BUILDHOUND_` | Owner decision; pre-release so renamed with no compatibility shim. Research doc + old plans keep the BTP working name as historical records |
 
 *Add a row (or a docs/plans entry) whenever an architectural decision is made or reversed.*

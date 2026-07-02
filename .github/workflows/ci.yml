@@ -38,15 +38,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build image
-        run: docker build -f btp-server/Dockerfile -t btp-server:${{ github.sha }} .
+        run: docker build -f buildhound-server/Dockerfile -t buildhound-server:${{ github.sha }} .
 
       - name: Smoke test image
         run: |
-          docker run -d --rm --name btp-server -p 8080:8080 btp-server:${{ github.sha }}
+          docker run -d --rm --name buildhound-server -p 8080:8080 buildhound-server:${{ github.sha }}
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8080/health; then exit 0; fi
             sleep 1
           done
           echo "server did not become healthy" >&2
-          docker logs btp-server >&2
+          docker logs buildhound-server >&2
           exit 1

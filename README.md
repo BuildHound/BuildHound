@@ -1,22 +1,19 @@
-# Build Telemetry Platform (working name: BTP)
+# BuildHound
 
 An open-source build-telemetry stack for Gradle — monitor build performance on CI over
 time. A Gradle settings plugin collects build/task/cache telemetry from every build, a
 self-hostable multi-tenant service ingests it, and each build additionally produces a
-fully standalone HTML report artifact. Apache-2.0.
-
-> Naming, plugin id, and Maven coordinates are placeholders until decision #6
-> (`io.example.buildtelemetry` / `io.example.btp`).
+fully standalone HTML report artifact. Apache-2.0. Home: [buildhound.dev](https://buildhound.dev).
 
 ## Repository layout
 
 | Path | What it is |
 |---|---|
-| `btp-commons/` | Kotlin Multiplatform shared module: payload schema v1 + `CiEnvironmentProvider` SPI |
-| `btp-gradle-plugin/` | Settings plugin: task-event collector (BuildService), Flow-API finalizer, `buildTelemetry {}` DSL |
-| `btp-server/` | Ktor ingestion service (`POST /v1/builds`), shipped as an OCI image |
-| `btp-report/` | Standalone HTML build-report artifact (zero network access) |
-| `btp-ci-assets/` | Azure Pipelines template, metric CLI — JVM-free CI assets |
+| `buildhound-commons/` | Kotlin Multiplatform shared module: payload schema v1 + `CiEnvironmentProvider` SPI |
+| `buildhound-gradle-plugin/` | Settings plugin: task-event collector (BuildService), Flow-API finalizer, `buildhound {}` DSL |
+| `buildhound-server/` | Ktor ingestion service (`POST /v1/builds`), shipped as an OCI image |
+| `buildhound-report/` | Standalone HTML build-report artifact (zero network access) |
+| `buildhound-ci-assets/` | Azure Pipelines template, metric CLI — JVM-free CI assets |
 | `deploy/` | `compose.yaml`: server + TimescaleDB for local/self-host |
 | `docs/` | Research, specification, roadmap, and the living [architecture doc](docs/architecture.md) |
 
@@ -27,7 +24,7 @@ fully standalone HTML report artifact. Apache-2.0.
 ./gradlew build
 
 # Run the ingest server locally
-./gradlew :btp-server:run
+./gradlew :buildhound-server:run
 curl http://localhost:8080/health
 
 # Or the full stack as containers
@@ -39,10 +36,10 @@ development use an included build or `mavenLocal`):
 
 ```kotlin
 plugins {
-    id("io.example.buildtelemetry") version "0.1.0-SNAPSHOT"
+    id("dev.buildhound") version "0.1.0-SNAPSHOT"
 }
 
-buildTelemetry {
+buildhound {
     tags.put("team", "mobile")
 }
 ```

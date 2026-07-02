@@ -1,0 +1,27 @@
+# Reusable steps template for Azure Pipelines (spec §7).
+# Usage from a consumer pipeline:
+#
+#   steps:
+#     - template: buildhound-gradle-steps.yml@buildhound
+#       parameters:
+#         gradleTasks: "assembleDebug"
+#         buildhoundServerUrl: "https://buildhound.dev"
+#
+# Scaffold version: wires the token + runs Gradle. Phase 1 adds gradle.properties
+# validation, HTML-artifact publishing, and the optional verdict gate.
+
+parameters:
+  - name: gradleTasks
+    type: string
+    default: "build"
+  - name: buildhoundServerUrl
+    type: string
+    default: ""
+
+steps:
+  - script: ./gradlew ${{ parameters.gradleTasks }}
+    displayName: "Gradle build (with build telemetry)"
+    env:
+      # Map the secret in the consuming pipeline; never echo it.
+      BUILDHOUND_TOKEN: $(BUILDHOUND_TOKEN)
+      BUILDHOUND_SERVER_URL: ${{ parameters.buildhoundServerUrl }}

@@ -14,11 +14,11 @@ dependencyResolutionManagement {
 
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
-rootProject.name = "build-telemetry-platform"
+rootProject.name = "buildhound"
 
-include(":btp-commons")
-include(":btp-gradle-plugin")
-include(":btp-server")
-include(":btp-report")
-// btp-ci-assets is intentionally not a Gradle module: it holds CI templates and
+include(":buildhound-commons")
+include(":buildhound-gradle-plugin")
+include(":buildhound-server")
+include(":buildhound-report")
+// buildhound-ci-assets is intentionally not a Gradle module: it holds CI templates and
 // shell assets that must be consumable without a JVM (see docs/architecture.md).

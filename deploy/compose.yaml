@@ -5,21 +5,21 @@
 # The scaffold server does not talk to the database yet (in-memory store); the service is
 # provisioned here so phase 1 lands against a running TimescaleDB from day one.
 
-name: btp
+name: buildhound
 
 services:
   server:
     build:
       context: ..
-      dockerfile: btp-server/Dockerfile
+      dockerfile: buildhound-server/Dockerfile
     ports:
       - "8080:8080"
     environment:
-      BTP_PORT: "8080"
-      BTP_DB_URL: "jdbc:postgresql://db:5432/btp"
-      BTP_DB_USER: "btp"
+      BUILDHOUND_PORT: "8080"
+      BUILDHOUND_DB_URL: "jdbc:postgresql://db:5432/buildhound"
+      BUILDHOUND_DB_USER: "buildhound"
       # Local development only — use a secret manager for real deployments.
-      BTP_DB_PASSWORD: "btp-local-dev"
+      BUILDHOUND_DB_PASSWORD: "buildhound-local-dev"
     depends_on:
       db:
         condition: service_healthy
@@ -29,16 +29,16 @@ services:
     # Pin to a digest before any shared/production use.
     image: timescale/timescaledb:latest-pg16
     environment:
-      POSTGRES_DB: "btp"
-      POSTGRES_USER: "btp"
-      POSTGRES_PASSWORD: "btp-local-dev"
+      POSTGRES_DB: "buildhound"
+      POSTGRES_USER: "buildhound"
+      POSTGRES_PASSWORD: "buildhound-local-dev"
     volumes:
-      - btp-db-data:/var/lib/postgresql/data
+      - buildhound-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U btp -d btp"]
+      test: ["CMD-SHELL", "pg_isready -U buildhound -d buildhound"]
       interval: 5s
       timeout: 3s
       retries: 10
 
 volumes:
-  btp-db-data:
+  buildhound-db-data:

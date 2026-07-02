@@ -6,7 +6,7 @@ plugins {
 }
 
 allprojects {
-    // Placeholder coordinates — final name/group is deferred (spec decision #6).
-    group = "io.example.btp"
+    // buildhound.dev (naming decision #6).
+    group = "dev.buildhound"
     version = "0.1.0-SNAPSHOT"
 }

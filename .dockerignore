@@ -3,6 +3,6 @@
 .kotlin
 **/build
 docs
-btp-ci-assets
+buildhound-ci-assets
 deploy
 *.md

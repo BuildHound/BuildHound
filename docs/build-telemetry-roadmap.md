@@ -1,10 +1,10 @@
-# Build Telemetry Platform — MVP-first Roadmap
+# BuildHound — MVP-first Roadmap
 
 Phases are scoped so every phase ends in something usable in production on the pilot project. Effort assumes one senior engineer part-time alongside client work; treat sizes as relative (S < M < L < XL), not calendar promises.
 
 ## Phase 0 — Foundations (S)
 
-Pick the name + plugin id + Maven coordinates (decision #6 lands here). Create repos/modules (`commons`, `gradle-plugin`, `server`, `ci-assets`), Apache-2.0, CI for the project itself (plugin TestKit matrix skeleton, server Testcontainers, publishing dry-run). Define payload schema v1 in `btp-commons` with golden-file tests — the schema is the contract everything else builds against, so it is finished first.
+Pick the name + plugin id + Maven coordinates (decision #6 — resolved: **BuildHound**, buildhound.dev, `dev.buildhound`). Create repos/modules (`commons`, `gradle-plugin`, `server`, `ci-assets`), Apache-2.0, CI for the project itself (plugin TestKit matrix skeleton, server Testcontainers, publishing dry-run). Define payload schema v1 in `buildhound-commons` with golden-file tests — the schema is the contract everything else builds against, so it is finished first.
 
 **Exit:** empty plugin applies cleanly on a Gradle 8/9 matrix with config cache; schema serializes/deserializes golden files.
 
