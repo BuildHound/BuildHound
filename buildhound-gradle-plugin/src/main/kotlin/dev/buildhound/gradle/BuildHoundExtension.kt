@@ -11,7 +11,7 @@ abstract class BuildHoundExtension {
     /** Master switch; telemetry is skipped entirely when false. */
     abstract val enabled: Property<Boolean>
 
-    /** Base URL of the BuildHound server, e.g. `https://buildhound.dev`. Unset = offline/artifact-only. */
+    /** Base URL of the BuildHound server, e.g. `https://buildhound.example.com`. Unset = offline/artifact-only. */
     abstract val serverUrl: Property<String>
 
     /** Ingest token. Wire from an environment variable provider, never hardcode. */

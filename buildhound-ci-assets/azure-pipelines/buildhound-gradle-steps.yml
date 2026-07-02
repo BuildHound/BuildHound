@@ -5,7 +5,7 @@
 #     - template: buildhound-gradle-steps.yml@buildhound
 #       parameters:
 #         gradleTasks: "assembleDebug"
-#         buildhoundServerUrl: "https://buildhound.dev"
+#         buildhoundServerUrl: "https://buildhound.example.com"
 #
 # Scaffold version: wires the token + runs Gradle. Phase 1 adds gradle.properties
 # validation, HTML-artifact publishing, and the optional verdict gate.

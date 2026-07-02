@@ -85,7 +85,7 @@ Discovery: built-ins first (Azure DevOps, GitHub Actions, GitLab CI, Bitrise, Je
 
 ```kotlin
 buildhound {
-    server { url = "https://buildhound.dev"; token = providers.environmentVariable("BUILDHOUND_TOKEN") }
+    server { url = "https://buildhound.example.com"; token = providers.environmentVariable("BUILDHOUND_TOKEN") }
     mode = auto            // auto | ci | local | disabled  (auto: CI detected → ci)
     localBuilds { enabled = true; requireOptInFile = true } // ~/.buildhound/optin marker
     identity { pseudonymize = true }                        // false | true | strict(off)
