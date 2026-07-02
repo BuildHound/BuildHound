@@ -130,6 +130,47 @@ class BuildHoundSettingsPluginFunctionalTest {
     }
 
     @Test
+    fun `vcs is collected from a git working copy`() {
+        setUpProject()
+        // The build itself creates .gradle/ and build/ — ignore them or the clean run is dirty.
+        File(projectDir, ".gitignore").writeText(".gradle/\nbuild/\n")
+        exec("git", "init", "--initial-branch=main")
+        exec("git", "config", "user.email", "test@example.com")
+        exec("git", "config", "user.name", "Test")
+        exec("git", "add", ".")
+        exec("git", "commit", "-m", "init")
+
+        val clean = runner("hello", "--configuration-cache").build()
+        val cleanLine = vcsLine(clean.output)
+        assertTrue(cleanLine.contains("branch=main"), cleanLine)
+        assertTrue(Regex("sha=[0-9a-f]{40}").containsMatchIn(cleanLine), cleanLine)
+        assertTrue(cleanLine.contains("dirty=false"), cleanLine)
+
+        File(projectDir, "untracked.txt").writeText("x")
+        val dirty = runner("hello", "--configuration-cache").build()
+        assertTrue(vcsLine(dirty.output).contains("dirty=true"))
+    }
+
+    @Test
+    fun `non git projects degrade to null vcs fields`() {
+        setUpProject()
+
+        val result = runner("hello", "--configuration-cache").build()
+
+        val line = vcsLine(result.output)
+        assertTrue(line.contains("branch=null") && line.contains("sha=null") && line.contains("dirty=null"), line)
+    }
+
+    private fun vcsLine(output: String): String =
+        output.lineSequence().single { it.startsWith("[buildhound] vcs:") }
+
+    private fun exec(vararg command: String) {
+        val process = ProcessBuilder(*command).directory(projectDir).redirectErrorStream(true).start()
+        val output = process.inputStream.readBytes().decodeToString()
+        check(process.waitFor() == 0) { "command ${command.joinToString(" ")} failed:\n$output" }
+    }
+
+    @Test
     fun `enabled false disables collection and salt creation`() {
         setUpProject(extraDsl = "enabled = false")
 

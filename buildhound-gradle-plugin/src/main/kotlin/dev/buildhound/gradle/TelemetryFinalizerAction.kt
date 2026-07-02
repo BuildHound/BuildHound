@@ -29,6 +29,9 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         val environment: Property<CollectedEnvironment>
 
         @get:Input
+        val vcs: Property<CollectedVcs>
+
+        @get:Input
         val configurationCacheRequested: Property<Boolean>
     }
 
@@ -54,6 +57,9 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 env?.os, env?.arch, env?.cores, env?.ramMb, env?.gradleVersion, env?.jdkVersion,
                 execution.daemonReused, ccState,
             )
+            val vcs = parameters.vcs.orNull
+            // Branch and sha are declared payload metadata (spec §4 vcs block); paths never surface.
+            logger.lifecycle("[buildhound] vcs: branch={}, sha={}, dirty={}", vcs?.branch, vcs?.sha, vcs?.dirty)
             // TODO(phase 1): payload assembly, derived metrics, HTML artifact, spool + upload.
         }.onFailure {
             logger.warn("[buildhound] telemetry finalization failed (build unaffected): {}", it.message)
