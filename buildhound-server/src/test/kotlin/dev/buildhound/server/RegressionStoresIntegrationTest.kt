@@ -1,0 +1,121 @@
+package dev.buildhound.server
+
+import javax.sql.DataSource
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.TestInstance
+import org.testcontainers.containers.PostgreSQLContainer
+import org.testcontainers.junit.jupiter.Container
+import org.testcontainers.junit.jupiter.Testcontainers
+
+/**
+ * Real-database checks for the plan-025 migration + stores (architecture §5: Testcontainers).
+ * Skipped without Docker; CI has it. Exercises the V3 hot columns, the baseline-window SQL, metric
+ * upsert idempotency + lazy correlation, verdict persistence, and settings jsonb round-trips.
+ */
+@Testcontainers(disabledWithoutDocker = true)
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class RegressionStoresIntegrationTest {
+
+    companion object {
+        @Container
+        @JvmStatic
+        val postgres: PostgreSQLContainer<*> = PostgreSQLContainer("postgres:17-alpine")
+    }
+
+    private lateinit var dataSource: DataSource
+    private lateinit var builds: PostgresBuildStore
+    private lateinit var tokens: PostgresTokenStore
+    private lateinit var metrics: PostgresMetricStore
+    private lateinit var verdicts: PostgresVerdictStore
+    private lateinit var settings: PostgresSettingsStore
+
+    @BeforeAll
+    fun setUp() {
+        dataSource = createDataSource(postgres.jdbcUrl, postgres.username, postgres.password)
+        migrate(dataSource)
+        builds = PostgresBuildStore(dataSource)
+        tokens = PostgresTokenStore(dataSource)
+        metrics = PostgresMetricStore(dataSource)
+        verdicts = PostgresVerdictStore(dataSource)
+        settings = PostgresSettingsStore(dataSource)
+    }
+
+    @Test
+    fun `baseline window matches on the hot columns and excludes the candidate, PR, and non-success`() {
+        val project = tokens.ensureProjectWithToken("baseline-project", sha256Hex("bp"))
+        // Six SUCCESS main builds matching the key, plus a PR build and a FAILED build that must not count.
+        repeat(6) { i -> builds.save(project.id, TestPayloads.build(buildId = "b-$i", durationMs = 1000, startedAt = 1_000_000L + i * 1000)) }
+        builds.save(project.id, TestPayloads.build(buildId = "pr", durationMs = 1000, branch = "feature/x", startedAt = 1_100_000L))
+        builds.save(project.id, TestPayloads.build(buildId = "failed", durationMs = 1000, outcome = dev.buildhound.commons.payload.BuildOutcome.FAILED, startedAt = 1_200_000L))
+
+        val sig = RegressionEngine.requestedTasksSignature(listOf("build"))
+        val window = builds.baselineWindow(project.id, "main", BaselineQuery("android-ci", sig, "CI"), excludingBuildId = "b-0", n = 20)
+
+        assertEquals(5, window.size, "excludes the candidate, the PR build, and the failed build")
+        assertTrue(window.all { it.durationMs == 1000L })
+        assertTrue(window.all { it.hitRate == null }, "these fixtures carry no hit rate")
+    }
+
+    @Test
+    fun `resolveBuildId finds the newest build for a provider and run id`() {
+        val project = tokens.ensureProjectWithToken("correlate-project", sha256Hex("cp"))
+        builds.save(project.id, TestPayloads.build(buildId = "old", provider = "azure-devops", runId = "run-9", startedAt = 1_000L))
+        builds.save(project.id, TestPayloads.build(buildId = "new", provider = "azure-devops", runId = "run-9", startedAt = 2_000L))
+        assertEquals("new", builds.resolveBuildId(project.id, "azure-devops", "run-9"))
+        assertNull(builds.resolveBuildId(project.id, "azure-devops", "nope"))
+    }
+
+    @Test
+    fun `metric upsert is idempotent and lazily correlates by run`() {
+        val project = tokens.ensureProjectWithToken("metric-project", sha256Hex("mp"))
+        // Posted before the build exists → null build_id, provider/run kept.
+        metrics.upsert(project.id, MetricRecord(scope = "apk", name = "size", value = 10.0, provider = "azure-devops", runId = "r-1"))
+        metrics.upsert(project.id, MetricRecord(scope = "apk", name = "size", value = 12.0, provider = "azure-devops", runId = "r-1"))
+        assertEquals(setOf("apk size"), metrics.correlationKeys(project.id, null, "azure-devops", "r-1"))
+
+        metrics.correlate(project.id, "azure-devops", "r-1", "the-build")
+        val forBuild = metrics.forBuild(project.id, "the-build")
+        assertEquals(1, forBuild.size, "the re-post upserted, not duplicated")
+        assertEquals(12.0, forBuild.single().value, "the later value wins")
+    }
+
+    @Test
+    fun `verdicts persist with their detail and expose the latest status per key`() {
+        val project = tokens.ensureProjectWithToken("verdict-project", sha256Hex("vp"))
+        val key = "android-ci|sig|main|CI"
+        val metricsDetail = listOf(MetricVerdict("durationMs", 5000.0, 1000.0, 20.0, 40.0, null, VerdictStatus.FAIL.name))
+        verdicts.save(project.id, "v-1", Verdict(VerdictStatus.FAIL.name, metricsDetail, key))
+        val loaded = verdicts.find(project.id, "v-1")
+        assertNotNull(loaded)
+        assertEquals(VerdictStatus.FAIL.name, loaded.status)
+        assertEquals("durationMs", loaded.metrics.single().name)
+        assertNotNull(loaded.evaluatedAt)
+
+        verdicts.save(project.id, "v-2", Verdict(VerdictStatus.PASS.name, emptyList(), key))
+        assertEquals(VerdictStatus.PASS.name, verdicts.latestStatusForKey(project.id, key, excludingBuildId = "v-999"))
+        assertEquals(VerdictStatus.FAIL.name, verdicts.latestStatusForKey(project.id, key, excludingBuildId = "v-2"))
+    }
+
+    @Test
+    fun `settings round-trip budgets and alert channels as jsonb`() {
+        val project = tokens.ensureProjectWithToken("settings-project", sha256Hex("sp"))
+        assertNull(settings.get(project.id), "no row → null (caller uses defaults)")
+
+        val cfg = ProjectSettings(
+            baselineN = 15, defaultBranch = "trunk", warnZ = 3.0, failZ = 6.0,
+            budgets = mapOf("durationMs" to 5000.0, "apk.size" to 90.0),
+            alertChannels = listOf(AlertChannel("slack", "https://hooks.slack.com/x")),
+        )
+        settings.put(project.id, cfg)
+        assertEquals(cfg, settings.get(project.id), "jsonb round trip must be lossless")
+
+        val updated = cfg.copy(baselineN = 30)
+        settings.put(project.id, updated)
+        assertEquals(30, settings.get(project.id)?.baselineN, "put upserts")
+    }
+}

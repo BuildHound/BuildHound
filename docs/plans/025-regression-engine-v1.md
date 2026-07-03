@@ -208,3 +208,56 @@ verdict-gate step (`buildhound-gradle-steps.yml:11,21-27`): after the Gradle bui
   do not re-spam.
 - Spec §5/§7/§8 amended; architecture §5 + decision-log updated; clean-context code and
   security/privacy reviews completed with findings addressed.
+
+## 8. Divergences from plan (2026-07-04, implementation)
+
+- **Migration is `V3__regression.sql`** (the next free version). `requested_tasks_sig` is
+  `md5(sorted tasks joined by \n)`, computed identically by `RegressionEngine.requestedTasksSignature`
+  and the backfill SQL (pinned by a unit test) so old (backfilled) and new builds share a baseline.
+- **v1 baselines cover duration + hit rate only.** Custom metrics are ingested, correlated, and
+  **budget-checked**, but get no rolling-baseline z-score in v1 (that needs per-baseline-build custom
+  values — the rollup family, plan 026). In the engine they surface as `INSUFFICIENT_DATA` on the
+  z-axis (neutral) unless a budget breaches. Custom metrics default to `HIGHER_BAD` direction.
+- **Settings are configured via `PUT /v1/settings` (all-scope token), not env-seeded.** Env-seeding
+  needed a projectKey→id resolution that the authenticated route provides cleanly; defaults apply
+  when no row exists, so nothing is lost. `GET /v1/settings` is read-scope.
+- **Evaluation runs inline (synchronous) in the ingest request**, only on a fresh store
+  (`stored == true`), wrapped in its own `runCatching` (never blocks/fails ingest). The queries are
+  bounded + indexed; only the **alert HTTP** call is async (bounded executor). The baseline is
+  always the default-branch window, so a PR build is judged against main.
+- **Metric correlation storage:** an explicit `buildId` stores `build_id` with `provider`/`run_id`
+  null; a `{provider,runId}` stores those and resolves `build_id` now (or null → lazily joined at
+  verdict time by `MetricStore.correlate`). The ≤100-measures cap counts by logical run
+  (`correlationKeys`) and rejects only a *new* measure beyond the cap (422); a re-post upserts.
+- **Alert dispatcher is injectable** (`AlertDispatcher` interface): `HttpAlertDispatcher` (https-only,
+  bounded fire-and-forget, injectable `HttpSend` for tests) in prod; `RecordingAlertDispatcher` in
+  DB-less mode and tests. The de-dup (no repeat-spam) lives in `VerdictEvaluator`.
+- Everything else as planned: V3 tables + hot columns + backfill, the three stores (in-memory +
+  Postgres), the pure `RegressionEngine`, the metrics/verdict/settings routes, the metric CLI
+  (env-only token, `--strict`, shellcheck-clean harness), and the Azure `verdictGate` step.
+
+### Review-driven changes (2026-07-04, two clean-context reviews)
+
+Both reviews returned **SHIP-WITH-FIXES**; core math/SQL/authz/never-block confirmed correct.
+
+- **[security High] SSRF host filter.** `HttpAlertDispatcher.isAllowedUrl` now rejects any URL whose
+  host resolves to a loopback/link-local/private/ULA/metadata address (169.254.169.254, RFC1918,
+  ::1, fc00::/7, …) or is unresolvable (fail-closed), and rejects URLs with userinfo. The resolver
+  is injectable so tests exercise the filter without real DNS. New tests cover internal-IP + userinfo
+  refusal. (Payload-steered SSRF was already closed — URLs come only from stored settings.)
+- **[security High] CLI `--value` numeric validation.** `buildhound-metric` rejects a non-numeric
+  `--value` hard (it is spliced raw into JSON) — closes a client-side JSON-injection foothold. Harness
+  case added. CLI header now warns not to put secrets in `--name`/`--text`/`--scope`.
+- **[security Med] Alert URLs never logged** (only kind + scheme); **Teams gets a MessageCard** body
+  (its webhook rejects a bare `{text}`); **bounded alert queue** with `DiscardPolicy` (the pool no
+  longer queues unboundedly under a FAIL storm).
+- **[code Med] `requested_tasks_sig` collation.** The backfill sorts `ORDER BY 1 COLLATE "C"` so the
+  SQL code-point order matches Kotlin's `sorted()` even under a locale/ICU DB collation — a latent
+  baseline-split bug for non-ASCII/punctuation task paths. Pinned by a new signature test (colon-bearing).
+- **[code Med] In-memory `evaluatedAt`** is now stamped in `InMemoryVerdictStore.save`, so dev/tests
+  match Postgres; asserted by a route test.
+- **[code Med] Shell harness wired into CI** — the `build` job runs `shellcheck` + the metric-CLI
+  harness (ci-assets is not a Gradle module, so `./gradlew build` couldn't cover it).
+- **[code Low] Robust-z end-to-end route test** (spread baseline → non-null `z` → persisted FAIL),
+  complementing the exit-criterion test (which exercises the zero-MAD fallback); **tie-breaker**
+  `ORDER BY evaluated_at DESC, build_id DESC` in `latestStatusForKey` for strict de-dup parity.

@@ -9,6 +9,9 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.util.UUID
 import javax.sql.DataSource
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import org.flywaydb.core.Flyway
 import org.postgresql.util.PGobject
 
@@ -39,8 +42,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             connection.prepareStatement(
                 """
                 INSERT INTO builds (project_id, build_id, started_at, finished_at, outcome,
-                                    mode, branch, duration_ms, hit_rate, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    mode, branch, duration_ms, hit_rate, ci_provider, ci_run_id,
+                                    pipeline_name, requested_tasks_sig, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (project_id, build_id) DO NOTHING
                 """.trimIndent(),
             ).use { statement ->
@@ -55,14 +59,74 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 payload.derived?.cacheableHitRate
                     ?.let { statement.setDouble(9, it) }
                     ?: statement.setNull(9, java.sql.Types.DOUBLE)
+                // Extracted hot columns for baseline keying + metric correlation (plan 025).
+                statement.setString(10, payload.ci?.provider)
+                statement.setString(11, payload.ci?.runId)
+                statement.setString(12, payload.ci?.pipelineName)
+                statement.setString(13, RegressionEngine.requestedTasksSignature(payload.requestedTasks))
                 statement.setObject(
-                    10,
+                    14,
                     PGobject().apply {
                         type = "jsonb"
                         value = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
                     },
                 )
                 statement.executeUpdate() == 1
+            }
+        }
+
+    override fun resolveBuildId(projectId: String, provider: String?, runId: String?): String? =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT build_id FROM builds
+                WHERE project_id = ? AND ci_provider IS NOT DISTINCT FROM ? AND ci_run_id IS NOT DISTINCT FROM ?
+                ORDER BY started_at DESC LIMIT 1
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, provider)
+                statement.setString(3, runId)
+                statement.executeQuery().use { rows -> if (rows.next()) rows.getString(1) else null }
+            }
+        }
+
+    override fun baselineWindow(
+        projectId: String,
+        defaultBranch: String,
+        query: BaselineQuery,
+        excludingBuildId: String,
+        n: Int,
+    ): List<BaselinePoint> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT duration_ms, hit_rate FROM builds
+                WHERE project_id = ? AND outcome = 'SUCCESS' AND branch = ?
+                  AND mode = ? AND pipeline_name IS NOT DISTINCT FROM ? AND requested_tasks_sig = ?
+                  AND build_id <> ?
+                ORDER BY started_at DESC LIMIT ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, defaultBranch)
+                statement.setString(3, query.mode)
+                statement.setString(4, query.pipelineName)
+                statement.setString(5, query.requestedTasksSig)
+                statement.setString(6, excludingBuildId)
+                statement.setInt(7, n)
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                BaselinePoint(
+                                    durationMs = rows.getLong("duration_ms"),
+                                    hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
+                                ),
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -239,4 +303,213 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
             }
             project
         }
+}
+
+private fun jsonb(value: String): PGobject = PGobject().apply { type = "jsonb"; this.value = value }
+
+class PostgresMetricStore(private val dataSource: DataSource) : MetricStore {
+
+    override fun upsert(projectId: String, metric: MetricRecord) {
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO custom_metrics (project_id, build_id, provider, run_id, scope, name, value, text_value, unit)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (project_id, coalesce(build_id, ''), coalesce(provider, ''), coalesce(run_id, ''), scope, name)
+                DO UPDATE SET value = EXCLUDED.value, text_value = EXCLUDED.text_value, unit = EXCLUDED.unit, created_at = now()
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, metric.buildId)
+                statement.setString(3, metric.provider)
+                statement.setString(4, metric.runId)
+                statement.setString(5, metric.scope)
+                statement.setString(6, metric.name)
+                metric.value?.let { statement.setDouble(7, it) } ?: statement.setNull(7, java.sql.Types.DOUBLE)
+                statement.setString(8, metric.text)
+                statement.setString(9, metric.unit)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    override fun forBuild(projectId: String, buildId: String): List<MetricRecord> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT scope, name, value, text_value, unit, build_id, provider, run_id FROM custom_metrics WHERE project_id = ? AND build_id = ?",
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, buildId)
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                MetricRecord(
+                                    scope = rows.getString("scope"),
+                                    name = rows.getString("name"),
+                                    value = rows.getDouble("value").takeUnless { rows.wasNull() },
+                                    text = rows.getString("text_value"),
+                                    unit = rows.getString("unit"),
+                                    buildId = rows.getString("build_id"),
+                                    provider = rows.getString("provider"),
+                                    runId = rows.getString("run_id"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    override fun correlate(projectId: String, provider: String?, runId: String?, buildId: String) {
+        if (provider == null && runId == null) return
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                UPDATE custom_metrics SET build_id = ?
+                WHERE project_id = ? AND build_id IS NULL
+                  AND provider IS NOT DISTINCT FROM ? AND run_id IS NOT DISTINCT FROM ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, buildId)
+                statement.setObject(2, UUID.fromString(projectId))
+                statement.setString(3, provider)
+                statement.setString(4, runId)
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    override fun correlationKeys(projectId: String, buildId: String?, provider: String?, runId: String?): Set<String> {
+        val byRun = provider != null || runId != null
+        val where = if (byRun) "provider IS NOT DISTINCT FROM ? AND run_id IS NOT DISTINCT FROM ?" else "build_id IS NOT DISTINCT FROM ?"
+        return dataSource.connection.use { connection ->
+            connection.prepareStatement("SELECT scope, name FROM custom_metrics WHERE project_id = ? AND $where").use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                if (byRun) {
+                    statement.setString(2, provider)
+                    statement.setString(3, runId)
+                } else {
+                    statement.setString(2, buildId)
+                }
+                statement.executeQuery().use { rows ->
+                    buildSet { while (rows.next()) add("${rows.getString("scope")} ${rows.getString("name")}") }
+                }
+            }
+        }
+    }
+}
+
+class PostgresVerdictStore(private val dataSource: DataSource) : VerdictStore {
+
+    private val metricsSerializer = ListSerializer(MetricVerdict.serializer())
+
+    override fun save(projectId: String, buildId: String, verdict: Verdict) {
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO build_verdicts (project_id, build_id, status, baseline_key, detail, evaluated_at)
+                VALUES (?, ?, ?, ?, ?, now())
+                ON CONFLICT (project_id, build_id)
+                DO UPDATE SET status = EXCLUDED.status, baseline_key = EXCLUDED.baseline_key,
+                              detail = EXCLUDED.detail, evaluated_at = now()
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, buildId)
+                statement.setString(3, verdict.status)
+                statement.setString(4, verdict.baselineKey)
+                statement.setObject(5, jsonb(BuildHoundJson.payload.encodeToString(metricsSerializer, verdict.metrics)))
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    override fun find(projectId: String, buildId: String): Verdict? =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT status, baseline_key, detail, (extract(epoch from evaluated_at) * 1000)::bigint AS ms
+                FROM build_verdicts WHERE project_id = ? AND build_id = ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, buildId)
+                statement.executeQuery().use { rows ->
+                    if (!rows.next()) null
+                    else Verdict(
+                        status = rows.getString("status"),
+                        metrics = BuildHoundJson.payload.decodeFromString(metricsSerializer, rows.getString("detail")),
+                        baselineKey = rows.getString("baseline_key"),
+                        evaluatedAt = rows.getLong("ms"),
+                    )
+                }
+            }
+        }
+
+    override fun latestStatusForKey(projectId: String, baselineKey: String, excludingBuildId: String): String? =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT status FROM build_verdicts
+                WHERE project_id = ? AND baseline_key = ? AND build_id <> ?
+                ORDER BY evaluated_at DESC, build_id DESC LIMIT 1
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, baselineKey)
+                statement.setString(3, excludingBuildId)
+                statement.executeQuery().use { rows -> if (rows.next()) rows.getString(1) else null }
+            }
+        }
+}
+
+class PostgresSettingsStore(private val dataSource: DataSource) : SettingsStore {
+
+    private val budgetsSerializer = MapSerializer(String.serializer(), Double.serializer())
+    private val channelsSerializer = ListSerializer(AlertChannel.serializer())
+
+    override fun get(projectId: String): ProjectSettings? =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT baseline_n, default_branch, warn_z, fail_z, budgets, alert_channels FROM project_settings WHERE project_id = ?",
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.executeQuery().use { rows ->
+                    if (!rows.next()) null
+                    else ProjectSettings(
+                        baselineN = rows.getInt("baseline_n"),
+                        defaultBranch = rows.getString("default_branch"),
+                        warnZ = rows.getDouble("warn_z"),
+                        failZ = rows.getDouble("fail_z"),
+                        budgets = BuildHoundJson.payload.decodeFromString(budgetsSerializer, rows.getString("budgets")),
+                        alertChannels = BuildHoundJson.payload.decodeFromString(channelsSerializer, rows.getString("alert_channels")),
+                    )
+                }
+            }
+        }
+
+    override fun put(projectId: String, settings: ProjectSettings) {
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO project_settings (project_id, baseline_n, default_branch, warn_z, fail_z, budgets, alert_channels, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, now())
+                ON CONFLICT (project_id)
+                DO UPDATE SET baseline_n = EXCLUDED.baseline_n, default_branch = EXCLUDED.default_branch,
+                              warn_z = EXCLUDED.warn_z, fail_z = EXCLUDED.fail_z, budgets = EXCLUDED.budgets,
+                              alert_channels = EXCLUDED.alert_channels, updated_at = now()
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setInt(2, settings.baselineN)
+                statement.setString(3, settings.defaultBranch)
+                statement.setDouble(4, settings.warnZ)
+                statement.setDouble(5, settings.failZ)
+                statement.setObject(6, jsonb(BuildHoundJson.payload.encodeToString(budgetsSerializer, settings.budgets)))
+                statement.setObject(7, jsonb(BuildHoundJson.payload.encodeToString(channelsSerializer, settings.alertChannels)))
+                statement.executeUpdate()
+            }
+        }
+    }
 }

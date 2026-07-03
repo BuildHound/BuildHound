@@ -1,11 +1,115 @@
 #!/usr/bin/env sh
-# Metric CLI scaffold (spec §7): report a custom measure from any CI step, no JVM required.
+# Metric CLI (spec §7, plan 025): report a custom measure from any CI step, no JVM required.
 #
 #   buildhound-metric --name sign.duration --value 42 --unit s
+#   buildhound-metric --scope apk --name release.size --value 84.2 --unit MB
+#   buildhound-metric --name flaky.note --text "quarantined FooTest"
 #
-# Correlation (provider + run id) is read from CI env vars using the same mappings as the
-# plugin's CiEnvironmentProvider SPI. Phase 2 wires this to POST /v1/metrics.
+# Correlation (which build the measure belongs to) is derived from CI env vars using the same
+# markers as the plugin's CiEnvironmentProvider SPI: Azure (TF_BUILD → provider azure-devops,
+# runId BUILD_BUILDID), GitHub Actions (GITHUB_ACTIONS → github-actions, runId GITHUB_RUN_ID),
+# else generic (CI truthy). BUILDHOUND_BUILD_ID overrides with an explicit build correlation.
+#
+# Server + token come ONLY from the environment — never a flag, so the token never lands on the
+# command line or in `ps`:  BUILDHOUND_SERVER_URL, BUILDHOUND_TOKEN.
+#
+# Never fails the CI step by default: a transport error or missing config warns on stderr and
+# exits 0. Pass --strict to make those non-zero (for a gating step that must not silently skip).
+#
+# Do NOT put secrets in --name / --text / --scope: they are stored as-is and shown on the dashboard.
 set -eu
 
-echo "buildhound-metric: scaffold placeholder — POST /v1/metrics arrives with roadmap phase 2" >&2
-exit 1
+usage() {
+    echo "usage: buildhound-metric --name NAME (--value N | --text S) [--scope S] [--unit U] [--strict]" >&2
+}
+
+scope=""
+name=""
+value=""
+text=""
+unit=""
+strict=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --name) name="${2:-}"; shift 2 ;;
+        --value) value="${2:-}"; shift 2 ;;
+        --text) text="${2:-}"; shift 2 ;;
+        --unit) unit="${2:-}"; shift 2 ;;
+        --scope) scope="${2:-}"; shift 2 ;;
+        --strict) strict=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "buildhound-metric: unknown argument '$1'" >&2; usage; exit 2 ;;
+    esac
+done
+
+# Argument errors are always hard (a broken invocation is a caller bug, not a transport blip).
+if [ -z "$name" ]; then usage; exit 2; fi
+if [ -z "$value" ] && [ -z "$text" ]; then echo "buildhound-metric: --value or --text is required" >&2; exit 2; fi
+if [ -n "$value" ] && [ -n "$text" ]; then echo "buildhound-metric: use either --value or --text, not both" >&2; exit 2; fi
+# --value is spliced into JSON as a raw number, so it MUST be numeric — reject anything else hard,
+# else a non-numeric value would break the body or inject JSON structure.
+if [ -n "$value" ]; then
+    case "$value" in
+        *[!0-9.eE+-]* | '' | '-' | '+' | '.') echo "buildhound-metric: --value must be a number" >&2; exit 2 ;;
+    esac
+fi
+scope="${scope:-default}"
+
+# Soft-fail helper: warn, then exit 0 unless --strict.
+soft_fail() {
+    echo "buildhound-metric: $1" >&2
+    if [ "$strict" -eq 1 ]; then exit 1; fi
+    exit 0
+}
+
+# Minimal JSON string escaping (backslash and double-quote only; CI metric text is plain).
+json_str() {
+    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+}
+
+is_truthy() {
+    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        ''|false|0|no|off) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# Derive the correlation object body (without braces).
+correlation=""
+if [ -n "${BUILDHOUND_BUILD_ID:-}" ]; then
+    correlation="\"buildId\":$(json_str "$BUILDHOUND_BUILD_ID")"
+elif is_truthy "${TF_BUILD:-}"; then
+    correlation="\"provider\":\"azure-devops\",\"runId\":$(json_str "${BUILD_BUILDID:-}")"
+elif [ "$(printf '%s' "${GITHUB_ACTIONS:-}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+    correlation="\"provider\":\"github-actions\",\"runId\":$(json_str "${GITHUB_RUN_ID:-}")"
+elif is_truthy "${CI:-}"; then
+    correlation="\"provider\":\"generic\""
+else
+    soft_fail "no CI correlation available (set BUILDHOUND_BUILD_ID to send from a local run)"
+fi
+
+# Build the request body.
+body="{\"correlation\":{$correlation},\"scope\":$(json_str "$scope"),\"name\":$(json_str "$name")"
+if [ -n "$value" ]; then body="$body,\"value\":$value"; fi
+if [ -n "$text" ]; then body="$body,\"text\":$(json_str "$text")"; fi
+if [ -n "$unit" ]; then body="$body,\"unit\":$(json_str "$unit")"; fi
+body="$body}"
+
+if [ -z "${BUILDHOUND_SERVER_URL:-}" ]; then soft_fail "BUILDHOUND_SERVER_URL is not set"; fi
+if [ -z "${BUILDHOUND_TOKEN:-}" ]; then soft_fail "BUILDHOUND_TOKEN is not set"; fi
+
+# Token is passed via a header from the env — never on the command line.
+http_code="$(
+    curl -s -o /dev/null -w '%{http_code}' \
+        -X POST "${BUILDHOUND_SERVER_URL%/}/v1/metrics" \
+        -H "Authorization: Bearer ${BUILDHOUND_TOKEN}" \
+        -H "Content-Type: application/json" \
+        --data "$body" 2>/dev/null || echo "000"
+)"
+
+case "$http_code" in
+    2*) exit 0 ;;
+    000) soft_fail "could not reach ${BUILDHOUND_SERVER_URL%/} (transport error)" ;;
+    *) soft_fail "server returned HTTP $http_code" ;;
+esac

@@ -6,9 +6,11 @@
 #       parameters:
 #         gradleTasks: "assembleDebug"
 #         buildhoundServerUrl: "https://buildhound.example.com"
+#         verdictGate: "warn"   # off | warn | fail
 #
-# Scaffold version: wires the token + runs Gradle. Phase 1 adds gradle.properties
-# validation, HTML-artifact publishing, and the optional verdict gate.
+# Runs Gradle with telemetry wired, then optionally polls the per-build regression verdict
+# (plan 025) and warns or fails the pipeline. The token is mapped from a pipeline secret and
+# only ever leaves via an Authorization header — never echoed.
 
 parameters:
   - name: gradleTasks
@@ -17,6 +19,14 @@ parameters:
   - name: buildhoundServerUrl
     type: string
     default: ""
+  # off = no gate; warn = log a warning on a FAIL verdict; fail = fail the pipeline on FAIL.
+  - name: verdictGate
+    type: string
+    default: "off"
+    values:
+      - "off"
+      - "warn"
+      - "fail"
 
 steps:
   - script: ./gradlew ${{ parameters.gradleTasks }}
@@ -25,3 +35,32 @@ steps:
       # Map the secret in the consuming pipeline; never echo it.
       BUILDHOUND_TOKEN: $(BUILDHOUND_TOKEN)
       BUILDHOUND_SERVER_URL: ${{ parameters.buildhoundServerUrl }}
+
+  - ${{ if ne(parameters.verdictGate, 'off') }}:
+      - script: |
+          set -eu
+          payload="build/buildhound/build-payload.json"
+          if [ ! -f "$payload" ]; then echo "buildhound: no payload written; skipping verdict gate"; exit 0; fi
+          build_id=$(sed -n 's/.*"buildId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$payload" | head -n1)
+          if [ -z "$build_id" ]; then echo "buildhound: no buildId in payload; skipping"; exit 0; fi
+          # The verdict is computed post-ingest, so poll briefly for it to appear.
+          status=""
+          i=0
+          while [ "$i" -lt 10 ]; do
+            body=$(curl -s -H "Authorization: Bearer $BUILDHOUND_TOKEN" "${BUILDHOUND_SERVER_URL%/}/v1/builds/$build_id/verdict" || echo "")
+            status=$(printf '%s' "$body" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+            if [ -n "$status" ]; then break; fi
+            i=$((i + 1)); sleep 2
+          done
+          echo "buildhound verdict: ${status:-unknown}"
+          if [ "$status" = "FAIL" ]; then
+            if [ "${{ parameters.verdictGate }}" = "fail" ]; then
+              echo "##vso[task.logissue type=error]BuildHound flagged a regression against baseline"
+              exit 1
+            fi
+            echo "##vso[task.logissue type=warning]BuildHound flagged a regression against baseline"
+          fi
+        displayName: "BuildHound verdict gate (${{ parameters.verdictGate }})"
+        env:
+          BUILDHOUND_TOKEN: $(BUILDHOUND_TOKEN)
+          BUILDHOUND_SERVER_URL: ${{ parameters.buildhoundServerUrl }}

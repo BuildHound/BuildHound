@@ -16,6 +16,7 @@ import io.ktor.utils.io.readAvailable
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import java.io.ByteArrayInputStream
 import java.sql.SQLException
@@ -47,7 +48,7 @@ fun Route.healthRoutes() {
  * (project, buildId). The token — not the payload's `projectKey` — determines the
  * tenant. Fails closed: no resolvable token, no ingest.
  */
-fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore) {
+fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore, evaluator: VerdictEvaluator) {
     route("/v1") {
         post("/builds") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsIngest) ?: return@post
@@ -104,6 +105,10 @@ fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore) {
                     call.respond(HttpStatusCode.ServiceUnavailable, ApiError("storage unavailable"))
                 }
             }
+            // Post-save regression evaluation (plan 025): only on a fresh store, wrapped so it can
+            // never block or fail ingest (its own runCatching). The alert HTTP call inside is async.
+            if (stored) evaluator.evaluate(project.id, project.key, capped)
+
             call.respond(
                 HttpStatusCode.Accepted,
                 IngestResponse(buildId = payload.buildId, status = if (stored) "accepted" else "duplicate"),
@@ -112,12 +117,132 @@ fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore) {
     }
 }
 
+/** Metric caps enforced in code (spec §5): a foreign CLI is rejected loudly (422), not clamped. */
+const val MAX_METRICS_PER_RUN: Int = 100
+const val MAX_METRIC_NAME_CHARS: Int = 150
+const val MAX_METRIC_VALUE_CHARS: Int = 300
+const val MAX_METRIC_SCOPE_CHARS: Int = 64
+
+@Serializable
+data class MetricCorrelation(val buildId: String? = null, val provider: String? = null, val runId: String? = null)
+
+@Serializable
+data class MetricSubmission(
+    val correlation: MetricCorrelation = MetricCorrelation(),
+    val scope: String,
+    val name: String,
+    val value: Double? = null,
+    val text: String? = null,
+    val unit: String? = null,
+)
+
+@Serializable
+data class MetricAck(val status: String, val correlatedBuildId: String? = null)
+
+/**
+ * `POST /v1/metrics` (spec §5): ingest-scoped custom measures from the metric CLI, correlated to a
+ * build by an explicit buildId or a {provider, runId}. Caps are enforced in code and rejected 422.
+ */
+fun Route.metricsRoutes(builds: BuildStore, metrics: MetricStore, tokens: TokenStore) {
+    route("/v1") {
+        post("/metrics") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsIngest) ?: return@post
+            val body = call.receiveBounded(256 * 1024)
+                ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, ApiError("metric too large"))
+            val submission = runCatching {
+                BuildHoundJson.payload.decodeFromString(MetricSubmission.serializer(), body.decodeToString())
+            }.getOrElse { return@post call.respond(HttpStatusCode.BadRequest, ApiError("invalid metric")) }
+
+            validateMetric(submission)?.let {
+                return@post call.respond(HttpStatusCode.UnprocessableEntity, ApiError(it))
+            }
+
+            val correlation = submission.correlation
+            // Explicit buildId is a direct correlation (no provider/runId stored); otherwise resolve
+            // {provider,runId} to the newest matching build now (or null — joined lazily at verdict time).
+            val byBuildId = correlation.buildId != null
+            val resolvedBuildId = correlation.buildId
+                ?: builds.resolveBuildId(project.id, correlation.provider, correlation.runId)
+
+            // Cardinality cap: a *new* measure beyond the per-run limit is rejected loudly.
+            val runKeys = call.runQuery {
+                metrics.correlationKeys(project.id, correlation.buildId, correlation.provider, correlation.runId)
+            } ?: return@post
+            val measureKey = "${submission.scope} ${submission.name}"
+            if (measureKey !in runKeys.value && runKeys.value.size >= MAX_METRICS_PER_RUN) {
+                return@post call.respond(
+                    HttpStatusCode.UnprocessableEntity,
+                    ApiError("too many measures for this run (max $MAX_METRICS_PER_RUN)"),
+                )
+            }
+
+            call.runQuery {
+                metrics.upsert(
+                    project.id,
+                    MetricRecord(
+                        scope = submission.scope, name = submission.name,
+                        value = submission.value, text = submission.text, unit = submission.unit,
+                        buildId = resolvedBuildId,
+                        provider = if (byBuildId) null else correlation.provider,
+                        runId = if (byBuildId) null else correlation.runId,
+                    ),
+                )
+            } ?: return@post
+            call.respond(HttpStatusCode.Accepted, MetricAck(status = "accepted", correlatedBuildId = resolvedBuildId))
+        }
+    }
+}
+
+private fun validateMetric(s: MetricSubmission): String? = when {
+    s.scope.isBlank() || s.scope.length > MAX_METRIC_SCOPE_CHARS -> "scope must be 1..$MAX_METRIC_SCOPE_CHARS chars"
+    s.name.isBlank() || s.name.length > MAX_METRIC_NAME_CHARS -> "name must be 1..$MAX_METRIC_NAME_CHARS chars"
+    s.value == null && s.text == null -> "a value or text is required"
+    s.value != null && s.text != null -> "provide either value or text, not both"
+    (s.text?.length ?: 0) > MAX_METRIC_VALUE_CHARS -> "text must be <= $MAX_METRIC_VALUE_CHARS chars"
+    (s.unit?.length ?: 0) > MAX_METRIC_VALUE_CHARS -> "unit must be <= $MAX_METRIC_VALUE_CHARS chars"
+    s.correlation.buildId == null && s.correlation.provider == null && s.correlation.runId == null ->
+        "a correlation (buildId, or provider + runId) is required"
+    else -> null
+}
+
+/** `GET/PUT /v1/settings` (spec §5): read with read-scope; write requires the all-scope admin token. */
+fun Route.settingsRoutes(settings: SettingsStore, tokens: TokenStore) {
+    route("/v1") {
+        get("/settings") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            call.runQuery { settings.get(project.id) ?: ProjectSettings() }?.let { call.respond(it.value) }
+        }
+        put("/settings") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsAll) ?: return@put
+            val body = call.receiveBounded(256 * 1024)
+                ?: return@put call.respond(HttpStatusCode.PayloadTooLarge, ApiError("settings too large"))
+            val cfg = runCatching {
+                BuildHoundJson.payload.decodeFromString(ProjectSettings.serializer(), body.decodeToString())
+            }.getOrElse { return@put call.respond(HttpStatusCode.BadRequest, ApiError("invalid settings")) }
+            validateSettings(cfg)?.let { return@put call.respond(HttpStatusCode.UnprocessableEntity, ApiError(it)) }
+            call.runQuery { settings.put(project.id, cfg) } ?: return@put
+            call.respond(cfg)
+        }
+    }
+}
+
+private fun validateSettings(s: ProjectSettings): String? = when {
+    s.baselineN < RegressionEngine.MIN_BASELINE -> "baselineN must be >= ${RegressionEngine.MIN_BASELINE}"
+    s.warnZ <= 0.0 || s.failZ <= 0.0 -> "z thresholds must be positive"
+    s.failZ < s.warnZ -> "failZ must be >= warnZ"
+    s.defaultBranch.isBlank() -> "defaultBranch is required"
+    // Alert URLs are the outbound-allowlist source; the dispatcher additionally enforces https.
+    s.alertChannels.any { it.url.isBlank() || it.kind.lowercase() !in setOf("slack", "teams", "webhook") } ->
+        "each alert channel needs a non-blank url and a kind of slack|teams|webhook"
+    else -> null
+}
+
 /**
  * Query API (plan 010): same token, same tenant scoping as ingest. Rollups are
  * computed on read over the indexed hot columns; materialized aggregates come when
  * volume demands them.
  */
-fun Route.queryRoutes(store: BuildStore, tokens: TokenStore) {
+fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenStore) {
     route("/v1") {
         get("/builds") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
@@ -144,6 +269,17 @@ fun Route.queryRoutes(store: BuildStore, tokens: TokenStore) {
             payload.value
                 ?.let { call.respond(it) }
                 ?: call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
+        }
+
+        // Per-build regression verdict (plan 025, spec §5): pollable by the CI verdict gate.
+        // Tenant-scoped, so a foreign or unknown build reads as 404 (never a cross-tenant peek).
+        get("/builds/{buildId}/verdict") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val buildId = call.parameters.getOrFail("buildId")
+            val verdict = call.runQuery { verdicts.find(project.id, buildId) } ?: return@get
+            verdict.value
+                ?.let { call.respond(it) }
+                ?: call.respond(HttpStatusCode.NotFound, ApiError("no verdict for this build"))
         }
 
         // Compare two builds' inputs to explain B's cache misses vs A (plan 022, spec §5).

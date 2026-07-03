@@ -19,7 +19,15 @@ import kotlin.time.Duration.Companion.seconds
 import org.slf4j.LoggerFactory
 
 /** Everything the module needs; assembled from env in [main], hand-built in tests. */
-class ServerStores(val builds: BuildStore, val tokens: TokenStore)
+class ServerStores(
+    val builds: BuildStore,
+    val tokens: TokenStore,
+    val metrics: MetricStore = InMemoryMetricStore(),
+    val verdicts: VerdictStore = InMemoryVerdictStore(),
+    val settings: SettingsStore = InMemorySettingsStore(),
+    val alerts: AlertDispatcher = RecordingAlertDispatcher(),
+    val dashboardBaseUrl: String? = null,
+)
 
 /**
  * Request ceilings (spec §8), per minute; 0 disables a limiter. The per-host limiter
@@ -84,7 +92,16 @@ fun storesFromEnvironment(env: Map<String, String>): ServerStores {
         )
         migrate(dataSource)
         logger.info("storage: postgres ({})", dbUrl.substringBefore('?'))
-        ServerStores(PostgresBuildStore(dataSource), PostgresTokenStore(dataSource))
+        ServerStores(
+            builds = PostgresBuildStore(dataSource),
+            tokens = PostgresTokenStore(dataSource),
+            metrics = PostgresMetricStore(dataSource),
+            verdicts = PostgresVerdictStore(dataSource),
+            settings = PostgresSettingsStore(dataSource),
+            // The server's only outbound caller — real HTTP in prod; https-only enforced in the dispatcher.
+            alerts = HttpAlertDispatcher(),
+            dashboardBaseUrl = env["BUILDHOUND_DASHBOARD_URL"],
+        )
     } else {
         logger.warn("storage: IN-MEMORY (no BUILDHOUND_DB_URL) — data is lost on restart")
         ServerStores(InMemoryBuildStore(), InMemoryTokenStore())
@@ -141,14 +158,30 @@ fun Application.buildHoundModule(
         rateLimits.ingestPerMinute, rateLimits.queryPerMinute, rateLimits.perHostPerMinute,
     )
 
+    // Post-ingest regression evaluation (plan 025); never blocks or fails ingest.
+    val evaluator = VerdictEvaluator(
+        builds = stores.builds,
+        metrics = stores.metrics,
+        verdicts = stores.verdicts,
+        settings = stores.settings,
+        alerts = stores.alerts,
+        dashboardBaseUrl = stores.dashboardBaseUrl,
+    )
+
     routing {
         healthRoutes()
         dashboardRoutes()
         // Nested limiters compose (each rateLimit() collects its ancestors' providers):
         // the host layer sees every /v1 request first, then the per-token layer.
         maybeRateLimited(hostOn, HOST_LIMIT) {
-            maybeRateLimited(ingestOn, INGEST_LIMIT) { ingestRoutes(stores.builds, stores.tokens) }
-            maybeRateLimited(queryOn, QUERY_LIMIT) { queryRoutes(stores.builds, stores.tokens) }
+            maybeRateLimited(ingestOn, INGEST_LIMIT) {
+                ingestRoutes(stores.builds, stores.tokens, evaluator)
+                metricsRoutes(stores.builds, stores.metrics, stores.tokens)
+            }
+            maybeRateLimited(queryOn, QUERY_LIMIT) {
+                queryRoutes(stores.builds, stores.verdicts, stores.tokens)
+                settingsRoutes(stores.settings, stores.tokens)
+            }
         }
     }
 }
