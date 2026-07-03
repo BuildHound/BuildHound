@@ -47,6 +47,9 @@ abstract class CiValueSource : ValueSource<CollectedCi, CiValueSource.Parameters
         return runCatching {
             val extras = ServiceLoader.load(CiEnvironmentProvider::class.java, javaClass.classLoader).toList()
             CiEnvironment.detect(System.getenv(), extras)?.let { context ->
+                // Attribution for surprised users: says why AUTO resolved to ci
+                // (matters most for the bare-CI "generic" fallback, plan 014).
+                logger.info("[buildhound] CI environment detected (provider: {})", context.provider)
                 CollectedCi(
                     provider = context.provider,
                     pipelineId = context.pipelineId,

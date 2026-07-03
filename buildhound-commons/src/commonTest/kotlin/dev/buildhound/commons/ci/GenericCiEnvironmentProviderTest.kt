@@ -16,7 +16,8 @@ class GenericCiEnvironmentProviderTest {
 
     @Test
     fun detects_bare_ci_variable_with_no_mapped_fields() {
-        for (value in listOf("true", "True", "1", "")) {
+        // Presence semantics: empty and whitespace values still count as set.
+        for (value in listOf("true", "True", "1", "", " ")) {
             val context = provider.detect(mapOf("CI" to value, "HOME" to "/home/agent"))
 
             assertEquals("generic", context?.provider, "CI=$value")
@@ -34,8 +35,25 @@ class GenericCiEnvironmentProviderTest {
     }
 
     @Test
-    fun buildhound_ci_false_suppresses_the_bare_ci_fallback() {
+    fun truthy_buildhound_ci_variants_activate_the_mapping() {
+        for (value in listOf("true", "TRUE", "1")) {
+            assertEquals("generic", provider.detect(mapOf("BUILDHOUND_CI" to value))?.provider, "BUILDHOUND_CI=$value")
+        }
+    }
+
+    @Test
+    fun falsy_buildhound_ci_suppresses_the_bare_ci_fallback() {
         assertNull(provider.detect(mapOf("BUILDHOUND_CI" to "false", "CI" to "true")))
+        assertNull(provider.detect(mapOf("BUILDHOUND_CI" to "0", "CI" to "true")))
+    }
+
+    @Test
+    fun falsy_buildhound_ci_is_the_kill_switch_even_with_a_provider_set() {
+        assertNull(
+            provider.detect(
+                mapOf("BUILDHOUND_CI" to "false", "BUILDHOUND_CI_PROVIDER" to "my-inhouse-ci", "CI" to "true"),
+            ),
+        )
     }
 
     @Test

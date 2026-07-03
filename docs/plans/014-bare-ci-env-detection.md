@@ -29,8 +29,10 @@ Spec sections touched: §3.3 (discovery), §3.4 (`auto` mode).
   following the wider `ci-info` ecosystem convention and giving an opt-out on machines
   where tooling exports `CI` spuriously. An empty value (`CI=`) still counts as CI
   (presence semantics, matches CCUD).
-- Escape hatch: `BUILDHOUND_CI` set to any non-`true` value (with no
-  `BUILDHOUND_CI_PROVIDER`) suppresses the bare-`CI` fallback — explicit beats heuristic.
+- Escape hatch (reworked after review, see below): the same truthiness rule applies to
+  `BUILDHOUND_CI` — truthy (`1`, `TRUE`, …) activates the mapping like `true` does, and
+  an explicit falsy value (`false`/`0`) is the generic provider's kill switch, forcing
+  not-CI over `BUILDHOUND_CI_PROVIDER` and the bare-`CI` fallback. Built-ins unaffected.
 - Ordering unchanged (first non-null wins): built-ins → ServiceLoader extras → generic
   provider, whose internal order is BUILDHOUND markers first, bare `CI` last. GitHub
   Actions / Azure DevOps also set `CI=true` and keep resolving to their own providers.
@@ -58,6 +60,23 @@ Spec sections touched: §3.3 (discovery), §3.4 (`auto` mode).
   `BUILDHOUND_CI=false`, or DSL `mode = local`.
 - Plugin must never fail a build: change is pure map-lookup code inside the existing
   never-throw detection path (`CiValueSource` already wraps in `runCatching`).
+
+## Review outcome (divergence from the original design)
+
+Both clean-context reviews flagged the first-cut escape hatch ("any non-`true`
+`BUILDHOUND_CI` suppresses the fallback"): it was silently defeated when
+`BUILDHOUND_CI_PROVIDER` was also set, and it inverted truthiness —
+`BUILDHOUND_CI=1`/`TRUE` acted as an opt-*out*, silently flipping a real CI build to
+local (telemetry loss). Reworked to the single truthiness rule described above, with
+unit tests for the truthy variants and the kill-switch-vs-provider combination.
+
+Accepted residual risk (security review): a developer machine that globally exports a
+truthy `CI` *and* builds a project with a configured server URL uploads pseudonymized
+telemetry without the local opt-in marker. Accepted because CI builds must not sit
+behind a personal opt-in, the heuristic matches ecosystem precedent (CCUD, more
+conservative than), and `CI=false` / `BUILDHOUND_CI=false` / DSL `mode = local` /
+`enabled = false` all opt out. CI detection is now attributed in the info log
+(`CiValueSource`) so a surprised user can see why AUTO resolved to `ci`.
 
 ## Exit criteria
 
