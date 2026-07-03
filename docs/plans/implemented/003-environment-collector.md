@@ -84,3 +84,34 @@ salt is now only created when `pseudonymize=true` actually needs it.
 
 `./gradlew build` green including new functional tests; no schema change; no
 plaintext identity in any log line when pseudonymizing.
+
+## Amendment (2026-07-03, plan 020)
+
+The CC-detection wording above ("a per-daemon-JVM execution counter … and
+config-vs-execution counter comparison") does **not** describe the shipped mechanism.
+What actually shipped is the Talaiot `ConfigurationPhaseObserver` pattern, not a
+counter comparison:
+
+- A static `AtomicBoolean` `configuredSinceLastExecution`
+  ([DaemonState.kt:30](../../../buildhound-gradle-plugin/src/main/kotlin/dev/buildhound/gradle/DaemonState.kt))
+  is set **only** from configuration-phase code — the single call site is
+  `DaemonState.configurationRan()` in `BuildHoundSettingsPlugin.apply`
+  ([BuildHoundSettingsPlugin.kt:44](../../../buildhound-gradle-plugin/src/main/kotlin/dev/buildhound/gradle/BuildHoundSettingsPlugin.kt),
+  after the included-build guard) — and consumed exactly once per build by the finalizer
+  via `getAndSet(false)` (`DaemonState.executionRan()`), which the finalizer calls
+  first and unconditionally
+  ([TelemetryFinalizerAction.kt](../../../buildhound-gradle-plugin/src/main/kotlin/dev/buildhound/gradle/TelemetryFinalizerAction.kt))
+  so a stale mark can never misreport the next build.
+- Combined with the public `BuildFeatures.configurationCache.requested`
+  ([BuildHoundSettingsPlugin.kt:122](../../../buildhound-gradle-plugin/src/main/kotlin/dev/buildhound/gradle/BuildHoundSettingsPlugin.kt)),
+  the mapping is: not requested → `DISABLED`; requested + configured this build →
+  `MISS_STORED`; requested + configuration skipped → `HIT`.
+- The execution **counter** (`AtomicInteger`, `DaemonState.kt:29`) survives only to
+  derive `daemonReused` — it plays no part in CC detection.
+
+This supersedes the "counter comparison" sentence only. It does **not** change:
+`daemonReused` (still the counter, still carrying the documented shared-daemon
+misattribution caveat), the still-deferred `INCOMPATIBLE` state, or `configurationMs`
+— which plan 016 later populated from this same configuration-phase observer (the mark
+is now paired with a task-graph `whenReady` end mark). Original plan text above is
+unchanged (plans/README.md append-only convention).

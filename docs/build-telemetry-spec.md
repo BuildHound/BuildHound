@@ -8,7 +8,7 @@ Companion to `build-telemetry-research.md`. Naming (decision #6, resolved 2026-0
 
 ## 1. Goals & non-goals
 
-**Goals (v1):** capture build/task/cache/test/Kotlin-compile telemetry from Gradle 8.x+ builds with configuration cache required; per-build standalone HTML artifact; multi-tenant ingestion service + dashboard with trends, baselines, budgets, alerts; opt-in pseudonymized local-build telemetry; CI-agnostic core with pluggable provider integrations; OSS-ready codebase (Apache-2.0).
+**Goals (v1):** capture build/task/cache/test/Kotlin-compile telemetry from Gradle 8.14+ builds with configuration cache required; per-build standalone HTML artifact; multi-tenant ingestion service + dashboard with trends, baselines, budgets, alerts; opt-in pseudonymized local-build telemetry; CI-agnostic core with pluggable provider integrations; OSS-ready codebase (Apache-2.0).
 
 **Non-goals (v1):** remote build cache node · local/remote cache-origin split (v1.x) · quarantine enforcement (post-flaky-detection) · Git/DORA analytics · dependency-resolution tracing · IDE sync telemetry · per-test-case ingestion for passing tests.
 
@@ -122,7 +122,11 @@ Single self-contained `buildhound-report.html`: inlined CSS/JS (a small vendored
 
 ### 3.9 Upload semantics
 
-CI: synchronous upload in Finalizer (timeout 15s default) → on failure, spool to `build/buildhound/spool/` and emit a warning + optional CI logging-command annotation. Local: background thread with JVM-exit flush; spool retried on next build. Idempotency: build UUID; server dedupes. Payload gzip; hard cap with overflow strategy (drop per-task execution reasons first, then truncate task array with summary counts — never drop the build envelope).
+One synchronous upload attempt per payload for **every** mode, inside the Flow-API finalizer (`PayloadUploader`): a 15 s timeout on both connect and request, gzip JSON `POST <url>/v1/builds` with an `Authorization: Bearer` header, redirects never followed; a non-loopback plaintext-`http://` URL logs a warning. Failures are classified — transport errors, 5xx, and 408/429 spool the payload to `build/buildhound/spool/<buildId>.json.gz` for retry; other 4xx (bad token, bad payload) are permanent rejections, dropped with a warning and never retried. The **next** build's finalizer drains up to 10 spooled files oldest-first *before* uploading its own payload; a rejected file is deleted and never blocks younger ones, the spool is trimmed to 20 files, and any file over 8 MB is dropped unread. Upload gating: CI and benchmark modes always upload; local mode uploads only when `localBuilds.enabled` and (by default) the `~/.buildhound/optin` marker is present (§3.4/§3.7). Idempotency: build UUID; the server dedupes.
+
+Payloads are gzipped and **size-capped before upload** (see §4 `caps`, plan 019): a hard byte budget with the overflow strategy (drop per-task execution reasons first, then truncate the task array with summary counts — never drop the build envelope), plus tag/value cardinality and free-text length caps; the server re-clamps defensively at ingest.
+
+*Deliberately not a background thread:* the original v0.1 sketch's local background/JVM-exit-flush upload was dropped — there is no reliable flush guarantee at daemon shutdown, and Talaiot's `publishOnNewThread` during `BuildService.close()` silently drops data (plan 008). *Planned, not shipped:* an opt-out `uploadInBackground` knob for local builds (Tuist parity — an opt-out from blocking local builds, not the default; plan 027), and an optional CI logging-command annotation emitted on spool (future `buildhound-ci-assets` work).
 
 ## 4. Payload schema (v1, `schemaVersion: 1`)
 
@@ -213,7 +217,7 @@ Tokens hashed at rest; ingest rate-limited per token; payload schema validated +
 (plan 019 budgets, enforced in code at assembly and defensively at ingest: ≤100 tags/values
 with key ≤100 / value ≤300 chars, ≤10 execution reasons/task ≤500 chars, ≤20 000 tasks,
 ≤20 MiB JSON — overflow drops reasons then truncates the task array with `caps` counts, never
-the build envelope; outer byte ceilings 32 MiB compressed / 64 MiB decompressed remain); HTML artifact CSP-safe (no external loads — locked #4). Testing: plugin via Gradle TestKit matrix {Gradle 8.0, 8.14, 9.latest} × {CC on/off} × {Kotlin 2.0/2.2} on synthetic projects from cdsap/ProjectGenerator + one real KMP fixture; server via Testcontainers; golden-file tests for payload schema; contract test that `buildhound-commons` deserializes all historical schema versions. Distribution: plugin → Gradle Plugin Portal, server+dashboard → Docker images (self-host compose documented à la Tuist), license Apache-2.0, public docs site. Pilot tenant: the client project you'll designate (decision #5) — spec assumes multi-module Android/KMP with KSP.
+the build envelope; outer byte ceilings 32 MiB compressed / 64 MiB decompressed remain); HTML artifact CSP-safe (no external loads — locked #4). Testing: plugin via Gradle TestKit matrix {Gradle 8.14 (floor), 9.latest} × {CC on/off} × {Kotlin 2.0/2.2} on synthetic projects from cdsap/ProjectGenerator + one real KMP fixture; server via Testcontainers; golden-file tests for payload schema; contract test that `buildhound-commons` deserializes all historical schema versions. Distribution: plugin → Gradle Plugin Portal, server+dashboard → Docker images (self-host compose documented à la Tuist), license Apache-2.0, public docs site. Pilot tenant: the client project you'll designate (decision #5) — spec assumes multi-module Android/KMP with KSP.
 
 ## 9. Traceability of locked decisions
 

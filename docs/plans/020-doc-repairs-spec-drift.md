@@ -171,3 +171,16 @@ Docs-only, so the "tests" are verification checks rather than new test code:
   pre-existing text is byte-identical.
 - `./gradlew build` green; both clean-context reviews pass with no unresolved
   spec-vs-source discrepancy.
+
+## 8. Divergences from the plan (recorded during implementation)
+
+- **The payload size cap is now presented as shipped, not "planned (plan 019)".** This plan
+  was written expecting §3.9 to name the cap as normative-future text; plan 019 landed first,
+  so the rewritten §3.9 states the gzip + hard-byte-budget + cardinality/free-text caps as
+  shipped behavior (citing §4 `caps` and plan 019 as where it landed) and adds that the server
+  re-clamps defensively at ingest. Only `uploadInBackground` (plan 027) and the CI
+  logging-command annotation remain marked "planned, not shipped".
+- **Plan 003 amendment additionally notes `configurationMs`**: since plan 016 shipped, the
+  amendment records that `configurationMs` is now populated from this same configuration-phase
+  observer (paired with a task-graph `whenReady` end mark), rather than "hardcoded null" as
+  plan 020 §3.3 anticipated.
