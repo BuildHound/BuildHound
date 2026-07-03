@@ -1,13 +1,8 @@
 package dev.buildhound.gradle
 
-import java.io.File
 import java.io.Serializable
 import java.lang.management.ManagementFactory
 import java.net.InetAddress
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
-import java.nio.file.attribute.PosixFilePermission
-import java.security.SecureRandom
 import org.gradle.api.logging.Logging
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.ValueSource
@@ -56,7 +51,7 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
         val hostname = guarded("hostname") { InetAddress.getLocalHost().hostName }
         val username = guarded("user") { System.getProperty("user.name") }
         val pseudonymize = parameters.pseudonymize.getOrElse(true)
-        val salt = if (pseudonymize) guarded("salt") { readOrCreateSalt() } else null
+        val salt = if (pseudonymize) guarded("salt") { IdentitySalt.readOrCreate(parameters.identitySaltFile.orNull) } else null
         val identity = IdentityHashing.identityFields(pseudonymize, salt, username, hostname)
         return CollectedEnvironment(
             os = guarded("os") { System.getProperty("os.name") },
@@ -69,36 +64,6 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
             jdkVersion = guarded("jdk") { System.getProperty("java.version") },
         )
     }
-
-    private fun readOrCreateSalt(): ByteArray? {
-        val saltFile = File(parameters.identitySaltFile.orNull ?: return null)
-        saltFile.validBytesOrNull()?.let { return it }
-        val dir = saltFile.parentFile.apply { mkdirs() }
-        // Safety net for consumer repos that don't ignore .gradle/: a committed salt
-        // makes the low-entropy identity inputs enumerable offline.
-        runCatching { File(dir, ".gitignore").takeIf { !it.exists() }?.writeText("*\n") }
-        val salt = ByteArray(SALT_BYTES).also(SecureRandom()::nextBytes)
-        val tmp = File(dir, ".identity.salt.${ProcessHandle.current().pid()}.tmp")
-        return try {
-            tmp.writeBytes(salt)
-            runCatching {
-                Files.setPosixFilePermissions(
-                    tmp.toPath(),
-                    setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
-                )
-            } // non-POSIX file systems: best effort
-            Files.move(tmp.toPath(), saltFile.toPath(), StandardCopyOption.ATOMIC_MOVE)
-            salt
-        } catch (_: Exception) {
-            // Concurrent build won the race (or the move failed): use whatever is there.
-            saltFile.validBytesOrNull()
-        } finally {
-            tmp.delete()
-        }
-    }
-
-    private fun File.validBytesOrNull(): ByteArray? =
-        if (isFile) readBytes().takeIf { it.size == SALT_BYTES } else null
 
     private fun totalRamMb(): Long? {
         val bean = ManagementFactory.getOperatingSystemMXBean()
@@ -113,7 +78,6 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
         }.getOrNull()
 
     private companion object {
-        const val SALT_BYTES = 32
         val logger = Logging.getLogger(EnvironmentValueSource::class.java)
     }
 }

@@ -214,3 +214,33 @@ Nav link added in `index.html:38-44`; the CSP style hash is computed from served
 - Default configuration injects nothing into Test tasks (verified by functional test).
 - Spec §3.4/§4/§5/§6 amended; architecture decision-log row added; clean-context code and
   security/privacy reviews completed with findings addressed.
+
+## 8. Divergences from the plan (recorded during implementation)
+
+- **Per-`Test`-task system-property capture is DEFERRED** (the plan's own §6/§5a fallback,
+  now taken). The `GradleLifecycle.beforeProject` hook — the only isolated-projects-safe way
+  for a settings plugin to inject a `doFirst` into project tasks — **isolates** its action and
+  cannot carry a `BuildService` provider or the extension reference into it (Gradle throws
+  "Failed to isolate 'GradleLifecycle' action: field `collector`…"). So the risky, default-off
+  boundary-crossing part moves to a future `dev.buildhound.fingerprints` add-on. Removed for
+  now: the `testTaskSystemProperties` DSL knob, `TaskFingerprintCollector`, and
+  `CaptureTestSystemPropertiesAction`. **Kept in core and shipping:** build-level fingerprints
+  (built-in + `systemProperties`/`envVars`/`gradleProperties` allowlists), the `compare`
+  endpoint, and the comparisons page. The schema's `FingerprintInfo.tasks` map stays
+  (additive) so the add-on needs no schema change; `BuildComparator.taskLevelDiffs` already
+  ranks per-task keys for when it lands.
+- **Fingerprints are salted regardless of `identity.pseudonymize`.** The `FingerprintValueSource`
+  reads/creates the shared salt unconditionally (fingerprints are always hashed, never
+  plaintext), so they work even under `pseudonymize = false` — a stronger privacy stance than
+  the identity fields, which honor the plaintext opt-out. **Consequence (invariant updated):**
+  the old "plaintext-identity mode creates no salt" rule no longer holds — the salt is now also
+  created for the always-salted fingerprints. This is harmless: in plaintext mode the identity
+  is already un-pseudonymized (nothing to protect by withholding the salt), and the salt file
+  stays gitignored. The `identity pseudonymize can be disabled via dsl` functional test was
+  updated to assert plaintext identity **and** salted fingerprints.
+- **Key-name scrubbing lives in `PayloadScrubber.scrub`** (commons) rather than the plugin
+  assembler, so the one scrubbing pass covers fingerprint keys alongside execution reasons;
+  values are hashes and are left untouched.
+- **`BuildComparator` diff scope has three values** (`BUILD` fingerprint, `FIELD` declared
+  toolchain/env, `TASK` per-task) — the plan named `BUILD|TASK`; the declared-field diffs
+  needed their own `FIELD` scope so the UI can show them in full (they are not hashed).

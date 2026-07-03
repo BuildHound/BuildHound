@@ -5,6 +5,7 @@ import org.gradle.api.Action
 import org.gradle.api.model.ObjectFactory
 import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
+import org.gradle.api.provider.SetProperty
 
 /**
  * `buildhound { ... }` DSL (spec §3.4). Scaffold exposes the core knobs; nested blocks
@@ -34,6 +35,37 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     val localBuilds: LocalBuildsSpec = objects.newInstance(LocalBuildsSpec::class.java)
 
     fun localBuilds(action: Action<LocalBuildsSpec>) = action.execute(localBuilds)
+
+    val fingerprints: FingerprintsSpec = objects.newInstance(FingerprintsSpec::class.java)
+
+    fun fingerprints(action: Action<FingerprintsSpec>) = action.execute(fingerprints)
+}
+
+/**
+ * `fingerprints { ... }` (spec §3.4, plan 022): allowlist extra build inputs to fingerprint as
+ * salted hashes for cache-miss comparison. Built-in JDK/locale/OS/timezone/parallelism keys are
+ * always captured; these add named system properties, environment variables, and Gradle
+ * properties. Values are salted 16-hex hashes — no plaintext leaves the machine.
+ *
+ * Per-`Test`-task system-property capture is deferred (plan 022 §8): it requires injecting an
+ * action into Test tasks, which the isolated-projects-safe `GradleLifecycle` hook cannot carry a
+ * build service into; it will land as a `dev.buildhound.fingerprints` add-on.
+ */
+abstract class FingerprintsSpec {
+    /** Extra JVM system properties to fingerprint, recorded under `sysProps-<name>` keys. */
+    abstract val systemProperties: SetProperty<String>
+
+    /** Extra environment variables to fingerprint, recorded under `env-<name>` keys. */
+    abstract val envVars: SetProperty<String>
+
+    /** Extra Gradle properties to fingerprint, recorded under `gradleProp-<name>` keys. */
+    abstract val gradleProperties: SetProperty<String>
+
+    fun systemProperties(vararg names: String) = systemProperties.addAll(*names)
+
+    fun envVars(vararg names: String) = envVars.addAll(*names)
+
+    fun gradleProperties(vararg names: String) = gradleProperties.addAll(*names)
 }
 
 /** `server { ... }` (spec §3.4). Unset url = offline/artifact-only. */

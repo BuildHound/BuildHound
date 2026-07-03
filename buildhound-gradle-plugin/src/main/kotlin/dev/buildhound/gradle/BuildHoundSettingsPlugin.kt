@@ -58,6 +58,8 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
 
         eventsListenerRegistry.onTaskCompletion(collector)
 
+        val saltPath = File(settings.rootDir, SALT_PATH).absolutePath
+
         // Task type/cacheable dictionary + configuration-duration end mark (plan 016).
         // Registering the callback is isolated-projects safe; only `allTasks` is not, so
         // the IP gate runs before the graph is touched. Runs at configuration time only,
@@ -90,7 +92,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         val environment = settings.providers.of(EnvironmentValueSource::class.java) { spec ->
             spec.parameters.enabled.set(extension.enabled)
             spec.parameters.pseudonymize.set(extension.identity.pseudonymize)
-            spec.parameters.identitySaltFile.set(File(settings.rootDir, SALT_PATH).absolutePath)
+            spec.parameters.identitySaltFile.set(saltPath)
         }
 
         val vcs = settings.providers.of(VcsValueSource::class.java) { spec ->
@@ -107,6 +109,27 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.enabled.set(extension.enabled)
         }
 
+        // Build-level input fingerprints (plan 022). Allowlists flow as ValueSource params and
+        // resolve at execution (after the DSL runs); Gradle-property *values* are pre-resolved
+        // via `providers.gradleProperty` (they are CC inputs already). parallel/maxWorkers are
+        // CC-safe start-parameter scalars captured here.
+        val fingerprints = settings.providers.of(FingerprintValueSource::class.java) { spec ->
+            spec.parameters.enabled.set(extension.enabled)
+            spec.parameters.identitySaltFile.set(saltPath)
+            spec.parameters.systemProperties.set(extension.fingerprints.systemProperties)
+            spec.parameters.envVars.set(extension.fingerprints.envVars)
+            spec.parameters.gradleProperties.set(
+                // An unset property (or one set to "") is treated as absent — no gradleProp-<name>
+                // key. providers.gradleProperty stays a CC input even resolved eagerly here.
+                extension.fingerprints.gradleProperties.map { names ->
+                    names.associateWith { name -> settings.providers.gradleProperty(name).getOrElse("") }
+                        .filterValues { it.isNotEmpty() }
+                },
+            )
+            spec.parameters.parallel.set(settings.startParameter.isParallelProjectExecutionEnabled)
+            spec.parameters.maxWorkers.set(settings.startParameter.maxWorkerCount)
+        }
+
         // Flow API is the CC-safe "build finished" hook (spec §3.2). The finalizer
         // assembles the payload and writes it next to the build outputs; the HTML
         // artifact and upload chunks build on it. It must never fail the build.
@@ -115,6 +138,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.mode.set(extension.mode)
             spec.parameters.tags.set(extension.tags)
             spec.parameters.collector.set(collector)
+            spec.parameters.fingerprints.set(fingerprints)
             spec.parameters.buildFailed.set(flowProviders.buildWorkResult.map { it.failure.isPresent })
             spec.parameters.environment.set(environment)
             spec.parameters.vcs.set(vcs)

@@ -3,6 +3,7 @@ package dev.buildhound.gradle
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.ConfigurationCacheState
+import dev.buildhound.commons.payload.FingerprintInfo
 import dev.buildhound.report.ReportAssets
 import java.io.File
 import java.util.UUID
@@ -38,6 +39,10 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
         @get:ServiceReference
         val collector: Property<TaskEventCollector>
+
+        @get:Input
+        @get:Optional
+        val fingerprints: Property<CollectedFingerprints>
 
         @get:Input
         val buildFailed: Property<Boolean>
@@ -111,6 +116,9 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // measured, so report 0 rather than the (absent) marks. Otherwise the marked
             // duration, or null when unmeasurable (plan 016).
             val configurationMs = if (ccState == ConfigurationCacheState.HIT) 0L else execution.configurationMs
+            // Build-level input fingerprints (plan 022). Per-task capture is deferred (see the
+            // plan §8 divergence); the schema's `tasks` map stays reserved for it.
+            val fingerprints = FingerprintInfo(build = parameters.fingerprints.orNull?.build.orEmpty())
             val payload = PayloadAssembler.assemble(
                 buildId = UUID.randomUUID().toString(),
                 projectKey = parameters.projectKey.orNull,
@@ -127,6 +135,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 nowMs = System.currentTimeMillis(),
                 projectRoots = scrubRoots(parameters.rootDir.orNull),
                 configurationMs = configurationMs,
+                fingerprints = fingerprints,
             )
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so

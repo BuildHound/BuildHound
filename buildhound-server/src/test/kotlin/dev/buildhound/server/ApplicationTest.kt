@@ -256,6 +256,52 @@ class ApplicationTest {
     }
 
     @Test
+    fun `compare endpoint is tenant-scoped, read-gated, and names the changed input`() = testApplication {
+        val fixture = fixture()
+        appWith(fixture)
+        val foreign = fixture.stores.tokens.ensureProjectWithToken("other", sha256Hex("other-token"))
+        assertEquals("other", foreign.key)
+
+        fun fingerprintPayload(id: String, jdkHash: String) = """
+            {
+              "schemaVersion": 1, "buildId": "$id", "startedAt": 1, "finishedAt": 2,
+              "outcome": "SUCCESS", "mode": "ci",
+              "fingerprints": { "build": { "jdk.home": "$jdkHash" } }
+            }
+        """.trimIndent()
+        for (body in listOf(fingerprintPayload("cmp-a", "aaaa111122223333…"), fingerprintPayload("cmp-b", "bbbb444455556666…"))) {
+            client.post("/v1/builds") {
+                header("Authorization", "Bearer test-token")
+                contentType(ContentType.Application.Json)
+                setBody(body)
+            }
+        }
+
+        // No token → 401; self-compare → 400; unknown id → 404.
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/builds/cmp-a/compare/cmp-b").status)
+        assertEquals(
+            HttpStatusCode.BadRequest,
+            client.get("/v1/builds/cmp-a/compare/cmp-a") { header("Authorization", "Bearer test-token") }.status,
+        )
+        assertEquals(
+            HttpStatusCode.NotFound,
+            client.get("/v1/builds/cmp-a/compare/nope") { header("Authorization", "Bearer test-token") }.status,
+        )
+        // Foreign tenant sees neither build → 404, never another tenant's data.
+        assertEquals(
+            HttpStatusCode.NotFound,
+            client.get("/v1/builds/cmp-a/compare/cmp-b") { header("Authorization", "Bearer other-token") }.status,
+        )
+
+        // Happy path: the differing jdk.home is named in the ranked diff.
+        val ok = client.get("/v1/builds/cmp-a/compare/cmp-b") { header("Authorization", "Bearer test-token") }
+        assertEquals(HttpStatusCode.OK, ok.status)
+        val body = ok.bodyAsText()
+        assertTrue(body.contains("jdk.home"), body)
+        assertTrue(body.contains("\"scope\":\"BUILD\""), body)
+    }
+
+    @Test
     fun `ingest clamps an over-cap payload but stores it, and leaves a compliant one untouched`() = testApplication {
         val fixture = fixture()
         appWith(fixture)

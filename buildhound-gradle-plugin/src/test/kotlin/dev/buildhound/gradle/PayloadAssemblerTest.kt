@@ -160,6 +160,24 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `assemble sets fingerprints when populated and omits an empty block`() {
+        val fp = dev.buildhound.commons.payload.FingerprintInfo(
+            build = mapOf("jdk.home" to "9f86d081884c7d65…"),
+            tasks = mapOf(":app:test" to mapOf("sysProps-x" to "2c26b46b68ffc68f…")),
+        )
+        val populated = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), fingerprints = fp)
+        assertEquals("9f86d081884c7d65…", populated.fingerprints?.build?.get("jdk.home"))
+        assertEquals("2c26b46b68ffc68f…", populated.fingerprints?.tasks?.get(":app:test")?.get("sysProps-x"))
+
+        // An empty FingerprintInfo (no salt / nothing captured) becomes a null field.
+        val empty = assemble(
+            tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)),
+            fingerprints = dev.buildhound.commons.payload.FingerprintInfo(),
+        )
+        assertNull(empty.fingerprints)
+    }
+
+    @Test
     fun `scrub runs before cap so a boundary secret is redacted not sliced`() {
         // A shape-matched secret (AWS access key = AKIA + exactly 16 chars) only matches the
         // scrubber WHOLE. It straddles the 500-char reason cap: scrub-then-cap redacts it and
@@ -186,6 +204,7 @@ class PayloadAssemblerTest {
         configurationMs: Long? = null,
         tags: Map<String, String> = mapOf("team" to "mobile"),
         caps: dev.buildhound.commons.payload.PayloadCaps = dev.buildhound.commons.payload.PayloadCaps.DEFAULT,
+        fingerprints: dev.buildhound.commons.payload.FingerprintInfo? = null,
     ) = PayloadAssembler.assemble(
         buildId = "test-build",
         projectKey = "fixture",
@@ -207,6 +226,7 @@ class PayloadAssemblerTest {
         projectRoots = emptyList(),
         configurationMs = configurationMs,
         caps = caps,
+        fingerprints = fingerprints,
     )
 
     private fun task(

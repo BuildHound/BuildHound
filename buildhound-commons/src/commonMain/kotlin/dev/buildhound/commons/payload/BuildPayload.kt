@@ -29,11 +29,26 @@ data class BuildPayload(
     val derived: DerivedMetrics? = null,
     /** What the caps enforcement dropped/truncated (plan 019); null when nothing was capped. */
     val caps: CapsSummary? = null,
+    /** Salted input fingerprints for cache-miss comparison (plan 022); null when uncaptured. */
+    val fingerprints: FingerprintInfo? = null,
 ) {
     companion object {
         const val SCHEMA_VERSION: Int = 1
     }
 }
+
+/**
+ * Salted-hash fingerprints of build inputs (plan 022, spec §4). Values are 16-hex-char + `…`
+ * HMAC digests keyed with the per-project identity salt — equality within a project is all the
+ * comparison endpoint needs, and no plaintext (e.g. absolute `jdk.home`) ever leaves the machine.
+ */
+@Serializable
+data class FingerprintInfo(
+    /** Build-level inputs: key (e.g. `jdk.home`, `env-CI`) → salted hash. */
+    val build: Map<String, String> = emptyMap(),
+    /** Per-task inputs (opt-in Test system properties): task path → (key → salted hash). */
+    val tasks: Map<String, Map<String, String>> = emptyMap(),
+)
 
 /**
  * Records exactly what [PayloadCapper] removed to keep the payload within budget (spec §3.9):

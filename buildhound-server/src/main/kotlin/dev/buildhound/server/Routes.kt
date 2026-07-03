@@ -146,6 +146,25 @@ fun Route.queryRoutes(store: BuildStore, tokens: TokenStore) {
                 ?: call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
         }
 
+        // Compare two builds' inputs to explain B's cache misses vs A (plan 022, spec §5).
+        // Tenant-scoped: both lookups use the token's project, so a foreign build reads as 404.
+        get("/builds/{a}/compare/{b}") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val idA = call.parameters.getOrFail("a")
+            val idB = call.parameters.getOrFail("b")
+            if (idA == idB) {
+                return@get call.respond(HttpStatusCode.BadRequest, ApiError("cannot compare a build with itself"))
+            }
+            val result = call.runQuery {
+                val a = store.findById(project.id, idA)
+                val b = store.findById(project.id, idB)
+                if (a == null || b == null) null else BuildComparator.compare(a, b)
+            } ?: return@get
+            result.value
+                ?.let { call.respond(it) }
+                ?: call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
+        }
+
         get("/trends") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val filter = call.buildFilterOrNull()

@@ -32,6 +32,7 @@
     };
     const ms = n => n >= 60000 ? (n / 60000).toFixed(1) + " min" : n >= 1000 ? (n / 1000).toFixed(1) + " s" : n + " ms";
     const when = t => new Date(t).toISOString().replace("T", " ").slice(0, 16) + "Z";
+    const chipItem = (label, value) => { const li = el("li"); li.append(el("b", label + " ")); li.append(el("span", value)); return li; };
 
     // Single place for the bearer header + auth-error handling, shared by api()/apiList().
     async function authedFetch(path) {
@@ -432,6 +433,101 @@
         app.append(bars);
     }
 
+    // Comparisons (plan 022): pick two builds, then explain B's cache misses vs A by input diff.
+    async function compareView() {
+        const seq = ++renderSeq;
+        const { items: builds } = await apiList("/v1/builds?limit=50&offset=0");
+        if (seq !== renderSeq) return;
+
+        app.textContent = "";
+        app.append(el("p", "Compare two builds", "summary-sentence"));
+        if (!builds.length) {
+            app.append(emptyState({ title: "No builds to compare", lines: ["Send builds first, then pick two here."] }));
+            return;
+        }
+        const label = b => when(b.startedAt) + " · " + b.outcome + " · " + (b.branch || "no branch") + " · " + b.mode;
+        const selectA = document.createElement("select");
+        const selectB = document.createElement("select");
+        for (const build of builds) {
+            selectA.append(new Option(label(build), build.buildId));
+            selectB.append(new Option(label(build), build.buildId));
+        }
+        if (builds.length > 1) selectB.value = builds[1].buildId;
+        const bar = el("div", null, "filters");
+        bar.append(el("span", "A (fast / cached): "), selectA, el("span", "  B (missed): "), selectB);
+        const go = el("button", "Compare");
+        go.addEventListener("click", () => {
+            if (selectA.value && selectB.value) {
+                location.hash = "#/compare/" + encodeURIComponent(selectA.value) + "/" + encodeURIComponent(selectB.value);
+            }
+        });
+        bar.append(go);
+        app.append(bar);
+    }
+
+    function refChips(ref) {
+        const ul = el("ul", null, "chips");
+        ul.append(chipItem("build", ref.buildId.slice(0, 12)));
+        ul.append(chipItem("started", when(ref.startedAt)));
+        ul.append(chipItem("outcome", ref.outcome));
+        ul.append(chipItem("mode", ref.mode));
+        if (ref.branch) ul.append(chipItem("branch", ref.branch));
+        if (ref.sha) ul.append(chipItem("sha", ref.sha.slice(0, 10)));
+        return ul;
+    }
+
+    async function comparisonView(idA, idB) {
+        const seq = ++renderSeq;
+        const result = await api("/v1/builds/" + encodeURIComponent(idA) + "/compare/" + encodeURIComponent(idB));
+        if (seq !== renderSeq) return;
+
+        app.textContent = "";
+        const back = el("a", "← pick builds");
+        back.href = "#/compare";
+        app.append(back);
+        app.append(el("h2", "Comparison"));
+        app.append(el("h3", "A (fast / cached)"));
+        app.append(refChips(result.a));
+        app.append(el("h3", "B (missed)"));
+        app.append(refChips(result.b));
+        if (!result.requestedTasksMatch) {
+            app.append(el("p", "⚠ These builds ran different requested tasks — the comparison may be misleading.", "error"));
+        }
+
+        app.append(el("h3", "Changed inputs"));
+        if (!result.diffs.length) {
+            app.append(emptyState({
+                title: "No differing inputs captured",
+                lines: ["Enable fingerprints {} in the plugin to explain cache misses by input value."],
+            }));
+        } else {
+            const table = el("table");
+            const head = el("tr");
+            for (const columnName of ["Input", "Scope", "Coverage", "A", "B", "Why"]) head.append(el("th", columnName));
+            table.append(head);
+            for (const diff of result.diffs) {
+                const row = el("tr");
+                row.append(el("td", diff.key));
+                row.append(el("td", diff.scope));
+                row.append(el("td", Math.round((diff.coverage || 0) * 100) + "%", "num"));
+                row.append(el("td", diff.valueA == null ? "—" : diff.valueA));
+                row.append(el("td", diff.valueB == null ? "—" : diff.valueB));
+                row.append(el("td", diff.note || ""));
+                table.append(row);
+            }
+            app.append(table);
+        }
+
+        app.append(el("h3", "Cache misses in B"));
+        if (!result.missesToExplain.length) {
+            app.append(el("p", "No cache misses to explain — B avoided the same work as A.", "muted"));
+        } else {
+            const list = el("ul");
+            for (const path of result.missesToExplain) list.append(el("li", path));
+            app.append(list);
+        }
+    }
+
     function route() {
         // decodeURIComponent throws synchronously on malformed input (Firefox returns
         // location.hash pre-decoded, so a stored %xx can arrive re-broken) — the try
@@ -442,9 +538,12 @@
             if (!token()) { firstRunView(); return; }
             const hash = location.hash || "#/builds";
             const detail = hash.match(/^#\/build\/(.+)$/);
-            const run = detail
-                ? detailView(decodeURIComponent(detail[1]))
-                : hash.startsWith("#/trends") ? trendsView({}, 30) : buildsView({}, 0);
+            const compare = hash.match(/^#\/compare\/([^/]+)\/(.+)$/);
+            const run = detail ? detailView(decodeURIComponent(detail[1]))
+                : compare ? comparisonView(decodeURIComponent(compare[1]), decodeURIComponent(compare[2]))
+                : hash.startsWith("#/compare") ? compareView()
+                : hash.startsWith("#/trends") ? trendsView({}, 30)
+                : buildsView({}, 0);
             run.catch(fail);
         } catch (err) {
             fail(err);

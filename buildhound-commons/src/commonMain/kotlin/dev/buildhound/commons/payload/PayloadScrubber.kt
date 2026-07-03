@@ -36,6 +36,14 @@ object PayloadScrubber {
                 if (reasons === task.executionReasons && nonCacheableReason == task.nonCacheableReason) task
                 else task.copy(executionReasons = reasons, nonCacheableReason = nonCacheableReason)
             },
+            // Fingerprint values are salted hashes; key names are defensively scrubbed
+            // (deterministic, so cross-build key equality survives — plan 022).
+            fingerprints = payload.fingerprints?.let { fp ->
+                FingerprintInfo(
+                    build = fp.build.mapKeys { scrubText(it.key, projectRoots) },
+                    tasks = fp.tasks.mapValues { (_, keys) -> keys.mapKeys { scrubText(it.key, projectRoots) } },
+                )
+            },
         )
 
     fun scrub(payload: BuildPayload, projectRoot: String?): BuildPayload =

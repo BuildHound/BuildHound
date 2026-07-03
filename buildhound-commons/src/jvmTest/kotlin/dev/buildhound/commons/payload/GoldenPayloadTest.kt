@@ -2,6 +2,7 @@ package dev.buildhound.commons.payload
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -66,8 +67,31 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `schema v1 fingerprints golden file deserializes with populated maps`() {
+        val payload =
+            BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-fingerprints.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        val fp = payload.fingerprints
+        assertEquals("9f86d081884c7d65…", fp?.build?.get("jdk.home"))
+        assertEquals(4, fp?.build?.size)
+        assertEquals("fcde2b2edba56bf4…", fp?.tasks?.get(":app:testDebugUnitTest")?.get("sysProps-robolectric.offline"))
+    }
+
+    @Test
+    fun `payloads without a fingerprints field default to null`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1.json"))
+        assertNull(payload.fingerprints)
+    }
+
+    @Test
     fun `round trip is lossless`() {
-        for (name in listOf("build-payload-v1.json", "build-payload-v1-task-metadata.json", "build-payload-v1-caps.json")) {
+        for (name in listOf(
+            "build-payload-v1.json",
+            "build-payload-v1-task-metadata.json",
+            "build-payload-v1-caps.json",
+            "build-payload-v1-fingerprints.json",
+        )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)
             val decodedAgain = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), reEncoded)

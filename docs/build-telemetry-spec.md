@@ -94,6 +94,10 @@ buildhound {
     // values ≤300 chars; excess is dropped/truncated and recorded in the payload `caps` block.
     filters { excludeTasks("help", "tasks"); minTaskDurationMs = 0 }
     ignoreWhen { property("buildhound.skip") }
+    // Salted input fingerprints for cache-miss comparison (plan 022). Built-in JDK/locale/OS/
+    // timezone/parallelism keys are always captured; these add named inputs. Values are salted
+    // 16-hex hashes — no plaintext leaves the machine.
+    fingerprints { systemProperties("robolectric.offline"); envVars("CI"); gradleProperties("kotlin.incremental") }
     kotlinReports { bundle = true }        // validates gradle.properties wiring, warns if absent
     tests { collect = true }               // per-class rollup + failure/retry detail (locked)
     processProbe { enabled = true }
@@ -157,6 +161,10 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
             "droppedExecutionReasons": 0, "truncatedExecutionReasons": 0,
             "truncatedNonCacheableReasons": 0, "droppedTasks": 0, "droppedTaskOutcomes": {} },
     // ^ present only when the caps enforcement dropped/truncated something (plan 019); omitted otherwise
+  "fingerprints": { "build": { "jdk.home": "9f86d081884c7d65…", "env-CI": "18ac3e7343f01690…" },
+                    "tasks": {} },
+    // ^ salted 16-hex input hashes for cache-miss comparison (plan 022); `tasks` is reserved for
+    //   the per-Test capture add-on. Null/omitted when uncaptured.
   "kotlin": { "reportSchema": "2.x", "perTask": [ /* bundled CompileStatisticsData subset */ ] },
   "tests": [ { "taskPath": ":app:testDebugUnitTest", "durationMs": 0,
                "classes": [ { "class": "...", "passed": 0, "failed": 0, "skipped": 0, "durationMs": 0 } ],
@@ -179,6 +187,7 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
 - `POST /v1/metrics` — the CLI endpoint: `{correlation: {provider, runId} | buildId, scope, name, value|text, unit?}` (Datadog tag/measure model; caps: 100 measures/run, key+value ≤ 300 chars).
 - `POST /v1/kotlin-report` — accepts raw KGP HTTP-report POSTs for teams preferring direct `kotlin.build.report.http.url` wiring; correlated by label/buildId.
 - `GET /v1/...` query API mirroring every dashboard view (JSON + CSV) — public, documented, versioned (agent/MCP-friendly).
+- `GET /v1/builds/{a}/compare/{b}` — read-scope, tenant-scoped input-fingerprint comparison (plan 022): ranks the salted-hash inputs (build-level + declared toolchain/env fields) that differ between two builds by how much of B's cache misses (executed in B, avoided in A) they could explain, with catalog notes; 400 when `a == b`, 404 when either build is missing or foreign-tenant.
 - Webhook receiver mount point per connector (below).
 
 **CI connector SPI (backend side):**
@@ -203,7 +212,7 @@ interface CiConnector {
 
 ## 6. Dashboard (SPA served by the server)
 
-Pages: **Overview/Bottlenecks** (what regressed in 7d: duration, hit rate, flaky count, budget breaches) · **Trends** (p50/p95 duration, hit rate, avoided time, config-cache hit %, filter: pipeline/branch/mode/env) · **Builds** list → **Build detail** (mirror of HTML artifact + CI span tree + custom metrics + baseline verdict) · **Tasks explorer** (by type/module: duration, miss-rate×duration ranking) · **Kotlin** (incremental %, rebuild reasons, slowest) · **Tests** (slowest classes, failures; flaky page v1.x) · **Comparisons** (two builds side-by-side; input-fingerprint diff arrives v1.x with cache-origin work) · **Budgets & Alerts** config · **Admin** (projects, tokens, connectors, retention, salt rotation). Charts follow Tuist's line/scatter toggle pattern; every view has CSV/JSON export.
+Pages: **Overview/Bottlenecks** (what regressed in 7d: duration, hit rate, flaky count, budget breaches) · **Trends** (p50/p95 duration, hit rate, avoided time, config-cache hit %, filter: pipeline/branch/mode/env) · **Builds** list → **Build detail** (mirror of HTML artifact + CI span tree + custom metrics + baseline verdict) · **Tasks explorer** (by type/module: duration, miss-rate×duration ranking) · **Kotlin** (incremental %, rebuild reasons, slowest) · **Tests** (slowest classes, failures; flaky page v1.x) · **Comparisons** (two builds side-by-side; tier-(a) salted input-fingerprint diff ships now via `GET /v1/builds/{a}/compare/{b}`, plan 022 — ranks the differing inputs that could explain B's cache misses vs A, with a known-volatile-key note catalog; per-property cause ranking arrives v1.x with cache-origin work) · **Budgets & Alerts** config · **Admin** (projects, tokens, connectors, retention, salt rotation). Charts follow Tuist's line/scatter toggle pattern; every view has CSV/JSON export.
 
 ## 7. CI assets (`buildhound-ci-assets`)
 

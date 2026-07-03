@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "buildId": "d5b6c7e8-f9a0-4b1c-9d2e-3f4a5b6c7d8e",
+  "projectKey": "pilot-android",
+  "startedAt": 1751480000000,
+  "finishedAt": 1751480030000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["testDebugUnitTest"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:testDebugUnitTest",
+      "module": ":app",
+      "startMs": 1751480001000,
+      "durationMs": 21000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "fingerprints": {
+    "build": {
+      "jdk.home": "9f86d081884c7d65…",
+      "jdk.version": "3a7bd3e2360a3d29…",
+      "file.encoding": "2c26b46b68ffc68f…",
+      "env-CI": "18ac3e7343f01690…"
+    },
+    "tasks": {
+      ":app:testDebugUnitTest": {
+        "sysProps-robolectric.offline": "fcde2b2edba56bf4…"
+      }
+    }
+  }
+}

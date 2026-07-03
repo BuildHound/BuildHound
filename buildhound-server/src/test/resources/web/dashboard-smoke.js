@@ -75,6 +75,13 @@ const responses = {
         { day: "2026-06-30", builds: 3, failures: 1, avgDurationMs: 60000, avgHitRate: 0.5 },
         { day: "2026-07-01", builds: 2, failures: 0, avgDurationMs: null, avgHitRate: null },
     ],
+    "/v1/builds/b1/compare/b2": {
+        a: { buildId: "b1", startedAt: 1751450000000, outcome: "SUCCESS", mode: "CI", branch: "main", sha: "abcdef0123456789" },
+        b: { buildId: "b2", startedAt: 1751450100000, outcome: "FAILED", mode: "LOCAL" },
+        requestedTasksMatch: false,
+        missesToExplain: [":app:compileKotlin"],
+        diffs: [{ key: "jdk.home", scope: "BUILD", valueA: "aaaa1111…", valueB: "bbbb2222…", differingTaskCount: 0, coverage: 1.0, note: "JDK install path differs" }],
+    },
 };
 // X-Total-Count values by path; a path absent here → header missing (tolerance case).
 const totals = {
@@ -188,6 +195,14 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     clickButton(byId["app"], "Apply");
     await tick(); await tick();
     if (!hasText(byId["app"], "5 builds on main")) throw new Error("branch-qualified count-summary sentence missing");
+
+    // Comparisons (plan 022): picker renders two selects; the comparison view renders the diff.
+    context.location.hash = "#/compare"; context._onhashchange(); await tick(); await tick();
+    if (countTag(byId["app"], "select") < 2) throw new Error("compare picker must render two build selects");
+    context.location.hash = "#/compare/b1/b2"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "Comparison")) throw new Error("comparison view header missing");
+    if (!hasText(byId["app"], "jdk.home")) throw new Error("comparison view must render the changed input");
+    if (!hasText(byId["app"], ":app:compileKotlin")) throw new Error("comparison view must list the cache miss");
 
     // Missing X-Total-Count → tolerated: the builds view still renders (total falls back).
     delete totals["/v1/builds?limit=50&offset=0"];

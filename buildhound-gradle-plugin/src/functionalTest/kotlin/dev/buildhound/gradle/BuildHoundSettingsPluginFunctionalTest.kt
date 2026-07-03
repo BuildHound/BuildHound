@@ -141,16 +141,23 @@ class BuildHoundSettingsPluginFunctionalTest {
     }
 
     @Test
-    fun `identity pseudonymize can be disabled via dsl`() {
+    fun `identity pseudonymize can be disabled via dsl but fingerprints stay salted`() {
         setUpProject(extraDsl = "identity { pseudonymize = false }")
 
         runner("hello").build()
 
-        assertEquals(System.getProperty("user.name"), readPayload().environment?.userId)
-        assertFalse(
-            File(projectDir, ".gradle/buildhound/identity.salt").exists(),
-            "plaintext mode must not create a salt",
+        val payload = readPayload()
+        // Identity is plaintext in this mode…
+        assertEquals(System.getProperty("user.name"), payload.environment?.userId)
+        // …but input fingerprints are ALWAYS salted (plan 022), so the shared salt is still
+        // created here (harmless: identity is already plaintext, and the salt file is gitignored).
+        assertTrue(
+            File(projectDir, ".gradle/buildhound/identity.salt").isFile,
+            "the always-salted fingerprints create the shared salt even in plaintext-identity mode",
         )
+        val jdkHome = payload.fingerprints?.build?.get("jdk.home")
+        assertTrue(jdkHome.orEmpty().matches(Regex("[0-9a-f]{16}…")), "jdk.home stays a salted hash: $jdkHome")
+        assertFalse(jdkHome.orEmpty().contains(System.getProperty("java.home")), "no plaintext path in fingerprints")
     }
 
     @Test
