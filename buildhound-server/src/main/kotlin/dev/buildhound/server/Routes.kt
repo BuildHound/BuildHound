@@ -8,6 +8,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.header
 import io.ktor.server.request.receiveChannel
+import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.util.getOrFail
 import io.ktor.utils.io.readAvailable
@@ -112,7 +113,16 @@ fun Route.queryRoutes(store: BuildStore, tokens: TokenStore) {
                 ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
             val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 200)
             val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceIn(0, 10_000)
-            call.respondQuery { store.list(project.id, filter, limit, offset) }
+            val result = call.runQuery {
+                store.count(project.id, filter) to store.list(project.id, filter, limit, offset)
+            } ?: return@get
+            val (total, builds) = result.value
+            // Filter-aware total for the list's count-summary header (plan 018): additive,
+            // the body stays a plain array so existing consumers are unaffected. count and
+            // list run on separate pooled connections, so a concurrent ingest can make the
+            // header and page momentarily disagree by one — cosmetic, accepted at pilot scale.
+            call.response.header("X-Total-Count", total.toString())
+            call.respond(builds)
         }
 
         get("/builds/{buildId}") {

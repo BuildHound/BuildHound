@@ -50,7 +50,8 @@ interface BuildStore {
 
     fun findById(projectId: String, buildId: String): BuildPayload?
 
-    fun count(projectId: String): Long
+    /** Total matching [filter] (default: whole project) — the filter-aware list total (plan 018). */
+    fun count(projectId: String, filter: BuildFilter = BuildFilter()): Long
 
     /** Newest-first summaries. */
     fun list(projectId: String, filter: BuildFilter, limit: Int, offset: Int): List<BuildSummary>
@@ -88,8 +89,8 @@ class InMemoryBuildStore : BuildStore {
     override fun findById(projectId: String, buildId: String): BuildPayload? =
         builds[projectId to buildId]
 
-    override fun count(projectId: String): Long =
-        builds.keys.count { it.first == projectId }.toLong()
+    override fun count(projectId: String, filter: BuildFilter): Long =
+        matching(projectId, filter).size.toLong()
 
     private fun matching(projectId: String, filter: BuildFilter): List<BuildPayload> =
         builds.entries

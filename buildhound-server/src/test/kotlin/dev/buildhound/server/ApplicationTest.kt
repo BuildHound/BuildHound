@@ -240,12 +240,15 @@ class ApplicationTest {
         assertEquals(HttpStatusCode.OK, all.status)
         val ids = Regex("\"buildId\":\"([^\"]+)\"").findAll(all.bodyAsText()).map { it.groupValues[1] }.toList()
         assertEquals(listOf("b-new", "b-mid", "b-old"), ids, "newest first")
+        assertEquals("3", all.headers["X-Total-Count"], "unfiltered total in the header (plan 018)")
 
         val mainOnly = client.get("/v1/builds?branch=main&limit=1&offset=1") {
             header("Authorization", "Bearer test-token")
         }
         val mainIds = Regex("\"buildId\":\"([^\"]+)\"").findAll(mainOnly.bodyAsText()).map { it.groupValues[1] }.toList()
         assertEquals(listOf("b-old"), mainIds, "branch filter + paging")
+        // The header is the filter-aware total (2 on main), not the returned page size (1).
+        assertEquals("2", mainOnly.headers["X-Total-Count"], "total is filter-aware, independent of paging")
 
         val badFilter = client.get("/v1/builds?mode=bogus") { header("Authorization", "Bearer test-token") }
         assertEquals(HttpStatusCode.BadRequest, badFilter.status)

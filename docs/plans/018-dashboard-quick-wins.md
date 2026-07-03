@@ -178,3 +178,24 @@ recorded dead-click on exact multiples of 50 (`dashboard.js:112`).
   offered on exact multiples of 50.
 - `./gradlew :buildhound-server:test` green, including the new smoke scenarios,
   header tests, and Postgres count parity; CSP tests still pin no `unsafe-*` sources.
+
+## 8. Divergences from the plan (recorded during implementation)
+
+- **Plans 016 and 017 landed before this one**, so two "pre-016 honesty" premises are now
+  moot (in a good way): the ledger's `Executed → Cacheable / Not cacheable / Unknown`
+  split shows *real* data because `task.cacheable` is populated (plan 016) — the split
+  code handles all three cases unchanged, so no rework was needed and the
+  unknown-cacheability bucket now fills only for genuinely unknown tasks. And the detail
+  view already carries the plan-017 timeline; the ledger sits between the summary chips and
+  that timeline, with the task table last.
+- **`PostgresBuildStore.count` override cannot carry the interface default** (Kotlin forbids
+  default values on overrides), so the one concrete-typed test caller
+  (`PostgresStoresIntegrationTest`) passes `BuildFilter()` explicitly. Interface-typed
+  callers (`ServerStores.builds`) stay source-compatible via the interface default, as the
+  plan intended.
+- **`apiList` parses `X-Total-Count` with `Number(raw)` + `Number.isFinite`, not
+  `parseInt`** — the node smoke harness's `vm` context intentionally exposes only an
+  allow-list of globals and does not include `parseInt`; `Number(...)` is already in scope
+  and gives the same tolerant-null behaviour for a missing/blank/non-numeric header.
+- **Trends stat chips became the count-summary sentence** (as the plan described) — the
+  old `builds / failures / days` chip row is fully replaced, not kept alongside.

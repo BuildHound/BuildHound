@@ -80,10 +80,12 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             }
         }
 
-    override fun count(projectId: String): Long =
+    override fun count(projectId: String, filter: BuildFilter): Long =
         dataSource.connection.use { connection ->
-            connection.prepareStatement("SELECT count(*) FROM builds WHERE project_id = ?").use { statement ->
+            val (clauses, params) = filterSql(filter)
+            connection.prepareStatement("SELECT count(*) FROM builds WHERE project_id = ?$clauses").use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
+                params.forEachIndexed { index, value -> statement.setString(index + 2, value) }
                 statement.executeQuery().use { rows -> rows.next(); rows.getLong(1) }
             }
         }

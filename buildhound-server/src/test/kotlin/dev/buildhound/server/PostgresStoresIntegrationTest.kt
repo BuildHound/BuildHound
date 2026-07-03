@@ -94,6 +94,12 @@ class PostgresStoresIntegrationTest {
         val failed = builds.list(project.id, BuildFilter(outcome = "FAILED"), limit = 50, offset = 0)
         assertEquals(listOf("q-fail"), failed.map { it.buildId })
 
+        // Filtered count agrees with the filtered list length, including the no-match case (plan 018).
+        assertEquals(3L, builds.count(project.id, BuildFilter()))
+        assertEquals(2L, builds.count(project.id, BuildFilter(branch = "main")))
+        assertEquals(1L, builds.count(project.id, BuildFilter(outcome = "FAILED")))
+        assertEquals(0L, builds.count(project.id, BuildFilter(branch = "no-such-branch")), "no match → 0")
+
         val trends = builds.trends(project.id, BuildFilter(), days = 7, nowMs = now)
         assertEquals(3, trends.sumOf { it.builds })
         assertEquals(1, trends.sumOf { it.failures })
@@ -121,6 +127,6 @@ class PostgresStoresIntegrationTest {
         val loaded = builds.findById(projectA.id, "round-trip-1")
         assertEquals(build, loaded, "jsonb round trip must be lossless")
         assertNull(builds.findById(projectA.id, "missing"))
-        assertEquals(1, builds.count(projectA.id))
+        assertEquals(1L, builds.count(projectA.id, BuildFilter()))
     }
 }
