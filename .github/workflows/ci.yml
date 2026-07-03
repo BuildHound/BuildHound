@@ -93,3 +93,92 @@ jobs:
           echo "server did not become healthy" >&2
           docker logs buildhound-server >&2
           exit 1
+
+  functional-cc-off:
+    name: Functional tests (config cache off)
+    # Blocking CC-off axis (plan 021): the whole functional suite re-runs with inner-build
+    # CC off. CC-off failure modes don't vary by OS/floor, so one leg, not a cross-product.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 26
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.6.1"
+          cache-read-only: false
+
+      - name: Functional tests with inner-build configuration cache off
+        run: gradle :buildhound-gradle-plugin:functionalTest -Pbuildhound.testkit.cc=off
+
+  isolated-projects:
+    name: Isolated projects (watched)
+    # Watched, non-blocking (roadmap guardrail): the workflow stays green; this job may show
+    # red while the incubating org.gradle.unsafe.isolated-projects flag settles. Per-collector
+    # degradation is enforced by blocking tests in the default suite, not here.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 26
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.6.1"
+          cache-read-only: false
+
+      - name: Isolated-projects TestKit suite
+        run: gradle :buildhound-gradle-plugin:isolatedProjectsTest
+
+  build-macos:
+    name: Build & test (macOS)
+    # Blocking (plan 021): plan 007's only field bug was macOS-only (scrubber path handling),
+    # covered by these unit + functional tests. Testcontainers self-skips without Docker, so
+    # `gradle build` is viable on the Docker-less macOS runner. One leg, no floor cross-product.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 26
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.6.1"
+          cache-read-only: false
+
+      - name: Build
+        run: gradle build
+
+  build-windows:
+    name: Build & test (Windows, watched)
+    # Watched canary (plan 021): the OS-sensitive surfaces are the scrubber, spool paths, and
+    # VCS exec. Known gaps: the hung-git fixture and GitExec fixtures are @DisabledOnOs(WINDOWS)
+    # (plan 015). Promote-or-defer criteria in the architecture decision log.
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 26
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.6.1"
+          cache-read-only: false
+
+      - name: Build
+        run: gradle build

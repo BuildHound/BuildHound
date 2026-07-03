@@ -60,11 +60,18 @@ These are the rules every plugin change is reviewed against:
    set via `convention()`, values read only at execution time. Nothing is resolved at
    configuration time that doesn't have to be.
 6. **Compatibility is tested, not assumed.** TestKit functional tests live in a dedicated
-   `functionalTest` source set so CI can run them as a matrix:
-   {Gradle 8.14, 9.latest} × {config cache on/off} (roadmap phase 0). The floor is
-   8.5+ (`BuildFeatures` injection) and in practice 8.14+ for the JDK-21 requirement.
-   Isolated
-   Projects runs as a non-blocking CI job from phase 1.
+   `functionalTest` source set. The realized CI matrix (plan 021): the Gradle axis is two
+   jobs — `build` on 9.latest and `build-floor` on 8.14 (the floor: `BuildFeatures` needs
+   8.5+, JDK-21 needs 8.14+; inner TestKit builds inherit the outer job's Gradle). The OS
+   axis is `build` (ubuntu, **blocking**) + `build-macos` (**blocking** — plan 007's only
+   field bug was macOS-only) + `build-windows` (**watched**, `continue-on-error`: OS-sensitive
+   scrubber/spool/VCS surfaces, with `@DisabledOnOs(WINDOWS)` gaps). The config-cache axis is
+   one **blocking** `functional-cc-off` leg (`-Pbuildhound.testkit.cc=off` flips inner-build
+   CC via the `testkitCcFlag`/`runnerExplicit` seam) — not a full OS×Gradle×CC cross-product,
+   because CC-off failure modes don't vary by OS or floor. **Isolated projects** runs as a
+   **watched** (`continue-on-error`) `isolatedProjectsTest` job over the `@Tag("isolated-projects")`
+   suite; the default `functionalTest` excludes that tag. Watched jobs are reviewed each
+   phase-2a retro (they show red without failing the workflow).
 7. **Identity & hygiene:** plugin id `dev.buildhound`, Maven group `dev.buildhound`
    (decision #6); `gradlePlugin {}` metadata kept publish-ready; `validatePlugins` runs
    in `check`.
@@ -109,6 +116,19 @@ These are the rules every plugin change is reviewed against:
     whole walk is wrapped so a defect warns rather than fails (rule 3). Reflection over
     task classes stays name-based and Gradle-type-free (`TaskClassIntrospection`) so it
     unit-tests without gradleApi() on the test classpath (rule shared with §2.11).
+
+13. **Isolated-projects degradation contract (binding, plan 021).** Any collector whose
+    data needs configuration-time cross-project state must: (a) detect IP via the public
+    `BuildFeatures.isolatedProjects.active`; (b) degrade to **null/empty, never partial** —
+    derived metrics computed from degraded inputs also go null (honest nulls, plan 005);
+    (c) log a single `info` line naming the degraded fields; (d) never warn-spam or fail the
+    build; (e) ship a **blocking** TestKit degradation test in the same PR — a self-contained
+    case that enables IP itself and asserts the degraded payload shape plus build success.
+    Promotion is therefore **test-by-test**, not a job flip: the watched `isolatedProjectsTest`
+    job (§2.6) runs the general suite under IP to catch unknowns and stays `continue-on-error`
+    while the flag is `unsafe.`-prefixed; per-collector guarantees are the blocking degradation
+    tests. First consumer: plan 016's type/cacheable dictionary (empty under IP → `type`/
+    `cacheable` null → `cacheableHitRate` null), whose blocking degradation test already ships.
 
 ## 3. Kotlin Multiplatform best practices (binding)
 
@@ -215,5 +235,8 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
 | 2026-07-03 | `derived.cacheableHitRate` is now over a **cacheable-only** denominator (plan 016): a task is cache-relevant iff `cacheable == true` or its outcome is FROM_CACHE (a cache hit proves cacheability past a static `cacheIf {}` miss); null when no task carries a non-null `cacheable` flag (IP degradation / legacy pre-016 payloads). Supersedes the v0 all-tasks denominator | The old number diluted the rate with non-cacheable work and was not comparable across builds; honest-nulls over a spliced two-definition trend line (plan 005). Server stores derived metrics as-sent, so no migration — pre-release step change accepted |
 | 2026-07-03 | `buildhound-report` is the shared payload-rendering channel; the server may depend on it (not only the plugin), amending §1's "plugin and server never share code except through commons" for *rendering* code (plan 017). The task timeline is one JS renderer served at `/timeline.js` and inlined in the artifact | Duplicating the renderer per surface is permanent copy-drift with a sync test as the only guard; a dependency-free module shared by reference is a resources-plus-pure-functions edge with no transitive cost. Lanes are computed from start/end overlaps (max concurrency), deliberately not the unpopulated Gradle `worker` id |
 | 2026-07-03 | Payload cardinality + size budgets (`PayloadCaps`/`PayloadCapper` in commons) enforced at plugin assembly (after scrub) **and** as a defensive server clamp at ingest; overflow follows spec §3.9 (reasons then task array), recording drops in an additive `caps` field; server clamps rather than rejects (plan 019) | The roadmap guardrail "cardinality and payload-size budgets enforced in code, not docs"; Talaiot's unbounded cardinality wrecked its backends. Clamping over rejecting keeps "degrade gracefully, never lose the envelope"; idempotency keys on `buildId`, which the capper never touches. Warn logs carry counts only (a tag/reason could hold a secret) |
+| 2026-07-03 | CC-off is one **blocking** `functional-cc-off` leg (`-Pbuildhound.testkit.cc=off` via the `testkitCcFlag`/`runnerExplicit` harness seam), not a full {OS}×{Gradle}×{CC} cross-product (plan 021) | CC-off is the simpler execution model; its failure modes (mode-detection branches, `DaemonState` across daemon reuse) don't vary by OS or floor, so 12 jobs would buy nothing over one. The mode is a `providers.gradleProperty` CC input of the outer build (which keeps CC on); "never disable CC" governs the outer build, not TestKit inner builds |
+| 2026-07-03 | Isolated projects: a **watched** (`continue-on-error`) `isolatedProjectsTest` job over a `@Tag`-separated suite; per-collector degradation enforced by **blocking** tests, promoted test-by-test, not by flipping the job (plan 021, §2 rule 13) | The IP flag is incubating (`unsafe.`-prefixed) — a watched job catches unknowns without letting a Gradle rename fail the workflow; real guarantees come from blocking degradation tests each collector owns (first: plan 016). Defines the contract plan 016's `BuildFeatures`-gated degradation satisfies |
+| 2026-07-03 | macOS is a **blocking** `build-macos` leg (full suite, not a canary); Windows is a **watched** `build-windows` canary (plan 021) | Plan 007's only field bug was macOS-only (scrubber path handling) — a sample canary would have missed it, so macOS runs the same unit+functional coverage. Windows has known `@DisabledOnOs(WINDOWS)` gaps (hung-git, GitExec POSIX fixtures) and unknowns (path separators, CRLF); promote-or-defer: green ~2 weeks of PRs → blocking by plan 042, red → each failure becomes its own follow-up task. One job each — macOS bills 10×, Windows 2× |
 
 *Add a row (or a docs/plans entry) whenever an architectural decision is made or reversed.*

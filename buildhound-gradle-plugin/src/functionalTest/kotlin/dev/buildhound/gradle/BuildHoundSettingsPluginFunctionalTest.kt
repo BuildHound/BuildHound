@@ -47,7 +47,12 @@ class BuildHoundSettingsPluginFunctionalTest {
         )
     }
 
+    /** Default runner: inner-build CC mode injected from `buildhound.testkit.cc` (plan 021). */
     private fun runner(vararg arguments: String): GradleRunner =
+        runnerExplicit(*arguments, testkitCcFlag())
+
+    /** Escape hatch for tests that pin CC semantics themselves — they pass their own flags. */
+    private fun runnerExplicit(vararg arguments: String): GradleRunner =
         GradleRunner.create()
             .withProjectDir(projectDir)
             .withPluginClasspath()
@@ -66,7 +71,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `plugin applies cleanly and writes a schema v1 payload`() {
         setUpProject()
 
-        val result = runner("hello", "--configuration-cache").build()
+        val result = runner("hello").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
         val payload = readPayload()
@@ -86,8 +91,8 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `payload keeps flowing on configuration cache reuse`() {
         setUpProject()
 
-        runner("hello", "--configuration-cache").build()
-        val secondRun = runner("hello", "--configuration-cache").build()
+        runnerExplicit("hello", "--configuration-cache").build()
+        val secondRun = runnerExplicit("hello", "--configuration-cache").build()
 
         assertTrue(summaryLine(secondRun.output).contains("cc=HIT"), summaryLine(secondRun.output))
         assertTrue(readPayload().tasks.isNotEmpty(), "telemetry must survive configuration-cache reuse")
@@ -97,9 +102,9 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `cc state tracks store then hit and disabled`() {
         setUpProject()
 
-        val firstRun = runner("hello", "--configuration-cache").build()
-        val secondRun = runner("hello", "--configuration-cache").build()
-        val noCcRun = runner("hello", "--no-configuration-cache").build()
+        val firstRun = runnerExplicit("hello", "--configuration-cache").build()
+        val secondRun = runnerExplicit("hello", "--configuration-cache").build()
+        val noCcRun = runnerExplicit("hello", "--no-configuration-cache").build()
 
         assertTrue(summaryLine(firstRun.output).contains("cc=MISS_STORED"), summaryLine(firstRun.output))
         assertTrue(summaryLine(secondRun.output).contains("cc=HIT"), summaryLine(secondRun.output))
@@ -110,7 +115,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `pseudonymized identity never leaks plaintext`() {
         setUpProject()
 
-        val result = runner("hello", "--configuration-cache").build()
+        val result = runner("hello").build()
 
         val username = System.getProperty("user.name")
         val hostname = runCatching { InetAddress.getLocalHost().hostName }.getOrNull()
@@ -139,7 +144,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `identity pseudonymize can be disabled via dsl`() {
         setUpProject(extraDsl = "identity { pseudonymize = false }")
 
-        runner("hello", "--configuration-cache").build()
+        runner("hello").build()
 
         assertEquals(System.getProperty("user.name"), readPayload().environment?.userId)
         assertFalse(
@@ -159,14 +164,16 @@ class BuildHoundSettingsPluginFunctionalTest {
         exec("git", "add", ".")
         exec("git", "commit", "-m", "init")
 
-        runner("hello", "--configuration-cache").build()
+        runnerExplicit("hello", "--configuration-cache").build()
         val clean = readPayload().vcs
         assertEquals("main", clean?.branch)
         assertTrue(clean?.sha.orEmpty().matches(Regex("[0-9a-f]{40}")), "sha: ${clean?.sha}")
         assertEquals(false, clean?.dirty)
 
         File(projectDir, "untracked.txt").writeText("x")
-        val dirtyRun = runner("hello", "--configuration-cache").build()
+        // CC-pinned: the dirty rerun must be a CC hit whose freshness comes from re-executing
+        // the ValueSource, not a CC miss — so it uses explicit flags, not the harness mode.
+        val dirtyRun = runnerExplicit("hello", "--configuration-cache").build()
         assertEquals(true, readPayload().vcs?.dirty)
         // Freshness must come from re-executing the source on reuse, not from a CC miss.
         assertTrue(summaryLine(dirtyRun.output).contains("cc=HIT"))
@@ -176,7 +183,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `non git projects degrade to a null vcs block`() {
         setUpProject()
 
-        runner("hello", "--configuration-cache").build()
+        runner("hello").build()
 
         val payload = readPayload()
         if (payload.ci == null) {
@@ -210,7 +217,7 @@ class BuildHoundSettingsPluginFunctionalTest {
         exec("git", "config", "core.fsmonitor", hook.absolutePath)
 
         val startedNs = System.nanoTime()
-        val result = runner("hello", "--configuration-cache", "-Pbuildhound.vcs.timeout.ms=1000").build()
+        val result = runner("hello", "-Pbuildhound.vcs.timeout.ms=1000").build()
         val elapsedMs = (System.nanoTime() - startedNs) / 1_000_000
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
@@ -232,7 +239,7 @@ class BuildHoundSettingsPluginFunctionalTest {
         setUpProject()
 
         val cleanedEnv = System.getenv().filterKeys { it != "GITHUB_ACTIONS" && it != "TF_BUILD" }
-        runner("hello", "--configuration-cache")
+        runner("hello")
             // Fresh daemon: an inherited-env daemon from earlier tests would not see
             // the injected variables (daemon selection ignores env differences).
             .withTestKitDir(File(projectDir, "testkit"))
@@ -266,7 +273,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `bare CI variable resolves mode ci with the generic provider`() {
         setUpProject()
 
-        runner("hello", "--configuration-cache")
+        runner("hello")
             // Fresh daemon, same reason as the generic-detection test above.
             .withTestKitDir(File(projectDir, "testkit"))
             .withEnvironment(ciNeutralEnv() + mapOf("CI" to "true"))
@@ -282,7 +289,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `explicit CI=false keeps the build local`() {
         setUpProject()
 
-        runner("hello", "--configuration-cache")
+        runner("hello")
             .withTestKitDir(File(projectDir, "testkit"))
             .withEnvironment(ciNeutralEnv() + mapOf("CI" to "false"))
             .build()
@@ -311,9 +318,9 @@ class BuildHoundSettingsPluginFunctionalTest {
             """.trimIndent(),
         )
 
-        runner("sum", "--configuration-cache").build()
+        runner("sum").build()
         File(projectDir, "input.txt").writeText("two")
-        runner("sum", "--configuration-cache").build()
+        runner("sum").build()
 
         val reasons = readPayload().tasks.single { it.path == ":sum" }.executionReasons
         assertTrue(reasons.isNotEmpty(), "expected an execution reason for the changed input")
@@ -336,7 +343,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `html artifact is written next to the payload`() {
         setUpProject()
 
-        runner("hello", "--configuration-cache").build()
+        runner("hello").build()
 
         val html = File(projectDir, "build/buildhound/buildhound-report.html")
         assertTrue(html.isFile, "expected the standalone report artifact")
@@ -353,7 +360,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `html artifact can be disabled via dsl`() {
         setUpProject(extraDsl = "htmlReport { enabled = false }")
 
-        runner("hello", "--configuration-cache").build()
+        runner("hello").build()
 
         assertTrue(File(projectDir, "build/buildhound/build-payload.json").isFile, "payload still written")
         assertFalse(
@@ -366,7 +373,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `mode disabled writes no payload`() {
         setUpProject(extraDsl = "mode = dev.buildhound.gradle.TelemetryMode.DISABLED")
 
-        val result = runner("hello", "--configuration-cache").build()
+        val result = runner("hello").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
         assertFalse(result.output.contains("[buildhound] build "), result.output)
@@ -381,7 +388,7 @@ class BuildHoundSettingsPluginFunctionalTest {
         File(projectDir, "build").mkdirs()
         File(projectDir, "build/buildhound").writeText("in the way")
 
-        val result = runner("hello", "--configuration-cache").build()
+        val result = runner("hello").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
         assertTrue(
@@ -398,7 +405,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `enabled false disables collection and salt creation`() {
         setUpProject(extraDsl = "enabled = false")
 
-        val result = runner("hello", "--configuration-cache").build()
+        val result = runner("hello").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
         assertFalse(result.output.contains("[buildhound] build "), result.output)
@@ -462,7 +469,7 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `task type and cacheable metadata populate and configuration is timed`() {
         setUpTaskTypeProject()
 
-        val store = runner("copyFile", "ephemeral", "plain", "--configuration-cache").build()
+        val store = runnerExplicit("copyFile", "ephemeral", "plain", "--configuration-cache").build()
 
         assertTrue(summaryLine(store.output).contains("cc=MISS_STORED"), summaryLine(store.output))
         val payload = readPayload()
@@ -490,8 +497,8 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `cacheable hit rate ignores non-cacheable work and metadata survives a cc hit`() {
         setUpTaskTypeProject()
 
-        runner("copyFile", "ephemeral", "plain", "--configuration-cache").build()
-        val hit = runner("copyFile", "ephemeral", "plain", "--configuration-cache").build()
+        runnerExplicit("copyFile", "ephemeral", "plain", "--configuration-cache").build()
+        val hit = runnerExplicit("copyFile", "ephemeral", "plain", "--configuration-cache").build()
 
         assertTrue(summaryLine(hit.output).contains("cc=HIT"), summaryLine(hit.output))
         assertEquals(TaskOutcome.UP_TO_DATE, hit.task(":copyFile")?.outcome)
@@ -513,7 +520,9 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `isolated projects degrades task metadata to null without failing the build`() {
         setUpTaskTypeProject()
 
-        val result = runner(
+        // IP implies config cache, so this test pins CC-on explicitly rather than using the
+        // harness mode (which could inject --no-configuration-cache).
+        val result = runnerExplicit(
             "copyFile", "ephemeral", "plain",
             "--configuration-cache", "-Dorg.gradle.unsafe.isolated-projects=true",
         ).build()
@@ -536,7 +545,7 @@ class BuildHoundSettingsPluginFunctionalTest {
 
         val result = runner(
             "copyFile", "ephemeral", "plain",
-            "--configuration-cache", "-Pbuildhound.internal.failTaskGraphSnapshot=true",
+            "-Pbuildhound.internal.failTaskGraphSnapshot=true",
         ).build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":copyFile")?.outcome)
@@ -563,7 +572,7 @@ class BuildHoundSettingsPluginFunctionalTest {
         val manyTags = (1..150).joinToString("\n            ") { "tags.put(\"k$it\", \"v$it\")" }
         setUpProject(extraDsl = "tags.put(\"big\", \"$bigValue\")\n            $manyTags")
 
-        val result = runner("hello", "--configuration-cache").build()
+        val result = runner("hello").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
         val payload = readPayload()

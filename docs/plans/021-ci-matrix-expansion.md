@@ -191,3 +191,18 @@ reuse) do not vary by OS or floor.
   (a–e + promotion policy) is a numbered §2 rule; §7 has the three new decision rows.
 - Plan 016 can point at the contract for its `BuildFeatures`-gated degradation and at the
   blocking-degradation-test obligation without further CI work.
+
+## 8. Divergences from the plan (recorded during implementation)
+
+- **The IP degradation contract's first consumer already ships its blocking test.** Plan 016
+  landed before this plan, so its `isolated projects degrades task metadata to null` case
+  (in the default, blocking `functionalTest`) already satisfies contract clause (e); §2 rule
+  13 and its decision-log row note this rather than leaving it as a future obligation.
+- **`useJUnitPlatform()` moved out of `tasks.withType<Test>().configureEach`.** The old
+  block applied a no-arg `useJUnitPlatform()` to every Test task, which would have reset the
+  per-task `excludeTags`/`includeTags` filters. It is now applied per task: `test`
+  (`tasks.named`), `functionalTest` (`excludeTags`), and `isolatedProjectsTest`
+  (`includeTags`); `configureEach` keeps only the shared JDK-21 `javaLauncher`.
+- **Seven jobs total** (`build`, `build-floor`, `server-image`, `functional-cc-off`,
+  `isolated-projects`, `build-macos`, `build-windows`) — the pre-existing `server-image` job
+  is counted in the seven the exit criteria name.

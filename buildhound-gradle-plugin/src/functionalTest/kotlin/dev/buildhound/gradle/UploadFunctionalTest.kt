@@ -79,11 +79,13 @@ class UploadFunctionalTest {
         )
     }
 
+    // Inner-build CC mode injected from `buildhound.testkit.cc` (plan 021); no upload test
+    // pins CC semantics, so the whole suite runs under both models.
     private fun runner(vararg arguments: String): GradleRunner =
         GradleRunner.create()
             .withProjectDir(projectDir)
             .withPluginClasspath()
-            .withArguments(*arguments)
+            .withArguments(*arguments, testkitCcFlag())
 
     /**
      * CI mode is forced via the DSL (`mode = CI`) — recorded plan divergence; the
@@ -91,7 +93,7 @@ class UploadFunctionalTest {
      * `providers.environmentVariable`, see architecture §6).
      */
     private fun ciArgs(vararg extra: String) = arrayOf(
-        "hello", "--configuration-cache", "-PbhTestToken=test-token-123",
+        "hello", "-PbhTestToken=test-token-123",
         // Pin the opt-in marker to the fixture: the gate must never read the
         // developer's real ~/.buildhound/optin from a test (buildhound.optin.file
         // is the documented override, plan 008).

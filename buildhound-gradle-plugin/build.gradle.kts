@@ -77,20 +77,40 @@ gradlePlugin {
     }
 }
 
+// Inner-build CC mode for the TestKit suite (plan 021): forwarded from the
+// `-Pbuildhound.testkit.cc` Gradle property (default `on`) as a system property the tests
+// read. Provider-based so it is a proper CC input of this build (which itself keeps CC on).
+val testkitCcMode: String = providers.gradleProperty("buildhound.testkit.cc").getOrElse("on")
+
 val functionalTestTask = tasks.register<Test>("functionalTest") {
-    description = "Runs TestKit functional tests"
+    description = "Runs TestKit functional tests (excludes the watched isolated-projects suite)"
     group = "verification"
     testClassesDirs = functionalTest.output.classesDirs
     classpath = functionalTest.runtimeClasspath
-    useJUnitPlatform()
+    // The isolated-projects suite is watched (non-blocking), run only by isolatedProjectsTest.
+    useJUnitPlatform { excludeTags("isolated-projects") }
+    systemProperty("buildhound.testkit.cc", testkitCcMode)
+}
+
+// Watched (non-blocking) isolated-projects suite (plan 021): runs the same functionalTest
+// classes but only the @Tag("isolated-projects") cases; deliberately NOT wired into `check`.
+val isolatedProjectsTestTask = tasks.register<Test>("isolatedProjectsTest") {
+    description = "Runs the watched isolated-projects TestKit suite"
+    group = "verification"
+    testClassesDirs = functionalTest.output.classesDirs
+    classpath = functionalTest.runtimeClasspath
+    useJUnitPlatform { includeTags("isolated-projects") }
 }
 
 tasks.check {
     dependsOn(functionalTestTask)
 }
 
-tasks.withType<Test>().configureEach {
+tasks.named<Test>("test") {
     useJUnitPlatform()
+}
+
+tasks.withType<Test>().configureEach {
     // TestKit spawns the fixture Gradle on the test JVM, and the floor Gradle (8.14)
     // cannot RUN on JDK 26 — consumers run on 21+, so tests execute on the real
     // consumer floor while compilation stays on the 26 toolchain (plan 011).
