@@ -16,6 +16,9 @@
 
 pluginManagement {
     includeBuild("build-logic")
+    // BuildHound lives in this repository two levels up; the included build supplies
+    // the `dev.buildhound` settings plugin without a published artifact.
+    includeBuild("../..")
     repositories {
         google {
             content {
@@ -26,6 +29,32 @@ pluginManagement {
         }
         mavenCentral()
         gradlePluginPortal()
+    }
+}
+
+plugins {
+    id("dev.buildhound")
+}
+
+buildhound {
+    // Per-build HTML report under build/buildhound/ (on by default; explicit for the demo).
+    htmlReport {
+        enabled = true
+    }
+    // Local BuildHound stack from deploy/compose.yaml:
+    //   docker compose -f ../../deploy/compose.yaml up --build
+    server {
+        url = "http://localhost:8080"
+        // The committed local-dev token from deploy/compose.yaml (project "pilot").
+        // Real deployments must supply the token via the environment only.
+        token = providers.environmentVariable("BUILDHOUND_TOKEN")
+            .orElse("buildhound-local-dev-token")
+    }
+    // Builds of this sample are LOCAL mode (no CI env). Uploads go to localhost only,
+    // so the ~/.buildhound/optin marker is not required for the demo.
+    localBuilds {
+        enabled = true
+        requireOptInFile = false
     }
 }
 
@@ -82,9 +111,10 @@ include(":sync:work")
 include(":sync:sync-test")
 include(":ui-test-hilt-manifest")
 
-check(JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_17)) {
+// Upstream requires 17+; the BuildHound plugin (JVM 21 bytecode) raises the floor to 21.
+check(JavaVersion.current().isCompatibleWith(JavaVersion.VERSION_21)) {
     """
-    Now in Android requires JDK 17+ but it is currently using JDK ${JavaVersion.current()}.
+    This sample requires JDK 21+ (BuildHound plugin floor) but it is currently using JDK ${JavaVersion.current()}.
     Java Home: [${System.getProperty("java.home")}]
     https://developer.android.com/build/jdks#jdk-config-in-studio
     """.trimIndent()
