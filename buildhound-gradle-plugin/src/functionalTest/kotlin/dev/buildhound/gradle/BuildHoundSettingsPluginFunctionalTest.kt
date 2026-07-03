@@ -14,6 +14,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
+import org.junit.jupiter.api.condition.DisabledOnOs
+import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
 
 class BuildHoundSettingsPluginFunctionalTest {
@@ -184,6 +186,47 @@ class BuildHoundSettingsPluginFunctionalTest {
         }
     }
 
+    /**
+     * The CCUD-documented hang, reproduced for real: an fsmonitor hook that never
+     * answers blocks `git status` (plan 015). A PATH-shadowed fake git cannot simulate
+     * this under TestKit — the daemon's native environ keeps the original PATH, so
+     * `ProcessBuilder`'s executable lookup ignores `withEnvironment` overrides.
+     * The hook script is POSIX shell; CI runs ubuntu.
+     */
+    @Test
+    @DisabledOnOs(OS.WINDOWS)
+    fun `hung git degrades gracefully without blocking the build`() {
+        setUpProject()
+        File(projectDir, ".gitignore").writeText(".gradle/\nbuild/\n")
+        exec("git", "init", "--initial-branch=main")
+        exec("git", "config", "user.email", "test@example.com")
+        exec("git", "config", "user.name", "Test")
+        exec("git", "add", ".")
+        exec("git", "commit", "-m", "init")
+        val hook = File(projectDir, "hung-fsmonitor").apply {
+            writeText("#!/bin/sh\nexec sleep 300\n")
+            setExecutable(true)
+        }
+        exec("git", "config", "core.fsmonitor", hook.absolutePath)
+
+        val startedNs = System.nanoTime()
+        val result = runner("hello", "--configuration-cache", "-Pbuildhound.vcs.timeout.ms=1000").build()
+        val elapsedMs = (System.nanoTime() - startedNs) / 1_000_000
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        val vcs = readPayload().vcs
+        assertEquals("main", vcs?.branch, "probes before the hung one must still deliver")
+        assertNotNull(vcs?.sha, "probes before the hung one must still deliver")
+        assertNull(vcs?.dirty, "the hung status probe must degrade to null")
+        assertEquals(
+            1,
+            result.output.lineSequence().count { it.contains("[buildhound] git") && it.contains("timed out") },
+            "expected exactly one timeout warn line:\n${result.output}",
+        )
+        // Well under the hook's 300 s sleep — the build must not ride out the hang.
+        assertTrue(elapsedMs < 120_000, "build took $elapsedMs ms with a hung git")
+    }
+
     @Test
     fun `generic ci detection resolves mode and fills the ci block`() {
         setUpProject()
@@ -210,7 +253,11 @@ class BuildHoundSettingsPluginFunctionalTest {
         assertEquals("main", payload.vcs?.branch, "CI context must fill vcs gaps")
     }
 
-    /** Ambient CI markers stripped so only the injected variables steer detection. */
+    /**
+     * Ambient CI markers stripped so only the injected variables steer detection.
+     * Extend this list whenever a new built-in provider (and its detection marker)
+     * lands, or these tests misdetect on that CI.
+     */
     private fun ciNeutralEnv(): Map<String, String> = System.getenv().filterKeys {
         it != "GITHUB_ACTIONS" && it != "TF_BUILD" && it != "CI" && !it.startsWith("BUILDHOUND_")
     }

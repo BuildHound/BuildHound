@@ -86,6 +86,14 @@ These are the rules every plugin change is reviewed against:
     it, the response is raising the Gradle floor to 9.x and moving the pin to 2.2 —
     the CI floor job survives that transition and remains the true backstop.
 
+11. **Every subprocess gets a bounded wait.** Rule 3's "never fail a build" includes
+    "never hang one": a stuck child (git fsmonitor, network worktree, credential
+    helper) must degrade to missing data, not block the build. `ExecOperations.exec`
+    has no timeout, so subprocesses run through JDK `ProcessBuilder` with
+    `waitFor(timeout)` + `destroyForcibly()` — 10 s default (CCUD parity), capped and
+    drained stdout, discarded stderr, closed stdin (`GitExec`, plan 015). Runners stay
+    free of Gradle types so plain unit tests pin the timeout behavior.
+
 ## 3. Kotlin Multiplatform best practices (binding)
 
 1. **`buildhound-commons` is the only shared-code channel.** Models are pure data + 
@@ -176,6 +184,7 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
 | 2026-07-02 | Gradle support floor is 8.14 (JDK-21 requirement; `BuildFeatures` needs 8.5+), tested by a dedicated CI floor job | Supersedes spec §3.1's "Gradle 8.0+" |
 | 2026-07-02 | Kotlin `apiVersion` pinned to 2.0 for commons/plugin/report | Plugin-classpath code executes on Gradle's embedded Kotlin stdlib (2.0 on Gradle 8.14); newer stdlib APIs are runtime `NoSuchMethodError`s |
 | 2026-07-02 | Naming decision #6: product **BuildHound**, domain **buildhound.dev**, plugin id + Maven group `dev.buildhound`, modules `buildhound-*`, DSL `buildhound {}`, env prefix `BUILDHOUND_` | Owner decision; pre-release so renamed with no compatibility shim. Research doc + old plans keep the BTP working name as historical records |
-| 2026-07-03 | Bare `CI` env var (present and not `false`/`0`) classifies a build as CI, provider `generic`, no mapped fields; `BUILDHOUND_CI=false` opts out (plan 014) | CCUD-parity gap: CircleCI/GitLab/Travis/Jenkins set only generic `CI`, so AUTO resolved to `local` — wrong baselines and local-opt-in gating on CI. Diverges from CCUD's presence-only check to honor the ci-info `CI=false` opt-out convention |
+| 2026-07-03 | Bare `CI` env var (set and not `false`/`0`) classifies a build as CI, provider `generic`, no mapped fields. Same truthiness rule for `BUILDHOUND_CI`: truthy activates the generic mapping, falsy is the generic provider's kill switch (overrides `BUILDHOUND_CI_PROVIDER` and bare `CI`; built-in providers unaffected) (plan 014) | CCUD-parity gap: CircleCI/GitLab/Travis/Jenkins set only generic `CI`, so AUTO resolved to `local` — wrong baselines and local-opt-in gating on CI. Diverges from CCUD's presence-only check to honor the ci-info `CI=false` opt-out convention |
+| 2026-07-03 | Plugin subprocesses run via JDK `ProcessBuilder` with `waitFor(timeout)`/`destroyForcibly` (10 s default, `buildhound.vcs.timeout.ms` override), not `ExecOperations` (plan 015, §2 rule 11) | `ExecOperations.exec` cannot bound a hung git, which stalled the build forever; CCUD enforces the same 10 s hard kill. Supersedes plan 004's accepted "no exec timeout" residual risk |
 
 *Add a row (or a docs/plans entry) whenever an architectural decision is made or reversed.*

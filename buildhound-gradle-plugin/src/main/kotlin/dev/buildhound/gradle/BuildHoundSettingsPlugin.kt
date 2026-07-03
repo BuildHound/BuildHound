@@ -61,6 +61,11 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         val vcs = settings.providers.of(VcsValueSource::class.java) { spec ->
             spec.parameters.enabled.set(extension.enabled)
             spec.parameters.rootDir.set(settings.rootDir.absolutePath)
+            // Test seam + escape hatch (plan 015) for repos where a healthy git needs >10 s.
+            spec.parameters.timeoutMillis.set(
+                settings.providers.gradleProperty("buildhound.vcs.timeout.ms")
+                    .map { raw -> raw.toLongOrNull()?.takeIf { it > 0 } ?: GitExec.DEFAULT_TIMEOUT_MS },
+            )
         }
 
         val ci = settings.providers.of(CiValueSource::class.java) { spec ->

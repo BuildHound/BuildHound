@@ -49,11 +49,17 @@ at execution time, CC-safe; `ExecOperations` injection is removed.
   `exit 3` → `NonZeroExit`; missing binary → `Failed`; `exec sleep 300` with a 250 ms
   timeout → `TimedOut` with elapsed time far below the sleep; a 2 MiB emitter →
   `Success` capped at 64 KiB, terminates (drain, no pipe deadlock).
-- Functional (TestKit): fake `git` that sleeps 300 s, prepended to `PATH` via
-  `withEnvironment` + fresh TestKit dir (pattern from the generic-CI test), with
-  `-Pbuildhound.vcs.timeout.ms=1000`: build SUCCESS, payload written with null `vcs`,
-  **exactly one** `[buildhound] git timed out` line (pins the short-circuit), wall
+- Functional (TestKit): a real repository with a `core.fsmonitor` hook that sleeps
+  300 s — the CCUD-documented hang, hit by `git status` while the rev-parse probes stay
+  healthy — plus `-Pbuildhound.vcs.timeout.ms=1000`: build SUCCESS, branch/sha still
+  delivered, `dirty` null, exactly one `[buildhound] git … timed out` warn line, wall
   clock < 120 s (vs. a 300 s hang if the bound fails).
+  *Diverged from the committed plan:* the fixture was planned as a fake sleeping `git`
+  shadowing `PATH` via `withEnvironment`, which can never work under TestKit — Gradle
+  virtualizes client env vars on the Java side only, the daemon's **native** environ
+  keeps its original `PATH`, and `ProcessBuilder`'s executable lookup uses the native
+  environ. The fsmonitor hook reproduces the real failure mode instead (and covers the
+  partial-degradation path a fake binary couldn't).
 
 ## Risks
 
