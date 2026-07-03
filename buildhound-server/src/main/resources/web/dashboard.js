@@ -709,6 +709,105 @@
         }
     }
 
+    // Tasks explorer (plan 026): three server rollups over the last 30 days. textContent-only;
+    // module/name/type are the same untrusted class as task paths already rendered elsewhere.
+    async function tasksRollupView() {
+        const seq = ++renderSeq;
+        const cost = await api("/v1/rollups/project-cost?days=30");
+        const duration = await api("/v1/rollups/task-duration?days=30");
+        const negative = await api("/v1/rollups/negative-avoidance?days=30");
+        if (seq !== renderSeq) return;
+
+        app.textContent = "";
+        app.append(el("p", "Tasks explorer — last 30 days", "summary-sentence"));
+
+        // Project cost by module.
+        app.append(el("h3", "Project cost by module"));
+        if (!cost.length) {
+            app.append(emptyState({
+                title: "No task data yet",
+                lines: ["Send builds with task telemetry to see per-module cost."],
+            }));
+        } else {
+            const table = el("table");
+            const head = el("tr");
+            for (const columnName of ["Module", "Builds", "Executed", "Impacted users", "Serial task time", "Avg build", "Cost scalar"]) head.append(el("th", columnName));
+            table.append(head);
+            for (const r of cost) {
+                const row = el("tr");
+                row.append(el("td", r.module || "(root)"));
+                row.append(el("td", r.builds, "num"));
+                row.append(el("td", r.executedBuilds, "num"));
+                row.append(el("td", r.buildImpactedUsers, "num"));
+                row.append(el("td", ms(r.serialTaskMs), "num"));
+                row.append(el("td", ms(r.buildAvgDurationMs), "num"));
+                row.append(el("td", r.buildCostScalar, "num"));
+                table.append(row);
+            }
+            app.append(table);
+        }
+
+        // Task duration with a name/type toggle.
+        app.append(el("h3", "Task duration"));
+        const bar = el("div", null, "filters");
+        const durationHolder = el("div");
+        let showType = false;
+        const renderDuration = () => {
+            durationHolder.textContent = "";
+            if (showType && !duration.byTypeAvailable) {
+                durationHolder.append(emptyState({
+                    title: "Task types not populated yet",
+                    lines: ["By-type rankings appear once the plugin's task-type capture (plan 016) is deployed."],
+                }));
+                return;
+            }
+            const rows = showType ? duration.byType : duration.byName;
+            if (!rows.length) { durationHolder.append(el("p", "No task durations in this window.", "muted")); return; }
+            const table = el("table");
+            const head = el("tr");
+            for (const columnName of [showType ? "Type" : "Name", "Count", "Total", "Avg", "Min", "Max"]) head.append(el("th", columnName));
+            table.append(head);
+            for (const r of rows) {
+                const row = el("tr");
+                row.append(el("td", r.key));
+                row.append(el("td", r.count, "num"));
+                row.append(el("td", ms(r.totalMs), "num"));
+                row.append(el("td", ms(r.avgMs), "num"));
+                row.append(el("td", ms(r.minMs), "num"));
+                row.append(el("td", ms(r.maxMs), "num"));
+                table.append(row);
+            }
+            durationHolder.append(table);
+        };
+        const byName = el("button", "By name");
+        const byType = el("button", "By type");
+        byName.addEventListener("click", () => { showType = false; renderDuration(); });
+        byType.addEventListener("click", () => { showType = true; renderDuration(); });
+        bar.append(byName, byType);
+        app.append(bar, durationHolder);
+        renderDuration();
+
+        // Negative avoidance.
+        app.append(el("h3", "Negative avoidance (avoiding cost more than doing)"));
+        if (!negative.length) {
+            app.append(el("p", "No negative-avoidance signal in this window — avoidance is paying off.", "muted"));
+        } else {
+            const table = el("table");
+            const head = el("tr");
+            for (const columnName of ["Group", "Count", "Total excess", "Worst excess"]) head.append(el("th", columnName));
+            table.append(head);
+            for (const r of negative) {
+                const row = el("tr");
+                row.append(el("td", r.key));
+                row.append(el("td", r.count, "num"));
+                row.append(el("td", ms(r.totalExcessMs), "num"));
+                row.append(el("td", ms(r.worstExcessMs), "num"));
+                table.append(row);
+            }
+            app.append(table);
+        }
+    }
+
     function route() {
         // decodeURIComponent throws synchronously on malformed input (Firefox returns
         // location.hash pre-decoded, so a stored %xx can arrive re-broken) — the try
@@ -724,6 +823,7 @@
                 : compare ? comparisonView(decodeURIComponent(compare[1]), decodeURIComponent(compare[2]))
                 : hash.startsWith("#/compare") ? compareView()
                 : hash.startsWith("#/trends") ? trendsView({}, 30)
+                : hash.startsWith("#/tasks") ? tasksRollupView()
                 : hash.startsWith("#/tests") ? testsView()
                 : buildsView({}, 0);
             run.catch(fail);

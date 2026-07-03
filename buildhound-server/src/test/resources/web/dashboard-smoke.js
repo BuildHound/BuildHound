@@ -104,6 +104,18 @@ const responses = {
         missesToExplain: [":app:compileKotlin"],
         diffs: [{ key: "jdk.home", scope: "BUILD", valueA: "aaaa1111…", valueB: "bbbb2222…", differingTaskCount: 0, coverage: 1.0, note: "JDK install path differs" }],
     },
+    // Tasks explorer rollups (plan 026). byTypeAvailable false → the by-type toggle shows an empty state.
+    "/v1/rollups/project-cost?days=30": [
+        { module: ":app", builds: 12, executedBuilds: 9, buildImpactedUsers: 3, serialTaskMs: 45000, buildAvgDurationMs: 60000, buildPercentage: 0.8, buildCostScalar: 4800000 },
+    ],
+    "/v1/rollups/task-duration?days=30": {
+        byName: [{ key: "compileKotlin", count: 40, totalMs: 800000, avgMs: 20000, minMs: 1000, maxMs: 50000 }],
+        byType: [],
+        byTypeAvailable: false,
+    },
+    "/v1/rollups/negative-avoidance?days=30": [
+        { key: "checkstyle", count: 5, totalExcessMs: 12000, worstExcessMs: 4000 },
+    ],
 };
 // X-Total-Count values by path; a path absent here → header missing (tolerance case).
 const totals = {
@@ -253,6 +265,25 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "Comparison")) throw new Error("comparison view header missing");
     if (!hasText(byId["app"], "jdk.home")) throw new Error("comparison view must render the changed input");
     if (!hasText(byId["app"], ":app:compileKotlin")) throw new Error("comparison view must list the cache miss");
+
+    // Tasks explorer (plan 026): the three rollups render; the by-type toggle shows the
+    // "types not populated" empty state (byTypeAvailable false); no throw on any of it.
+    context.location.hash = "#/tasks"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/rollups/project-cost?days=30")) throw new Error("tasks view did not fetch project-cost");
+    if (!hasText(byId["app"], "Project cost by module")) throw new Error("project-cost section missing");
+    if (!hasText(byId["app"], ":app")) throw new Error("project-cost row missing");
+    if (!hasText(byId["app"], "compileKotlin")) throw new Error("task-duration by-name row missing");
+    if (!hasText(byId["app"], "checkstyle")) throw new Error("negative-avoidance row missing");
+    clickButton(byId["app"], "By type");
+    if (!hasText(byId["app"], "Task types not populated yet")) throw new Error("by-type empty state missing when byTypeAvailable is false");
+
+    // Empty rollups render without throwing (server-side never-fail analogue).
+    responses["/v1/rollups/project-cost?days=30"] = [];
+    responses["/v1/rollups/task-duration?days=30"] = { byName: [], byType: [], byTypeAvailable: false };
+    responses["/v1/rollups/negative-avoidance?days=30"] = [];
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/tasks"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "No task data yet")) throw new Error("empty project-cost state missing");
 
     // Missing X-Total-Count → tolerated: the builds view still renders (total falls back).
     delete totals["/v1/builds?limit=50&offset=0"];

@@ -278,3 +278,44 @@ the CSP style hash recomputes from served bytes
 - The dashboard Tasks explorer renders all three rollups with honest empty/degraded states; no
   payload-schema change (golden files and contract tests unmodified in the diff).
 - Spec §5/§6 updated; `docs/architecture.md` §5 + decision log carry the normalized-table row.
+
+## 8. Divergences from plan (2026-07-04, implementation)
+
+- **Migration is `V4__task_executions.sql`** (next free version after 025's V3).
+- **The rollup math is a pure `RollupCalculator`** (server-owned, over a flat `TaskRow`) that the
+  in-memory store calls directly and the Postgres SQL mirrors; a Testcontainers parity test pins
+  byte-for-byte agreement. This is a stronger version of the plan's "both stores agree."
+- **The negative-avoidance *rollup* uses the window executed median** (`percentile_cont(0.5)`, per
+  §3), **not** the build-local commons `negativeAvoidanceMs`. The commons helper is still added +
+  unit-tested (per §2) — it is the per-build artifact/DerivedMetrics signal — but a build-local sum
+  can't produce the per-group (type/name) ranking the rollup needs, so the rollup computes its own
+  window medians. Both are "avoided task slower than the executed baseline"; they differ only in
+  baseline scope (window vs build). Recorded so the two definitions aren't conflated.
+- **Deterministic tiebreakers** added to every rollup ordering (`… DESC, key/module ASC`) in both
+  `RollupCalculator` and the SQL, so in-memory and Postgres return identical order under ties (the
+  parity test would otherwise be flaky).
+- **All three rollups cap at top-25** (`RollupCalculator.TOP_N`), including Project Cost (the plan
+  named top-25 only for task-duration/negative-avoidance) — bounds result size uniformly; modules
+  rarely exceed 25 and the ranking is by cost.
+- Everything else as planned: commons `negativeAvoidanceMs`, transactional task-row insert (rows
+  only on a fresh build), the three DTOs + routes (read-scope, tenant, days clamp), the `#/tasks`
+  dashboard page (name/type toggle + `byTypeAvailable` empty state) + smoke cases, and the docs.
+
+### Review-driven changes (2026-07-04, two clean-context reviews)
+
+Security & privacy: **SHIP** (no Critical/High/Medium — parameterized SQL, read-scope + tenant
+scoping, pseudonymized userId only ever counted, textContent rendering, bounded). Code &
+architecture: **SHIP** (full parity traced sound, pinned by the Testcontainers test). Applied:
+
+- **[code Low] `buildPercentage` rounded to 6 dp** in both `RollupCalculator` and the SQL
+  (`round(count(*)::numeric / tot.n, 6)::float8`), so Kotlin double-division and Postgres float8
+  division agree exactly — removes a latent parity-test-flakiness risk on raw IEEE-754 division.
+- **[code Low] Parity fixtures strengthened** with a build carrying a **null module**, a **null
+  user**, and an **even executed count** (median interpolation) — the branches the tiebreakers and
+  `percentile_cont(0.5)` exist for now assert, not just reasoned.
+- **[security Low] `taskDuration` column-selection comment** making explicit that `$column`/
+  `$typeFilter` are boolean-derived fixed literals, never request input (SQL-injection guard).
+- **[security Low, accepted] `path` is stored in `task_executions` but unused by v1 rollups** —
+  kept for near-term per-path drill-down (it's the same scrubbed structural identifier already in
+  `builds.payload`); noted rather than dropped. Retention (N1) lands with the deferred TimescaleDB
+  conversion, inheriting the `builds` obligations.

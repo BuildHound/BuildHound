@@ -124,4 +124,41 @@ class DerivedMetricsCalculatorTest {
         val metrics = DerivedMetricsCalculator.compute(listOf(task(TaskOutcome.EXECUTED, cacheable = true)), cores = 2)!!
         assertNull(metrics.configurationMs)
     }
+
+    private fun na(outcome: TaskOutcome, durationMs: Long, type: String? = null, path: String = ":t") =
+        TaskExecution(path = path, startMs = 0, durationMs = durationMs, outcome = outcome, type = type)
+
+    @Test
+    fun negative_avoidance_sums_excess_over_the_executed_median_of_the_type() {
+        // Type "C" executed [1000, 3000] → median 2000. Avoided-but-slower tasks pay the excess.
+        val tasks = listOf(
+            na(TaskOutcome.EXECUTED, 1000, type = "C"),
+            na(TaskOutcome.EXECUTED, 3000, type = "C"),
+            na(TaskOutcome.UP_TO_DATE, 5000, type = "C"), // excess 3000
+            na(TaskOutcome.FROM_CACHE, 500, type = "C"), // faster than median → 0
+        )
+        assertEquals(3000, DerivedMetricsCalculator.negativeAvoidanceMs(tasks))
+    }
+
+    @Test
+    fun negative_avoidance_is_zero_without_an_executed_baseline_for_the_group() {
+        // Only avoided tasks in type "X" — no executed baseline, so never negative.
+        val tasks = listOf(na(TaskOutcome.UP_TO_DATE, 9999, type = "X"), na(TaskOutcome.FROM_CACHE, 8888, type = "X"))
+        assertEquals(0, DerivedMetricsCalculator.negativeAvoidanceMs(tasks))
+    }
+
+    @Test
+    fun negative_avoidance_groups_by_task_name_when_type_is_null() {
+        val tasks = listOf(
+            na(TaskOutcome.EXECUTED, 1000, path = ":app:foo"), // name "foo" median 1000
+            na(TaskOutcome.UP_TO_DATE, 4000, path = ":lib:foo"), // same name → excess 3000
+            na(TaskOutcome.UP_TO_DATE, 4000, path = ":app:bar"), // name "bar" has no executed baseline → 0
+        )
+        assertEquals(3000, DerivedMetricsCalculator.negativeAvoidanceMs(tasks))
+    }
+
+    @Test
+    fun negative_avoidance_of_an_empty_build_is_zero() {
+        assertEquals(0, DerivedMetricsCalculator.negativeAvoidanceMs(emptyList()))
+    }
 }

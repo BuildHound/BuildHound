@@ -4,6 +4,7 @@ import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.DerivedMetricsCalculator
 import java.time.Instant
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -39,41 +40,88 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
 
     override fun save(projectId: String, payload: BuildPayload): Boolean =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                INSERT INTO builds (project_id, build_id, started_at, finished_at, outcome,
-                                    mode, branch, duration_ms, hit_rate, ci_provider, ci_run_id,
-                                    pipeline_name, requested_tasks_sig, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (project_id, build_id) DO NOTHING
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, payload.buildId)
-                statement.setObject(3, OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC))
-                statement.setObject(4, OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.finishedAt), ZoneOffset.UTC))
-                statement.setString(5, payload.outcome.name)
-                statement.setString(6, payload.mode.name)
-                statement.setString(7, payload.vcs?.branch)
-                statement.setLong(8, payload.finishedAt - payload.startedAt)
-                payload.derived?.cacheableHitRate
-                    ?.let { statement.setDouble(9, it) }
-                    ?: statement.setNull(9, java.sql.Types.DOUBLE)
-                // Extracted hot columns for baseline keying + metric correlation (plan 025).
-                statement.setString(10, payload.ci?.provider)
-                statement.setString(11, payload.ci?.runId)
-                statement.setString(12, payload.ci?.pipelineName)
-                statement.setString(13, RegressionEngine.requestedTasksSignature(payload.requestedTasks))
-                statement.setObject(
-                    14,
-                    PGobject().apply {
-                        type = "jsonb"
-                        value = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
-                    },
-                )
-                statement.executeUpdate() == 1
+            // The build row and its normalized task rows go in as one all-or-nothing unit (plan 026),
+            // so a partial failure never leaves task rows without their build (idempotency at the
+            // build level, no PK on task rows). autoCommit is restored in finally.
+            connection.autoCommit = false
+            try {
+                val inserted = insertBuild(connection, projectId, payload)
+                // Task rows only when the build was newly inserted — a duplicate build adds none.
+                if (inserted && payload.tasks.isNotEmpty()) insertTaskRows(connection, projectId, payload)
+                connection.commit()
+                inserted
+            } catch (e: Throwable) {
+                runCatching { connection.rollback() }
+                throw e
+            } finally {
+                runCatching { connection.autoCommit = true }
             }
         }
+
+    private fun insertBuild(connection: java.sql.Connection, projectId: String, payload: BuildPayload): Boolean =
+        connection.prepareStatement(
+            """
+            INSERT INTO builds (project_id, build_id, started_at, finished_at, outcome,
+                                mode, branch, duration_ms, hit_rate, ci_provider, ci_run_id,
+                                pipeline_name, requested_tasks_sig, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (project_id, build_id) DO NOTHING
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setObject(1, UUID.fromString(projectId))
+            statement.setString(2, payload.buildId)
+            statement.setObject(3, OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC))
+            statement.setObject(4, OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.finishedAt), ZoneOffset.UTC))
+            statement.setString(5, payload.outcome.name)
+            statement.setString(6, payload.mode.name)
+            statement.setString(7, payload.vcs?.branch)
+            statement.setLong(8, payload.finishedAt - payload.startedAt)
+            payload.derived?.cacheableHitRate
+                ?.let { statement.setDouble(9, it) }
+                ?: statement.setNull(9, java.sql.Types.DOUBLE)
+            // Extracted hot columns for baseline keying + metric correlation (plan 025).
+            statement.setString(10, payload.ci?.provider)
+            statement.setString(11, payload.ci?.runId)
+            statement.setString(12, payload.ci?.pipelineName)
+            statement.setString(13, RegressionEngine.requestedTasksSignature(payload.requestedTasks))
+            statement.setObject(
+                14,
+                PGobject().apply {
+                    type = "jsonb"
+                    value = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
+                },
+            )
+            statement.executeUpdate() == 1
+        }
+
+    /** Batch-insert the normalized task rows (plan 026), denormalizing user_id + started_at. */
+    private fun insertTaskRows(connection: java.sql.Connection, projectId: String, payload: BuildPayload) {
+        connection.prepareStatement(
+            """
+            INSERT INTO task_executions
+                (project_id, build_id, started_at, user_id, path, module, name, type, outcome, cacheable, duration_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            val startedAt = OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC)
+            val userId = payload.environment?.userId
+            for (task in payload.tasks) {
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, payload.buildId)
+                statement.setObject(3, startedAt)
+                statement.setString(4, userId)
+                statement.setString(5, task.path)
+                statement.setString(6, task.module)
+                statement.setString(7, DerivedMetricsCalculator.taskName(task))
+                statement.setString(8, task.type)
+                statement.setString(9, task.outcome.name)
+                task.cacheable?.let { statement.setBoolean(10, it) } ?: statement.setNull(10, java.sql.Types.BOOLEAN)
+                statement.setLong(11, task.durationMs)
+                statement.addBatch()
+            }
+            statement.executeBatch()
+        }
+    }
 
     override fun resolveBuildId(projectId: String, provider: String?, runId: String?): String? =
         dataSource.connection.use { connection ->
@@ -232,6 +280,152 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                                     avgDurationMs = rows.getLong("avg_duration"),
                                     maxDurationMs = rows.getLong("max_duration"),
                                     avgHitRate = rows.getDouble("avg_hit_rate").takeUnless { rows.wasNull() },
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    private fun cutoff(days: Int, nowMs: Long): OffsetDateTime =
+        OffsetDateTime.ofInstant(Instant.ofEpochMilli(nowMs - days.toLong() * 86_400_000), ZoneOffset.UTC)
+
+    override fun projectCost(projectId: String, days: Int, nowMs: Long): List<ProjectCostRow> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                // Integer division (sum/count) matches RollupCalculator's truncating averageOrZero;
+                // trunc() matches its .toInt() on the executed percentage (the eBay quirk).
+                """
+                WITH win AS (
+                    SELECT te.build_id, te.module, te.outcome, te.duration_ms, te.user_id, b.duration_ms AS wall
+                    FROM task_executions te
+                    JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
+                    WHERE te.project_id = ? AND te.started_at >= ?
+                ),
+                total AS (SELECT count(DISTINCT build_id) AS n FROM win),
+                mb AS (
+                    SELECT module, build_id, max(wall) AS wall, bool_or(outcome = 'EXECUTED') AS executed
+                    FROM win GROUP BY module, build_id
+                ),
+                tallies AS (
+                    SELECT module, count(DISTINCT user_id) AS impacted_users, sum(duration_ms) AS serial_ms
+                    FROM win GROUP BY module
+                )
+                SELECT m.module,
+                    count(*) AS builds,
+                    count(*) FILTER (WHERE m.executed) AS executed_builds,
+                    t.impacted_users, t.serial_ms,
+                    (sum(m.wall) / count(*)) AS build_avg,
+                    round(count(*)::numeric / tot.n, 6)::float8 AS build_pct,
+                    (CASE WHEN count(*) FILTER (WHERE m.executed) = 0 THEN 0
+                          ELSE sum(m.wall) FILTER (WHERE m.executed) / count(*) FILTER (WHERE m.executed) END
+                    ) * trunc(count(*) FILTER (WHERE m.executed)::float8 / tot.n * 100)::int AS cost_scalar
+                FROM mb m
+                JOIN tallies t ON t.module IS NOT DISTINCT FROM m.module
+                CROSS JOIN total tot
+                GROUP BY m.module, t.impacted_users, t.serial_ms, tot.n
+                ORDER BY cost_scalar DESC, coalesce(m.module, '') ASC
+                LIMIT ${RollupCalculator.TOP_N}
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                ProjectCostRow(
+                                    module = rows.getString("module"),
+                                    builds = rows.getInt("builds"),
+                                    executedBuilds = rows.getInt("executed_builds"),
+                                    buildImpactedUsers = rows.getInt("impacted_users"),
+                                    serialTaskMs = rows.getLong("serial_ms"),
+                                    buildAvgDurationMs = rows.getLong("build_avg"),
+                                    buildPercentage = rows.getDouble("build_pct"),
+                                    buildCostScalar = rows.getLong("cost_scalar"),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    override fun taskDuration(projectId: String, days: Int, nowMs: Long): TaskDurationRollup =
+        dataSource.connection.use { connection ->
+            fun rank(byType: Boolean): List<TaskDurationRow> {
+                // SQL-injection safety: `column`/`typeFilter` are chosen ONLY by this Boolean and are
+                // fixed literals — never request/payload input. Keep it that way (no String column arg).
+                val column = if (byType) "type" else "name"
+                val typeFilter = if (byType) "AND type IS NOT NULL " else ""
+                return connection.prepareStatement(
+                    """
+                    SELECT $column AS k, count(*) AS cnt, sum(duration_ms) AS total,
+                           sum(duration_ms) / count(*) AS avg, min(duration_ms) AS mn, max(duration_ms) AS mx
+                    FROM task_executions WHERE project_id = ? AND started_at >= ? $typeFilter
+                    GROUP BY $column ORDER BY total DESC, k ASC LIMIT ${RollupCalculator.TOP_N}
+                    """.trimIndent(),
+                ).use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setObject(2, cutoff(days, nowMs))
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                add(
+                                    TaskDurationRow(
+                                        key = rows.getString("k"), count = rows.getInt("cnt"),
+                                        totalMs = rows.getLong("total"), avgMs = rows.getLong("avg"),
+                                        minMs = rows.getLong("mn"), maxMs = rows.getLong("mx"),
+                                    ),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            val available = connection.prepareStatement(
+                "SELECT EXISTS(SELECT 1 FROM task_executions WHERE project_id = ? AND started_at >= ? AND type IS NOT NULL)",
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.executeQuery().use { rows -> rows.next(); rows.getBoolean(1) }
+            }
+            TaskDurationRollup(byName = rank(byType = false), byType = rank(byType = true), byTypeAvailable = available)
+        }
+
+    override fun negativeAvoidance(projectId: String, days: Int, nowMs: Long): List<NegativeAvoidanceRow> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                // percentile_cont(0.5) == RollupCalculator.medianDouble; trunc() matches its .toLong().
+                """
+                WITH win AS (
+                    SELECT coalesce(type, name) AS grp, outcome, duration_ms
+                    FROM task_executions WHERE project_id = ? AND started_at >= ?
+                ),
+                med AS (
+                    SELECT grp, percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) AS median
+                    FROM win WHERE outcome = 'EXECUTED' GROUP BY grp
+                ),
+                excess AS (
+                    SELECT w.grp, (w.duration_ms - m.median) AS ex
+                    FROM win w JOIN med m ON m.grp = w.grp
+                    WHERE w.outcome IN ('UP_TO_DATE', 'FROM_CACHE') AND w.duration_ms > m.median
+                )
+                SELECT grp AS k, count(*) AS cnt, trunc(sum(ex))::bigint AS total_excess, trunc(max(ex))::bigint AS worst
+                FROM excess GROUP BY grp
+                ORDER BY total_excess DESC, k ASC LIMIT ${RollupCalculator.TOP_N}
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                NegativeAvoidanceRow(
+                                    key = rows.getString("k"), count = rows.getInt("cnt"),
+                                    totalExcessMs = rows.getLong("total_excess"), worstExcessMs = rows.getLong("worst"),
                                 ),
                             )
                         }

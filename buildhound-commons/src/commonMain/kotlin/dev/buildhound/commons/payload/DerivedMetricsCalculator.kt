@@ -67,4 +67,43 @@ object DerivedMetricsCalculator {
         val end = tasks.maxOfOrNull { it.startMs + it.durationMs } ?: return 0
         return (end - start).coerceAtLeast(0)
     }
+
+    /**
+     * Negative-avoidance milliseconds (plan 026): work where *avoiding* it cost more than *doing*
+     * it. A candidate is a task that was avoided (`UP_TO_DATE`/`FROM_CACHE`) yet ran longer than the
+     * median **executed** duration of its group — the cache/up-to-date check was slower than the
+     * work. Grouped by `type`, falling back to the task name when `type` is null (pre-016 payloads).
+     *
+     * Build-local and independent of plan 038's per-task savings: it compares against a baseline
+     * that already exists in this build's task list. A group with no executed task has no baseline,
+     * so its avoided tasks contribute 0 (never negative). Returns the sum of positive excesses only.
+     * Kept in commons so the server rollup and the HTML artifact compute the same number.
+     */
+    fun negativeAvoidanceMs(tasks: List<TaskExecution>): Long {
+        val medianByGroup = tasks
+            .filter { it.outcome == TaskOutcome.EXECUTED }
+            .groupBy { groupKey(it) }
+            .mapValues { (_, group) -> medianLong(group.map { it.durationMs }) }
+
+        var excess = 0L
+        for (task in tasks) {
+            if (task.outcome != TaskOutcome.UP_TO_DATE && task.outcome != TaskOutcome.FROM_CACHE) continue
+            val baseline = medianByGroup[groupKey(task)] ?: continue // no executed baseline → 0
+            val delta = task.durationMs - baseline
+            if (delta > 0) excess += delta
+        }
+        return excess
+    }
+
+    /** The negative-avoidance grouping key: static type when known, else the task name. */
+    fun groupKey(task: TaskExecution): String = task.type ?: taskName(task)
+
+    /** Task name = the last path segment (`:app:compileKotlin` → `compileKotlin`). */
+    fun taskName(task: TaskExecution): String = task.path.substringAfterLast(':')
+
+    private fun medianLong(values: List<Long>): Long {
+        val sorted = values.sorted()
+        val n = sorted.size
+        return if (n % 2 == 1) sorted[n / 2] else (sorted[n / 2 - 1] + sorted[n / 2]) / 2
+    }
 }

@@ -308,8 +308,30 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val days = (call.request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)
             call.respondQuery { store.trends(project.id, filter, days, System.currentTimeMillis()) }
         }
+
+        // Server-side rollups over the normalized task_executions table (plan 026). Read-scope,
+        // tenant-scoped, days clamped like /trends, top-25 result caps enforced in the store.
+        get("/rollups/project-cost") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.projectCost(project.id, days, System.currentTimeMillis()) }
+        }
+        get("/rollups/task-duration") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.taskDuration(project.id, days, System.currentTimeMillis()) }
+        }
+        get("/rollups/negative-avoidance") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.negativeAvoidance(project.id, days, System.currentTimeMillis()) }
+        }
     }
 }
+
+/** Window size in days, defaulting to 30 and clamped to [1, 365] like /trends. */
+private fun ApplicationCall.daysParam(): Int =
+    (request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)
 
 private class QueryResult<T>(val value: T)
 
