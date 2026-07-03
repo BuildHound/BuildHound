@@ -4,7 +4,11 @@ One file per feature/phase slice, written **before** implementation starts and c
 on its own (see the workflow in the repository root `CLAUDE.md`).
 
 Naming: `NNN-short-title.md` (e.g. `001-task-event-collector.md`), numbered in creation
-order.
+order. Numbering continues across directories — the next plan takes the next free number.
+
+Lifecycle: active plans live in this directory; once a plan's exit criteria are met and the
+work is merged, the file moves to [implemented/](implemented/) (`git mv`, same PR or a sweep).
+Plans 000–013 (roadmap phases 0–1) are implemented and live there.
 
 A plan contains, briefly:
 
