@@ -13,7 +13,10 @@ package dev.buildhound.commons.payload
  * Known accepted limitations (plan 007): tails of out-of-project paths containing
  * spaces can leak fragments ("<path> Doe/other"); sub-32-char high-entropy tokens
  * without a recognizable key or AKIA/JWT shape survive; space-separated flag secrets
- * (`--token abc`) survive — revisit before failure-text collection.
+ * (`--token abc`) survive — revisit before failure-text collection. Because roots
+ * relativize before the blob rule, a keyless sub-32-char token written immediately
+ * under the project root (`<root>/shorttoken1`) survives as its relative name — it is
+ * an in-project path, which the payload carries by design.
  */
 object PayloadScrubber {
 
@@ -37,10 +40,14 @@ object PayloadScrubber {
         scrubText(text, listOfNotNull(projectRoot))
 
     /**
-     * Secrets first, then paths — a secret value containing a path must not survive as
-     * a "relativized" fragment. Before the path regexes, any literal occurrence of a
-     * root is stripped so in-project paths relativize even when they contain spaces
-     * (which the path regexes cannot span).
+     * Keyed/shaped secrets first, then paths — a secret value containing a path must
+     * not survive as a "relativized" fragment. The literal-root strip runs BEFORE the
+     * blob rule: the roots are not secrets (they are the location the payload
+     * deliberately describes), and [longBlob]'s char class spans `/`, so a long
+     * dot-free, digit-bearing root (macOS `/private/var/folders/...` temp dirs) would
+     * otherwise be eaten as a blob before it can relativize — in-project reasons came
+     * out as `<redacted><path>` instead of `input.txt`. The root strip also lets
+     * in-project paths with spaces relativize (the path regexes cannot span spaces).
      */
     fun scrubText(text: String, projectRoots: List<String>): String {
         var result = text
@@ -49,12 +56,12 @@ object PayloadScrubber {
         result = bearerToken.replace(result, "<redacted>")
         result = secretPair.replace(result) { match -> "${match.groupValues[1]}=<redacted>" }
         result = awsAccessKey.replace(result, "<redacted>")
-        result = longBlob.replace(result, "<redacted>")
         // Longest root first, and only at a path boundary — a root must not be eaten
         // out of the middle of a longer path (/tmp/proj inside /private/tmp/proj).
         for (root in usableRoots(projectRoots).sortedByDescending { it.length }) {
             result = Regex("""(?<![\w.@+-])${Regex.escape(root)}[/\\]""").replace(result, "")
         }
+        result = longBlob.replace(result, "<redacted>")
         result = unixPath.replace(result) { match -> relativizeOrRedact(match.value, projectRoots) }
         result = uncPath.replace(result, "<path>")
         result = windowsPath.replace(result) { match -> relativizeOrRedact(match.value, projectRoots) }

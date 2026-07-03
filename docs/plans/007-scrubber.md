@@ -50,6 +50,18 @@ relativize. Accepted limitations recorded in the scrubber KDoc: out-of-project
 space-path tails, sub-32 keyless tokens, `--token abc` flag shapes — revisit
 before failure-text collection lands.
 
+**Post-merge field bug (owner-reported, fixed):** the blob regex's char class spans
+`/`, so a project root made of long dot-free, digit-bearing segments (macOS
+`/private/var/folders/.../T/junitNNN/...` temp dirs) was eaten as a "blob" before
+the literal-root pre-pass could relativize it — in-project execution reasons came
+out as `<redacted><path>` and the plan-007 functional test failed on macOS while
+staying green on Linux/CI (short `/tmp/junitNNN` runs sit under the 32-char blob
+floor). Fix: the root strip now runs before the blob rule — roots are not secrets,
+they are the location the payload deliberately describes; all keyed/shaped secret
+rules still run first. New accepted limitation recorded in the KDoc: a keyless
+sub-32-char token sitting directly under the project root survives as its relative
+name (it is an in-project path, which the payload carries by design).
+
 ## Test strategy
 
 - commons unit: unix/windows path redaction, project-root relativization (incl. root

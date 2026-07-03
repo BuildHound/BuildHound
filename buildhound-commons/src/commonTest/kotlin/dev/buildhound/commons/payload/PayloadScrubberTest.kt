@@ -24,6 +24,36 @@ class PayloadScrubberTest {
     }
 
     @Test
+    fun long_dotfree_roots_still_relativize_instead_of_being_eaten_as_blobs() {
+        // macOS temp shape: /private/var/folders/<xx>/<~30-char hash>/T/junitNNN/... —
+        // a digit-bearing, dot-free run >= 32 chars. The blob regex used to eat the
+        // root (its char class spans '/') before relativization could happen, turning
+        // "file <root>/input.txt" into "file <redacted><path>" (user-reported bug).
+        val macRoot = "/private/var/folders/5d/abcdef1234567890abcdef1234567890/T/junit1234567890/project"
+        assertEquals(
+            "Input property 'source' file input.txt has changed.",
+            PayloadScrubber.scrubText("Input property 'source' file $macRoot/input.txt has changed.", macRoot),
+        )
+        // Plain + canonical root pair (the /var -> /private/var symlink), deeper file.
+        assertEquals(
+            "Input property 'source' file src/main/A.kt has changed.",
+            PayloadScrubber.scrubText(
+                "Input property 'source' file $macRoot/src/main/A.kt has changed.",
+                listOf("/var/folders/5d/abcdef1234567890abcdef1234567890/T/junit1234567890/project", macRoot),
+            ),
+        )
+        // An OUT-of-project path of the same shape must still vanish entirely —
+        // which token replaces it doesn't matter, but no absolute fragment survives.
+        val outside = PayloadScrubber.scrubText(
+            "file /private/var/folders/5d/abcdef1234567890abcdef1234567890/T/other/cache.bin was removed",
+            macRoot,
+        )
+        assertFalse(outside.contains("folders"), outside)
+        assertFalse(outside.contains("private"), outside)
+        assertFalse(outside.contains("cache.bin"), outside)
+    }
+
+    @Test
     fun paths_outside_the_project_are_redacted() {
         assertEquals(
             "file <path> has been removed.",
