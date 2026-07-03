@@ -27,11 +27,33 @@ data class BuildPayload(
     val values: Map<String, String> = emptyMap(),
     val tasks: List<TaskExecution> = emptyList(),
     val derived: DerivedMetrics? = null,
+    /** What the caps enforcement dropped/truncated (plan 019); null when nothing was capped. */
+    val caps: CapsSummary? = null,
 ) {
     companion object {
         const val SCHEMA_VERSION: Int = 1
     }
 }
+
+/**
+ * Records exactly what [PayloadCapper] removed to keep the payload within budget (spec §3.9):
+ * "truncate + count what was dropped". Non-null on a payload only when something was capped;
+ * a server-side re-cap merges its counts into this instead of overwriting them.
+ */
+@Serializable
+data class CapsSummary(
+    val droppedTags: Int = 0,
+    val droppedValues: Int = 0,
+    /** Over-long map values (in `tags` or `values`) truncated to the char cap. */
+    val truncatedValues: Int = 0,
+    val droppedExecutionReasons: Int = 0,
+    val truncatedExecutionReasons: Int = 0,
+    /** `nonCacheableReason` free text truncated to the char cap (plan 016 populates it). */
+    val truncatedNonCacheableReasons: Int = 0,
+    val droppedTasks: Int = 0,
+    /** Per-outcome counts of the dropped tasks, so the totals stay reconstructable. */
+    val droppedTaskOutcomes: Map<String, Int> = emptyMap(),
+)
 
 @Serializable
 enum class BuildOutcome { SUCCESS, FAILED }

@@ -185,6 +185,15 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
   http log a warning. Spool files carry only the (scrubbed) payload, never the token;
   anything that can write the spool dir already executes code in the build (same trust
   domain).
+- **Payload budgets live in one place (`buildhound-commons` `PayloadCaps`/`PayloadCapper`)
+  and are enforced in code, not docs** (plan 019): the plugin caps as the final assembly
+  step (after the scrubber, so secret patterns see whole values), and the server re-caps
+  defensively at ingest — clamping a hostile/buggy client's oversized `tags`/`values`/text
+  rather than rejecting it, so the telemetry survives bounded. Overflow follows spec §3.9
+  (drop execution reasons, then truncate the task array with `caps` counts; the build
+  envelope always survives). Cap warn logs carry **counts only** — never tag keys or
+  values, since a misconfigured build could put a secret in either. New payload fields must
+  route through `PayloadCapper` when they land.
 - Every feature PR gets a dedicated security **and** privacy review (see CLAUDE.md).
 
 ## 7. Decision log
@@ -205,5 +214,6 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
 | 2026-07-03 | Isolated-projects degradation contract for task metadata (plan 016, §2 rule 12): when `BuildFeatures.isolatedProjects.active` is true the `taskGraph.allTasks` walk is skipped, so `tasks[].type`/`cacheable`/`nonCacheableReason` are null and `derived.cacheableHitRate` is null. The plan-021 IP CI job asserts exactly this shape | `allTasks` from settings scope is an IP violation by design; degrading to empty (not failing, not violating) is the only correct behavior, and pinning the shape keeps the future IP job a real regression gate |
 | 2026-07-03 | `derived.cacheableHitRate` is now over a **cacheable-only** denominator (plan 016): a task is cache-relevant iff `cacheable == true` or its outcome is FROM_CACHE (a cache hit proves cacheability past a static `cacheIf {}` miss); null when no task carries a non-null `cacheable` flag (IP degradation / legacy pre-016 payloads). Supersedes the v0 all-tasks denominator | The old number diluted the rate with non-cacheable work and was not comparable across builds; honest-nulls over a spliced two-definition trend line (plan 005). Server stores derived metrics as-sent, so no migration — pre-release step change accepted |
 | 2026-07-03 | `buildhound-report` is the shared payload-rendering channel; the server may depend on it (not only the plugin), amending §1's "plugin and server never share code except through commons" for *rendering* code (plan 017). The task timeline is one JS renderer served at `/timeline.js` and inlined in the artifact | Duplicating the renderer per surface is permanent copy-drift with a sync test as the only guard; a dependency-free module shared by reference is a resources-plus-pure-functions edge with no transitive cost. Lanes are computed from start/end overlaps (max concurrency), deliberately not the unpopulated Gradle `worker` id |
+| 2026-07-03 | Payload cardinality + size budgets (`PayloadCaps`/`PayloadCapper` in commons) enforced at plugin assembly (after scrub) **and** as a defensive server clamp at ingest; overflow follows spec §3.9 (reasons then task array), recording drops in an additive `caps` field; server clamps rather than rejects (plan 019) | The roadmap guardrail "cardinality and payload-size budgets enforced in code, not docs"; Talaiot's unbounded cardinality wrecked its backends. Clamping over rejecting keeps "degrade gracefully, never lose the envelope"; idempotency keys on `buildId`, which the capper never touches. Warn logs carry counts only (a tag/reason could hold a secret) |
 
 *Add a row (or a docs/plans entry) whenever an architectural decision is made or reversed.*

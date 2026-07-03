@@ -7,6 +7,8 @@ import dev.buildhound.commons.payload.CiInfo
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
 import dev.buildhound.commons.payload.EnvironmentInfo
+import dev.buildhound.commons.payload.PayloadCapper
+import dev.buildhound.commons.payload.PayloadCaps
 import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.ToolchainInfo
@@ -42,6 +44,7 @@ internal object PayloadAssembler {
         nowMs: Long,
         projectRoots: List<String>,
         configurationMs: Long? = null,
+        caps: PayloadCaps = PayloadCaps.DEFAULT,
     ): BuildPayload {
         val startedAt = tasks.minOfOrNull { it.startMs } ?: nowMs
         val finishedAt = (tasks.maxOfOrNull { it.startMs + it.durationMs } ?: nowMs).coerceAtLeast(startedAt)
@@ -70,10 +73,15 @@ internal object PayloadAssembler {
             ci = ciInfo(ci),
             tags = tags,
             tasks = tasks,
+            // Derived metrics are computed over the FULL task list, before any cap drops
+            // rows — hit rate/utilization must not shift when the payload is truncated.
             derived = DerivedMetricsCalculator.compute(tasks, environment?.cores, configurationMs),
         )
-        // Spec §3.7: one scrubbed payload everywhere — local file, artifact, upload.
-        return PayloadScrubber.scrub(payload, projectRoots)
+        // Spec §3.7 then §3.9: scrub whole free-text values first (so secret patterns see
+        // the complete string, never a truncated slice), then enforce the payload budgets.
+        // One capped, scrubbed payload everywhere — local file, artifact, upload.
+        val scrubbed = PayloadScrubber.scrub(payload, projectRoots)
+        return PayloadCapper.cap(scrubbed, caps)
     }
 
     /** Git wins; CI context fills the gaps (detached HEAD on CI has no branch name). */

@@ -52,8 +52,22 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `schema v1 caps golden file deserializes with a populated caps summary`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-caps.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        val caps = payload.caps
+        assertEquals(4, caps?.droppedTags)
+        assertEquals(1, caps?.truncatedValues)
+        assertEquals(3, caps?.droppedExecutionReasons)
+        assertEquals(2, caps?.truncatedExecutionReasons)
+        assertEquals(17, caps?.droppedTasks)
+        assertEquals(mapOf("EXECUTED" to 15, "FROM_CACHE" to 2), caps?.droppedTaskOutcomes)
+    }
+
+    @Test
     fun `round trip is lossless`() {
-        for (name in listOf("build-payload-v1.json", "build-payload-v1-task-metadata.json")) {
+        for (name in listOf("build-payload-v1.json", "build-payload-v1-task-metadata.json", "build-payload-v1-caps.json")) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)
             val decodedAgain = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), reEncoded)

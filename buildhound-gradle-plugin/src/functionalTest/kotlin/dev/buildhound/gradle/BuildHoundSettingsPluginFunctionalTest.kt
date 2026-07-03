@@ -555,6 +555,34 @@ class BuildHoundSettingsPluginFunctionalTest {
         assertNotNull(payload.derived)
     }
 
+    // --- Plan 019: cardinality + payload size caps -----------------------------------
+
+    @Test
+    fun `pathological tags are capped without failing the build`() {
+        val bigValue = "x".repeat(400)
+        val manyTags = (1..150).joinToString("\n            ") { "tags.put(\"k$it\", \"v$it\")" }
+        setUpProject(extraDsl = "tags.put(\"big\", \"$bigValue\")\n            $manyTags")
+
+        val result = runner("hello", "--configuration-cache").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        val payload = readPayload()
+        // Entry-count cap (team + big + 150 = 152 tags → 100 kept, 52 dropped).
+        assertEquals(100, payload.tags.size, "tag map capped to the entry budget")
+        assertEquals(300, payload.tags["big"]?.length, "tag value truncated to 300 chars")
+        assertNotNull(payload.caps, "caps summary present when something was dropped")
+        assertEquals(52, payload.caps?.droppedTags)
+        assertEquals(1, payload.caps?.truncatedValues)
+        // Counts-only warn line (never the keys or values).
+        assertTrue(
+            result.output.lineSequence().any { it.contains("[buildhound] payload capped to budget") },
+            result.output,
+        )
+        // The HTML artifact embeds the same capped payload — no un-capped 400-char value.
+        val html = File(projectDir, "build/buildhound/buildhound-report.html").readText()
+        assertFalse(html.contains(bigValue), "artifact must carry the capped value, not the original")
+    }
+
     private fun exec(vararg command: String) {
         val process = ProcessBuilder(*command).directory(projectDir).redirectErrorStream(true).start()
         val output = process.inputStream.readBytes().decodeToString()

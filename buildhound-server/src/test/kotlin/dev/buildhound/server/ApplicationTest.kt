@@ -1,6 +1,7 @@
 package dev.buildhound.server
 
 import dev.buildhound.commons.payload.BuildHoundJson
+import dev.buildhound.commons.payload.BuildPayload
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -252,6 +253,47 @@ class ApplicationTest {
 
         val badFilter = client.get("/v1/builds?mode=bogus") { header("Authorization", "Bearer test-token") }
         assertEquals(HttpStatusCode.BadRequest, badFilter.status)
+    }
+
+    @Test
+    fun `ingest clamps an over-cap payload but stores it, and leaves a compliant one untouched`() = testApplication {
+        val fixture = fixture()
+        appWith(fixture)
+
+        val bigValue = "y".repeat(400)
+        val overCap = """
+            {
+              "schemaVersion": 1,
+              "buildId": "cap-me",
+              "startedAt": 1,
+              "finishedAt": 2,
+              "outcome": "SUCCESS",
+              "mode": "ci",
+              "tags": {"big": "$bigValue"}
+            }
+        """.trimIndent()
+        val ingest = client.post("/v1/builds") {
+            header("Authorization", "Bearer test-token")
+            contentType(ContentType.Application.Json)
+            setBody(overCap)
+        }
+        assertEquals(HttpStatusCode.Accepted, ingest.status, "an over-cap payload is clamped, not rejected")
+
+        val stored = client.get("/v1/builds/cap-me") { header("Authorization", "Bearer test-token") }
+        assertEquals(HttpStatusCode.OK, stored.status)
+        val clamped = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), stored.bodyAsText())
+        assertEquals(300, clamped.tags["big"]?.length, "server clamps the over-long value")
+        assertEquals(1, clamped.caps?.truncatedValues)
+
+        // A compliant payload is stored byte-identical — no caps summary.
+        client.post("/v1/builds") {
+            header("Authorization", "Bearer test-token")
+            contentType(ContentType.Application.Json)
+            setBody(payloadJson("compliant-1"))
+        }
+        val compliant = client.get("/v1/builds/compliant-1") { header("Authorization", "Bearer test-token") }
+        val compliantPayload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), compliant.bodyAsText())
+        assertNull(compliantPayload.caps, "a compliant payload carries no caps summary")
     }
 
     @Test

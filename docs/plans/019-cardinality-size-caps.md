@@ -189,3 +189,30 @@ remain the outer wall; the capper bounds what actually reaches jsonb.
 - Spec §3.4/§4/§8 and `docs/architecture.md` (incl. decision log) updated in the same PR;
   the roadmap guardrail "cardinality and payload-size budgets enforced in code" is
   factually true.
+
+## 8. Divergences from the plan (recorded during implementation)
+
+- **`nonCacheableReason` is now capped too.** Plan §2 deferred it "when plan 016 populates
+  it"; 016 shipped first, so the capper truncates `nonCacheableReason` to `maxReasonChars`
+  and `CapsSummary` gained a `truncatedNonCacheableReasons` counter (additive).
+- **`truncatedValues` counts value truncations across *both* the `tags` and `values` maps.**
+  The plan's `CapsSummary` field list has a single `truncatedValues` (no `truncatedTags`),
+  so it is documented as "over-long map values (in tags or values) truncated". `droppedTags`
+  and `droppedValues` stay per-map, as listed.
+- **`PayloadAssembler.assemble` gained a `caps: PayloadCaps = DEFAULT` parameter.** The plan
+  said "call `PayloadCapper.cap` as the last step"; the added parameter (defaulting to the
+  production `DEFAULT`) lets the plugin unit test pin the derived-metrics-vs-truncation
+  invariant with tiny caps without constructing 20 000 tasks. Production is unchanged.
+- **Server clamp warns when `capped.caps != payload.caps`** — i.e. only when the ingest-side
+  cap changed the summary this pass (a compliant or already-capped-and-still-compliant
+  payload logs nothing). Counts only, never keys/values.
+- **Known limitation surfaced by review: `CiInfo.attributes` (a client-supplied map) is not
+  run through `capMap`.** Only `tags`/`values` are. The §3.9 byte budget still bounds the
+  *total* payload (it halves the task array to offset non-task bloat), but if the envelope
+  alone exceeds 20 MiB the capper cannot shrink it — absolute storage stays bounded by the
+  outer 64 MiB decompressed ceiling. Per-field capping of env-breadth fields (incl.
+  `attributes`) belongs to plan 027; routing them through `PayloadCapper` is already the
+  stated forward contract (§2 Out).
+- **Byte sizing strips the `caps` block** (review fix): `encodedSize` measures the payload
+  without its own summary, so the recorded summary can never tip a re-cap back over budget —
+  the byte path is now provably idempotent, pinned by a test.

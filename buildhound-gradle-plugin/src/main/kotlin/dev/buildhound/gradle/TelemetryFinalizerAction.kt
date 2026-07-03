@@ -129,6 +129,15 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 configurationMs = configurationMs,
             )
 
+            // Counts only — a misconfigured build could put a secret in a tag/reason, so
+            // keys and values never reach the log (plan 019).
+            payload.caps?.let { caps ->
+                logger.warn(
+                    "[buildhound] payload capped to budget: {} tag(s), {} value(s), {} reason(s) dropped; {} task(s) dropped",
+                    caps.droppedTags, caps.droppedValues, caps.droppedExecutionReasons, caps.droppedTasks,
+                )
+            }
+
             val payloadFile = writePayload(payload, parameters.outputDir.get())
             if (parameters.htmlReportEnabled.getOrElse(true)) {
                 // Wire-format JSON (not the pretty file) — the artifact doubles as an

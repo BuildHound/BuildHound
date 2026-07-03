@@ -90,6 +90,8 @@ buildhound {
     localBuilds { enabled = true; requireOptInFile = true } // ~/.buildhound/optin marker
     identity { pseudonymize = true }                        // false | true | strict(off)
     tags.put("team", "mobile"); value("mrLabel", providers.environmentVariable("MR_LABEL"))
+    // tags/values are cardinality-capped (plan 019): ≤100 entries each, keys ≤100 chars,
+    // values ≤300 chars; excess is dropped/truncated and recorded in the payload `caps` block.
     filters { excludeTasks("help", "tasks"); minTaskDurationMs = 0 }
     ignoreWhen { property("buildhound.skip") }
     kotlinReports { bundle = true }        // validates gradle.properties wiring, warns if absent
@@ -147,6 +149,10 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
                "executionReasons": ["..."] } ],
   "derived": { "cacheableHitRate": 0.0, "avoidedMs": 0, "criticalPathMs": 0,
                "parallelUtilization": 0.0, "configurationMs": 0 },
+  "caps": { "droppedTags": 0, "droppedValues": 0, "truncatedValues": 0,
+            "droppedExecutionReasons": 0, "truncatedExecutionReasons": 0,
+            "truncatedNonCacheableReasons": 0, "droppedTasks": 0, "droppedTaskOutcomes": {} },
+    // ^ present only when the caps enforcement dropped/truncated something (plan 019); omitted otherwise
   "kotlin": { "reportSchema": "2.x", "perTask": [ /* bundled CompileStatisticsData subset */ ] },
   "tests": [ { "taskPath": ":app:testDebugUnitTest", "durationMs": 0,
                "classes": [ { "class": "...", "passed": 0, "failed": 0, "skipped": 0, "durationMs": 0 } ],
@@ -203,7 +209,11 @@ Pages: **Overview/Bottlenecks** (what regressed in 7d: duration, hit rate, flaky
 
 ## 8. Security, quality, distribution
 
-Tokens hashed at rest; ingest rate-limited per token; payload schema validated + size-capped; HTML artifact CSP-safe (no external loads — locked #4). Testing: plugin via Gradle TestKit matrix {Gradle 8.0, 8.14, 9.latest} × {CC on/off} × {Kotlin 2.0/2.2} on synthetic projects from cdsap/ProjectGenerator + one real KMP fixture; server via Testcontainers; golden-file tests for payload schema; contract test that `buildhound-commons` deserializes all historical schema versions. Distribution: plugin → Gradle Plugin Portal, server+dashboard → Docker images (self-host compose documented à la Tuist), license Apache-2.0, public docs site. Pilot tenant: the client project you'll designate (decision #5) — spec assumes multi-module Android/KMP with KSP.
+Tokens hashed at rest; ingest rate-limited per token; payload schema validated + size-capped
+(plan 019 budgets, enforced in code at assembly and defensively at ingest: ≤100 tags/values
+with key ≤100 / value ≤300 chars, ≤10 execution reasons/task ≤500 chars, ≤20 000 tasks,
+≤20 MiB JSON — overflow drops reasons then truncates the task array with `caps` counts, never
+the build envelope; outer byte ceilings 32 MiB compressed / 64 MiB decompressed remain); HTML artifact CSP-safe (no external loads — locked #4). Testing: plugin via Gradle TestKit matrix {Gradle 8.0, 8.14, 9.latest} × {CC on/off} × {Kotlin 2.0/2.2} on synthetic projects from cdsap/ProjectGenerator + one real KMP fixture; server via Testcontainers; golden-file tests for payload schema; contract test that `buildhound-commons` deserializes all historical schema versions. Distribution: plugin → Gradle Plugin Portal, server+dashboard → Docker images (self-host compose documented à la Tuist), license Apache-2.0, public docs site. Pilot tenant: the client project you'll designate (decision #5) — spec assumes multi-module Android/KMP with KSP.
 
 ## 9. Traceability of locked decisions
 

@@ -4,6 +4,7 @@ import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.PayloadCapper
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.header
@@ -78,11 +79,22 @@ fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore) {
                 ingestLogger.warn("payload projectKey '{}' differs from token project '{}'", it, project.key)
             }
 
+            // Defensive clamp (plan 019): a compliant plugin makes this a no-op; a hostile or
+            // buggy client is bounded, not rejected — the telemetry survives, and only counts
+            // (never keys/values) log. The byte ceilings above stay the outer wall.
+            val capped = PayloadCapper.cap(payload)
+            if (capped.caps != payload.caps) {
+                ingestLogger.warn(
+                    "clamped over-cap payload from '{}': post-cap totals {} tag(s), {} value(s), {} task(s) dropped",
+                    project.key, capped.caps?.droppedTags, capped.caps?.droppedValues, capped.caps?.droppedTasks,
+                )
+            }
+
             // Data-shaped failures (SQLSTATE 22xxx, e.g. \u0000 in jsonb) are permanent →
             // 400 so the plugin drops them; anything else is a storage outage → 503 so
             // the plugin spools and retries (its 4xx/5xx classification relies on this).
             val stored = try {
-                store.save(project.id, payload)
+                store.save(project.id, capped)
             } catch (e: SQLException) {
                 val permanent = e.sqlState?.startsWith("22") == true
                 return@post if (permanent) {
