@@ -272,6 +272,74 @@
         app.append(pager);
     }
 
+    // Kotlin build-report panel (plan 023): compiler metrics bundled from the KGP json report.
+    // Rendered only when at least one compilation record is present; every value reaches the DOM
+    // via el()'s textContent, keeping the no-innerHTML rule (report free-text is untrusted).
+    function kotlinPanel(kotlin) {
+        const box = document.createDocumentFragment();
+        const perTask = Array.isArray(kotlin.perTask) ? kotlin.perTask : [];
+        box.append(el("h3", "Kotlin compilation"));
+
+        const chips = el("ul", null, "chips");
+        chips.append(chipItem("compilations", perTask.length));
+        const known = perTask.filter(t => t.incremental != null);
+        const incremental = known.filter(t => t.incremental === true).length;
+        chips.append(chipItem("incremental", known.length ? incremental + " / " + known.length : "unknown"));
+        // Effectiveness by time, not just count: share of known compile time that ran incrementally.
+        const timed = known.filter(t => t.durationMs != null);
+        const totalMs = timed.reduce((sum, t) => sum + t.durationMs, 0);
+        const incrementalMs = timed.filter(t => t.incremental === true).reduce((sum, t) => sum + t.durationMs, 0);
+        chips.append(chipItem("incremental time", totalMs ? Math.round((incrementalMs / totalMs) * 100) + "%" : "unknown"));
+        if (kotlin.reportSchema) chips.append(chipItem("report", kotlin.reportSchema));
+        if (kotlin.truncatedTasks) chips.append(chipItem("not shown", "+" + kotlin.truncatedTasks));
+        box.append(chips);
+
+        // Slowest compilations, with the incremental verdict and (when non-incremental) why.
+        const slowest = [...perTask].sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0));
+        const shown = slowest.slice(0, 15);
+        const table = el("table");
+        const head = el("tr");
+        for (const columnName of ["Compilation", "Duration", "Incremental", "Lines", "Why not incremental"]) head.append(el("th", columnName));
+        table.append(head);
+        for (const t of shown) {
+            const row = el("tr");
+            row.append(el("td", t.taskPath));
+            row.append(el("td", t.durationMs == null ? "" : ms(t.durationMs), "num"));
+            row.append(el("td", t.incremental == null ? "" : (t.incremental ? "yes" : "no")));
+            row.append(el("td", t.linesOfCode == null ? "" : String(t.linesOfCode), "num"));
+            row.append(el("td", (t.nonIncrementalReasons || []).join(", ")));
+            table.append(row);
+        }
+        box.append(table);
+        if (slowest.length > shown.length) {
+            box.append(el("p", (slowest.length - shown.length) + " more compilations not shown", "muted"));
+        }
+
+        // Compiler phase time summed across every compilation in this build.
+        const totals = {};
+        for (const t of perTask) {
+            const phases = t.compilerTimesMs || {};
+            for (const name of Object.keys(phases)) totals[name] = (totals[name] || 0) + (phases[name] || 0);
+        }
+        const phaseNames = Object.keys(totals).sort((a, b) => totals[b] - totals[a]);
+        if (phaseNames.length) {
+            box.append(el("h4", "Compiler phase time (all compilations)"));
+            const phaseTable = el("table");
+            const phaseHead = el("tr");
+            phaseHead.append(el("th", "Phase"));
+            phaseHead.append(el("th", "Time"));
+            phaseTable.append(phaseHead);
+            for (const name of phaseNames) {
+                const row = el("tr");
+                row.append(el("td", name));
+                row.append(el("td", ms(totals[name]), "num"));
+                phaseTable.append(row);
+            }
+            box.append(phaseTable);
+        }
+        return box;
+    }
+
     async function detailView(buildId) {
         const seq = ++renderSeq;
         const build = await api("/v1/builds/" + encodeURIComponent(buildId));
@@ -323,6 +391,12 @@
                 app.append(timeline.svg);
             }
         } catch (e) { /* keep the rest of the detail page */ }
+
+        // Kotlin compiler metrics, when the KGP json report was bundled for this build.
+        const kotlin = build.kotlin;
+        if (kotlin && Array.isArray(kotlin.perTask) && kotlin.perTask.length) {
+            app.append(kotlinPanel(kotlin));
+        }
 
         const table = el("table");
         const head = el("tr");

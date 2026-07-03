@@ -178,6 +178,17 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `assemble passes the kotlin report through`() {
+        val kotlin = dev.buildhound.commons.payload.KotlinInfo(
+            reportSchema = "KOTLIN_2_4",
+            perTask = listOf(dev.buildhound.commons.payload.KotlinTaskReport(taskPath = ":app:compileKotlin", durationMs = 1168)),
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), kotlin = kotlin)
+        assertEquals("KOTLIN_2_4", payload.kotlin?.reportSchema)
+        assertEquals(1168, payload.kotlin?.perTask?.single()?.durationMs)
+    }
+
+    @Test
     fun `scrub runs before cap so a boundary secret is redacted not sliced`() {
         // A shape-matched secret (AWS access key = AKIA + exactly 16 chars) only matches the
         // scrubber WHOLE. It straddles the 500-char reason cap: scrub-then-cap redacts it and
@@ -205,6 +216,7 @@ class PayloadAssemblerTest {
         tags: Map<String, String> = mapOf("team" to "mobile"),
         caps: dev.buildhound.commons.payload.PayloadCaps = dev.buildhound.commons.payload.PayloadCaps.DEFAULT,
         fingerprints: dev.buildhound.commons.payload.FingerprintInfo? = null,
+        kotlin: dev.buildhound.commons.payload.KotlinInfo? = null,
     ) = PayloadAssembler.assemble(
         buildId = "test-build",
         projectKey = "fixture",
@@ -227,6 +239,7 @@ class PayloadAssemblerTest {
         configurationMs = configurationMs,
         caps = caps,
         fingerprints = fingerprints,
+        kotlin = kotlin,
     )
 
     private fun task(

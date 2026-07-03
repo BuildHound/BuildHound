@@ -1,0 +1,27 @@
+{
+  "startParameters": { "currentDir": "/abs/project" },
+  "buildOperationRecord": [
+    { "path": ":checkKotlinGradlePluginConfigurationErrors", "isFromKotlinPlugin": false, "totalTimeMs": 1 },
+    {
+      "path": ":compileKotlin",
+      "isFromKotlinPlugin": true,
+      "totalTimeMs": 1168,
+      "kotlinLanguageVersion": "KOTLIN_2_4",
+      "compilerArguments": ["-classpath", "/abs/path/lib.jar", "-d", "/abs/out"],
+      "changedFiles": ["/abs/src/A.kt"],
+      "icLogLines": ["compiling /abs/src/A.kt"],
+      "buildMetrics": {
+        "buildTimes": { "buildTimesNs": [
+          [ { "name": "RUN_COMPILATION", "readableString": "Run compilation", "type": "NANOSECONDS" }, 190708291 ],
+          [ { "name": "COMPILER_INITIALIZATION", "type": "NANOSECONDS" }, 22503583 ]
+        ] },
+        "buildPerformanceMetrics": { "myBuildMetrics": [
+          [ { "name": "CLASSPATH_ENTRY_COUNT", "type": "NUMBER" }, 2 ],
+          [ { "name": "SOURCE_LINES_NUMBER", "type": "NUMBER" }, 3 ]
+        ] },
+        "buildAttributes": { "myAttributes": { "UNKNOWN_CHANGES_IN_GRADLE_INPUTS": 1 } },
+        "gcMetrics": { "myGcMetrics": {} }
+      }
+    }
+  ]
+}

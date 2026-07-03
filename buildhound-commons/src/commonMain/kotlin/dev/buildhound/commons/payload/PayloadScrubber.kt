@@ -4,7 +4,9 @@ package dev.buildhound.commons.payload
  * Spec §3.7: payloads never carry absolute paths outside the project or secret-shaped
  * values. This scrubber covers the *free-text* fields — execution reasons and
  * `nonCacheableReason` (the `@DisableCachingByDefault(because = …)` text, free text from
- * plugin authors, plan 016); failure text MUST route through [scrubText] when its
+ * plugin authors, plan 016), the Kotlin report's `nonIncrementalReasons`, `taskPath`, and
+ * `compilerTimesMs` phase keys (all sourced from the untrusted KGP report file, plan 023),
+ * and fingerprint key names (plan 022); failure text MUST route through [scrubText] when its
  * collector lands — structured fields like `vcs.sha` are declared data and are not touched.
  * KMP-pure so the server can run it as a defensive second pass; note the fixed-length
  * lookbehinds are fine on JVM/Native, but a future js() target needs Safari 16.4+.
@@ -42,6 +44,21 @@ object PayloadScrubber {
                 FingerprintInfo(
                     build = fp.build.mapKeys { scrubText(it.key, projectRoots) },
                     tasks = fp.tasks.mapValues { (_, keys) -> keys.mapKeys { scrubText(it.key, projectRoots) } },
+                )
+            },
+            // Every Kotlin string that originates in the (untrusted) KGP report file is scrubbed:
+            // the non-incremental reasons and the compiler-phase names are free text, and the
+            // task path — unlike Gradle's own trusted `TaskExecution.path` — comes from that file,
+            // so a hostile report can't smuggle a path/secret past §3.7 as a taskPath or phase key.
+            kotlin = payload.kotlin?.let { k ->
+                k.copy(
+                    perTask = k.perTask.map { report ->
+                        report.copy(
+                            taskPath = scrubText(report.taskPath, projectRoots),
+                            nonIncrementalReasons = report.nonIncrementalReasons.map { scrubText(it, projectRoots) },
+                            compilerTimesMs = report.compilerTimesMs.mapKeys { scrubText(it.key, projectRoots) },
+                        )
+                    },
                 )
             },
         )

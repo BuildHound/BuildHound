@@ -31,11 +31,39 @@ data class BuildPayload(
     val caps: CapsSummary? = null,
     /** Salted input fingerprints for cache-miss comparison (plan 022); null when uncaptured. */
     val fingerprints: FingerprintInfo? = null,
+    /** Bundled Kotlin build-report metrics (plan 023); null when unwired or not observable. */
+    val kotlin: KotlinInfo? = null,
 ) {
     companion object {
         const val SCHEMA_VERSION: Int = 1
     }
 }
+
+/**
+ * Kotlin build-report metrics bundled from the KGP json report (plan 023, spec §4). The KGP
+ * json is an unstable internal format, so only a name-keyed allowlist is retained — never
+ * compiler arguments, changed-file lists, or IC log lines (they carry absolute paths, §3.7).
+ */
+@Serializable
+data class KotlinInfo(
+    /** Version tag derived from the report (e.g. the KGP language version), else "unknown". */
+    val reportSchema: String? = null,
+    val perTask: List<KotlinTaskReport> = emptyList(),
+    /** How many task records the per-task cap dropped. */
+    val truncatedTasks: Int = 0,
+)
+
+@Serializable
+data class KotlinTaskReport(
+    val taskPath: String,
+    val durationMs: Long? = null,
+    val incremental: Boolean? = null,
+    /** KGP rebuild/non-incremental reason enum names (no paths). */
+    val nonIncrementalReasons: List<String> = emptyList(),
+    /** Compiler phase → milliseconds (name-keyed). */
+    val compilerTimesMs: Map<String, Long> = emptyMap(),
+    val linesOfCode: Long? = null,
+)
 
 /**
  * Salted-hash fingerprints of build inputs (plan 022, spec §4). Values are 16-hex-char + `…`

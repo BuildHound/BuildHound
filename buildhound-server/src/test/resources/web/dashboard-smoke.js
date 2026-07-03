@@ -31,6 +31,7 @@ for (const id of ["app", "token-bar", "token-save", "token-input"]) byId[id] = m
 const documentStub = {
     createElement: makeNode,
     createElementNS: (ns, tag) => makeNode(tag),
+    createDocumentFragment: () => makeNode("fragment"),
     getElementById: id => byId[id] || null,
 };
 
@@ -68,6 +69,14 @@ const responses = {
         derived: { cacheableHitRate: 0.75 },
         environment: { configurationCache: "HIT" },
         vcs: { branch: "main", sha: "abcdef0123456789" },
+        kotlin: {
+            reportSchema: "KOTLIN_2_4",
+            truncatedTasks: 2,
+            perTask: [
+                { taskPath: ":app:compileKotlin", durationMs: 1168, incremental: false, nonIncrementalReasons: ["UNKNOWN_CHANGES_IN_GRADLE_INPUTS"], compilerTimesMs: { RUN_COMPILATION: 190, COMPILER_INITIALIZATION: 22 }, linesOfCode: 42 },
+                { taskPath: ":lib:compileKotlin", durationMs: 300, incremental: true, compilerTimesMs: { RUN_COMPILATION: 80 } },
+            ],
+        },
     },
     // Missing-optional-keys build: everything the schema allows to be absent, absent.
     "/v1/builds/b2": { buildId: "b2", startedAt: 1, finishedAt: 2, outcome: "FAILED", mode: "LOCAL" },
@@ -147,10 +156,23 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "0.0%")) throw new Error("ledger missing explicit-zero rows");
     if (!hasText(byId["app"], "total task time")) throw new Error("detail count-summary sentence missing");
 
+    // Kotlin panel (plan 023): present with a bundled report; chips, slowest-compilation table
+    // (with the non-incremental reason), and summed compiler-phase time all render.
+    if (!hasText(byId["app"], "Kotlin compilation")) throw new Error("kotlin panel header missing");
+    if (!hasText(byId["app"], ":app:compileKotlin")) throw new Error("kotlin slowest-compilation row missing");
+    if (!hasText(byId["app"], "1 / 2")) throw new Error("kotlin incremental-effectiveness chip missing");
+    // incremental time share: 300ms incremental of 1468ms total ≈ 20%.
+    if (!hasText(byId["app"], "incremental time")) throw new Error("kotlin incremental-time chip missing");
+    if (!hasText(byId["app"], "20%")) throw new Error("kotlin incremental-time share value missing");
+    if (!hasText(byId["app"], "UNKNOWN_CHANGES_IN_GRADLE_INPUTS")) throw new Error("kotlin non-incremental reason missing");
+    if (!hasText(byId["app"], "Compiler phase time")) throw new Error("kotlin phase-time summary missing");
+
     // Minimal build (no tasks): ledger renders all-zero rows without dividing by zero.
     context.location.hash = "#/build/b2"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/builds/b2")) throw new Error("minimal detail view did not fetch");
     if (!hasText(byId["app"], "0 tasks")) throw new Error("empty-tasks detail sentence missing");
+    // No bundled report → no Kotlin panel at all (panel renders only with data).
+    if (hasText(byId["app"], "Kotlin compilation")) throw new Error("kotlin panel must be absent without a report");
 
     context.location.hash = "#/trends"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/trends?days=30")) throw new Error("trends view did not fetch");

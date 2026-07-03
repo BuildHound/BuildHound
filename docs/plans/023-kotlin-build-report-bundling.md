@@ -158,6 +158,31 @@ zeros over hidden cells per plan 018's ledger conventions.
     an unstable external format — name-keyed allowlist parser, per-version fixtures,
     window-matched files, absent-over-wrong* (closes research §4 item 10).
 
+## 4a. Ordering-spike finding (2026-07-03, step 1)
+
+Ran a real `kotlin("jvm") 2.4.0` build on Gradle 9.6.1 (CC on) with
+`kotlin.build.report.output=JSON` + `kotlin.build.report.json.directory` wired. Report **is
+written** (`<root>-build-<timestamp>-0.json`) and is a JSON **object** with top-level keys
+`metrics`, `startParameters`, `failureMessages`, `buildOperationRecord`, `aggregatedMetrics`.
+The per-task shape the parser targets (all extraction is name-keyed + optional):
+
+- `buildOperationRecord`: array of records. Kotlin tasks have `isFromKotlinPlugin: true` — the
+  allowlist filter. Per record: `path`, `totalTimeMs`, `kotlinLanguageVersion` (e.g.
+  `"KOTLIN_2_4"` → `reportSchema`), and `buildMetrics { buildTimes, buildPerformanceMetrics,
+  buildAttributes, gcMetrics }`.
+- `buildMetrics.buildTimes.buildTimesNs`: array of `[metricDef, nanos]` pairs, `metricDef.name`
+  is the phase (`RUN_COMPILATION`, `COMPILER_INITIALIZATION`, …) → `compilerTimesMs` (÷1e6).
+- `buildMetrics.buildAttributes.myAttributes`: map of rebuild-reason enum name → count (e.g.
+  `UNKNOWN_CHANGES_IN_GRADLE_INPUTS`) → `nonIncrementalReasons` (keys) and `incremental` =
+  map is empty.
+- `buildMetrics.buildPerformanceMetrics.myBuildMetrics`: array of `[metricDef, value]`;
+  `SOURCE_LINES_NUMBER` → `linesOfCode`.
+
+**Excluded (carry paths/classpaths, spec §3.7):** `startParameters.currentDir`,
+`compilerArguments`, `changedFiles`, `icLogLines`. There is no top-level format-version field,
+so `reportSchema` uses the record's `kotlinLanguageVersion`, else `"unknown"`. Observability
+inside the FlowAction is confirmed by functional test (c) below.
+
 ## 5. Test strategy
 
 - **Unit (plugin):** parser fixtures per KGP version; unknown/missing/renamed fields
@@ -215,3 +240,45 @@ zeros over hidden cells per plan 018's ledger conventions.
   harness covers both.
 - New golden file committed, existing golden untouched, `./gradlew build` green; spec §3.4
   wording and the architecture decision log updated in the same PR.
+
+## 8. Divergences from plan (2026-07-03, implementation)
+
+- **Logger injection.** `KotlinReportBundler` was planned to log via Gradle's `Logging`. It
+  now takes a `warn: (String) -> Unit` sink (defaulting to a no-op) that the finalizer wires
+  to its own logger. Reason: the plugin's plain `test` source set has no Gradle API on its
+  **runtime** classpath (only the TestKit `functionalTest` set does), so a static
+  `Logging.getLogger(...)` field made the object fail class-init with `NoClassDefFoundError`
+  under unit test. Injecting the sink keeps the parser/bundler/warning logic unit-testable off
+  the Gradle classpath and removes the object's only Gradle dependency. Recorded in the
+  architecture decision-log row.
+- **Smoke DOM stub.** `kotlinPanel` returns a `DocumentFragment`; the server's node smoke
+  harness stub lacked `createDocumentFragment`, so it was added (one line) — no behavioral
+  change to `dashboard.js`.
+- Everything else implemented as planned: additive `KotlinInfo`/`KotlinTaskReport` schema +
+  new golden (existing untouched), scrubber coverage for the one free-text field, name-keyed
+  defensive parser with path-field exclusion, mtime-window bundler with caps, `kotlinReports {}`
+  DSL, `gradleProperty` wiring, functional cases (a)–(e), and the dashboard panel + smoke cases.
+
+### Review-driven changes (2026-07-03, two clean-context reviews)
+
+Code & architecture review returned **SHIP** (all findings Low/Nit); security & privacy review
+returned **SHIP-WITH-FIXES** with two High findings. Applied before commit:
+
+- **[security High] Scrub every Kotlin string sourced from the untrusted report file.** The
+  first cut only scrubbed `nonIncrementalReasons`; `taskPath` and the `compilerTimesMs` phase
+  keys were lifted verbatim from the report and could smuggle a path/secret past §3.7 (unlike
+  `TaskExecution.path`, which comes from Gradle's own trusted event stream). `PayloadScrubber`
+  now routes `taskPath` and the phase keys through `scrubText` too (keys via `mapKeys`, the
+  fingerprint-key precedent). Added scrubber test `scrub_redacts_hostile_kotlin_task_path_and_phase_keys`.
+- **[security High] Cap `taskPath` length in the parser.** It was the only retained string
+  without a `.take(...)`; a multi-MB path could inflate the payload past the budget (and
+  `PayloadCapper` does not trim the kotlin section). Added `MAX_PATH_CHARS = 200` +
+  parser test `a_hostile_over_long_task_path_is_length_capped`.
+- **[security Medium] Documented that the kotlin section is bounded upstream** by the parser/
+  bundler caps (≤ 200 tasks, bounded reasons/keys/path) in `PayloadCapper`'s KDoc, so it isn't
+  silently outside the global byte budget; a kotlin-trim stage is flagged for if that changes.
+- **[code Low] Added the "incremental share of compile time" chip** the plan's dashboard
+  section promised (kept, not trimmed) + smoke assertion.
+- **[code Low] Bundler warns when candidate files exceed `MAX_FILES`** (parity with the
+  oversized-file warn) + added bundler unit tests for the `MAX_TASKS` truncation/ranking and
+  multi-file merge that the review noted were missing.

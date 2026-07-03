@@ -32,6 +32,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         extension.htmlReport.enabled.convention(true)
         extension.localBuilds.enabled.convention(true)
         extension.localBuilds.requireOptInFile.convention(true)
+        extension.kotlinReports.bundle.convention(true)
 
         // In a composite, only the root build observes: task events from included builds
         // already reach the root's listener, and a second flow action would consume the
@@ -149,6 +150,11 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.requestedTasks.set(settings.startParameter.taskNames.toList())
             spec.parameters.outputDir.set(File(settings.rootDir, "build/buildhound").absolutePath)
             spec.parameters.htmlReportEnabled.set(extension.htmlReport.enabled)
+            // KGP build-report bundling (plan 023): read-only capture of KGP's own report
+            // properties (never mutated) + our bundle toggle. gradle properties are CC inputs.
+            spec.parameters.kotlinBundle.set(extension.kotlinReports.bundle)
+            spec.parameters.kotlinReportOutput.set(settings.providers.gradleProperty("kotlin.build.report.output"))
+            spec.parameters.kotlinJsonDirectory.set(settings.providers.gradleProperty("kotlin.build.report.json.directory"))
             spec.parameters.rootDir.set(settings.rootDir.absolutePath)
             spec.parameters.serverUrl.set(extension.server.url)
             spec.parameters.serverToken.set(extension.server.token)

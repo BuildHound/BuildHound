@@ -82,6 +82,24 @@ class GoldenPayloadTest {
     fun `payloads without a fingerprints field default to null`() {
         val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1.json"))
         assertNull(payload.fingerprints)
+        assertNull(payload.kotlin)
+    }
+
+    @Test
+    fun `schema v1 kotlin golden file deserializes with populated report`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-kotlin.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        val kotlin = payload.kotlin
+        assertEquals("KOTLIN_2_4", kotlin?.reportSchema)
+        assertEquals(1, kotlin?.truncatedTasks)
+        val report = kotlin?.perTask?.single()
+        assertEquals(":app:compileDebugKotlin", report?.taskPath)
+        assertEquals(1168, report?.durationMs)
+        assertEquals(false, report?.incremental)
+        assertEquals(listOf("UNKNOWN_CHANGES_IN_GRADLE_INPUTS"), report?.nonIncrementalReasons)
+        assertEquals(190, report?.compilerTimesMs?.get("RUN_COMPILATION"))
+        assertEquals(3, report?.linesOfCode)
     }
 
     @Test
@@ -91,6 +109,7 @@ class GoldenPayloadTest {
             "build-payload-v1-task-metadata.json",
             "build-payload-v1-caps.json",
             "build-payload-v1-fingerprints.json",
+            "build-payload-v1-kotlin.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

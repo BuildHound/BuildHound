@@ -26,6 +26,12 @@ data class PayloadCaps(
  * envelope always survives; overflow follows spec §3.9 order (drop per-task execution
  * reasons first, then truncate the task array with summary counts).
  *
+ * The `kotlin` section counts toward the byte budget ([encodedSize] measures the whole payload)
+ * but is not itself reduced here — it is bounded upstream at collection: the plugin's
+ * `KotlinReportParser`/`KotlinReportBundler` cap it to ≤ 200 tasks, each with bounded reasons,
+ * phase keys, and path length, so its worst-case size is a few hundred KB and cannot dominate
+ * the budget. Revisit (add a kotlin-trim stage) if that section ever grows unbounded fields.
+ *
  * Used by the plugin as the final assembly step (after the scrubber, so secret patterns see
  * whole values) and by the server as a defensive clamp at ingest. A server re-cap **merges**
  * its counts into the payload's existing [CapsSummary] rather than overwriting it, so the two

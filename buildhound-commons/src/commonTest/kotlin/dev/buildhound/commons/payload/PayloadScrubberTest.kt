@@ -146,6 +146,45 @@ class PayloadScrubberTest {
     }
 
     @Test
+    fun scrub_redacts_kotlin_non_incremental_reason_free_text() {
+        val payload = payloadWith(reason = "x").copy(
+            kotlin = KotlinInfo(
+                perTask = listOf(
+                    KotlinTaskReport(
+                        taskPath = ":app:compileKotlin",
+                        nonIncrementalReasons = listOf("changed file $root/src/A.kt", "UNKNOWN_CHANGES_IN_GRADLE_INPUTS"),
+                    ),
+                ),
+            ),
+        )
+
+        val reasons = PayloadScrubber.scrub(payload, root).kotlin?.perTask?.single()?.nonIncrementalReasons
+        assertEquals(listOf("changed file src/A.kt", "UNKNOWN_CHANGES_IN_GRADLE_INPUTS"), reasons)
+    }
+
+    @Test
+    fun scrub_redacts_hostile_kotlin_task_path_and_phase_keys() {
+        // taskPath and compilerTimesMs keys are lifted from the untrusted KGP report file, so a
+        // hostile report must not smuggle a path/secret past §3.7 through either of them.
+        val payload = payloadWith(reason = "x").copy(
+            kotlin = KotlinInfo(
+                perTask = listOf(
+                    KotlinTaskReport(
+                        taskPath = "$root/leaked/output",
+                        compilerTimesMs = mapOf("token=ghp_AbCd1234" to 5, "RUN_COMPILATION" to 10),
+                    ),
+                ),
+            ),
+        )
+
+        val report = PayloadScrubber.scrub(payload, root).kotlin?.perTask?.single()
+        assertEquals("leaked/output", report?.taskPath, "an out-of-place root in taskPath must relativize")
+        assertTrue(report!!.compilerTimesMs.keys.contains("token=<redacted>"), report.compilerTimesMs.keys.toString())
+        assertFalse(report.compilerTimesMs.keys.any { it.contains("ghp_AbCd1234") }, "secret phase key must not survive")
+        assertEquals(10, report.compilerTimesMs["RUN_COMPILATION"], "a benign phase key passes through unchanged")
+    }
+
+    @Test
     fun snake_case_secret_keys_are_redacted() {
         assertEquals("GITHUB_TOKEN=<redacted>", PayloadScrubber.scrubText("GITHUB_TOKEN=ghp_AbCd1234", root))
         assertEquals("access_token=<redacted>", PayloadScrubber.scrubText("access_token: abc123", root))

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "buildId": "e6f7a8b9-c0d1-4e2f-9a3b-4c5d6e7f8a9b",
+  "projectKey": "pilot-android",
+  "startedAt": 1751490000000,
+  "finishedAt": 1751490040000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["compileKotlin"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileDebugKotlin",
+      "module": ":app",
+      "startMs": 1751490001000,
+      "durationMs": 8000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "kotlin": {
+    "reportSchema": "KOTLIN_2_4",
+    "truncatedTasks": 1,
+    "perTask": [
+      {
+        "taskPath": ":app:compileDebugKotlin",
+        "durationMs": 1168,
+        "incremental": false,
+        "nonIncrementalReasons": ["UNKNOWN_CHANGES_IN_GRADLE_INPUTS"],
+        "compilerTimesMs": { "RUN_COMPILATION": 190, "COMPILER_INITIALIZATION": 22 },
+        "linesOfCode": 3
+      }
+    ]
+  }
+}

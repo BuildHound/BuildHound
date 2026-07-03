@@ -73,6 +73,17 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         val htmlReportEnabled: Property<Boolean>
 
         @get:Input
+        val kotlinBundle: Property<Boolean>
+
+        @get:Input
+        @get:Optional
+        val kotlinReportOutput: Property<String>
+
+        @get:Input
+        @get:Optional
+        val kotlinJsonDirectory: Property<String>
+
+        @get:Input
         val rootDir: Property<String>
 
         @get:Input
@@ -119,6 +130,28 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // Build-level input fingerprints (plan 022). Per-task capture is deferred (see the
             // plan §8 divergence); the schema's `tasks` map stays reserved for it.
             val fingerprints = FingerprintInfo(build = parameters.fingerprints.orNull?.build.orEmpty())
+
+            // Kotlin build-report bundling (plan 023): warn once if misconfigured on a Kotlin
+            // build, then bundle whatever the wired json directory holds in this build's window.
+            val startedAtMs = tasks.minOfOrNull { it.startMs } ?: System.currentTimeMillis()
+            val bundleKotlin = parameters.kotlinBundle.getOrElse(true)
+            val hasKotlinCompilations = tasks.any { task ->
+                task.type?.contains("KotlinCompile") == true ||
+                    task.path.substringAfterLast(':').let { it.startsWith("compile") && it.contains("Kotlin") }
+            }
+            KotlinReportBundler.warnIfMisconfigured(
+                enabled = bundleKotlin,
+                reportOutput = parameters.kotlinReportOutput.orNull,
+                jsonDirectory = parameters.kotlinJsonDirectory.orNull,
+                hasKotlinCompilations = hasKotlinCompilations,
+                warn = { logger.warn(it) },
+            )
+            val kotlin = if (bundleKotlin) {
+                KotlinReportBundler.bundle(parameters.kotlinJsonDirectory.orNull, startedAtMs, { logger.warn(it) })
+            } else {
+                null
+            }
+
             val payload = PayloadAssembler.assemble(
                 buildId = UUID.randomUUID().toString(),
                 projectKey = parameters.projectKey.orNull,
@@ -136,6 +169,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 projectRoots = scrubRoots(parameters.rootDir.orNull),
                 configurationMs = configurationMs,
                 fingerprints = fingerprints,
+                kotlin = kotlin,
             )
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so

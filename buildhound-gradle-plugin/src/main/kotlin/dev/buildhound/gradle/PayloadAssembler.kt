@@ -8,6 +8,7 @@ import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
 import dev.buildhound.commons.payload.EnvironmentInfo
 import dev.buildhound.commons.payload.FingerprintInfo
+import dev.buildhound.commons.payload.KotlinInfo
 import dev.buildhound.commons.payload.PayloadCapper
 import dev.buildhound.commons.payload.PayloadCaps
 import dev.buildhound.commons.payload.PayloadScrubber
@@ -47,6 +48,7 @@ internal object PayloadAssembler {
         configurationMs: Long? = null,
         caps: PayloadCaps = PayloadCaps.DEFAULT,
         fingerprints: FingerprintInfo? = null,
+        kotlin: KotlinInfo? = null,
     ): BuildPayload {
         val startedAt = tasks.minOfOrNull { it.startMs } ?: nowMs
         val finishedAt = (tasks.maxOfOrNull { it.startMs + it.durationMs } ?: nowMs).coerceAtLeast(startedAt)
@@ -80,6 +82,8 @@ internal object PayloadAssembler {
             derived = DerivedMetricsCalculator.compute(tasks, environment?.cores, configurationMs),
             // Salted input fingerprints (plan 022); null when uncaptured or unsaltable.
             fingerprints = fingerprints?.takeIf { it.build.isNotEmpty() || it.tasks.isNotEmpty() },
+            // Bundled Kotlin build report (plan 023); null when unwired/unobservable.
+            kotlin = kotlin,
         )
         // Spec §3.7 then §3.9: scrub whole free-text values first (so secret patterns see
         // the complete string, never a truncated slice), then enforce the payload budgets.

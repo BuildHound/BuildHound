@@ -106,7 +106,7 @@ buildhound {
 }
 ```
 
-Kotlin build reports: plugin does **not** silently mutate KGP properties; it validates that `kotlin.build.report.output=json` + `kotlin.build.report.json.directory` point at its expected dir and emits a copy-paste fix if missing (honest, CC-safe, no ordering hazards). Bundler reads the JSON files in the Finalizer and embeds them (schema-version tagged) in the payload.
+Kotlin build reports: plugin does **not** silently mutate KGP properties; it reads whatever directory `kotlin.build.report.json.directory` names (it does not require a specific path), and emits a single copy-paste `gradle.properties` fix when the wiring is absent — either `kotlin.build.report.output=JSON` with no directory set, or no report wired at all on a build that ran Kotlin compilations (honest, CC-safe, no ordering hazards; non-Kotlin builds stay silent). Bundler reads the JSON files in the Finalizer and embeds them (schema-version tagged) in the payload. Ordering/staleness are handled by a modified-time window rather than assuming KGP writes before our Finalizer runs (plan 023 §4a): only reports touched within 60 s of build start are bundled, so a stale report from a prior build is treated as absent, never mis-attributed.
 
 ### 3.5 Tests (locked granularity)
 

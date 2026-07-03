@@ -39,6 +39,21 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     val fingerprints: FingerprintsSpec = objects.newInstance(FingerprintsSpec::class.java)
 
     fun fingerprints(action: Action<FingerprintsSpec>) = action.execute(fingerprints)
+
+    val kotlinReports: KotlinReportsSpec = objects.newInstance(KotlinReportsSpec::class.java)
+
+    fun kotlinReports(action: Action<KotlinReportsSpec>) = action.execute(kotlinReports)
+}
+
+/**
+ * `kotlinReports { ... }` (spec §3.4, plan 023): bundle the KGP json build report (compiler
+ * phase times, incremental effectiveness, rebuild reasons) into the payload. Read-only — the
+ * plugin never mutates KGP's own `kotlin.build.report.*` properties; when bundling is on and the
+ * report wiring is absent on a Kotlin build, it prints a one-time copy-paste hint.
+ */
+abstract class KotlinReportsSpec {
+    /** Bundle the KGP json build report into the payload (default true). */
+    abstract val bundle: Property<Boolean>
 }
 
 /**
