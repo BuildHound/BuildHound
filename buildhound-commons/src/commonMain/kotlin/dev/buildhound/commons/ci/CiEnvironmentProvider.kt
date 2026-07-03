@@ -32,14 +32,27 @@ data class CiContext(
 )
 
 /**
- * Fallback provider honoring `BUILDHOUND_CI_*` variables so unsupported CIs work with zero code.
- * Activated by `BUILDHOUND_CI=true` or the presence of `BUILDHOUND_CI_PROVIDER`.
+ * Fallback provider so unsupported CIs work with zero code. Two activation tiers,
+ * checked in order:
+ *
+ * 1. `BUILDHOUND_CI=true` or `BUILDHOUND_CI_PROVIDER` set → full `BUILDHOUND_CI_*`
+ *    field mapping.
+ * 2. The conventional `CI` variable (set by CircleCI, GitLab, Jenkins, Travis and most
+ *    others) → minimal context with provider `"generic"` and no fields. Unlike CCUD's
+ *    presence-only `isGenericCI`, an explicit `CI=false` / `CI=0` (case-insensitive)
+ *    counts as *not* CI — the ci-info ecosystem opt-out convention (plan 014); an empty
+ *    value still counts as present. Setting `BUILDHOUND_CI` to any non-`true` value
+ *    suppresses this fallback entirely.
  */
 class GenericCiEnvironmentProvider : CiEnvironmentProvider {
     override val id: String = "generic"
 
     override fun detect(env: Map<String, String>): CiContext? {
-        if (env["BUILDHOUND_CI"] != "true" && env["BUILDHOUND_CI_PROVIDER"] == null) return null
+        if (env["BUILDHOUND_CI"] != "true" && env["BUILDHOUND_CI_PROVIDER"] == null) {
+            // Explicit BUILDHOUND_CI (e.g. "false") overrides the bare-CI heuristic.
+            if (env["BUILDHOUND_CI"] != null) return null
+            return if (isBareCi(env["CI"])) CiContext(provider = id) else null
+        }
         return CiContext(
             provider = env["BUILDHOUND_CI_PROVIDER"] ?: id,
             pipelineId = env["BUILDHOUND_CI_PIPELINE_ID"],
@@ -55,4 +68,7 @@ class GenericCiEnvironmentProvider : CiEnvironmentProvider {
             agentName = env["BUILDHOUND_CI_AGENT_NAME"],
         )
     }
+
+    private fun isBareCi(value: String?): Boolean =
+        value != null && !value.equals("false", ignoreCase = true) && value != "0"
 }

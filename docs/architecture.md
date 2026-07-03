@@ -176,5 +176,6 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
 | 2026-07-02 | Gradle support floor is 8.14 (JDK-21 requirement; `BuildFeatures` needs 8.5+), tested by a dedicated CI floor job | Supersedes spec §3.1's "Gradle 8.0+" |
 | 2026-07-02 | Kotlin `apiVersion` pinned to 2.0 for commons/plugin/report | Plugin-classpath code executes on Gradle's embedded Kotlin stdlib (2.0 on Gradle 8.14); newer stdlib APIs are runtime `NoSuchMethodError`s |
 | 2026-07-02 | Naming decision #6: product **BuildHound**, domain **buildhound.dev**, plugin id + Maven group `dev.buildhound`, modules `buildhound-*`, DSL `buildhound {}`, env prefix `BUILDHOUND_` | Owner decision; pre-release so renamed with no compatibility shim. Research doc + old plans keep the BTP working name as historical records |
+| 2026-07-03 | Bare `CI` env var (present and not `false`/`0`) classifies a build as CI, provider `generic`, no mapped fields; `BUILDHOUND_CI=false` opts out (plan 014) | CCUD-parity gap: CircleCI/GitLab/Travis/Jenkins set only generic `CI`, so AUTO resolved to `local` — wrong baselines and local-opt-in gating on CI. Diverges from CCUD's presence-only check to honor the ci-info `CI=false` opt-out convention |
 
 *Add a row (or a docs/plans entry) whenever an architectural decision is made or reversed.*

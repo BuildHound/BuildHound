@@ -202,7 +202,20 @@ class CiEnvironmentDetectionTest {
 
     @Test
     fun returns_null_when_no_provider_matches() {
-        assertNull(CiEnvironment.detect(mapOf("CI" to "true")))
+        assertNull(CiEnvironment.detect(mapOf("HOME" to "/home/agent")))
+    }
+
+    @Test
+    fun bare_ci_variable_falls_through_to_generic() {
+        assertEquals("generic", CiEnvironment.detect(mapOf("CI" to "true"))?.provider)
+    }
+
+    @Test
+    fun built_in_wins_over_bare_ci() {
+        // Real CI systems with a built-in provider also export CI=true.
+        val context = CiEnvironment.detect(azurePushEnv + mapOf("CI" to "true"))!!
+
+        assertEquals("azure-devops", context.provider)
     }
 
     @Test

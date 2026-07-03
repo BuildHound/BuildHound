@@ -104,7 +104,8 @@ private fun encodeUrlSegment(raw: String): String = buildString {
  * Detection entry point (spec §3.3): built-ins first, then caller-supplied extras
  * (the plugin passes `ServiceLoader` discoveries — JVM-only, so loading stays out of
  * this KMP-common module), then [GenericCiEnvironmentProvider] as the zero-code
- * fallback. First non-null [CiEnvironmentProvider.detect] wins.
+ * fallback (`BUILDHOUND_CI_*` mapping first, bare `CI` variable last). First non-null
+ * [CiEnvironmentProvider.detect] wins.
  */
 object CiEnvironment {
     val builtIns: List<CiEnvironmentProvider> = listOf(

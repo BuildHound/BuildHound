@@ -210,6 +210,41 @@ class BuildHoundSettingsPluginFunctionalTest {
         assertEquals("main", payload.vcs?.branch, "CI context must fill vcs gaps")
     }
 
+    /** Ambient CI markers stripped so only the injected variables steer detection. */
+    private fun ciNeutralEnv(): Map<String, String> = System.getenv().filterKeys {
+        it != "GITHUB_ACTIONS" && it != "TF_BUILD" && it != "CI" && !it.startsWith("BUILDHOUND_")
+    }
+
+    @Test
+    fun `bare CI variable resolves mode ci with the generic provider`() {
+        setUpProject()
+
+        runner("hello", "--configuration-cache")
+            // Fresh daemon, same reason as the generic-detection test above.
+            .withTestKitDir(File(projectDir, "testkit"))
+            .withEnvironment(ciNeutralEnv() + mapOf("CI" to "true"))
+            .build()
+
+        val payload = readPayload()
+        assertEquals(BuildMode.CI, payload.mode)
+        assertEquals("generic", payload.ci?.provider)
+        assertNull(payload.ci?.runId, "bare CI detection must not invent fields")
+    }
+
+    @Test
+    fun `explicit CI=false keeps the build local`() {
+        setUpProject()
+
+        runner("hello", "--configuration-cache")
+            .withTestKitDir(File(projectDir, "testkit"))
+            .withEnvironment(ciNeutralEnv() + mapOf("CI" to "false"))
+            .build()
+
+        val payload = readPayload()
+        assertEquals(BuildMode.LOCAL, payload.mode)
+        assertNull(payload.ci, "CI=false must not produce a ci block")
+    }
+
     @Test
     fun `execution reasons are scrubbed of absolute paths`() {
         setUpProject()
