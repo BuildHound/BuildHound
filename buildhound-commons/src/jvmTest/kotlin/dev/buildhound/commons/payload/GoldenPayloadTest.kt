@@ -31,12 +31,35 @@ class GoldenPayloadTest {
     }
 
     @Test
-    fun `round trip is lossless`() {
-        val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1.json"))
-        val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)
-        val decodedAgain = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), reEncoded)
+    fun `schema v1 task-metadata golden file deserializes with populated fields`() {
+        val payload =
+            BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-task-metadata.json"))
 
-        assertEquals(original, decodedAgain)
+        assertEquals(1, payload.schemaVersion)
+        assertEquals(3, payload.tasks.size)
+        val compile = payload.tasks[0]
+        assertEquals("org.jetbrains.kotlin.gradle.tasks.KotlinCompile", compile.type)
+        assertEquals(true, compile.cacheable)
+        assertEquals(TaskOutcome.FROM_CACHE, compile.outcome)
+        val nonCacheable = payload.tasks[2]
+        assertEquals(false, nonCacheable.cacheable)
+        assertEquals("Produces no cacheable output", nonCacheable.nonCacheableReason)
+        assertEquals(0.5, payload.derived?.cacheableHitRate)
+        assertEquals(1200, payload.derived?.configurationMs)
+        // Pin the golden's hand-authored hit rate to what the live formula produces for
+        // its tasks, so a future golden edit can't silently drift from the calculator.
+        assertEquals(payload.derived?.cacheableHitRate, DerivedMetricsCalculator.cacheableHitRate(payload.tasks))
+    }
+
+    @Test
+    fun `round trip is lossless`() {
+        for (name in listOf("build-payload-v1.json", "build-payload-v1-task-metadata.json")) {
+            val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
+            val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)
+            val decodedAgain = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), reEncoded)
+
+            assertEquals(original, decodedAgain, name)
+        }
     }
 
     @Test

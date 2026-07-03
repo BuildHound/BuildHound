@@ -2,9 +2,10 @@ package dev.buildhound.commons.payload
 
 /**
  * Spec §3.7: payloads never carry absolute paths outside the project or secret-shaped
- * values. This scrubber covers the *free-text* fields (execution reasons today; failure
- * text and `nonCacheableReason` MUST route through [scrubText] when their collectors
- * land) — structured fields like `vcs.sha` are declared data and are not touched.
+ * values. This scrubber covers the *free-text* fields — execution reasons and
+ * `nonCacheableReason` (the `@DisableCachingByDefault(because = …)` text, free text from
+ * plugin authors, plan 016); failure text MUST route through [scrubText] when its
+ * collector lands — structured fields like `vcs.sha` are declared data and are not touched.
  * KMP-pure so the server can run it as a defensive second pass; note the fixed-length
  * lookbehinds are fine on JVM/Native, but a future js() target needs Safari 16.4+.
  *
@@ -28,8 +29,12 @@ object PayloadScrubber {
     fun scrub(payload: BuildPayload, projectRoots: List<String>): BuildPayload =
         payload.copy(
             tasks = payload.tasks.map { task ->
-                if (task.executionReasons.isEmpty()) task
-                else task.copy(executionReasons = task.executionReasons.map { scrubText(it, projectRoots) })
+                val reasons =
+                    if (task.executionReasons.isEmpty()) task.executionReasons
+                    else task.executionReasons.map { scrubText(it, projectRoots) }
+                val nonCacheableReason = task.nonCacheableReason?.let { scrubText(it, projectRoots) }
+                if (reasons === task.executionReasons && nonCacheableReason == task.nonCacheableReason) task
+                else task.copy(executionReasons = reasons, nonCacheableReason = nonCacheableReason)
             },
         )
 

@@ -405,6 +405,152 @@ class BuildHoundSettingsPluginFunctionalTest {
         assertFalse(File(projectDir, "build/buildhound").exists())
     }
 
+    // --- Plan 016: task type + cacheable capture, honest hit rate, configurationMs ------
+
+    /**
+     * Three task shapes exercising [TaskClassIntrospection]: a `@CacheableTask` with real
+     * inputs/outputs (goes UP_TO_DATE on rerun), a `@DisableCachingByDefault(because=…)`
+     * task, and a plain `DefaultTask` (itself `@DisableCachingByDefault` upstream).
+     */
+    private fun setUpTaskTypeProject() {
+        File(projectDir, "settings.gradle.kts").writeText(
+            """
+            plugins {
+                id("dev.buildhound")
+            }
+
+            rootProject.name = "buildhound-fixture"
+            """.trimIndent(),
+        )
+        File(projectDir, "input.txt").writeText("one")
+        File(projectDir, "build.gradle.kts").writeText(
+            """
+            import org.gradle.work.DisableCachingByDefault
+
+            @CacheableTask
+            abstract class CopyFile : DefaultTask() {
+                @get:InputFile
+                @get:PathSensitive(PathSensitivity.RELATIVE)
+                abstract val source: RegularFileProperty
+                @get:OutputFile
+                abstract val target: RegularFileProperty
+                @TaskAction fun run() { target.get().asFile.writeText(source.get().asFile.readText()) }
+            }
+
+            @DisableCachingByDefault(because = "no stable output")
+            abstract class Ephemeral : DefaultTask() {
+                @TaskAction fun run() { println("ephemeral ran") }
+            }
+
+            tasks.register<CopyFile>("copyFile") {
+                source = layout.projectDirectory.file("input.txt")
+                target = layout.buildDirectory.file("copied.txt")
+            }
+            tasks.register<Ephemeral>("ephemeral")
+            tasks.register("plain") { doLast { println("plain ran") } }
+            """.trimIndent(),
+        )
+    }
+
+    private fun BuildPayload.taskAt(path: String) = tasks.single { it.path == path }
+
+    @Test
+    fun `task type and cacheable metadata populate and configuration is timed`() {
+        setUpTaskTypeProject()
+
+        val store = runner("copyFile", "ephemeral", "plain", "--configuration-cache").build()
+
+        assertTrue(summaryLine(store.output).contains("cc=MISS_STORED"), summaryLine(store.output))
+        val payload = readPayload()
+
+        val copy = payload.taskAt(":copyFile")
+        assertEquals(true, copy.cacheable, "@CacheableTask → cacheable")
+        assertTrue(copy.type.orEmpty().contains("CopyFile"), "unexpected type: ${copy.type}")
+        assertFalse(copy.type.orEmpty().contains("_Decorated"), "the _Decorated suffix must be stripped: ${copy.type}")
+        assertNull(copy.nonCacheableReason)
+
+        val ephemeral = payload.taskAt(":ephemeral")
+        assertEquals(false, ephemeral.cacheable)
+        assertEquals("no stable output", ephemeral.nonCacheableReason)
+
+        val plain = payload.taskAt(":plain")
+        assertEquals(false, plain.cacheable)
+        assertEquals("org.gradle.api.DefaultTask", plain.type)
+
+        val configMs = payload.derived?.configurationMs
+        assertNotNull(configMs, "configurationMs must be measured on a cold build")
+        assertTrue(configMs > 0, "expected a positive configuration duration, got $configMs")
+    }
+
+    @Test
+    fun `cacheable hit rate ignores non-cacheable work and metadata survives a cc hit`() {
+        setUpTaskTypeProject()
+
+        runner("copyFile", "ephemeral", "plain", "--configuration-cache").build()
+        val hit = runner("copyFile", "ephemeral", "plain", "--configuration-cache").build()
+
+        assertTrue(summaryLine(hit.output).contains("cc=HIT"), summaryLine(hit.output))
+        assertEquals(TaskOutcome.UP_TO_DATE, hit.task(":copyFile")?.outcome)
+
+        val payload = readPayload()
+        // copyFile is the only cacheable task; UP_TO_DATE → 1/1 even though two
+        // non-cacheable tasks executed — they must not dilute the denominator.
+        assertEquals(1.0, payload.derived?.cacheableHitRate)
+        // Metadata replays from the stored service parameters even though configuration
+        // (and the whenReady dictionary walk) was skipped on the hit.
+        val copy = payload.taskAt(":copyFile")
+        assertEquals(true, copy.cacheable)
+        assertTrue(copy.type.orEmpty().contains("CopyFile"), "type must replay from CC: ${copy.type}")
+        // Configuration was skipped on the hit → reported as 0, not the (absent) marks.
+        assertEquals(0L, payload.derived?.configurationMs)
+    }
+
+    @Test
+    fun `isolated projects degrades task metadata to null without failing the build`() {
+        setUpTaskTypeProject()
+
+        val result = runner(
+            "copyFile", "ephemeral", "plain",
+            "--configuration-cache", "-Dorg.gradle.unsafe.isolated-projects=true",
+        ).build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":copyFile")?.outcome)
+        assertFalse(
+            result.output.contains("[buildhound] task metadata capture failed"),
+            "isolated-projects degradation must be silent, not an error:\n${result.output}",
+        )
+        val payload = readPayload()
+        val copy = payload.taskAt(":copyFile")
+        assertNull(copy.type, "types must be null under isolated projects")
+        assertNull(copy.cacheable, "cacheable must be null under isolated projects")
+        assertNull(payload.derived?.cacheableHitRate, "no cacheable flags → null hit rate")
+    }
+
+    @Test
+    fun `task metadata capture failure degrades to null types without failing the build`() {
+        setUpTaskTypeProject()
+
+        val result = runner(
+            "copyFile", "ephemeral", "plain",
+            "--configuration-cache", "-Pbuildhound.internal.failTaskGraphSnapshot=true",
+        ).build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":copyFile")?.outcome)
+        assertEquals(
+            1,
+            result.output.lineSequence().count { it.contains("[buildhound] task metadata capture failed") },
+            "expected exactly one capture-failure warn line:\n${result.output}",
+        )
+        val payload = readPayload()
+        val copy = payload.taskAt(":copyFile")
+        assertNull(copy.type, "type must be null when the dictionary is empty")
+        assertNull(copy.cacheable)
+        assertNull(payload.derived?.cacheableHitRate, "no cacheable flags → null hit rate")
+        // The rest of the payload is still assembled and written.
+        assertTrue(payload.tasks.size >= 3, "tasks: ${payload.tasks.map { it.path }}")
+        assertNotNull(payload.derived)
+    }
+
     private fun exec(vararg command: String) {
         val process = ProcessBuilder(*command).directory(projectDir).redirectErrorStream(true).start()
         val output = process.inputStream.readBytes().decodeToString()

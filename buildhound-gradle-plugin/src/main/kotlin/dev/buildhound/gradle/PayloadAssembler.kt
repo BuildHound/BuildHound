@@ -41,6 +41,7 @@ internal object PayloadAssembler {
         tags: Map<String, String>,
         nowMs: Long,
         projectRoots: List<String>,
+        configurationMs: Long? = null,
     ): BuildPayload {
         val startedAt = tasks.minOfOrNull { it.startMs } ?: nowMs
         val finishedAt = (tasks.maxOfOrNull { it.startMs + it.durationMs } ?: nowMs).coerceAtLeast(startedAt)
@@ -69,7 +70,7 @@ internal object PayloadAssembler {
             ci = ciInfo(ci),
             tags = tags,
             tasks = tasks,
-            derived = DerivedMetricsCalculator.compute(tasks, environment?.cores),
+            derived = DerivedMetricsCalculator.compute(tasks, environment?.cores, configurationMs),
         )
         // Spec §3.7: one scrubbed payload everywhere — local file, artifact, upload.
         return PayloadScrubber.scrub(payload, projectRoots)

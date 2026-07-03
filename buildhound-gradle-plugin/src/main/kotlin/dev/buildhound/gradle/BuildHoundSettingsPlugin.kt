@@ -1,6 +1,7 @@
 package dev.buildhound.gradle
 
 import java.io.File
+import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import org.gradle.api.Plugin
 import org.gradle.api.configuration.BuildFeatures
@@ -42,12 +43,46 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
 
         DaemonState.configurationRan()
 
+        // Per-apply mailbox for the configuration-time task dictionary. The service reads
+        // it through a lazy provider (below); the `whenReady` callback fills it. Gradle
+        // evaluates the provider when it finalizes the service parameters — after
+        // configuration in every mode — so ordering is always callback-then-read (plan 016).
+        val taskMetadataHolder = AtomicReference<Map<String, TaskMetadata>>(emptyMap())
+
         val collector = settings.gradle.sharedServices.registerIfAbsent(
             TaskEventCollector.SERVICE_NAME,
             TaskEventCollector::class.java,
-        ) {}
+        ) { spec ->
+            spec.parameters.taskMetadata.set(settings.providers.provider { taskMetadataHolder.get() })
+        }
 
         eventsListenerRegistry.onTaskCompletion(collector)
+
+        // Task type/cacheable dictionary + configuration-duration end mark (plan 016).
+        // Registering the callback is isolated-projects safe; only `allTasks` is not, so
+        // the IP gate runs before the graph is touched. Runs at configuration time only,
+        // so capturing `settings` here is CC-safe (Talaiot precedent). Never fails a build.
+        // Internal test seam only (not the user-facing CI truthiness rule): set to any
+        // value but "false" to arm the "dictionary walk throws" failpoint.
+        val failTaskGraphSnapshot = settings.providers
+            .gradleProperty("buildhound.internal.failTaskGraphSnapshot")
+            .map { it != "false" }
+            .getOrElse(false)
+        settings.gradle.taskGraph.whenReady { graph ->
+            DaemonState.configurationCompleted()
+            runCatching {
+                check(!failTaskGraphSnapshot) { "task-graph snapshot failpoint" }
+                if (buildFeatures.isolatedProjects.active.getOrElse(false)) {
+                    logger.info("[buildhound] isolated projects active; task metadata dictionary left empty")
+                    return@runCatching
+                }
+                taskMetadataHolder.set(
+                    graph.allTasks.associate { task -> task.path to TaskClassIntrospection.introspect(task.javaClass) },
+                )
+            }.onFailure {
+                logger.warn("[buildhound] task metadata capture failed (build unaffected): {}", it.message)
+            }
+        }
 
         // Salt IO happens inside the ValueSource at execution time: config-phase file
         // access is a CC fingerprint input, and creating the salt at apply time would

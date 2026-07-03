@@ -107,6 +107,10 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
             val tasks = parameters.collector.get().snapshot()
             val ccState = configurationCacheState(parameters.configurationCacheRequested.getOrElse(false), execution)
+            // Config-cache hit skips configuration entirely; entry-load time is not
+            // measured, so report 0 rather than the (absent) marks. Otherwise the marked
+            // duration, or null when unmeasurable (plan 016).
+            val configurationMs = if (ccState == ConfigurationCacheState.HIT) 0L else execution.configurationMs
             val payload = PayloadAssembler.assemble(
                 buildId = UUID.randomUUID().toString(),
                 projectKey = parameters.projectKey.orNull,
@@ -122,6 +126,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 tags = parameters.tags.getOrElse(emptyMap()),
                 nowMs = System.currentTimeMillis(),
                 projectRoots = scrubRoots(parameters.rootDir.orNull),
+                configurationMs = configurationMs,
             )
 
             val payloadFile = writePayload(payload, parameters.outputDir.get())

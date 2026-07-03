@@ -3,6 +3,7 @@ package dev.buildhound.commons.payload
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PayloadScrubberTest {
@@ -118,6 +119,30 @@ class PayloadScrubberTest {
         assertEquals("file <path> changed", scrubbed.tasks.single().executionReasons.single())
         assertEquals(payload.buildId, scrubbed.buildId)
         assertEquals(payload.tasks.single().path, scrubbed.tasks.single().path)
+    }
+
+    @Test
+    fun scrub_redacts_non_cacheable_reason_free_text() {
+        val payload = payloadWith(reason = "up to date").copy(
+            tasks = listOf(
+                TaskExecution(
+                    path = ":app:foo",
+                    startMs = 0,
+                    durationMs = 1,
+                    outcome = TaskOutcome.EXECUTED,
+                    cacheable = false,
+                    nonCacheableReason = "Caching disabled: reads $root/local.props and token=sk-live-42",
+                    executionReasons = listOf("file /etc/passwd changed"),
+                ),
+            ),
+        )
+
+        val scrubbed = PayloadScrubber.scrub(payload, root).tasks.single()
+
+        assertEquals("Caching disabled: reads local.props and token=<redacted>", scrubbed.nonCacheableReason)
+        assertEquals("file <path> changed", scrubbed.executionReasons.single())
+        // A null reason must stay null and not blow up the mapper.
+        assertNull(PayloadScrubber.scrub(payloadWith(reason = "x"), root).tasks.single().nonCacheableReason)
     }
 
     @Test

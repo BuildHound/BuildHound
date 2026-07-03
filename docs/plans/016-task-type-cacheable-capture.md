@@ -212,3 +212,24 @@ excluded — stated approximation, same v0 shared-daemon caveat as DaemonState t
   existing golden file unmodified in the diff.
 - `docs/architecture.md` decision log carries the IP-degradation and hit-rate rows.
 - Plan 026's by-type rollups can group tasks by `type` from stored payloads.
+
+## 8. Divergences from the plan (recorded during implementation)
+
+- **`PayloadAssemblerTest` updated too.** Step 1 named only `DerivedMetricsCalculatorTest`,
+  but the plugin-side `PayloadAssemblerTest` asserts `cacheableHitRate == 0.5` for
+  flag-less tasks, which now resolves to null under the cacheable-only rule. Its fixture
+  tasks gained `cacheable = true` and a `configurationMs` passthrough assertion. No
+  behavior change — same necessary consequence of the metric redefinition.
+- **Introspection unit-test doubles.** The plan's premise ("unit-tests without gradleApi()
+  on the test classpath") was verified true — `gradleApi()` is absent from the plugin's
+  unit `test` compile classpath. The test therefore declares same-FQN
+  (`org.gradle.api.tasks.CacheableTask`, `org.gradle.work.DisableCachingByDefault`)
+  RUNTIME-retained annotation doubles to drive `TaskClassIntrospection`'s name-based walk;
+  no clash because the real Gradle types are off that classpath.
+- **`_Decorated` handled by string strip only.** As designed; the superclass walk finds
+  the annotations, so no separate "unwrap to superclass" step was needed. A plain
+  `DefaultTask` reports `type = "org.gradle.api.DefaultTask"` and, since `DefaultTask` is
+  itself `@DisableCachingByDefault`, a `nonCacheableReason` — an incidental but correct
+  extra signal, pinned by the functional test.
+- **`Annotation.annotationType()` needs a `java.lang.annotation.Annotation` cast** in
+  Kotlin (`kotlin.Annotation` exposes no accessor) — a small helper in the introspection.

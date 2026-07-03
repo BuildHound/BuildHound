@@ -94,6 +94,18 @@ These are the rules every plugin change is reviewed against:
     drained stdout, discarded stderr, closed stdin (`GitExec`, plan 015). Runners stay
     free of Gradle types so plain unit tests pin the timeout behavior.
 
+12. **Task-graph-derived data is captured in `settings.gradle.taskGraph.whenReady`.**
+    This is the sanctioned configuration-time hook: it runs only during configuration
+    (never at execution), so capturing `Settings`/`Gradle` in the closure is CC-safe,
+    and on a config-cache hit it does not run — the data must instead ride into
+    execution as a **build-service/Flow parameter** finalized after configuration, so it
+    replays from the CC entry (`TaskEventCollector.Params.taskMetadata`, plan 016;
+    Talaiot precedent). Touching `taskGraph.allTasks` is an isolated-projects violation,
+    so gate it behind `BuildFeatures.isolatedProjects.active` and degrade to empty; the
+    whole walk is wrapped so a defect warns rather than fails (rule 3). Reflection over
+    task classes stays name-based and Gradle-type-free (`TaskClassIntrospection`) so it
+    unit-tests without gradleApi() on the test classpath (rule shared with §2.11).
+
 ## 3. Kotlin Multiplatform best practices (binding)
 
 1. **`buildhound-commons` is the only shared-code channel.** Models are pure data + 
@@ -186,5 +198,7 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
 | 2026-07-02 | Naming decision #6: product **BuildHound**, domain **buildhound.dev**, plugin id + Maven group `dev.buildhound`, modules `buildhound-*`, DSL `buildhound {}`, env prefix `BUILDHOUND_` | Owner decision; pre-release so renamed with no compatibility shim. Research doc + old plans keep the BTP working name as historical records |
 | 2026-07-03 | Bare `CI` env var (set and not `false`/`0`) classifies a build as CI, provider `generic`, no mapped fields. Same truthiness rule for `BUILDHOUND_CI`: truthy activates the generic mapping, falsy is the generic provider's kill switch (overrides `BUILDHOUND_CI_PROVIDER` and bare `CI`; built-in providers unaffected) (plan 014) | CCUD-parity gap: CircleCI/GitLab/Travis/Jenkins set only generic `CI`, so AUTO resolved to `local` — wrong baselines and local-opt-in gating on CI. Diverges from CCUD's presence-only check to honor the ci-info `CI=false` opt-out convention |
 | 2026-07-03 | Plugin subprocesses run via JDK `ProcessBuilder` with `waitFor(timeout)`/`destroyForcibly` (10 s default, `buildhound.vcs.timeout.ms` override), not `ExecOperations` (plan 015, §2 rule 11) | `ExecOperations.exec` cannot bound a hung git, which stalled the build forever; CCUD enforces the same 10 s hard kill. Supersedes plan 004's accepted "no exec timeout" residual risk |
+| 2026-07-03 | Isolated-projects degradation contract for task metadata (plan 016, §2 rule 12): when `BuildFeatures.isolatedProjects.active` is true the `taskGraph.allTasks` walk is skipped, so `tasks[].type`/`cacheable`/`nonCacheableReason` are null and `derived.cacheableHitRate` is null. The plan-021 IP CI job asserts exactly this shape | `allTasks` from settings scope is an IP violation by design; degrading to empty (not failing, not violating) is the only correct behavior, and pinning the shape keeps the future IP job a real regression gate |
+| 2026-07-03 | `derived.cacheableHitRate` is now over a **cacheable-only** denominator (plan 016): a task is cache-relevant iff `cacheable == true` or its outcome is FROM_CACHE (a cache hit proves cacheability past a static `cacheIf {}` miss); null when no task carries a non-null `cacheable` flag (IP degradation / legacy pre-016 payloads). Supersedes the v0 all-tasks denominator | The old number diluted the rate with non-cacheable work and was not comparable across builds; honest-nulls over a spliced two-definition trend line (plan 005). Server stores derived metrics as-sent, so no migration — pre-release step change accepted |
 
 *Add a row (or a docs/plans entry) whenever an architectural decision is made or reversed.*

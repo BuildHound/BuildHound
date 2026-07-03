@@ -110,10 +110,11 @@ class PayloadAssemblerTest {
     fun `assembles environment toolchain outcome and derived metrics`() {
         val payload = assemble(
             tasks = listOf(
-                task(":a", startMs = 0, durationMs = 1_000, outcome = TaskOutcome.EXECUTED),
-                task(":b", startMs = 0, durationMs = 1_000, outcome = TaskOutcome.FROM_CACHE),
+                task(":a", startMs = 0, durationMs = 1_000, outcome = TaskOutcome.EXECUTED, cacheable = true),
+                task(":b", startMs = 0, durationMs = 1_000, outcome = TaskOutcome.FROM_CACHE, cacheable = true),
             ),
             buildFailed = true,
+            configurationMs = 750,
         )
 
         assertEquals(BuildOutcome.FAILED, payload.outcome)
@@ -123,6 +124,7 @@ class PayloadAssemblerTest {
         assertEquals("8.14.3", payload.toolchain?.gradle)
         assertEquals("21.0.10", payload.toolchain?.jdk)
         assertEquals(0.5, payload.derived?.cacheableHitRate)
+        assertEquals(750, payload.derived?.configurationMs)
         assertEquals(mapOf("team" to "mobile"), payload.tags)
         assertEquals("fixture", payload.projectKey)
         assertEquals(listOf("build"), payload.requestedTasks)
@@ -132,6 +134,7 @@ class PayloadAssemblerTest {
         tasks: List<TaskExecution>,
         buildFailed: Boolean = false,
         nowMs: Long = 0,
+        configurationMs: Long? = null,
     ) = PayloadAssembler.assemble(
         buildId = "test-build",
         projectKey = "fixture",
@@ -151,8 +154,9 @@ class PayloadAssemblerTest {
         tags = mapOf("team" to "mobile"),
         nowMs = nowMs,
         projectRoots = emptyList(),
+        configurationMs = configurationMs,
     )
 
-    private fun task(path: String, startMs: Long, durationMs: Long, outcome: TaskOutcome) =
-        TaskExecution(path = path, startMs = startMs, durationMs = durationMs, outcome = outcome)
+    private fun task(path: String, startMs: Long, durationMs: Long, outcome: TaskOutcome, cacheable: Boolean? = null) =
+        TaskExecution(path = path, startMs = startMs, durationMs = durationMs, outcome = outcome, cacheable = cacheable)
 }
