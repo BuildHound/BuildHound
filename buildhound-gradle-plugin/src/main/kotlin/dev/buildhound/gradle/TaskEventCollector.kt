@@ -20,15 +20,18 @@ import org.gradle.tooling.events.task.TaskSuccessResult
  * configuration-cache safe and replays on cache hits.
  *
  * [Params.taskMetadata] carries the configuration-time task dictionary (path → static
- * type/cacheable/reason, plan 016). It is the shared home for per-task config-time data:
- * plan 024 later *extends* this same interface with `testResultLocations` rather than
- * re-deriving from `None`. The provider is replayed verbatim on a config-cache hit, so
- * the metadata survives when the `whenReady` callback that built it never runs.
+ * type/cacheable/reason, plan 016); [Params.testResultLocations] carries the JUnit XML output
+ * directory of each `Test` task (path → dir/module, plan 024). Both are the shared home for
+ * per-task config-time data. Each provider is replayed verbatim on a config-cache hit, so the
+ * data survives when the `whenReady` callback that built it never runs.
  */
 abstract class TaskEventCollector : BuildService<TaskEventCollector.Params>, OperationCompletionListener {
 
     interface Params : BuildServiceParameters {
         val taskMetadata: MapProperty<String, TaskMetadata>
+
+        /** Test-task path → JUnit XML output location (plan 024); empty under isolated projects. */
+        val testResultLocations: MapProperty<String, TestResultLocations>
     }
 
     private val tasks = ConcurrentLinkedQueue<TaskExecution>()
@@ -56,6 +59,13 @@ abstract class TaskEventCollector : BuildService<TaskEventCollector.Params>, Ope
     }
 
     fun snapshot(): List<TaskExecution> = tasks.toList()
+
+    /**
+     * Test-task JUnit XML locations captured at configuration time (plan 024). Consumed once in
+     * the finalizer (not per task-finish event), so it is read directly from the parameter rather
+     * than cached like [metadata]. Empty under isolated projects or when test collection is off.
+     */
+    fun snapshotLocations(): Map<String, TestResultLocations> = parameters.testResultLocations.getOrElse(emptyMap())
 
     private fun org.gradle.tooling.events.OperationResult.toOutcome(): TaskOutcome = when (this) {
         is TaskSuccessResult -> when {

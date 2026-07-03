@@ -13,6 +13,7 @@ import dev.buildhound.commons.payload.PayloadCapper
 import dev.buildhound.commons.payload.PayloadCaps
 import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.commons.payload.TaskExecution
+import dev.buildhound.commons.payload.TestTaskResult
 import dev.buildhound.commons.payload.ToolchainInfo
 import dev.buildhound.commons.payload.VcsInfo
 
@@ -49,6 +50,7 @@ internal object PayloadAssembler {
         caps: PayloadCaps = PayloadCaps.DEFAULT,
         fingerprints: FingerprintInfo? = null,
         kotlin: KotlinInfo? = null,
+        tests: List<TestTaskResult> = emptyList(),
     ): BuildPayload {
         val startedAt = tasks.minOfOrNull { it.startMs } ?: nowMs
         val finishedAt = (tasks.maxOfOrNull { it.startMs + it.durationMs } ?: nowMs).coerceAtLeast(startedAt)
@@ -84,6 +86,8 @@ internal object PayloadAssembler {
             fingerprints = fingerprints?.takeIf { it.build.isNotEmpty() || it.tasks.isNotEmpty() },
             // Bundled Kotlin build report (plan 023); null when unwired/unobservable.
             kotlin = kotlin,
+            // Per-test-task results parsed from JUnit XML (plan 024); empty when no test ran.
+            tests = tests,
         )
         // Spec §3.7 then §3.9: scrub whole free-text values first (so secret patterns see
         // the complete string, never a truncated slice), then enforce the payload budgets.

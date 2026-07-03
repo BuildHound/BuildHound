@@ -33,11 +33,74 @@ data class BuildPayload(
     val fingerprints: FingerprintInfo? = null,
     /** Bundled Kotlin build-report metrics (plan 023); null when unwired or not observable. */
     val kotlin: KotlinInfo? = null,
+    /** Per-test-task results parsed from JUnit XML (plan 024); empty when no test ran or disabled. */
+    val tests: List<TestTaskResult> = emptyList(),
 ) {
     companion object {
         const val SCHEMA_VERSION: Int = 1
     }
 }
+
+/**
+ * One `Test` task's results, parsed from its JUnit XML output (plan 024, spec §3.5/§4). Per-class
+ * rollups always; per-case detail *only* for cases that failed/errored or were retried (locked
+ * granularity, non-goal #2). `allCases` is reserved-empty in v1 so widening to all cases later
+ * stays additive (spec §3.5). Class/method names and counts are declared data; the only free text
+ * is [TestCaseDetail.message], which the scrubber covers.
+ */
+@Serializable
+data class TestTaskResult(
+    val taskPath: String,
+    val module: String? = null,
+    val durationMs: Long? = null,
+    val classes: List<TestClassResult> = emptyList(),
+    val failedOrRetried: List<TestCaseDetail> = emptyList(),
+    /** How many class rollups the per-task cap dropped (kept the slowest). */
+    val truncatedClasses: Int = 0,
+    /** How many failed/retried case details the per-task cap dropped (spec §3.9 truncate+count). */
+    val truncatedDetail: Int = 0,
+    /** Reserved for a future additive plan that ingests passing cases too (spec §3.5); empty in v1. */
+    val allCases: List<TestCaseDetail> = emptyList(),
+)
+
+/**
+ * THE `module/class` join key, defined once here (plan 024 is its canonical site). Plans 036
+ * (flaky), 037 (quarantine), and 040 (sharding) reference `TestUnitKey.of` verbatim to join
+ * client-side timings against server-side per-class data — so Tuist's bare-FQCN-vs-`module/class`
+ * degeneration bug (research §2.6) cannot recur. A null module yields an empty-string prefix.
+ */
+object TestUnitKey {
+    fun of(module: String?, classFqcn: String): String = "${module ?: ""}/$classFqcn"
+}
+
+@Serializable
+data class TestClassResult(
+    /** Fully-qualified class name. */
+    val className: String,
+    val passed: Int = 0,
+    val failed: Int = 0,
+    val skipped: Int = 0,
+    val durationMs: Long = 0,
+) {
+    /** Convenience delegating to the canonical [TestUnitKey.of]; never the source of truth. */
+    fun unitKey(module: String?): String = TestUnitKey.of(module, className)
+}
+
+@Serializable
+data class TestCaseDetail(
+    val className: String,
+    val name: String,
+    /** Ordered outcome sequence; more than one entry means the case was retried. */
+    val outcomes: List<TestCaseOutcome> = emptyList(),
+    val durationMs: Long = 0,
+    /** SHA-256 hex of the raw (pre-scrub, pre-truncation) message — a stable flaky-signal key. */
+    val messageHash: String? = null,
+    /** Failure/assertion text, scrubbed then truncated; null when the case carried none. */
+    val message: String? = null,
+)
+
+@Serializable
+enum class TestCaseOutcome { PASSED, FAILED, ERROR, SKIPPED }
 
 /**
  * Kotlin build-report metrics bundled from the KGP json report (plan 023, spec §4). The KGP

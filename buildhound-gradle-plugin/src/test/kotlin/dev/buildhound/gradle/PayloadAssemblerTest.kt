@@ -189,6 +189,28 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `assemble passes test results through and scrubs the failure message`() {
+        val tests = listOf(
+            dev.buildhound.commons.payload.TestTaskResult(
+                taskPath = ":app:test",
+                module = ":app",
+                failedOrRetried = listOf(
+                    dev.buildhound.commons.payload.TestCaseDetail(
+                        className = "com.example.FooTest",
+                        name = "reads()",
+                        message = "missing /home/ci/agent/work/project/src/x.txt",
+                    ),
+                ),
+            ),
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), tests = tests)
+        assertEquals(":app:test", payload.tests.single().taskPath)
+        // projectRoots is emptyList in this helper, so only the absolute-path rule applies: the
+        // out-of-declared-root path collapses to <path> (scrub still runs on test messages).
+        assertEquals("missing <path>", payload.tests.single().failedOrRetried.single().message)
+    }
+
+    @Test
     fun `scrub runs before cap so a boundary secret is redacted not sliced`() {
         // A shape-matched secret (AWS access key = AKIA + exactly 16 chars) only matches the
         // scrubber WHOLE. It straddles the 500-char reason cap: scrub-then-cap redacts it and
@@ -217,6 +239,7 @@ class PayloadAssemblerTest {
         caps: dev.buildhound.commons.payload.PayloadCaps = dev.buildhound.commons.payload.PayloadCaps.DEFAULT,
         fingerprints: dev.buildhound.commons.payload.FingerprintInfo? = null,
         kotlin: dev.buildhound.commons.payload.KotlinInfo? = null,
+        tests: List<dev.buildhound.commons.payload.TestTaskResult> = emptyList(),
     ) = PayloadAssembler.assemble(
         buildId = "test-build",
         projectKey = "fixture",
@@ -240,6 +263,7 @@ class PayloadAssemblerTest {
         caps = caps,
         fingerprints = fingerprints,
         kotlin = kotlin,
+        tests = tests,
     )
 
     private fun task(

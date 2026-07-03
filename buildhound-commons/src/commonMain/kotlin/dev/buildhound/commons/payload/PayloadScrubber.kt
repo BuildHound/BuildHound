@@ -6,8 +6,9 @@ package dev.buildhound.commons.payload
  * `nonCacheableReason` (the `@DisableCachingByDefault(because = …)` text, free text from
  * plugin authors, plan 016), the Kotlin report's `nonIncrementalReasons`, `taskPath`, and
  * `compilerTimesMs` phase keys (all sourced from the untrusted KGP report file, plan 023),
- * and fingerprint key names (plan 022); failure text MUST route through [scrubText] when its
- * collector lands — structured fields like `vcs.sha` are declared data and are not touched.
+ * test-case failure `message` text (from JUnit XML, plan 024), and fingerprint key names
+ * (plan 022); failure text MUST route through [scrubText] when its collector lands — structured
+ * fields like `vcs.sha`, class/method names, and counts are declared data and are not touched.
  * KMP-pure so the server can run it as a defensive second pass; note the fixed-length
  * lookbehinds are fine on JVM/Native, but a future js() target needs Safari 16.4+.
  *
@@ -61,7 +62,30 @@ object PayloadScrubber {
                     },
                 )
             },
+            // Test failure/assertion text (plan 024) routinely embeds absolute paths and can carry
+            // secret-shaped values — scrub the one free-text field on every retained case. Class and
+            // method names are declared data (like task paths) and pass through.
+            tests = payload.tests.map { task ->
+                if (task.failedOrRetried.isEmpty() && task.allCases.isEmpty()) task
+                else task.copy(
+                    failedOrRetried = task.failedOrRetried.map { it.scrubMessage(projectRoots) },
+                    allCases = task.allCases.map { it.scrubMessage(projectRoots) },
+                )
+            },
         )
+
+    /**
+     * Scrubs the failure message, then truncates to [MAX_TEST_MESSAGE_CHARS] — in that order so a
+     * secret straddling the char cap is redacted whole before slicing (the plan-019 scrub-then-cap
+     * rule). `messageHash` is computed upstream over the raw text, so the flaky key is unaffected.
+     */
+    private fun TestCaseDetail.scrubMessage(projectRoots: List<String>): TestCaseDetail {
+        if (message == null) return this
+        val scrubbed = scrubText(message, projectRoots)
+        return copy(message = if (scrubbed.length > MAX_TEST_MESSAGE_CHARS) scrubbed.substring(0, MAX_TEST_MESSAGE_CHARS) else scrubbed)
+    }
+
+    private const val MAX_TEST_MESSAGE_CHARS = 512
 
     fun scrub(payload: BuildPayload, projectRoot: String?): BuildPayload =
         scrub(payload, listOfNotNull(projectRoot))

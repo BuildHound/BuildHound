@@ -4,11 +4,13 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
 import org.gradle.api.Plugin
+import org.gradle.api.Task
 import org.gradle.api.configuration.BuildFeatures
 import org.gradle.api.flow.FlowProviders
 import org.gradle.api.flow.FlowScope
 import org.gradle.api.initialization.Settings
 import org.gradle.api.logging.Logging
+import org.gradle.api.tasks.testing.Test
 import org.gradle.build.event.BuildEventsListenerRegistry
 
 /**
@@ -33,6 +35,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         extension.localBuilds.enabled.convention(true)
         extension.localBuilds.requireOptInFile.convention(true)
         extension.kotlinReports.bundle.convention(true)
+        extension.tests.collect.convention(true)
 
         // In a composite, only the root build observes: task events from included builds
         // already reach the root's listener, and a second flow action would consume the
@@ -49,12 +52,16 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // evaluates the provider when it finalizes the service parameters — after
         // configuration in every mode — so ordering is always callback-then-read (plan 016).
         val taskMetadataHolder = AtomicReference<Map<String, TaskMetadata>>(emptyMap())
+        // Sibling mailbox for the Test-task JUnit XML locations (plan 024), filled by the same
+        // `whenReady` callback and replayed from the CC entry on a hit (discovery spike §4a).
+        val testLocationsHolder = AtomicReference<Map<String, TestResultLocations>>(emptyMap())
 
         val collector = settings.gradle.sharedServices.registerIfAbsent(
             TaskEventCollector.SERVICE_NAME,
             TaskEventCollector::class.java,
         ) { spec ->
             spec.parameters.taskMetadata.set(settings.providers.provider { taskMetadataHolder.get() })
+            spec.parameters.testResultLocations.set(settings.providers.provider { testLocationsHolder.get() })
         }
 
         eventsListenerRegistry.onTaskCompletion(collector)
@@ -71,6 +78,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             .gradleProperty("buildhound.internal.failTaskGraphSnapshot")
             .map { it != "false" }
             .getOrElse(false)
+        val collectTests = extension.tests.collect
         settings.gradle.taskGraph.whenReady { graph ->
             DaemonState.configurationCompleted()
             runCatching {
@@ -82,6 +90,17 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
                 taskMetadataHolder.set(
                     graph.allTasks.associate { task -> task.path to TaskClassIntrospection.introspect(task.javaClass) },
                 )
+                // Test-result locations (plan 024): capture each Test task's JUnit XML dir now, at
+                // config time (spike §4a) — the XML itself is read in the finalizer. Public Test API
+                // only; the decision to treat a task as a Test task is the type-free introspection.
+                if (collectTests.getOrElse(true)) {
+                    testLocationsHolder.set(
+                        graph.allTasks
+                            .filter { TestTaskIntrospection.isTestTask(it.javaClass) }
+                            .mapNotNull { task -> testLocationOf(task) }
+                            .toMap(),
+                    )
+                }
             }.onFailure {
                 logger.warn("[buildhound] task metadata capture failed (build unaffected): {}", it.message)
             }
@@ -155,6 +174,15 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.kotlinBundle.set(extension.kotlinReports.bundle)
             spec.parameters.kotlinReportOutput.set(settings.providers.gradleProperty("kotlin.build.report.output"))
             spec.parameters.kotlinJsonDirectory.set(settings.providers.gradleProperty("kotlin.build.report.json.directory"))
+            // Test collection (plan 024): the toggle, plus an internal failure-injection seam
+            // (any value but "false" arms the "collection throws" failpoint) mirroring the
+            // task-graph-snapshot failpoint above.
+            spec.parameters.testsCollect.set(extension.tests.collect)
+            spec.parameters.failTestCollection.set(
+                settings.providers.gradleProperty("buildhound.internal.failTestCollection")
+                    .map { it != "false" }
+                    .orElse(false),
+            )
             spec.parameters.rootDir.set(settings.rootDir.absolutePath)
             spec.parameters.serverUrl.set(extension.server.url)
             spec.parameters.serverToken.set(extension.server.token)
@@ -163,6 +191,18 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             // Test seam + advanced override; default (~/.buildhound/optin) resolves at execution.
             spec.parameters.optInFile.set(settings.providers.gradleProperty("buildhound.optin.file"))
         }
+    }
+
+    /**
+     * The JUnit XML dir + module for one `Test` task, via the public Test report API (plan 024).
+     * Runs at configuration time inside `whenReady`, so resolving the output location is CC-safe
+     * (spike §4a). Null when the task is not a `Test` or the location is unresolvable.
+     */
+    private fun testLocationOf(task: Task): Pair<String, TestResultLocations>? {
+        val test = task as? Test ?: return null
+        val dir = test.reports.junitXml.outputLocation.orNull?.asFile?.absolutePath ?: return null
+        val module = task.path.substringBeforeLast(':').ifEmpty { ":" }
+        return task.path to TestResultLocations(junitXmlDir = dir, module = module)
     }
 
     private companion object {

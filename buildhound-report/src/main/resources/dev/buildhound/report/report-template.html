@@ -51,6 +51,14 @@
         </table>
         <p id="no-tasks" class="placeholder" hidden>No task events captured.</p>
     </section>
+    <section id="tests" hidden>
+        <h2>Tests</h2>
+        <p id="tests-summary"></p>
+        <table id="tests-failures" hidden>
+            <thead><tr><th>Class</th><th>Test</th><th>Outcome</th><th class="num">Duration</th><th>Message</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </section>
 </main>
 <script>
     // The shared timeline renderer is spliced in here at report time (defines the global
@@ -122,6 +130,39 @@
             body.append(row);
         }
         if (tasks.length) table.hidden = false; else document.getElementById("no-tasks").hidden = false;
+
+        // Tests section (plan 024): a summary sentence + a failures/retries table. Hidden entirely
+        // when no test results were collected. All strings reach the DOM via textContent.
+        const testTasks = d.tests || [];
+        if (testTasks.length) {
+            let cases = 0, classes = 0, failed = 0;
+            const failures = [];
+            for (const tt of testTasks) {
+                for (const c of tt.classes || []) {
+                    classes++;
+                    cases += (c.passed || 0) + (c.failed || 0) + (c.skipped || 0);
+                    failed += (c.failed || 0);
+                }
+                for (const f of tt.failedOrRetried || []) failures.push(f);
+            }
+            document.getElementById("tests-summary").textContent =
+                cases + (cases === 1 ? " test" : " tests") + " in " + classes + (classes === 1 ? " class" : " classes")
+                + " across " + testTasks.length + (testTasks.length === 1 ? " test task" : " test tasks")
+                + "; " + failed + " failed";
+            const failuresTable = document.getElementById("tests-failures");
+            const failuresBody = failuresTable.querySelector("tbody");
+            for (const f of failures) {
+                const row = el("tr");
+                row.append(el("td", f.className));
+                row.append(el("td", f.name));
+                row.append(el("td", (f.outcomes || []).join(" → ")));
+                row.append(el("td", ms(f.durationMs || 0), "num"));
+                row.append(el("td", f.message || ""));
+                failuresBody.append(row);
+            }
+            if (failures.length) failuresTable.hidden = false;
+            document.getElementById("tests").hidden = false;
+        }
     })(buildhoundData);
 </script>
 </body>

@@ -273,6 +273,35 @@ the raw pre-truncation message so it stays a stable flaky-signal key.
     the KGP-report reader).
 16. Re-read this plan against the diff; record any divergence here in the same PR.
 
+## 4a. Discovery-spike finding (2026-07-03, step 1)
+
+Ran a real `java` + JUnit 5 module on Gradle 9.6.1 (CC on), a passing + a failing test,
+`taskGraph.whenReady` reading each `Test` task's report location, twice (store then reuse).
+
+- **Location resolvable at config time.** `test.reports.junitXml.outputLocation.get().asFile`
+  resolves inside `taskGraph.whenReady` to `build/test-results/<taskName>/` (absolute). So the
+  `(taskPath → junitXmlDir, module)` snapshot is available exactly where plan 016 fills its
+  metadata dictionary — same holder/provider mechanism.
+- **XML present when the Flow action runs.** The `Test` task writes `TEST-<FQCN>.xml` during
+  execution, before the build-finished Flow action. A file exists per test *class*.
+- **CC store + reuse both write XML.** On "Configuration cache entry reused", `whenReady` does
+  **not** run, but the test task still re-executes and re-writes its XML. So the locations map
+  must be **replayed from the CC entry** (Gradle evaluates the params provider before storing —
+  the exact `TaskEventCollector.taskMetadata` replay pattern). The collector reads XML at
+  execution time regardless, so reuse is fine. Pinned by functional test (c).
+- **Exact XML surface** (allowlist the parser targets; everything else ignored):
+  - `<testsuite name= tests= skipped= failures= errors= time= …>` — `time` is **seconds**
+    (e.g. `0.026`) → ×1000 ms. Also carries `timestamp=` and **`hostname=`** (the machine name —
+    PII); the parser must **never** read those two. `name` is the class FQCN.
+  - `<testcase name= classname= time=>` — `name` includes `()` (e.g. `fails()`); `classname` is
+    the FQCN; child `<failure message= type=>stacktrace</failure>`, `<error …>`, or `<skipped/>`.
+    `message` (the assertion text) is the concise free-text field → scrub + truncate +
+    `messageHash`; the element body (full stack trace, may hold absolute paths) is **not** shipped.
+- **Missing launcher → no XML, degrade cleanly.** On Gradle 9.x a module without
+  `junit-platform-launcher` on the test runtime classpath fails the test executor and writes no
+  XML; that is the consumer's build error, and our collector simply finds no files → `tests = []`
+  for that task (absent-over-wrong). Not our failure to surface.
+
 ## 5. Test strategy
 
 - **Unit (commons):** golden-file cases (step 3); `TestUnitKey.of` exact-format assertion
@@ -352,3 +381,55 @@ the raw pre-truncation message so it stays a stable flaky-signal key.
   with a contextual empty state when no results exist; node smoke harness covers both.
 - New golden file committed, existing golden untouched, `./gradlew build` green; the
   architecture decision log carries the collection-source and join-key row.
+
+## 8. Divergences from plan (2026-07-04, implementation)
+
+- **Message truncation lives in the scrubber.** Plan §3 says "`message` truncated to 512 chars
+  *after* scrubbing." Implemented as `PayloadScrubber.scrubMessage` = `scrubText` then a 512-char
+  cut, so the ordering rule (redact a boundary secret whole before slicing, plan 019) holds
+  without adding a test-specific stage to `PayloadCapper`. `messageHash` is computed upstream in
+  the parser over the raw text, so the flaky key is unaffected by truncation.
+- **Warn sink injected** into `TestResultCollector.collect(..., warn)` (and the failpoint), the
+  plan 023 `KotlinReportBundler` precedent — the parser and collector carry no Gradle `Logging`
+  reference, so they unit-test off the Gradle classpath (the plugin's plain `test` source set has
+  no `gradleApi()` at runtime). The finalizer passes `{ logger.warn(it) }`.
+- **Only the `<failure message=>` / `<error message=>` attribute is retained**, never the element
+  body (the full stack trace, which routinely carries absolute paths). Recorded in §4a.
+- **Functional (a) covers passing + failing, not a real retried case.** Retry collapse
+  (`outcomes = [FAILED, PASSED]`) is pinned by the `JUnitXmlParser` unit test rather than a real
+  Gradle Test-Retry run, to avoid a third-party plugin + plugin-portal resolution in the fixture.
+  The exit-criteria retry assertion is met at the unit layer.
+- **Functional (f) is a network-free multi-project NO_SOURCE smoke** (`@Tag("isolated-projects")`,
+  the watched suite): `:a` gets a real `Test` task via the `java` plugin but no tests, so the IP
+  gate is exercised without resolving JUnit under IP. Deeper IP degradation stays owned by plan
+  016's blocking test + the shared gate + the plan-021 job.
+- **Only tasks with an EXECUTED/FAILED this-build outcome are ingested** (`FROM_CACHE`/
+  `UP_TO_DATE` skipped) — the §6 stale-output guard; a cache-hit build therefore reports no test
+  data even though restored XML exists, an accepted absent-over-wrong trade.
+- Everything else as planned: additive schema + `TestUnitKey` + new golden (existing untouched),
+  scrubber coverage, StAX XXE-hardened parser, collector with bounds, `Params` extension +
+  `snapshotLocations()`, `tests {}` DSL, `whenReady` capture, report + dashboard `#/tests` + smoke.
+
+### Review-driven changes (2026-07-04, two clean-context reviews)
+
+Code & architecture review: **SHIP-WITH-FIXES**; security & privacy: **SHIP-WITH-FIXES**. Applied:
+
+- **[security Medium] Bound the raw failure message at ingest.** `JUnitXmlParser` now caps the
+  `<failure message=>` attribute to 8192 chars in `Case.mark` before it enters the payload or the
+  hash — so a hostile multi-MB message (bounded only by the 10 MiB file cap, ×500 details) can't
+  bloat finalizer memory or make the scrubber run its regex battery over multi-MB strings. The
+  scrubber's 512-char cut still runs after scrubbing. Test `a huge failure message is capped at
+  ingest`.
+- **[code Medium] Fixed the golden's `messageHash` values.** They were placeholder digests of
+  "foobar"/"hello", not of their sibling messages — a wrong contract for the exact key plans
+  036/040 join on. Replaced with the real SHA-256 of each message and added a `GoldenPayloadTest`
+  assertion (`messageHash == sha256(message)`) so it can't recur.
+- **[code Low] Merge class rollups by FQCN.** `TestResultCollector.mergeByClassName` collapses a
+  class that spans multiple `<testsuite>`s (aggregated/retry layouts) into one row (fast-path
+  no-op for the common one-file-per-class case), so the dashboard and downstream joins don't
+  double-count. Test `rollups for the same class across suites are merged`.
+- **[security Low] Added `truncatedDetail`** (additive, default 0) to `TestTaskResult`, populated
+  by the collector — the spec §3.9 truncate-and-count convention now covers `failedOrRetried`,
+  matching `truncatedClasses`.
+- **[code Low] Documented `TestTaskResult.durationMs`** as the summed per-class suite time (an
+  approximation of wall clock); per-class timings that sharding (040) uses stay accurate.

@@ -340,6 +340,110 @@
         return box;
     }
 
+    // Test-results panel (plan 024): summary sentence, failures/retries table, slowest classes.
+    // Shared by the build detail and the Tests page. textContent-only (message text is untrusted).
+    function testsPanel(tests) {
+        const box = document.createDocumentFragment();
+        box.append(el("h3", "Tests"));
+
+        let cases = 0, classCount = 0, failed = 0, skipped = 0;
+        const allClasses = [];
+        const failures = [];
+        for (const tt of tests) {
+            for (const c of tt.classes || []) {
+                classCount++;
+                cases += (c.passed || 0) + (c.failed || 0) + (c.skipped || 0);
+                failed += (c.failed || 0);
+                skipped += (c.skipped || 0);
+                allClasses.push(c);
+            }
+            for (const f of tt.failedOrRetried || []) failures.push(f);
+        }
+        box.append(el("p",
+            cases + (cases === 1 ? " test" : " tests") + " in " + classCount + (classCount === 1 ? " class" : " classes")
+            + " across " + tests.length + (tests.length === 1 ? " test task" : " test tasks")
+            + " — " + failed + " failed, " + skipped + " skipped",
+            "summary-sentence"));
+
+        if (failures.length) {
+            box.append(el("h4", "Failures & retries"));
+            const table = el("table");
+            const head = el("tr");
+            for (const columnName of ["Class", "Test", "Outcome", "Duration", "Message"]) head.append(el("th", columnName));
+            table.append(head);
+            for (const f of failures) {
+                const row = el("tr");
+                row.append(el("td", f.className));
+                row.append(el("td", f.name));
+                row.append(el("td", (f.outcomes || []).join(" → ")));
+                row.append(el("td", ms(f.durationMs || 0), "num"));
+                row.append(el("td", f.message || ""));
+                table.append(row);
+            }
+            box.append(table);
+        }
+
+        box.append(el("h4", "Slowest classes"));
+        const table = el("table");
+        const head = el("tr");
+        for (const columnName of ["Class", "Passed", "Failed", "Skipped", "Duration"]) head.append(el("th", columnName));
+        table.append(head);
+        for (const c of [...allClasses].sort((a, b) => (b.durationMs || 0) - (a.durationMs || 0)).slice(0, 20)) {
+            const row = el("tr");
+            row.append(el("td", c.className));
+            row.append(el("td", c.passed || 0, "num"));
+            row.append(el("td", c.failed || 0, "num"));
+            row.append(el("td", c.skipped || 0, "num"));
+            row.append(el("td", ms(c.durationMs || 0), "num"));
+            table.append(row);
+        }
+        box.append(table);
+        return box;
+    }
+
+    // Tests page (plan 024): a per-build-scoped view — pick a build, show its tests. Fleet-wide
+    // slowest/flaky trends are plan 026/036. No new server route; reads the existing query API.
+    async function testsView() {
+        const seq = ++renderSeq;
+        const { items: builds } = await apiList("/v1/builds?limit=50&offset=0");
+        if (seq !== renderSeq) return;
+
+        app.textContent = "";
+        app.append(el("p", "Test results", "summary-sentence"));
+        if (!builds.length) {
+            app.append(emptyState({
+                title: "No test results ingested yet",
+                lines: ["Send a build that runs tests to see per-class results and failures here."],
+            }));
+            return;
+        }
+        const label = b => when(b.startedAt) + " · " + b.outcome + " · " + (b.branch || "no branch") + " · " + b.mode;
+        const select = document.createElement("select");
+        for (const build of builds) select.append(new Option(label(build), build.buildId));
+        const bar = el("div", null, "filters");
+        bar.append(el("span", "Build: "), select);
+        app.append(bar);
+        const holder = el("div");
+        app.append(holder);
+
+        async function show(buildId) {
+            const mySeq = ++renderSeq;
+            const build = await api("/v1/builds/" + encodeURIComponent(buildId));
+            if (mySeq !== renderSeq) return;
+            holder.textContent = "";
+            if (Array.isArray(build.tests) && build.tests.length) {
+                holder.append(testsPanel(build.tests));
+            } else {
+                holder.append(emptyState({
+                    title: "No test results in this build",
+                    lines: ["Pick another build, or run a build that executes tests."],
+                }));
+            }
+        }
+        select.addEventListener("change", () => show(select.value).catch(fail));
+        await show(builds[0].buildId);
+    }
+
     async function detailView(buildId) {
         const seq = ++renderSeq;
         const build = await api("/v1/builds/" + encodeURIComponent(buildId));
@@ -413,6 +517,9 @@
             table.append(row);
         }
         app.append(table);
+
+        // Test results, when any test task's JUnit XML was collected for this build.
+        if (Array.isArray(build.tests) && build.tests.length) app.append(testsPanel(build.tests));
     }
 
     const SVG_NS = "http://www.w3.org/2000/svg";
@@ -617,6 +724,7 @@
                 : compare ? comparisonView(decodeURIComponent(compare[1]), decodeURIComponent(compare[2]))
                 : hash.startsWith("#/compare") ? compareView()
                 : hash.startsWith("#/trends") ? trendsView({}, 30)
+                : hash.startsWith("#/tests") ? testsView()
                 : buildsView({}, 0);
             run.catch(fail);
         } catch (err) {

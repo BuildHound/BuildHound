@@ -185,6 +185,44 @@ class PayloadScrubberTest {
     }
 
     @Test
+    fun scrub_redacts_test_case_failure_message_free_text() {
+        // Test failure text (plan 024) routinely embeds an absolute path and can carry a secret.
+        val payload = payloadWith(reason = "x").copy(
+            tests = listOf(
+                TestTaskResult(
+                    taskPath = ":app:test",
+                    module = ":app",
+                    failedOrRetried = listOf(
+                        TestCaseDetail(
+                            className = "com.example.FooTest",
+                            name = "reads()",
+                            message = "expected file $root/src/expected.txt with token=ghp_AbCd1234",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val message = PayloadScrubber.scrub(payload, root).tests.single().failedOrRetried.single().message
+        assertEquals("expected file src/expected.txt with token=<redacted>", message)
+        // Class and method names are declared data — untouched.
+        assertEquals("com.example.FooTest", PayloadScrubber.scrub(payload, root).tests.single().failedOrRetried.single().className)
+    }
+
+    @Test
+    fun scrub_leaves_a_null_test_message_null() {
+        val payload = payloadWith(reason = "x").copy(
+            tests = listOf(
+                TestTaskResult(
+                    taskPath = ":app:test",
+                    failedOrRetried = listOf(TestCaseDetail(className = "com.example.FooTest", name = "x()", message = null)),
+                ),
+            ),
+        )
+        assertNull(PayloadScrubber.scrub(payload, root).tests.single().failedOrRetried.single().message)
+    }
+
+    @Test
     fun snake_case_secret_keys_are_redacted() {
         assertEquals("GITHUB_TOKEN=<redacted>", PayloadScrubber.scrubText("GITHUB_TOKEN=ghp_AbCd1234", root))
         assertEquals("access_token=<redacted>", PayloadScrubber.scrubText("access_token: abc123", root))

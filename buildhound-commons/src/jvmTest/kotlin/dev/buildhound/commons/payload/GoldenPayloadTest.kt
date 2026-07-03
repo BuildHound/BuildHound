@@ -83,6 +83,46 @@ class GoldenPayloadTest {
         val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1.json"))
         assertNull(payload.fingerprints)
         assertNull(payload.kotlin)
+        assertTrue(payload.tests.isEmpty())
+    }
+
+    @Test
+    fun `schema v1 tests golden file deserializes with populated results`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-tests.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        val task = payload.tests.single()
+        assertEquals(":app:testDebugUnitTest", task.taskPath)
+        assertEquals(":app", task.module)
+        assertEquals(5, task.truncatedClasses)
+        assertTrue(task.allCases.isEmpty(), "allCases reserved-empty in v1")
+        val cart = task.classes.first { it.className == "com.example.CartTest" }
+        assertEquals(11, cart.passed)
+        assertEquals(1, cart.failed)
+        // A retried case is one detail with an ordered multi-entry outcome sequence.
+        val retried = task.failedOrRetried.first { it.name == "flakyPaymentGateway()" }
+        assertEquals(listOf(TestCaseOutcome.FAILED, TestCaseOutcome.PASSED), retried.outcomes)
+
+        // messageHash must be the SHA-256 of its own message — it is the flaky-signal key plans
+        // 036/040 join on, so a golden with an inconsistent hash would enshrine a wrong contract.
+        for (detail in task.failedOrRetried) {
+            assertEquals(sha256(detail.message!!), detail.messageHash, "messageHash must hash its message")
+        }
+    }
+
+    private fun sha256(text: String): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(text.encodeToByteArray())
+            .joinToString("") { b -> ((b.toInt() and 0xff) + 0x100).toString(16).substring(1) }
+
+    @Test
+    fun `TestUnitKey is the single canonical module-slash-class join key`() {
+        // Pinned exact form: plans 036/037/040 reference this verbatim to join, so it must never drift.
+        assertEquals(":app/com.example.FooTest", TestUnitKey.of(":app", "com.example.FooTest"))
+        // Null module → empty-string prefix (still a leading slash), not "null/…".
+        assertEquals("/com.example.FooTest", TestUnitKey.of(null, "com.example.FooTest"))
+        // TestClassResult.unitKey delegates to the canonical function — same output.
+        val cls = TestClassResult(className = "com.example.FooTest")
+        assertEquals(TestUnitKey.of(":app", "com.example.FooTest"), cls.unitKey(":app"))
     }
 
     @Test
@@ -110,6 +150,7 @@ class GoldenPayloadTest {
             "build-payload-v1-caps.json",
             "build-payload-v1-fingerprints.json",
             "build-payload-v1-kotlin.json",
+            "build-payload-v1-tests.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

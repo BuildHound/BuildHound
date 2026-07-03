@@ -43,6 +43,20 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     val kotlinReports: KotlinReportsSpec = objects.newInstance(KotlinReportsSpec::class.java)
 
     fun kotlinReports(action: Action<KotlinReportsSpec>) = action.execute(kotlinReports)
+
+    val tests: TestsSpec = objects.newInstance(TestsSpec::class.java)
+
+    fun tests(action: Action<TestsSpec>) = action.execute(tests)
+}
+
+/**
+ * `tests { ... }` (spec §3.4/§3.5, plan 024): collect per-class test rollups + failure/retry
+ * detail by parsing each `Test` task's JUnit XML output. Read-only — no `Test` task is mutated;
+ * zero overhead when no test task runs (there is simply no results directory to read).
+ */
+abstract class TestsSpec {
+    /** Parse test results into the payload (default true). */
+    abstract val collect: Property<Boolean>
 }
 
 /**

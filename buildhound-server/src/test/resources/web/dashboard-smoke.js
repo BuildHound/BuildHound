@@ -77,6 +77,19 @@ const responses = {
                 { taskPath: ":lib:compileKotlin", durationMs: 300, incremental: true, compilerTimesMs: { RUN_COMPILATION: 80 } },
             ],
         },
+        tests: [
+            {
+                taskPath: ":app:testDebugUnitTest", module: ":app", durationMs: 44000, truncatedClasses: 3,
+                classes: [
+                    { className: "com.example.CartTest", passed: 11, failed: 1, skipped: 0, durationMs: 3200 },
+                    { className: "com.example.CheckoutTest", passed: 8, failed: 0, skipped: 1, durationMs: 1500 },
+                ],
+                failedOrRetried: [
+                    { className: "com.example.CartTest", name: "totalsWithDiscount()", outcomes: ["FAILED"], durationMs: 120, message: "expected: <42> but was: <41>" },
+                    { className: "com.example.CheckoutTest", name: "flakyGateway()", outcomes: ["FAILED", "PASSED"], durationMs: 640, message: "connection reset" },
+                ],
+            },
+        ],
     },
     // Missing-optional-keys build: everything the schema allows to be absent, absent.
     "/v1/builds/b2": { buildId: "b2", startedAt: 1, finishedAt: 2, outcome: "FAILED", mode: "LOCAL" },
@@ -167,12 +180,27 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "UNKNOWN_CHANGES_IN_GRADLE_INPUTS")) throw new Error("kotlin non-incremental reason missing");
     if (!hasText(byId["app"], "Compiler phase time")) throw new Error("kotlin phase-time summary missing");
 
+    // Tests section (plan 024): summary sentence, failures/retries table (with the retry outcome
+    // sequence), and slowest classes all render on the build detail.
+    if (!hasText(byId["app"], "Failures & retries")) throw new Error("tests failures table missing");
+    if (!hasText(byId["app"], "totalsWithDiscount()")) throw new Error("tests failure row missing");
+    if (!hasText(byId["app"], "FAILED → PASSED")) throw new Error("retry outcome sequence missing");
+    if (!hasText(byId["app"], "Slowest classes")) throw new Error("tests slowest-classes table missing");
+
     // Minimal build (no tasks): ledger renders all-zero rows without dividing by zero.
     context.location.hash = "#/build/b2"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/builds/b2")) throw new Error("minimal detail view did not fetch");
     if (!hasText(byId["app"], "0 tasks")) throw new Error("empty-tasks detail sentence missing");
     // No bundled report → no Kotlin panel at all (panel renders only with data).
     if (hasText(byId["app"], "Kotlin compilation")) throw new Error("kotlin panel must be absent without a report");
+    // No test results on b2 → no Tests section either.
+    if (hasText(byId["app"], "Failures & retries")) throw new Error("tests section must be absent without results");
+
+    // Tests page (plan 024): defaults to the latest build (b1), renders its tests panel.
+    context.location.hash = "#/tests"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "Test results")) throw new Error("tests page header missing");
+    if (countTag(byId["app"], "select") < 1) throw new Error("tests page build picker missing");
+    if (!hasText(byId["app"], "totalsWithDiscount()")) throw new Error("tests page did not render the default build's failures");
 
     context.location.hash = "#/trends"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/trends?days=30")) throw new Error("trends view did not fetch");

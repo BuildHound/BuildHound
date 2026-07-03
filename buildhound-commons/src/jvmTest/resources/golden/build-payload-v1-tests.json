@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "buildId": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "projectKey": "pilot-android",
+  "startedAt": 1751500000000,
+  "finishedAt": 1751500060000,
+  "outcome": "FAILED",
+  "requestedTasks": ["test"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:testDebugUnitTest",
+      "module": ":app",
+      "startMs": 1751500001000,
+      "durationMs": 45000,
+      "outcome": "FAILED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "tests": [
+    {
+      "taskPath": ":app:testDebugUnitTest",
+      "module": ":app",
+      "durationMs": 44000,
+      "truncatedClasses": 5,
+      "classes": [
+        { "className": "com.example.CartTest", "passed": 11, "failed": 1, "skipped": 0, "durationMs": 3200 },
+        { "className": "com.example.CheckoutTest", "passed": 8, "failed": 0, "skipped": 1, "durationMs": 1500 }
+      ],
+      "failedOrRetried": [
+        {
+          "className": "com.example.CartTest",
+          "name": "totalsWithDiscount()",
+          "outcomes": ["FAILED"],
+          "durationMs": 120,
+          "messageHash": "9acd9616ca732c126e755abf8438efa171c37de7ad90240346e911e744ee2174",
+          "message": "expected: <42> but was: <41>"
+        },
+        {
+          "className": "com.example.CheckoutTest",
+          "name": "flakyPaymentGateway()",
+          "outcomes": ["FAILED", "PASSED"],
+          "durationMs": 640,
+          "messageHash": "e8bdfd2578e0060a822c83cb44855976f3345090ccf344ae45b083d956b73732",
+          "message": "connection reset"
+        }
+      ]
+    }
+  ]
+}

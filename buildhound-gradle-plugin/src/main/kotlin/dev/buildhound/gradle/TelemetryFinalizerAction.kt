@@ -73,6 +73,13 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         val htmlReportEnabled: Property<Boolean>
 
         @get:Input
+        val testsCollect: Property<Boolean>
+
+        /** Internal failure-injection seam (`buildhound.internal.failTestCollection`); default off. */
+        @get:Input
+        val failTestCollection: Property<Boolean>
+
+        @get:Input
         val kotlinBundle: Property<Boolean>
 
         @get:Input
@@ -152,6 +159,19 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 null
             }
 
+            // Test results (plan 024): parse each executed Test task's JUnit XML. Locations were
+            // captured at config time and ride the collector service (replayed on a CC hit).
+            val tests = if (parameters.testsCollect.getOrElse(true)) {
+                TestResultCollector.collect(
+                    locations = parameters.collector.get().snapshotLocations(),
+                    taskOutcomes = tasks.associate { it.path to it.outcome },
+                    warn = { logger.warn(it) },
+                    failInjection = parameters.failTestCollection.getOrElse(false),
+                )
+            } else {
+                emptyList()
+            }
+
             val payload = PayloadAssembler.assemble(
                 buildId = UUID.randomUUID().toString(),
                 projectKey = parameters.projectKey.orNull,
@@ -170,6 +190,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 configurationMs = configurationMs,
                 fingerprints = fingerprints,
                 kotlin = kotlin,
+                tests = tests,
             )
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so
@@ -192,9 +213,10 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 logger.lifecycle("[buildhound] report written: {}", htmlFile)
             }
             val byOutcome = tasks.groupingBy { it.outcome }.eachCount()
+            val testCount = tests.sumOf { task -> task.classes.sumOf { it.passed + it.failed + it.skipped } }
             logger.lifecycle(
-                "[buildhound] build {}: {} task(s) {}, mode={}, cc={}, hitRate={}",
-                payload.outcome, tasks.size, byOutcome, mode, ccState,
+                "[buildhound] build {}: {} task(s) {}, {} test(s), mode={}, cc={}, hitRate={}",
+                payload.outcome, tasks.size, byOutcome, testCount, mode, ccState,
                 payload.derived?.cacheableHitRate?.let { "%.2f".format(java.util.Locale.ROOT, it) } ?: "n/a",
             )
             logger.lifecycle("[buildhound] payload written: {} (buildId={})", payloadFile, payload.buildId)
