@@ -40,6 +40,10 @@ application {
 
 dependencies {
     implementation(projects.buildhoundCommons)
+    // Shared payload-rendering channel (plan 017): the dashboard serves the same timeline
+    // renderer the HTML artifact inlines. buildhound-report is dependency-free by rule
+    // (architecture §1), so nothing transitive arrives — resources plus one object.
+    implementation(projects.buildhoundReport)
 
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.netty)

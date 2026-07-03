@@ -27,8 +27,12 @@
 | `buildhound-ci-assets` | not a Gradle module | none | Azure YAML template, metric CLI (shell), profiler scenarios |
 
 **Dependency rule:** `buildhound-commons` has no dependency on any other module and no Gradle API
-types. The plugin and server never share code except through `buildhound-commons`. `buildhound-report`
-depends on nothing but the payload JSON shape.
+types. The plugin and server never share *code* except through `buildhound-commons`. `buildhound-report`
+depends on nothing but the payload JSON shape, and is the **shared payload-rendering channel**: both the
+plugin (inlines the template + renderer into the standalone artifact) and the server (serves the same
+renderer to the dashboard, e.g. `/timeline.js`) may depend on it (plan 017). Because it stays
+dependency-free, that edge is resources-plus-pure-functions — nothing transitive arrives, and the two
+surfaces render identically instead of drifting apart as duplicated copies would.
 
 **JVM floors:** every module targets JVM 21 (owner decision, deviating from spec §3.1's
 Java 11+; see decision log). Consequence for the compatibility matrix: the plugin
@@ -200,5 +204,6 @@ The server ships as an OCI image (`buildhound-server/Dockerfile`, compose in `de
 | 2026-07-03 | Plugin subprocesses run via JDK `ProcessBuilder` with `waitFor(timeout)`/`destroyForcibly` (10 s default, `buildhound.vcs.timeout.ms` override), not `ExecOperations` (plan 015, §2 rule 11) | `ExecOperations.exec` cannot bound a hung git, which stalled the build forever; CCUD enforces the same 10 s hard kill. Supersedes plan 004's accepted "no exec timeout" residual risk |
 | 2026-07-03 | Isolated-projects degradation contract for task metadata (plan 016, §2 rule 12): when `BuildFeatures.isolatedProjects.active` is true the `taskGraph.allTasks` walk is skipped, so `tasks[].type`/`cacheable`/`nonCacheableReason` are null and `derived.cacheableHitRate` is null. The plan-021 IP CI job asserts exactly this shape | `allTasks` from settings scope is an IP violation by design; degrading to empty (not failing, not violating) is the only correct behavior, and pinning the shape keeps the future IP job a real regression gate |
 | 2026-07-03 | `derived.cacheableHitRate` is now over a **cacheable-only** denominator (plan 016): a task is cache-relevant iff `cacheable == true` or its outcome is FROM_CACHE (a cache hit proves cacheability past a static `cacheIf {}` miss); null when no task carries a non-null `cacheable` flag (IP degradation / legacy pre-016 payloads). Supersedes the v0 all-tasks denominator | The old number diluted the rate with non-cacheable work and was not comparable across builds; honest-nulls over a spliced two-definition trend line (plan 005). Server stores derived metrics as-sent, so no migration — pre-release step change accepted |
+| 2026-07-03 | `buildhound-report` is the shared payload-rendering channel; the server may depend on it (not only the plugin), amending §1's "plugin and server never share code except through commons" for *rendering* code (plan 017). The task timeline is one JS renderer served at `/timeline.js` and inlined in the artifact | Duplicating the renderer per surface is permanent copy-drift with a sync test as the only guard; a dependency-free module shared by reference is a resources-plus-pure-functions edge with no transitive cost. Lanes are computed from start/end overlaps (max concurrency), deliberately not the unpopulated Gradle `worker` id |
 
 *Add a row (or a docs/plans entry) whenever an architectural decision is made or reversed.*

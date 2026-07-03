@@ -116,7 +116,7 @@ Identity fields: `userId = "u_" + hex12(hmacSha256(projectSalt, "user:" + userna
 
 ### 3.8 Standalone HTML artifact (locked: no CDN)
 
-Single self-contained `buildhound-report.html`: inlined CSS/JS (a small vendored chart lib or hand-rolled SVG — no external requests, so it renders inside Azure artifact viewers and email attachments). Content: header (build id, outcome, duration, env, toolchain), task timeline by worker lane, sortable task table with outcome/duration/type, cache summary donut + top cacheable misses, Kotlin panel (incremental %, rebuild reasons, slowest compilations), tests summary with failures, process snapshot, link to the dashboard build page when server configured. Data embedded as one JSON blob → the artifact doubles as an offline payload copy.
+Single self-contained `buildhound-report.html`: inlined CSS/JS (a small vendored chart lib or hand-rolled SVG — no external requests, so it renders inside Azure artifact viewers and email attachments). Content: header (build id, outcome, duration, env, toolchain), task timeline by concurrency lane (lanes computed greedily from per-task start/end overlaps — max observed parallelism — not the Gradle `worker` id, which stays unpopulated; plan 017), sortable task table with outcome/duration/type, cache summary donut + top cacheable misses, Kotlin panel (incremental %, rebuild reasons, slowest compilations), tests summary with failures, process snapshot, link to the dashboard build page when server configured. Data embedded as one JSON blob → the artifact doubles as an offline payload copy.
 
 ### 3.9 Upload semantics
 

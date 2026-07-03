@@ -22,8 +22,11 @@ class DashboardScriptTest {
         val dir = Files.createTempDirectory("buildhound-dashboard-smoke")
         val script = dir.resolve("dashboard.js").also { it.writeBytes(resource("web/dashboard.js")) }
         val harness = dir.resolve("dashboard-smoke.js").also { it.writeBytes(resource("web/dashboard-smoke.js")) }
+        // The shared timeline renderer rides in on the buildhound-report dependency; the
+        // harness loads it as a global before dashboard.js, like the browser does (plan 017).
+        val timeline = dir.resolve("timeline.js").also { it.writeBytes(resource("dev/buildhound/report/timeline.js")) }
 
-        val process = ProcessBuilder("node", harness.toString(), script.toString())
+        val process = ProcessBuilder("node", harness.toString(), script.toString(), timeline.toString())
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.readBytes().decodeToString()

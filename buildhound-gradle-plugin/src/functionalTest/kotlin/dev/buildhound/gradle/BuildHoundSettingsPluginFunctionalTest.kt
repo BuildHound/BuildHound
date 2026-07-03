@@ -343,6 +343,10 @@ class BuildHoundSettingsPluginFunctionalTest {
         val content = html.readText()
         assertTrue(content.startsWith("<!DOCTYPE html>"), "artifact must stay a full HTML document")
         assertTrue(content.contains(readPayload().buildId), "artifact must embed the payload data")
+        // The shared timeline renderer is spliced into the artifact (plan 017).
+        assertTrue(content.contains("id=\"timeline\""), "artifact must carry the timeline section")
+        assertTrue(content.contains("function buildhoundTimeline"), "artifact must inline the timeline renderer")
+        assertFalse(content.contains("__BUILDHOUND_TIMELINE_JS__"), "timeline placeholder must be spliced away")
     }
 
     @Test

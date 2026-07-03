@@ -15,6 +15,23 @@ class ReportAssetsTest {
     }
 
     @Test
+    fun `template splices the shared timeline renderer and leaves no placeholder`() {
+        val template = ReportAssets.template()
+
+        assertTrue(template.contains("function buildhoundTimeline"), "timeline renderer must be spliced in")
+        assertFalse(template.contains(ReportAssets.TIMELINE_PLACEHOLDER), "timeline placeholder must be consumed")
+        // The data placeholder survives template() — render() replaces it later.
+        assertTrue(template.contains(ReportAssets.DATA_PLACEHOLDER))
+    }
+
+    @Test
+    fun `timeline js is safe to splice into a script element`() {
+        // A </script sequence would terminate the host <script> early; timelineJs() also
+        // asserts this itself, so this pins the contract from the test side too.
+        assertFalse(ReportAssets.timelineJs().contains("</script", ignoreCase = true))
+    }
+
+    @Test
     fun `template makes no external requests`() {
         val template = ReportAssets.template()
 

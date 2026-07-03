@@ -73,6 +73,11 @@ Spec §6. Consumes the plan-010 query API; last Phase-1 chunk.
 - **Roadmap's build-detail "timeline" deferred**: task entries carry `durationMs`
   but no start offsets (schema v1), so a timeline needs an additive schema field
   first — same bucket as the pipeline filter above.
+  > **Correction (plan 017, 2026-07-03):** this premise was wrong. `TaskExecution.startMs`
+  > is a required schema-v1 field and has always been populated; the 2026-07-03
+  > reconciliation confirmed it. The timeline needed no schema change — only a greedy lane
+  > layout over the existing start/end offsets — and shipped in plan 017. Only the
+  > `worker` id stays unpopulated.
 - Filter/paging/trend-range state lives in function arguments, not the hash: back
   navigation or refresh resets to defaults. Accepted for v0; hash-encoded state is
   the natural follow-up when the dashboard grows a pipeline filter.

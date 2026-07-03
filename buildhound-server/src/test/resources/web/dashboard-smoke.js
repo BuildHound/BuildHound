@@ -34,6 +34,15 @@ const documentStub = {
     getElementById: id => byId[id] || null,
 };
 
+// Recursively count descendants (plus self) with a given tag — used to assert the
+// timeline <svg> is (or is not) rendered into the detail view.
+function countTag(node, tag) {
+    if (!node || typeof node !== "object") return 0;
+    let n = node.tag === tag ? 1 : 0;
+    for (const child of node.children || []) n += countTag(child, tag);
+    return n;
+}
+
 const store = {};
 const responses = {
     "/v1/builds?limit=50&offset=0": [
@@ -79,14 +88,16 @@ const context = {
     fetch: fetchStub,
     URLSearchParams,
     Option: function (label, value) { const n = makeNode("option"); n.textContent = label; n.value = value; return n; },
-    Date, Math, Object, String, Error, console,
+    Date, Math, Object, String, Number, Array, Boolean, isFinite, Error, console,
     setTimeout, // not used, but harmless
 };
 context.globalThis = context;
 
-const source = fs.readFileSync(process.argv[2], "utf8");
 vm.createContext(context);
-vm.runInContext(source, context, { filename: "dashboard.js" });
+// Load the shared timeline renderer (argv[3]) first so buildhoundTimeline is a global for
+// the detail view, mirroring the browser loading /timeline.js before /dashboard.js.
+if (process.argv[3]) vm.runInContext(fs.readFileSync(process.argv[3], "utf8"), context, { filename: "timeline.js" });
+vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), context, { filename: "dashboard.js" });
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -98,6 +109,10 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     context._onhashchange();
     await tick(); await tick();
     if (!fetched.includes("/v1/builds/b1")) throw new Error("detail view did not fetch");
+    // Timeline present (buildhoundTimeline loaded): b1 has tasks, so an <svg> must render.
+    if (context.buildhoundTimeline && countTag(byId["app"], "svg") === 0) {
+        throw new Error("detail view did not render the timeline svg");
+    }
 
     context.location.hash = "#/build/b2"; // minimal payload — missing-keys defensiveness
     context._onhashchange();
@@ -113,6 +128,22 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     context.location.hash = "#/build/missing";
     context._onhashchange();
     await tick(); await tick();
+
+    // Timeline global absent → detail view must still render (graceful omission), no throw.
+    // (A function-declared global is non-configurable, so overwrite rather than delete.)
+    context.buildhoundTimeline = undefined;
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/build/b1"; context._onhashchange(); await tick(); await tick();
+    if (countTag(byId["app"], "svg") !== 0) throw new Error("timeline must be omitted when the global is absent");
+    if (countTag(byId["app"], "table") === 0) throw new Error("detail view must still render without the timeline global");
+
+    // Throwing renderer → the detail view's try/catch swallows it and still renders the
+    // rest of the page (the never-blank guarantee, exercised here rather than only asserted).
+    context.buildhoundTimeline = function () { throw new Error("boom"); };
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/build/b1"; context._onhashchange(); await tick(); await tick();
+    if (countTag(byId["app"], "svg") !== 0) throw new Error("a throwing renderer must not leave a timeline svg");
+    if (countTag(byId["app"], "table") === 0) throw new Error("detail view must survive a throwing renderer");
 
     // Token save handler wiring.
     byId["token-save"].listeners.click[0]();

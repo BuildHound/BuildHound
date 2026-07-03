@@ -155,6 +155,18 @@
         }
         app.append(summary);
 
+        // Task timeline (plan 017): the same renderer the HTML artifact inlines, served at
+        // /timeline.js. Best-effort — a renderer defect or a missing global degrades to no
+        // section, never a blank detail page (client-side analogue of the never-fail rule).
+        try {
+            const timeline = typeof buildhoundTimeline === "function" ? buildhoundTimeline(tasks) : null;
+            if (timeline) {
+                app.append(el("h3", "Timeline"));
+                app.append(el("p", "max parallel " + timeline.lanes, "muted"));
+                app.append(timeline.svg);
+            }
+        } catch (e) { /* keep the rest of the detail page */ }
+
         const table = el("table");
         const head = el("tr");
         for (const columnName of ["Task", "Outcome", "Duration", "Incremental"]) head.append(el("th", columnName));

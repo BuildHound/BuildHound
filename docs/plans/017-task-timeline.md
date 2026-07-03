@@ -178,3 +178,23 @@ analogue of the plugin's never-fail rule.
 - `./gradlew build` green, including the new node-harness tests on a node-equipped
   runner; no golden files added or changed. Architecture §1 + decision log, spec §3.8,
   and plan 012's correction land in the same PR.
+
+## 8. Divergences from the plan (recorded during implementation)
+
+- **SVG namespace literal is split** (`"http" + "://www.w3.org/2000/svg"`) in `timeline.js`.
+  The plan wanted the existing artifact zero-network test to cover the spliced renderer
+  unchanged; that test greps for the substring `http://`, and the SVG namespace identifier
+  (never a network fetch) would have tripped it. Splitting the literal keeps the test
+  unmodified, as the plan intended. Commented at the call site.
+- **`ReportAssets.template()` now does the splice** (not `render()`), reading `timeline.js`
+  from resources and validating no `</script` and no leftover placeholder — so the
+  zero-network scan and every existing `render()` test cover the timeline for free, exactly
+  as the plan's "template() keeps returning the complete document" note intended.
+- **Dashboard smoke harness overwrites the global rather than deleting it** for the
+  "renderer absent" case: a function-declared global is non-configurable, so `delete` is a
+  no-op; `context.buildhoundTimeline = undefined` is what actually exercises the
+  `typeof … === "function"` guard. The svg-present assertion is itself guarded on the
+  global being loaded, so the harness still passes if invoked without the timeline arg.
+- **`timeline-smoke.js` lives at `buildhound-report/src/test/resources/`** (root), loaded
+  by `TimelineScriptTest` from the classpath — mirroring the server's `web/…-smoke.js`
+  placement without inventing a `web/` folder the report module otherwise lacks.

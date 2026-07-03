@@ -74,6 +74,26 @@ class DashboardRoutesTest {
     }
 
     @Test
+    fun `timeline script is served with a javascript content type and CSP and matches the report module`() = testApplication {
+        application { buildHoundModule() }
+
+        val response = client.get("/timeline.js")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(ContentType.parse("text/javascript"), response.contentType()?.withoutParameters())
+        assertEquals(Charsets.UTF_8, response.contentType()?.charset())
+        assertEquals(DashboardAssets.csp, response.headers["Content-Security-Policy"])
+        assertEquals("no-cache", response.headers["Cache-Control"])
+        assertEquals("nosniff", response.headers["X-Content-Type-Options"])
+        val served = response.bodyAsText()
+        assertTrue(served.contains("buildhoundTimeline"))
+        // Byte-identical (over UTF-8) to the buildhound-report resource — one renderer, no drift.
+        val reportResource = checkNotNull(javaClass.classLoader.getResourceAsStream("dev/buildhound/report/timeline.js"))
+            .use { it.readBytes() }.decodeToString()
+        assertEquals(reportResource, served, "served /timeline.js must match the report module resource")
+    }
+
+    @Test
     fun `data endpoints stay locked while the page itself is public`() = testApplication {
         application { buildHoundModule() }
 

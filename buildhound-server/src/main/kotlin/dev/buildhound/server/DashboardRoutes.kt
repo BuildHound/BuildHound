@@ -22,6 +22,13 @@ internal object DashboardAssets {
     val dashboardJs: ByteArray = resource("web/dashboard.js")
 
     /**
+     * The shared timeline renderer, loaded verbatim from the buildhound-report module
+     * (plan 017) so the dashboard and the standalone artifact never drift. Served at
+     * `/timeline.js` under the same `script-src 'self'` CSP as dashboard.js.
+     */
+    val timelineJs: ByteArray = resource("dev/buildhound/report/timeline.js")
+
+    /**
      * The single inline `<style>` block is pinned by hash instead of
      * `style-src 'unsafe-inline'` (review hardening) — computed from the served
      * bytes so a style edit can never silently un-style the page.
@@ -54,6 +61,10 @@ fun Route.dashboardRoutes() {
     get("/dashboard.js") {
         call.dashboardHeaders()
         call.respondBytes(DashboardAssets.dashboardJs, ContentType.Text.JavaScript.withCharset(Charsets.UTF_8))
+    }
+    get("/timeline.js") {
+        call.dashboardHeaders()
+        call.respondBytes(DashboardAssets.timelineJs, ContentType.Text.JavaScript.withCharset(Charsets.UTF_8))
     }
 }
 
