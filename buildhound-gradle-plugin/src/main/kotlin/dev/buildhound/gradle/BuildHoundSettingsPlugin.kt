@@ -15,6 +15,7 @@ import org.gradle.build.event.BuildEventsListenerRegistry
  * configuration-cache safe: no `Project` references at execution time, state flows through
  * providers and build-service parameters only.
  */
+@Suppress("UnstableApiUsage")
 abstract class BuildHoundSettingsPlugin @Inject constructor(
     private val eventsListenerRegistry: BuildEventsListenerRegistry,
     private val flowScope: FlowScope,

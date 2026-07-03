@@ -23,6 +23,7 @@ import org.gradle.api.tasks.Optional
  * it in later chunks). Hard rule: never fails the build — every error is logged at
  * warn and swallowed.
  */
+@Suppress("UnstableApiUsage")
 class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters> {
 
     interface Parameters : FlowParameters {
