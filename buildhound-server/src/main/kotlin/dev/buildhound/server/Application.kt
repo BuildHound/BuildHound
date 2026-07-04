@@ -243,6 +243,8 @@ fun Application.buildHoundModule(
                 settingsRoutes(stores.settings, stores.tokens)
                 // Addon API namespace (plan 039): shares the query limiter — no new flood vector.
                 addonRoutes(stores.addons, stores.tokens, stores.registeredAddons)
+                // Admin namespace (plan 042): retention config, admin-scoped; shares the query limiter.
+                adminRoutes(stores.settings, stores.tokens)
             }
         }
     }

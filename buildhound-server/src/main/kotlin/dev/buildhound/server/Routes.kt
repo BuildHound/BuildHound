@@ -295,6 +295,31 @@ fun Route.settingsRoutes(settings: SettingsStore, tokens: TokenStore) {
     }
 }
 
+/**
+ * `GET/PUT /v1/admin/retention` (plan 042): per-tenant retention windows. Admin-scoped — a `read`
+ * token gets 403, a missing token 401. Invalid windows → 400. Tenant comes from the token, never the
+ * body, so an admin token can only ever change its own project's retention.
+ */
+fun Route.adminRoutes(settings: SettingsStore, tokens: TokenStore) {
+    route("/v1/admin") {
+        get("/retention") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsAdmin) ?: return@get
+            call.runQuery { settings.retention(project.id) }?.let { call.respond(it.value) }
+        }
+        put("/retention") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsAdmin) ?: return@put
+            val body = call.receiveBounded(16 * 1024)
+                ?: return@put call.respond(HttpStatusCode.PayloadTooLarge, ApiError("retention config too large"))
+            val cfg = runCatching {
+                BuildHoundJson.payload.decodeFromString(RetentionConfig.serializer(), body.decodeToString())
+            }.getOrElse { return@put call.respond(HttpStatusCode.BadRequest, ApiError("invalid retention config")) }
+            cfg.validationError()?.let { return@put call.respond(HttpStatusCode.BadRequest, ApiError(it)) }
+            call.runQuery { settings.setRetention(project.id, cfg) } ?: return@put
+            call.respond(cfg)
+        }
+    }
+}
+
 private fun validateSettings(s: ProjectSettings): String? = when {
     s.baselineN < RegressionEngine.MIN_BASELINE -> "baselineN must be >= ${RegressionEngine.MIN_BASELINE}"
     s.warnZ <= 0.0 || s.failZ <= 0.0 -> "z thresholds must be positive"

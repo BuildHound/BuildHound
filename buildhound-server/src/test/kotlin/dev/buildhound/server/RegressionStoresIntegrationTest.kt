@@ -118,4 +118,24 @@ class RegressionStoresIntegrationTest {
         settings.put(project.id, updated)
         assertEquals(30, settings.get(project.id)?.baselineN, "put upserts")
     }
+
+    @Test
+    fun `retention defaults on absence, upserts, and shares the row without clobbering regression columns`() {
+        val project = tokens.ensureProjectWithToken("retention-project", sha256Hex("rp"))
+        // No row yet → spec defaults (90/395).
+        assertEquals(RetentionConfig.DEFAULT, settings.retention(project.id))
+
+        // setRetention on a project with no row creates it with regression columns at their defaults.
+        settings.setRetention(project.id, RetentionConfig(30, 180))
+        assertEquals(RetentionConfig(30, 180), settings.retention(project.id))
+
+        // A later regression put must not touch the retention columns…
+        settings.put(project.id, ProjectSettings(baselineN = 15))
+        assertEquals(RetentionConfig(30, 180), settings.retention(project.id), "put must not clobber retention")
+
+        // …and a retention update must not touch the regression columns.
+        settings.setRetention(project.id, RetentionConfig(45, 365))
+        assertEquals(15, settings.get(project.id)?.baselineN, "setRetention must not clobber regression settings")
+        assertEquals(RetentionConfig(45, 365), settings.retention(project.id), "setRetention upserts")
+    }
 }

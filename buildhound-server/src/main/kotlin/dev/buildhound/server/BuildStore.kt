@@ -289,6 +289,15 @@ interface SettingsStore {
     fun get(projectId: String): ProjectSettings?
 
     fun put(projectId: String, settings: ProjectSettings)
+
+    /**
+     * Per-project retention windows (plan 042), backed by the same `project_settings` row. Returns
+     * the spec defaults when the project has no row (or has one with the default columns). Kept a
+     * separate accessor from [get]/[put] so retention writes never disturb the regression columns.
+     */
+    fun retention(projectId: String): RetentionConfig = RetentionConfig.DEFAULT
+
+    fun setRetention(projectId: String, config: RetentionConfig) {}
 }
 
 /**
@@ -327,6 +336,7 @@ object TokenScope {
     const val INGEST = "ingest"
     const val READ = "read"
     const val ADDON = "addon"
+    const val ADMIN = "admin"
     const val ALL = "all"
 
     fun allowsIngest(scope: String): Boolean = scope == INGEST || scope == ALL
@@ -335,7 +345,12 @@ object TokenScope {
     /** Addon APIs (plan 039): a dedicated scope walls the `/v1/addons` namespace off from ingest/read tokens. */
     fun allowsAddon(scope: String): Boolean = scope == ADDON || scope == ALL
 
-    /** Admin operations (e.g. writing project settings) require the unrestricted token. */
+    /**
+     * Admin APIs (plan 042): retention config and future tenant admin. A distinct scope so a leaked CI
+     * `ingest` or dashboard `read` token can never reach `/v1/admin` — only an `admin` or `all` token.
+     */
+    fun allowsAdmin(scope: String): Boolean = scope == ADMIN || scope == ALL
+
     fun allowsAll(scope: String): Boolean = scope == ALL
 }
 
@@ -673,11 +688,18 @@ class InMemoryVerdictStore : VerdictStore {
 
 class InMemorySettingsStore : SettingsStore {
     private val settings = ConcurrentHashMap<String, ProjectSettings>()
+    private val retention = ConcurrentHashMap<String, RetentionConfig>()
 
     override fun get(projectId: String): ProjectSettings? = settings[projectId]
 
     override fun put(projectId: String, settings: ProjectSettings) {
         this.settings[projectId] = settings
+    }
+
+    override fun retention(projectId: String): RetentionConfig = retention[projectId] ?: RetentionConfig.DEFAULT
+
+    override fun setRetention(projectId: String, config: RetentionConfig) {
+        retention[projectId] = config
     }
 }
 

@@ -1064,6 +1064,44 @@ class PostgresSettingsStore(private val dataSource: DataSource) : SettingsStore 
             }
         }
     }
+
+    override fun retention(projectId: String): RetentionConfig =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT retention_raw_days, retention_build_days FROM project_settings WHERE project_id = ?",
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.executeQuery().use { rows ->
+                    if (!rows.next()) RetentionConfig.DEFAULT
+                    else RetentionConfig(
+                        rawDays = rows.getInt("retention_raw_days"),
+                        buildDays = rows.getInt("retention_build_days"),
+                    )
+                }
+            }
+        }
+
+    override fun setRetention(projectId: String, config: RetentionConfig) {
+        // Insert-or-update only the retention columns; the regression columns take their table
+        // defaults on a fresh insert and are left untouched on conflict (setRetention must never
+        // clobber a project's regression config, and put() must never clobber retention).
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO project_settings (project_id, retention_raw_days, retention_build_days, updated_at)
+                VALUES (?, ?, ?, now())
+                ON CONFLICT (project_id)
+                DO UPDATE SET retention_raw_days = EXCLUDED.retention_raw_days,
+                              retention_build_days = EXCLUDED.retention_build_days, updated_at = now()
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setInt(2, config.rawDays)
+                statement.setInt(3, config.buildDays)
+                statement.executeUpdate()
+            }
+        }
+    }
 }
 
 /** Tenant-scoped jsonb addon storage (plan 039); every query carries project_id + addon_id. */
