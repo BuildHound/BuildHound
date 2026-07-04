@@ -12,7 +12,7 @@
   by-omission gap in plan 012; token entry should read as first-run, not error).
 - [research/README.md](../research/README.md) §4 item 6.
 - Spec [§6 Dashboard](../build-telemetry-spec.md); extends
-  [implemented/012-dashboard.md](implemented/012-dashboard.md).
+  [implemented/012-dashboard.md](012-dashboard.md).
 
 ## 2. Scope
 

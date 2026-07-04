@@ -8,7 +8,10 @@ order. Numbering continues across directories — the next plan takes the next f
 
 Lifecycle: active plans live in this directory; once a plan's exit criteria are met and the
 work is merged, the file moves to [implemented/](implemented/) (`git mv`, same PR or a sweep).
-Plans 000–013 (roadmap phases 0–1) are implemented and live there.
+Plans 000–034, 036, and 038–042 (roadmap phases 0–4) are implemented and live there. Two
+plans remain active in this directory, both **blocked**: [035](035-cc-miss-reason-capture.md)
+(CC miss-reason capture — not implementable as specified) and
+[037](037-test-quarantine-addon.md) (test-quarantine addon — deferred behind gate #3).
 
 A plan contains, briefly:
 

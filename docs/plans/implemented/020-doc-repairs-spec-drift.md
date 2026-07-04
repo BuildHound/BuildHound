@@ -14,8 +14,8 @@
   is the ecosystem's most universal defect), §2.1a and
   [research/repos/Talaiot.md](../research/repos/Talaiot.md) item 2 (`ConfigurationPhaseObserver`
   pattern — which the shipped code already implements).
-- Divergences originally recorded in [plan 008](implemented/008-upload-spool.md) ("Divergences
-  from spec, recorded up front") and [plan 003](implemented/003-environment-collector.md).
+- Divergences originally recorded in [plan 008](008-upload-spool.md) ("Divergences
+  from spec, recorded up front") and [plan 003](003-environment-collector.md).
 
 ## 2. Scope
 
@@ -27,7 +27,7 @@
 2. Fix the Gradle-floor drift: spec §1 says "Gradle 8.x+" and §8's TestKit matrix starts at
    "Gradle 8.0"; both contradict §3.1 and the architecture decision log (8.14 floor,
    2026-07-02 rows). Fix to 8.14.
-3. Append a dated amendment to [plan 003](implemented/003-environment-collector.md): its
+3. Append a dated amendment to [plan 003](003-environment-collector.md): its
    CC-detection wording ("config-vs-execution counter comparison") does not describe the shipped
    mechanism (static `AtomicBoolean` observer + public `BuildFeatures`).
 

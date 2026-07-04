@@ -15,7 +15,7 @@
   "since last period" delta chips, headline trend, "View more" drill-downs), §4.2.4 (dimension
   slicing / "Configuration Insights" by Gradle version, JDK, module), §2/§4.1.4-5 (plain-language
   numbers, explicit zeros, honest degraded states). Fleet-first pattern is Tuist's, §1.2/§3.
-- Extends [implemented/012-dashboard.md](implemented/012-dashboard.md) and reuses the conventions
+- Extends [implemented/012-dashboard.md](012-dashboard.md) and reuses the conventions
   from [018-dashboard-quick-wins.md](018-dashboard-quick-wins.md) (empty states, count-summary
   sentences) and the rollup/endpoint scaffolding from
   [026-server-rollups-project-cost.md](026-server-rollups-project-cost.md).

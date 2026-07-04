@@ -85,7 +85,7 @@ null).
 **macOS leg (blocking).** `build-macos` mirrors the `build` job on `macos-latest`
 (Temurin 26, Gradle 9.6.1, `gradle build`). Full-suite, not a sample canary: plan 007's
 macOS-only field bug was in scrubber path handling
-([implemented/007-scrubber.md](implemented/007-scrubber.md)) and is covered by exactly these
+([implemented/007-scrubber.md](007-scrubber.md)) and is covered by exactly these
 unit + functional tests. The server's Postgres integration test self-skips where Docker is
 absent (`PostgresStoresIntegrationTest.kt:22`, `@Testcontainers(disabledWithoutDocker = true)`),
 so `gradle build` is viable on macOS/Windows runners, which ship no Docker. One macOS job only —

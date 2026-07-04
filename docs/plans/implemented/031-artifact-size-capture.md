@@ -1,6 +1,15 @@
 # Plan 031 — APK/AAB/AAR size capture + trend view (spec §4 artifacts)
 
-**Status: planned — roadmap phase 3** · 2026-07-03
+**Status: shipped but non-functional under AGP 9.x — capture rework deferred** · 2026-07-03 (defect recorded 2026-07-04)
+
+> **Known defect (branch review, 2026-07-04).** The code shipped, but the collector never
+> captures a size under AGP 9.x: `AndroidArtifactCollector` references AGP variant-API types
+> from the **settings**-plugin classloader, which has no AGP at runtime (`compileOnly`), so the
+> `withPlugin("com.android.application")` callback `NoClassDefFoundError`s and the never-fail
+> `runCatching` swallows it. The Android functional assertion is `@Disabled`. See the
+> architecture decision log (2026-07-04 row) for the full diagnosis; the fix — moving the
+> AGP-touching code into a separately-loaded project-plugin module (internal-adapters pattern) —
+> is a tracked follow-up.
 
 ## 1. Source
 

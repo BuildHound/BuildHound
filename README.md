@@ -9,13 +9,16 @@ fully standalone HTML report artifact. Apache-2.0. Home: [buildhound.dev](https:
 
 | Path | What it is |
 |---|---|
-| `buildhound-commons/` | Kotlin Multiplatform shared module: payload schema v1 + `CiEnvironmentProvider` SPI |
-| `buildhound-gradle-plugin/` | Settings plugin: task-event collector (BuildService), Flow-API finalizer, `buildhound {}` DSL |
-| `buildhound-server/` | Ktor ingestion service (`POST /v1/builds`), shipped as an OCI image |
-| `buildhound-report/` | Standalone HTML build-report artifact (zero network access) |
-| `buildhound-ci-assets/` | Azure Pipelines template, metric CLI — JVM-free CI assets |
+| `buildhound-commons/` | Kotlin Multiplatform shared module: payload schema v1 + `CiEnvironmentProvider` / addon SPIs — the contract everything builds against |
+| `buildhound-gradle-plugin/` | Settings plugin (`dev.buildhound`): collectors (BuildService), Flow-API finalizer, `buildhound {}` DSL, uploader |
+| `buildhound-server/` | Ktor ingestion + query service (`POST /v1/builds`, rollups, regression engine, CI connectors, dashboard), shipped as an OCI image |
+| `buildhound-report/` | Standalone HTML build-report artifact (zero network access, enforced by test) |
+| `buildhound-internal-adapters/` | Opt-in module (`dev.buildhound.internal-adapters`) — the one sanctioned use of internal Gradle APIs: cache origin/keys + critical-path/avoided-time |
+| `buildhound-addon-test-sharding/` | Opt-in addon (`dev.buildhound.test-sharding`): server-balanced test sharding across CI shards |
+| `buildhound-mcp/` | Opt-in read-only MCP server exposing the query API over stdio JSON-RPC (agent tooling) |
+| `buildhound-ci-assets/` | JVM-free CI assets: GitHub Action, GitLab + Azure Pipelines templates, metric CLI, overhead/profiler harnesses |
 | `deploy/` | `compose.yaml`: server + TimescaleDB for local/self-host |
-| `docs/` | Research, specification, roadmap, and the living [architecture doc](docs/architecture.md) |
+| `docs/` | Spec, roadmap, research, the living [architecture doc](docs/architecture.md), the [OpenAPI contract](docs/api/openapi.yaml), and [implementation plans](docs/plans/) |
 
 ## Quick start
 
@@ -50,10 +53,27 @@ buildhound {
 
 ## Status
 
-Phase 0 scaffold (see [roadmap](docs/build-telemetry-roadmap.md)): module structure,
-schema v1 models with golden-file contract tests, a configuration-cache-safe settings
-plugin validated by TestKit (including CC reuse), a Ktor ingest skeleton with idempotent
-`POST /v1/builds`, and the OCI packaging. Phase 1 ("see every build") is next.
+Roadmap phases 0–4 are implemented (see the [roadmap](docs/build-telemetry-roadmap.md) and
+[implemented plans](docs/plans/implemented/)). Highlights:
+
+- **Plugin** — configuration-cache- and isolated-projects-safe collectors validated by TestKit
+  (incl. CC reuse): task/cache/type telemetry, JUnit test results, Kotlin build-report metrics,
+  input fingerprints, an end-of-build JVM process probe, lost-build (`INTERRUPTED`) accounting,
+  broad CI/environment detection, and a measured overhead budget.
+- **Server** — Postgres + TimescaleDB persistence, multi-tenant with per-token + per-host rate
+  limiting, eBay-style project/task rollups, a regression engine with baselines and alerts,
+  flaky-test detection, per-build comparison, CI connectors (Azure DevOps, GitHub Actions,
+  GitLab) that enrich builds with pipeline timelines, retention with an `admin` scope, an
+  OpenAPI-contracted API, and a zero-CDN dashboard + docs viewer.
+- **Artifacts & extension points** — the standalone HTML report, an addon SPI with the
+  test-sharding addon, the internal-adapters module, and an opt-in read-only MCP server.
+
+Two plans remain open, both blocked: [035](docs/plans/035-cc-miss-reason-capture.md) and
+[037](docs/plans/037-test-quarantine-addon.md).
+
+> **Known gap:** Android artifact-size capture (plan 031) shipped but is non-functional under
+> AGP 9.x (a settings-plugin/AGP classloader boundary) and its test is disabled pending a
+> rework — see the [architecture decision log](docs/architecture.md#7-decision-log).
 
 ## Contributing / workflow
 
