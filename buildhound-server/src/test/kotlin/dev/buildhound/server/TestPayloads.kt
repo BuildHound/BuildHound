@@ -1,5 +1,6 @@
 package dev.buildhound.server
 
+import dev.buildhound.commons.payload.ArtifactSizes
 import dev.buildhound.commons.payload.BenchmarkInfo
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
@@ -28,6 +29,7 @@ object TestPayloads {
         buildUrl: String? = null,
         userId: String? = null,
         benchmark: BenchmarkInfo? = null,
+        artifacts: ArtifactSizes? = null,
         tasks: List<TaskExecution> = emptyList(),
     ): BuildPayload = BuildPayload(
         buildId = buildId,
@@ -41,6 +43,7 @@ object TestPayloads {
         derived = hitRate?.let { DerivedMetrics(cacheableHitRate = it) },
         environment = userId?.let { EnvironmentInfo(userId = it) },
         benchmark = benchmark,
+        artifacts = artifacts,
         tasks = tasks,
     )
 

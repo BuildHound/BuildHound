@@ -391,6 +391,15 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             call.respondQuery { store.trends(project.id, filter, days, System.currentTimeMillis()) }
         }
 
+        // Android artifact-size trends (plan 031, spec §6): daily avg/max per (module, variant, type).
+        // Read scope, tenant-scoped, same filter + days handling as /trends (benchmark excluded by default).
+        get("/artifacts/trends") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val filter = call.buildFilterOrNull()
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
+            call.respondQuery { store.artifactTrends(project.id, filter, call.daysParam(), System.currentTimeMillis()) }
+        }
+
         // Server-side rollups over the normalized task_executions table (plan 026). Read-scope,
         // tenant-scoped, days clamped like /trends, top-25 result caps enforced in the store.
         get("/rollups/project-cost") {

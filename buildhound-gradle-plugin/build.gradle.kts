@@ -45,6 +45,11 @@ dependencies {
     // embedding (plan 006) — a module dependency is correct for now.
     implementation(projects.buildhoundReport)
 
+    // AGP Variant API for the Android artifact-size collector (plan 031). compileOnly: the plugin
+    // must apply cleanly to non-Android builds, and no AGP jar ships with it — the collector is
+    // loaded only after a runtime class-probe confirms AGP is present.
+    compileOnly(libs.android.gradle.api)
+
     testImplementation(kotlin("test"))
     testRuntimeOnly(libs.junit.platform.launcher)
 }

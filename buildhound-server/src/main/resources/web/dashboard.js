@@ -735,6 +735,29 @@
             bars.append(bar);
         });
         app.append(bars);
+
+        // Artifact sizes (plan 031): one line per (module, variant, type), reusing trendChart with a
+        // bytes→MB formatter. Best-effort — a fetch error just omits the panel, never blanks the page.
+        try {
+            const artifacts = await api("/v1/artifacts/trends?" + params);
+            if (seq !== renderSeq) return;
+            app.append(el("h3", "Artifact sizes"));
+            if (!artifacts.length) {
+                app.append(el("p", "No Android artifacts in the last " + days + " days", "muted"));
+            } else {
+                const mb = bytes => (bytes / (1024 * 1024)).toFixed(1) + " MB";
+                const bySeries = new Map();
+                for (const p of artifacts) {
+                    const label = (p.module || "") + " · " + p.variant + " · " + p.type;
+                    if (!bySeries.has(label)) bySeries.set(label, []);
+                    bySeries.get(label).push(p);
+                }
+                for (const [label, series] of bySeries) {
+                    app.append(el("p", label, "muted"));
+                    app.append(trendChart(series, p => p.avgSizeBytes, "#a855f7", mb));
+                }
+            }
+        } catch (e) { /* keep the rest of the trends page */ }
     }
 
     // Comparisons (plan 022): pick two builds, then explain B's cache misses vs A by input diff.

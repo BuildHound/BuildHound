@@ -101,6 +101,11 @@ const responses = {
         { day: "2026-06-30", builds: 3, failures: 1, avgDurationMs: 60000, avgHitRate: 0.5 },
         { day: "2026-07-01", builds: 2, failures: 0, avgDurationMs: null, avgHitRate: null },
     ],
+    // Artifact-size trends (plan 031): one series for :app release APK.
+    "/v1/artifacts/trends?days=30": [
+        { day: "2026-06-30", module: ":app", variant: "release", type: "APK", avgSizeBytes: 8000000, maxSizeBytes: 8200000, builds: 3 },
+        { day: "2026-07-01", module: ":app", variant: "release", type: "APK", avgSizeBytes: 8100000, maxSizeBytes: 8300000, builds: 2 },
+    ],
     "/v1/builds/b1/compare/b2": {
         a: { buildId: "b1", startedAt: 1751450000000, outcome: "SUCCESS", mode: "CI", branch: "main", sha: "abcdef0123456789" },
         b: { buildId: "b2", startedAt: 1751450100000, outcome: "FAILED", mode: "LOCAL" },
@@ -268,6 +273,11 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     context.location.hash = "#/trends"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/trends?days=30")) throw new Error("trends view did not fetch");
     if (!hasText(byId["app"], "active day")) throw new Error("trends count-summary sentence missing");
+    // Artifact-size panel (plan 031): fetched as a second async round-trip; assert the section + series.
+    await tick(); await tick();
+    if (!fetched.includes("/v1/artifacts/trends?days=30")) throw new Error("trends view did not fetch artifact sizes");
+    if (!hasText(byId["app"], "Artifact sizes")) throw new Error("artifact-size panel header missing");
+    if (!hasText(byId["app"], ":app · release · APK")) throw new Error("artifact-size series label missing");
 
     // The error view must render, not throw, on API failure.
     context.location.hash = "#/build/missing"; context._onhashchange(); await tick(); await tick();

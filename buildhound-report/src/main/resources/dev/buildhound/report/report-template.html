@@ -66,6 +66,13 @@
             <tbody></tbody>
         </table>
     </section>
+    <section id="artifacts" hidden>
+        <h2>Android artifacts</h2>
+        <table id="artifacts-table">
+            <thead><tr><th>Module</th><th>Variant</th><th>Type</th><th class="num">Size</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </section>
 </main>
 <script>
     // The shared timeline renderer is spliced in here at report time (defines the global
@@ -201,6 +208,23 @@
                 pbody.append(row);
             }
             document.getElementById("processes").hidden = false;
+        }
+
+        // Android artifacts (plan 031): the current build's APK/AAB/AAR sizes, largest first. Hidden
+        // when the build produced none (non-Android). All strings via textContent.
+        const artifacts = (d.artifacts && d.artifacts.android) || [];
+        if (artifacts.length) {
+            const size = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? (n / 1024).toFixed(1) + " KB" : n + " B";
+            const abody = document.getElementById("artifacts-table").querySelector("tbody");
+            for (const a of [...artifacts].sort((x, y) => y.sizeBytes - x.sizeBytes)) {
+                const row = el("tr");
+                row.append(el("td", a.module || ""));
+                row.append(el("td", a.variant));
+                row.append(el("td", a.type));
+                row.append(el("td", size(a.sizeBytes), "num"));
+                abody.append(row);
+            }
+            document.getElementById("artifacts").hidden = false;
         }
     })(buildhoundData);
 </script>

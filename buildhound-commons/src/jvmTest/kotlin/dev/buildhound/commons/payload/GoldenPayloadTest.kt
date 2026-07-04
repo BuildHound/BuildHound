@@ -86,6 +86,7 @@ class GoldenPayloadTest {
         assertTrue(payload.tests.isEmpty())
         assertTrue(payload.processes.isEmpty())
         assertNull(payload.benchmark)
+        assertNull(payload.artifacts)
         assertNull(payload.links)
         assertNull(payload.environment?.ide)
         assertNull(payload.environment?.aiAgent)
@@ -201,6 +202,20 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `schema v1 artifacts golden file deserializes with populated APK, AAB, and AAR sizes`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-artifacts.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        val android = payload.artifacts?.android ?: error("expected an artifacts.android list")
+        assertEquals(3, android.size)
+        val apk = android.single { it.type == ArtifactType.APK }
+        assertEquals("release", apk.variant)
+        assertEquals(":app", apk.module)
+        assertEquals(8421376, apk.sizeBytes)
+        assertEquals(setOf(ArtifactType.APK, ArtifactType.AAB, ArtifactType.AAR), android.map { it.type }.toSet())
+    }
+
+    @Test
     fun `round trip is lossless`() {
         for (name in listOf(
             "build-payload-v1.json",
@@ -212,6 +227,7 @@ class GoldenPayloadTest {
             "build-payload-v1-ci-env.json",
             "build-payload-v1-processes.json",
             "build-payload-v1-benchmark.json",
+            "build-payload-v1-artifacts.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

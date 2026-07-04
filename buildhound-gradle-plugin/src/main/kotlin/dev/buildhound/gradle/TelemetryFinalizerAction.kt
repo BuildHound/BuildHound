@@ -1,5 +1,6 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.payload.ArtifactSize
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildPayload
@@ -188,6 +189,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 emptyList()
             }
 
+            // Android artifact sizes (plan 031): read the JSON-line files the AGP size tasks wrote.
+            // A genuine read failure (corrupt/locked dir) propagates to the finalizer's outer
+            // runCatching → warn + marker, never a failed build (§3 finalizer read).
+            val artifacts = parameters.rootDir.orNull?.let { readArtifacts(File(it)) }.orEmpty()
+
             val payload = PayloadAssembler.assemble(
                 buildId = UUID.randomUUID().toString(),
                 projectKey = parameters.projectKey.orNull,
@@ -209,6 +215,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 tests = tests,
                 processes = parameters.processes.getOrElse(emptyList()),
                 benchmark = benchmark,
+                artifacts = artifacts,
             )
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so
@@ -301,6 +308,18 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         if (rootDir == null) return emptyList()
         val canonical = runCatching { File(rootDir).canonicalPath }.getOrNull()
         return listOfNotNull(rootDir, canonical).distinct()
+    }
+
+    /**
+     * Reads the Android size tasks' JSON-line files (plan 031) under `<root>/build/buildhound/artifacts`.
+     * Missing dir → empty. `readText` is intentionally unguarded so a genuinely corrupt/locked file
+     * propagates to the finalizer's outer runCatching (→ warn + marker); per-line parse errors are
+     * swallowed by [ArtifactRecordIo].
+     */
+    private fun readArtifacts(root: File): List<ArtifactSize> {
+        val files = File(root, "build/buildhound/artifacts")
+            .listFiles { file -> file.name.endsWith(".jsonl") } ?: return emptyList()
+        return ArtifactRecordIo.parseAll(files.sortedBy { it.name }.map { it.readText() })
     }
 
     private fun writePayload(payload: BuildPayload, outputDir: String): File {

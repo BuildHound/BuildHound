@@ -14,9 +14,10 @@ class PayloadCapperTest {
         tasks: List<TaskExecution> = emptyList(),
         caps: CapsSummary? = null,
         benchmark: BenchmarkInfo? = null,
+        artifacts: ArtifactSizes? = null,
     ) = BuildPayload(
         buildId = "b", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
-        tags = tags, values = values, tasks = tasks, caps = caps, benchmark = benchmark,
+        tags = tags, values = values, tasks = tasks, caps = caps, benchmark = benchmark, artifacts = artifacts,
     )
 
     @Test
@@ -35,6 +36,31 @@ class PayloadCapperTest {
     @Test
     fun a_short_benchmark_seedRef_is_left_untouched() {
         val input = payload(benchmark = BenchmarkInfo(scenario = "clean", seedRef = "seed-1"))
+        assertSame(input, PayloadCapper.cap(input))
+    }
+
+    @Test
+    fun over_cap_artifacts_are_dropped_smallest_first_and_counted() {
+        // 5 artifacts, cap 3 → keep the 3 largest, drop 2, recorded in the caps summary.
+        val artifacts = (1..5).map {
+            ArtifactSize(variant = "v$it", module = ":app", type = ArtifactType.APK, sizeBytes = it.toLong())
+        }
+        val capped = PayloadCapper.cap(
+            payload(artifacts = ArtifactSizes(android = artifacts)),
+            PayloadCaps(maxArtifacts = 3),
+        )
+        val kept = capped.artifacts?.android ?: error("artifacts must survive")
+        assertEquals(3, kept.size)
+        assertEquals(5L, kept.maxOf { it.sizeBytes })
+        assertEquals(3L, kept.minOf { it.sizeBytes }) // 5,4,3 kept
+        assertEquals(2, capped.caps?.droppedArtifacts)
+    }
+
+    @Test
+    fun artifacts_under_the_cap_leave_the_payload_compliant() {
+        val input = payload(
+            artifacts = ArtifactSizes(android = listOf(ArtifactSize("release", ":app", ArtifactType.APK, 8000))),
+        )
         assertSame(input, PayloadCapper.cap(input))
     }
 

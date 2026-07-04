@@ -41,11 +41,36 @@ data class BuildPayload(
     val processes: List<ProcessInfo> = emptyList(),
     /** gradle-profiler benchmark context (plan 030, spec §7); null on non-benchmark builds. */
     val benchmark: BenchmarkInfo? = null,
+    /** APK/AAB/AAR sizes for an Android build (plan 031, spec §4); null on non-Android builds. */
+    val artifacts: ArtifactSizes? = null,
 ) {
     companion object {
         const val SCHEMA_VERSION: Int = 1
     }
 }
+
+/** The kind of Android build output whose size was measured (plan 031). */
+@Serializable
+enum class ArtifactType { APK, AAB, AAR }
+
+/**
+ * One measured Android artifact (plan 031, spec §4). Byte size only — no path, no contents (§3.7).
+ * [module]/[variant] are project-internal Gradle names (`:app`, `release`), not PII.
+ */
+@Serializable
+data class ArtifactSize(
+    val variant: String,
+    val module: String? = null,
+    val type: ArtifactType,
+    val sizeBytes: Long,
+)
+
+/**
+ * Android artifact sizes (plan 031). A single `android` list mixing APK/AAB/AAR (disambiguated by
+ * [ArtifactSize.type]); null on the payload means "not an Android build / nothing produced".
+ */
+@Serializable
+data class ArtifactSizes(val android: List<ArtifactSize> = emptyList())
 
 /**
  * Benchmark-run context (plan 030, spec §7): set when a gradle-profiler pipeline drives the pilot's
@@ -184,6 +209,8 @@ data class CapsSummary(
     val droppedTasks: Int = 0,
     /** Per-outcome counts of the dropped tasks, so the totals stay reconstructable. */
     val droppedTaskOutcomes: Map<String, Int> = emptyMap(),
+    /** Android artifact records dropped past the per-payload cap (plan 031), smallest-first. */
+    val droppedArtifacts: Int = 0,
 )
 
 @Serializable

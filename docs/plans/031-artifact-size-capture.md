@@ -288,6 +288,23 @@ absent/empty (the zero-network guarantee and escaping are unchanged — same emb
   budgets in code); a pathological flavor matrix truncates deterministically rather than
   bloating the payload.
 
+## 6a. Review-driven changes (both clean-context reviews)
+
+- *`PayloadCapper` now caps `artifacts`.* Both reviews flagged that the plugin's assembly-time
+  200-record cap is bypassed by a direct/foreign `POST /v1/builds` — `PayloadCapper.cap()` had no
+  `artifacts` branch, so an unbounded `artifacts.android` array reached `apk_sizes`. Fix: cap the
+  array server-side too (keep the largest N, drop + **count** the rest via a new
+  `CapsSummary.droppedArtifacts`) — the same treatment tasks/tags get (architecture §6).
+- *`apk_sizes` composite FK added.* `FOREIGN KEY (project_id, build_id) REFERENCES builds` — the
+  plan promised it; rows insert in the build's transaction so it always holds.
+- *Isolated-projects + CC-reuse tests.* Added a tagged non-Android IP inertness test (verifies the
+  new `beforeProject` reaction is IP-safe under store+reuse) and a second CC-reuse build to the
+  (SDK-gated) Android test.
+- *Accepted minor:* a settings-script `buildhound { enabled = false }` still lets the size tasks
+  register/run (the reaction gates on the env/property master switch, not the live Property, which a
+  serialization-safe `IsolatedAction` can't capture); the finalizer honors the DSL toggle so no data
+  leaves the machine — only local task-registration cost. Documented, not fixed.
+
 ## 7. Exit criteria
 
 - A real Android build (the pilot / `samples/nowinandroid`) produces a payload whose

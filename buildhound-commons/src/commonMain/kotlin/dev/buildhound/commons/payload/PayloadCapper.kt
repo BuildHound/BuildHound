@@ -14,6 +14,7 @@ data class PayloadCaps(
     val maxReasonsPerTask: Int = 10,
     val maxReasonChars: Int = 500,
     val maxTasks: Int = 20_000,
+    val maxArtifacts: Int = 200,
     val maxPayloadBytes: Int = 20 * 1024 * 1024,
 ) {
     companion object {
@@ -86,10 +87,26 @@ object PayloadCapper {
             if (seed != null && seed.length > caps.maxValueChars) b.copy(seedRef = seed.substring(0, caps.maxValueChars)) else b
         }
 
+        // Android artifacts (plan 031): the plugin caps at assembly, but a hostile/foreign ingest can
+        // POST an unbounded array — keep the largest N (they carry the signal), drop + count the rest.
+        var droppedArtifacts = 0
+        val cappedArtifacts = payload.artifacts?.let { a ->
+            if (a.android.size <= caps.maxArtifacts) {
+                a
+            } else {
+                val kept = a.android.sortedByDescending { it.sizeBytes }.take(caps.maxArtifacts)
+                droppedArtifacts = a.android.size - kept.size
+                a.copy(android = kept)
+            }
+        }
+
         // Strip any prior caps summary while working so the byte budget measures the same
         // shape on every pass (the summary is re-attached at the end) — this keeps re-capping
         // idempotent: the summary block itself must not count toward the budget it records.
-        var working = payload.copy(tags = tags.map, values = values.map, tasks = tasks, benchmark = cappedBenchmark, caps = null)
+        var working = payload.copy(
+            tags = tags.map, values = values.map, tasks = tasks,
+            benchmark = cappedBenchmark, artifacts = cappedArtifacts, caps = null,
+        )
 
         // Byte budget (spec §3.9 stages), only walked when the payload is actually oversized.
         if (encodedSize(working) > caps.maxPayloadBytes) {
@@ -123,6 +140,7 @@ object PayloadCapper {
             truncatedNonCacheableReasons = truncatedNonCacheable,
             droppedTasks = droppedTasks,
             droppedTaskOutcomes = droppedOutcomes,
+            droppedArtifacts = droppedArtifacts,
         )
 
         // Nothing countable to record and nothing was previously recorded → the input is compliant,
@@ -168,7 +186,7 @@ object PayloadCapper {
     private fun CapsSummary.isEmpty(): Boolean =
         droppedTags == 0 && droppedValues == 0 && truncatedValues == 0 &&
             droppedExecutionReasons == 0 && truncatedExecutionReasons == 0 && truncatedNonCacheableReasons == 0 &&
-            droppedTasks == 0 && droppedTaskOutcomes.isEmpty()
+            droppedTasks == 0 && droppedTaskOutcomes.isEmpty() && droppedArtifacts == 0
 
     private fun merge(existing: CapsSummary?, fresh: CapsSummary): CapsSummary {
         if (existing == null) return fresh
@@ -183,6 +201,7 @@ object PayloadCapper {
             truncatedNonCacheableReasons = existing.truncatedNonCacheableReasons + fresh.truncatedNonCacheableReasons,
             droppedTasks = existing.droppedTasks + fresh.droppedTasks,
             droppedTaskOutcomes = outcomes,
+            droppedArtifacts = existing.droppedArtifacts + fresh.droppedArtifacts,
         )
     }
 }

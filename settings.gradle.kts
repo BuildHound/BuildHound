@@ -15,6 +15,16 @@ dependencyResolutionManagement {
     repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
     repositories {
         mavenCentral()
+        // AGP (com.android.tools.build:gradle-api) is a compileOnly dependency of the plugin's
+        // Android artifact-size collector (plan 031) and is published to Google's Maven, not Central.
+        // Content-filtered so nothing else resolves here.
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google\\.testing\\.platform.*")
+                includeGroupByRegex("androidx\\..*")
+            }
+        }
     }
 }
 

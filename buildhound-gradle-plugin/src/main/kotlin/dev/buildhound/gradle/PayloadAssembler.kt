@@ -1,6 +1,8 @@
 package dev.buildhound.gradle
 
 import dev.buildhound.commons.ci.SourceLinks
+import dev.buildhound.commons.payload.ArtifactSize
+import dev.buildhound.commons.payload.ArtifactSizes
 import dev.buildhound.commons.payload.BenchmarkInfo
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
@@ -64,6 +66,7 @@ internal object PayloadAssembler {
         tests: List<TestTaskResult> = emptyList(),
         processes: List<CollectedProcess> = emptyList(),
         benchmark: CollectedBenchmark? = null,
+        artifacts: List<ArtifactSize> = emptyList(),
     ): BuildPayload {
         // Mirror the benchmark keys into tags (spec's tag contract), but user tags win on clash.
         val mergedTags = if (benchmark == null) {
@@ -127,6 +130,9 @@ internal object PayloadAssembler {
             kotlin = kotlin,
             // Per-test-task results parsed from JUnit XML (plan 024); empty when no test ran.
             tests = tests,
+            // Android artifact sizes (plan 031); null when not an Android build / nothing produced.
+            // Capped largest-first so a pathological flavor matrix can't blow the payload budget.
+            artifacts = artifacts.takeIf { it.isNotEmpty() }?.let { ArtifactSizes(android = capArtifacts(it)) },
             // End-of-build JVM process snapshot (plan 029); empty when disabled/unobservable. Numeric
             // + enum only — nothing for the scrubber to touch (no PID, path, or command line).
             processes = processes.map {
@@ -148,6 +154,12 @@ internal object PayloadAssembler {
         val scrubbed = PayloadScrubber.scrub(payload, projectRoots)
         return PayloadCapper.cap(scrubbed, caps)
     }
+
+    /** Cardinality guardrail (plan 031): a pathological flavor matrix keeps only the largest N. */
+    private const val MAX_ARTIFACTS = 200
+
+    private fun capArtifacts(list: List<ArtifactSize>): List<ArtifactSize> =
+        if (list.size <= MAX_ARTIFACTS) list else list.sortedByDescending { it.sizeBytes }.take(MAX_ARTIFACTS)
 
     /** Git wins; CI context fills the gaps (detached HEAD on CI has no branch name). */
     fun vcsInfo(vcs: CollectedVcs?, ci: CollectedCi?): VcsInfo? {

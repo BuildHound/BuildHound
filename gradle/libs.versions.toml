@@ -9,8 +9,11 @@ postgresql = "42.7.12"
 flyway = "12.10.0"
 hikaricp = "7.1.0"
 testcontainers = "1.21.4"
+# AGP Variant API for the Android artifact-size collector (plan 031); compileOnly only — never shipped.
+agp = "9.2.1"
 
 [libraries]
+android-gradle-api = { module = "com.android.tools.build:gradle-api", version.ref = "agp" }
 kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit-jupiter" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }

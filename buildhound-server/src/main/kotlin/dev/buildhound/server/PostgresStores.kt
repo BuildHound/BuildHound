@@ -46,8 +46,11 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             connection.autoCommit = false
             try {
                 val inserted = insertBuild(connection, projectId, payload)
-                // Task rows only when the build was newly inserted — a duplicate build adds none.
+                // Task + artifact rows only when the build was newly inserted — a duplicate adds none.
                 if (inserted && payload.tasks.isNotEmpty()) insertTaskRows(connection, projectId, payload)
+                if (inserted && payload.artifacts?.android?.isNotEmpty() == true) {
+                    insertArtifactRows(connection, projectId, payload)
+                }
                 connection.commit()
                 inserted
             } catch (e: Throwable) {
@@ -117,6 +120,29 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.setString(9, task.outcome.name)
                 task.cacheable?.let { statement.setBoolean(10, it) } ?: statement.setNull(10, java.sql.Types.BOOLEAN)
                 statement.setLong(11, task.durationMs)
+                statement.addBatch()
+            }
+            statement.executeBatch()
+        }
+    }
+
+    /** Batch-insert the Android artifact-size rows (plan 031), denormalizing started_at. */
+    private fun insertArtifactRows(connection: java.sql.Connection, projectId: String, payload: BuildPayload) {
+        connection.prepareStatement(
+            """
+            INSERT INTO apk_sizes (project_id, build_id, started_at, module, variant, type, size_bytes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            val startedAt = OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC)
+            for (artifact in payload.artifacts?.android.orEmpty()) {
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, payload.buildId)
+                statement.setObject(3, startedAt)
+                statement.setString(4, artifact.module)
+                statement.setString(5, artifact.variant)
+                statement.setString(6, artifact.type.name)
+                statement.setLong(7, artifact.sizeBytes)
                 statement.addBatch()
             }
             statement.executeBatch()
@@ -485,6 +511,46 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                         grouped.getOrPut(rows.getString("scenario") to rows.getString("isolation")) { mutableListOf() }.add(point)
                     }
                     grouped.map { (key, points) -> BenchmarkSeries(key.first, key.second, points, summarize(points)) }
+                }
+            }
+        }
+
+    override fun artifactTrends(projectId: String, filter: BuildFilter, days: Int, nowMs: Long): List<ArtifactTrendPoint> =
+        dataSource.connection.use { connection ->
+            // Join to builds so the same branch/mode/exclusion filter as /trends applies; every value
+            // is a bound param. `branch`/`mode`/`outcome` are unambiguous (only `builds` has them).
+            val (clauses, params) = filterSql(filter)
+            connection.prepareStatement(
+                """
+                SELECT (a.started_at AT TIME ZONE 'UTC')::date AS day, a.module, a.variant, a.type,
+                       avg(a.size_bytes)::bigint AS avg_size, max(a.size_bytes) AS max_size,
+                       count(DISTINCT a.build_id) AS builds
+                FROM apk_sizes a
+                JOIN builds b ON b.project_id = a.project_id AND b.build_id = a.build_id
+                WHERE a.project_id = ? AND a.started_at >= ?$clauses
+                GROUP BY day, a.module, a.variant, a.type
+                ORDER BY day, a.variant, a.type, a.module NULLS FIRST
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                params.forEachIndexed { index, value -> statement.setString(index + 3, value) }
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                ArtifactTrendPoint(
+                                    day = rows.getDate("day").toLocalDate().toString(),
+                                    module = rows.getString("module"),
+                                    variant = rows.getString("variant"),
+                                    type = rows.getString("type"),
+                                    avgSizeBytes = rows.getLong("avg_size"),
+                                    maxSizeBytes = rows.getLong("max_size"),
+                                    builds = rows.getInt("builds"),
+                                ),
+                            )
+                        }
+                    }
                 }
             }
         }

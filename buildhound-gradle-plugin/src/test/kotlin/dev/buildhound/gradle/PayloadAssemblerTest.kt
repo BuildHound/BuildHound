@@ -254,6 +254,33 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `assemble leaves artifacts null when none were collected`() {
+        assertNull(assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED))).artifacts)
+    }
+
+    @Test
+    fun `assemble carries artifacts under the cap unchanged`() {
+        val artifacts = listOf(
+            dev.buildhound.commons.payload.ArtifactSize("release", ":app", dev.buildhound.commons.payload.ArtifactType.APK, 8000),
+            dev.buildhound.commons.payload.ArtifactSize("release", ":lib", dev.buildhound.commons.payload.ArtifactType.AAR, 200),
+        )
+        val android = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), artifacts = artifacts).artifacts?.android
+        assertEquals(artifacts, android)
+    }
+
+    @Test
+    fun `assemble truncates an over-cap artifacts list largest-first`() {
+        // 250 records with ascending sizes; the cap keeps the 200 largest.
+        val artifacts = (1..250).map {
+            dev.buildhound.commons.payload.ArtifactSize("v$it", ":app", dev.buildhound.commons.payload.ArtifactType.APK, it.toLong())
+        }
+        val android = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), artifacts = artifacts).artifacts?.android!!
+        assertEquals(200, android.size)
+        assertEquals(250L, android.maxOf { it.sizeBytes })
+        assertEquals(51L, android.minOf { it.sizeBytes }) // smallest kept = 250 - 200 + 1
+    }
+
+    @Test
     fun `assemble passes test results through and scrubs the failure message`() {
         val tests = listOf(
             dev.buildhound.commons.payload.TestTaskResult(
@@ -339,6 +366,7 @@ class PayloadAssemblerTest {
         tests: List<dev.buildhound.commons.payload.TestTaskResult> = emptyList(),
         processes: List<CollectedProcess> = emptyList(),
         benchmark: CollectedBenchmark? = null,
+        artifacts: List<dev.buildhound.commons.payload.ArtifactSize> = emptyList(),
         environment: CollectedEnvironment = CollectedEnvironment(
             os = "Linux", arch = "amd64", cores = 8, ramMb = 16_000,
             hostnameHash = "h_0123456789ab", userId = "u_0123456789ab",
@@ -368,6 +396,7 @@ class PayloadAssemblerTest {
         tests = tests,
         processes = processes,
         benchmark = benchmark,
+        artifacts = artifacts,
     )
 
     private fun task(

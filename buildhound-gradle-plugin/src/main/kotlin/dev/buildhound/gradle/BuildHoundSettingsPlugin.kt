@@ -31,7 +31,10 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // Config overrides (plan 027): apply `buildhound.<key>`/`BUILDHOUND_<KEY>` as the convention
         // fallback so precedence is explicit-DSL > override > default. server.token is NOT overridable.
         val overrides = ConfigOverrides(settings.providers) { logger.info(it) }
-        extension.enabled.convention(overrides.bool("enabled") ?: true)
+        // The env/property master switch, resolved at apply time so it can gate the beforeProject
+        // reaction below (a DSL `enabled = false` is additionally honored by the finalizer).
+        val masterEnabled = overrides.bool("enabled") ?: true
+        extension.enabled.convention(masterEnabled)
         extension.mode.convention(overrides.mode("mode") ?: TelemetryMode.AUTO)
         extension.identity.pseudonymize.convention(overrides.bool("identity.pseudonymize") ?: true)
         extension.htmlReport.enabled.convention(overrides.bool("htmlReport.enabled") ?: true)
@@ -141,6 +144,15 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.enabled.set(extension.enabled)
         }
 
+        // Android artifact-size collector (plan 031): a per-project reaction wired from the settings
+        // context. beforeProject is the isolated-projects-safe hook; the collector class-references no
+        // AGP (its AGP-touching delegates are runCatching-guarded), so a non-Android build links
+        // nothing and even an AGP link failure degrades to no artifacts, never a failed build. The
+        // measuring tasks run at execution time; the Flow finalizer reads their output at build end.
+        if (masterEnabled) {
+            installAndroidArtifactCollector(settings.gradle, File(settings.rootDir, "build/buildhound/artifacts"))
+        }
+
         // End-of-build JVM process probe (plan 029). enabled is master AND the block toggle; the exec
         // timeout is the plan-015 test-seam/escape-hatch property. All exec is inside obtain() at
         // execution time, so CC store/reuse and isolated projects are unaffected.
@@ -242,5 +254,18 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
     private companion object {
         const val SALT_PATH = ".gradle/buildhound/identity.salt"
         val logger = Logging.getLogger(BuildHoundSettingsPlugin::class.java)
+    }
+}
+
+/**
+ * Registers the [AndroidArtifactCollector] `beforeProject` reaction (plan 031). Deliberately a
+ * top-level function so the `IsolatedAction` captures only [artifactsDir] (a serializable File) —
+ * never the plugin instance, which is not serializable across the isolated-projects/CC boundary.
+ */
+@Suppress("UnstableApiUsage")
+private fun installAndroidArtifactCollector(gradle: org.gradle.api.invocation.Gradle, artifactsDir: File) {
+    gradle.lifecycle.beforeProject { project ->
+        runCatching { AndroidArtifactCollector.install(project, artifactsDir) }
+            .onFailure { project.logger.info("[buildhound] android artifact collector unavailable: {}", it::class.java.simpleName) }
     }
 }

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "buildId": "c9d0e1f2-a3b4-4c5d-8e6f-7a8b9c0d1e2f",
+  "projectKey": "pilot-android",
+  "startedAt": 1751520000000,
+  "finishedAt": 1751520090000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["assembleRelease", "bundleRelease"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:packageRelease",
+      "module": ":app",
+      "startMs": 1751520010000,
+      "durationMs": 4000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "artifacts": {
+    "android": [
+      { "variant": "release", "module": ":app", "type": "APK", "sizeBytes": 8421376 },
+      { "variant": "release", "module": ":app", "type": "AAB", "sizeBytes": 6291456 },
+      { "variant": "release", "module": ":lib", "type": "AAR", "sizeBytes": 245760 }
+    ]
+  }
+}

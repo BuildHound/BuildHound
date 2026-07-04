@@ -188,9 +188,14 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
   "processes": [ { "role": "KOTLIN_DAEMON", "heapUsedMb": 0, "heapCommittedMb": 0, "heapMaxMb": 0,
                    "configuredXmxMb": 0, "gcTimeMs": 0, "rssMb": 0, "uptimeS": 0 } ],
   "benchmark": { "scenario": "clean", "iteration": 3, "isolationMode": "no_build_cache", "seedRef": "..." },
-  "artifacts": { "apk": [ { "variant": "release", "sizeBytes": 0, "type": "AAB" } ] }
+  "artifacts": { "android": [ { "variant": "release", "module": ":app", "type": "APK", "sizeBytes": 0 } ] }
 }
 ```
+
+The `artifacts` block (plan 031) is present only on Android builds; `android` is a single list mixing
+APK/AAB/AAR (disambiguated by `type`, not a filename-encoded key). Byte size only — no path or
+contents (§3.7); `module`/`variant` are project-internal Gradle names. Server-side it is projected
+into the `apk_sizes` hot table for the per-(module, variant, type) trend at `GET /v1/artifacts/trends`.
 
 The `benchmark` block (plan 030) is present only on `mode=benchmark` builds; its `scenario`/
 `iteration`/`isolationMode` are **also** mirrored into `tags` (the tag contract). Benchmark builds
