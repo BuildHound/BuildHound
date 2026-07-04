@@ -4,10 +4,11 @@
 #   docker build -f buildhound-server/Dockerfile -t buildhound-server .
 #
 # Best practices applied (docs/architecture.md §OCI): multi-stage build, JRE-only runtime,
-# non-root user, OCI annotations, no secrets in layers. Pin base images by digest before
-# publishing release images.
+# non-root user, OCI annotations, no secrets in layers. Base images are **digest-pinned** (plan 042):
+# the tag stays for humans, the @sha256 makes the base immutable. Refresh the digest (and re-scan) when
+# bumping — resolve with `docker buildx imagetools inspect eclipse-temurin:21-jdk-jammy`.
 
-FROM eclipse-temurin:21-jdk-jammy AS build
+FROM eclipse-temurin:21-jdk-jammy@sha256:9d8dcf999b0bce2453e913823595a5ff2a4e8e9e5d5241b45280d0ff069818ec AS build
 WORKDIR /workspace
 
 # Copy the wrapper and build configuration first so dependency resolution layers cache
@@ -30,7 +31,7 @@ COPY buildhound-server/ buildhound-server/
 RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
     ./gradlew --no-daemon -Pbuildhound.toolchain=21 :buildhound-server:installDist
 
-FROM eclipse-temurin:21-jre-jammy
+FROM eclipse-temurin:21-jre-jammy@sha256:d63bd8d9b171999cbed8576f2c76e874dd4856791a358536e5c4d407e77edc13
 
 LABEL org.opencontainers.image.title="buildhound-server" \
       org.opencontainers.image.description="BuildHound ingestion service" \

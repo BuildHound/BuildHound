@@ -1237,6 +1237,7 @@
     // Admin / retention page (plan 042). Uses its OWN admin-scoped token in a separate sessionStorage
     // slot — a read token can't reach /v1/admin (403). Every string reaches the DOM via textContent.
     async function adminView() {
+        const mySeq = ++renderSeq; // only the most recent render may touch the DOM (sibling-view pattern)
         tokenBar.hidden = true; // the read-token bar is irrelevant here; admin has its own field
         app.textContent = "";
         app.append(el("p", "Retention settings", "summary-sentence"));
@@ -1279,6 +1280,7 @@
                 say("Saving…");
                 try {
                     const res = await adminFetch("PUT", JSON.stringify({ rawDays: Number(rawInput.value), buildDays: Number(buildInput.value) }));
+                    if (mySeq !== renderSeq) return; // navigated away mid-save; don't paint a stale status
                     if (res.status === 401 || res.status === 403) return say("An admin-scoped token is required.", "error");
                     if (res.status === 400) { const b = await res.json(); return say("Rejected: " + (b.error || "invalid windows"), "error"); }
                     if (!res.ok) return say("Save failed: " + res.status, "error");
@@ -1294,9 +1296,11 @@
             say("Loading…");
             try {
                 const res = await adminFetch("GET");
+                if (mySeq !== renderSeq) return; // a newer view started while we awaited
                 if (res.status === 401 || res.status === 403) return say("An admin-scoped token is required.", "error");
                 if (!res.ok) return say("Could not load retention: " + res.status, "error");
                 const cfg = await res.json();
+                if (mySeq !== renderSeq) return;
                 say("Daily aggregates are always kept; these windows purge raw rows and build history.");
                 renderForm(cfg);
             } catch (e) { say("Could not load retention: " + (e && e.message || e), "error"); }

@@ -67,8 +67,9 @@ services:
         max-file: "5"
 
   db:
-    # Pin to a digest before any shared/production use.
-    image: timescale/timescaledb:latest-pg16
+    # Digest-pinned (plan 042): the tag is for humans, the @sha256 makes it immutable. Refresh with
+    # `docker buildx imagetools inspect timescale/timescaledb:latest-pg16` when bumping.
+    image: timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
     environment:
       POSTGRES_DB: "buildhound"
       POSTGRES_USER: "buildhound"

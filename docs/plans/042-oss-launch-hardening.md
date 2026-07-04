@@ -294,6 +294,21 @@ deferred to a real release pipeline (recorded).
   scan job surfaces CVEs; a Renovate/scheduled bump (comparison-to-spec.md §3 item 14) is the
   refresh mechanism — noted, not required for the exit criteria.
 
+## 6b. Implementation-time reconciliations (recorded per step 13)
+
+- **Settings table shared with plan 025 (as planned).** Plan 025's `project_settings` table already
+  existed, so retention was added as **`V10__retention.sql` ALTER** (two columns) rather than a second
+  table; `SettingsStore` gained `retention()`/`setRetention()` that touch only the retention columns
+  (regression `put()` and retention writes never clobber each other — parity-tested).
+- **MCP: hand-rolled, not the SDK.** The MCP Kotlin SDK was verified on Maven Central at 0.14.0 (still
+  0.x, pulls a Ktor/coroutines stack). For six read-only GET proxies the hand-rolled JSON-RPC-over-stdio
+  server (`kotlinx-serialization` + JDK `HttpClient`) was chosen — the plan's sanctioned fallback.
+  Recorded in `buildhound-mcp/README.md` and the architecture decision log.
+- **Digests pinned at implementation time** (`docker buildx imagetools inspect`): temurin 21-jdk-jammy
+  `sha256:9d8dcf99…`, 21-jre-jammy `sha256:d63bd8d9…`, timescaledb latest-pg16 `sha256:ba149561…`.
+- **Docs viewer is a bespoke route-list renderer**, not Swagger-UI: the strict served-page CSP forbids a
+  CDN, so `/docs` fetches `/openapi.yaml` and renders the path table with a tiny in-page parser.
+
 ## 7. Exit criteria
 
 - `./gradlew :buildhound-server:test` and `./gradlew build` green, including the admin-route,

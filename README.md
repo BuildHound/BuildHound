@@ -31,6 +31,10 @@ curl http://localhost:8080/health
 docker compose -f deploy/compose.yaml up --build
 ```
 
+To run BuildHound for a team, see **[docs/self-hosting.md](docs/self-hosting.md)** (compose + generic-OCI
+deployment, the env-var contract, token provisioning, retention, and backup/restore). The API is
+documented at `GET /docs` (rendered from [docs/api/openapi.yaml](docs/api/openapi.yaml)).
+
 Apply the plugin in a test project's `settings.gradle.kts` (once published; during
 development use an included build or `mavenLocal`):
 
