@@ -93,13 +93,28 @@ jobs:
       - name: Smoke test image
         run: |
           docker run -d --rm --name buildhound-server -p 8080:8080 buildhound-server:${{ github.sha }}
+          # Wait for liveness.
+          healthy=0
           for i in $(seq 1 30); do
-            if curl -fsS http://localhost:8080/health; then exit 0; fi
+            if curl -fsS http://localhost:8080/health >/dev/null; then healthy=1; break; fi
             sleep 1
           done
-          echo "server did not become healthy" >&2
-          docker logs buildhound-server >&2
-          exit 1
+          if [ "$healthy" != 1 ]; then
+            echo "server did not become healthy" >&2
+            docker logs buildhound-server >&2
+            exit 1
+          fi
+          # Runtime-resource smoke: the dashboard + docs load resources from the classpath at class
+          # init, so a resource missing from the image only surfaces on these routes, never on /health
+          # (this is exactly the bundling regression that shipped once — guard it here). -f fails on 5xx.
+          for path in / /timeline.js /dashboard.js /openapi.yaml /docs; do
+            if ! curl -fsS "http://localhost:8080$path" >/dev/null; then
+              echo "resource endpoint $path did not return 2xx (a bundled resource is likely missing)" >&2
+              docker logs buildhound-server >&2
+              exit 1
+            fi
+          done
+          echo "smoke ok: /health + dashboard + docs resources served"
 
   image-scan:
     name: Image scan + SBOM (non-blocking)
