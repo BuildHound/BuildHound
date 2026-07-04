@@ -1,0 +1,66 @@
+# Scheduled gradle-profiler benchmark pipeline for BuildHound (spec §7, plan 030) — GitHub Actions.
+#
+# Runs the pilot's real build under gradle-profiler once per (isolation, scenario) pair, exporting a
+# matching BUILDHOUND_BENCHMARK_* for each invocation. The plugin uploads each measured build as
+# mode=benchmark; the server excludes those from fleet trends and surfaces them at #/benchmark.
+#
+# The token is mapped from a repository secret and only ever leaves via the plugin's Authorization
+# header — never echoed. No OpenAI/BigQuery side channel (an explicit negative lesson from
+# Telltale/Bagan): the series lives in BuildHound.
+
+name: nightly-benchmark
+on:
+  schedule:
+    - cron: "0 3 * * *"   # 03:00 UTC nightly
+  workflow_dispatch: {}    # allow manual runs
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    env:
+      BUILDHOUND_SERVER_URL: ${{ vars.BUILDHOUND_SERVER_URL }}
+      BUILDHOUND_TOKEN: ${{ secrets.BUILDHOUND_TOKEN }}   # ingest-scoped; never echoed
+      GRADLE_PROFILER_VERSION: "0.24.0"
+      # v1 wires two isolation modes (see isolation-modes.md); add more as recipe opt-ins.
+      ISOLATIONS: "full_cache no_build_cache"
+      SCENARIOS: "clean no_op incremental_non_abi cc_hit"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install gradle-profiler
+        run: |
+          set -euo pipefail
+          curl -fsSL -o gradle-profiler.zip \
+            "https://repo.gradle.org/gradle/ext-releases-local/org/gradle/profiler/gradle-profiler/${GRADLE_PROFILER_VERSION}/gradle-profiler-${GRADLE_PROFILER_VERSION}.zip"
+          unzip -q gradle-profiler.zip
+          echo "$PWD/gradle-profiler-${GRADLE_PROFILER_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Run benchmark series
+        # NOTE: run this against a checkout of the *pilot* project; adjust the paths below.
+        run: |
+          set -euo pipefail
+          SEED_REF="$(date -u +%Y%m%dT%H%M%SZ)"
+          # gradle-profiler has no global gradle-args flag (those live in the scenario file), so the
+          # isolation control is a gradle.properties override on the pilot (see isolation-modes.md).
+          if [ -f gradle.properties ]; then cp gradle.properties gradle.properties.pristine; else : > gradle.properties.pristine; fi
+          for isolation in $ISOLATIONS; do
+            export BUILDHOUND_BENCHMARK_ISOLATION="$isolation"
+            cp gradle.properties.pristine gradle.properties          # full_cache = pristine warm baseline
+            [ "$isolation" = "no_build_cache" ] && echo "org.gradle.caching=false" >> gradle.properties
+            for scenario in $SCENARIOS; do
+              BUILDHOUND_BENCHMARK_SCENARIO="$scenario" \
+              BUILDHOUND_BENCHMARK_SEED_REF="$SEED_REF" \
+              gradle-profiler --benchmark \
+                --scenario-file buildhound-ci-assets/profiler-scenarios/buildhound.scenarios \
+                "$scenario"
+            done
+          done

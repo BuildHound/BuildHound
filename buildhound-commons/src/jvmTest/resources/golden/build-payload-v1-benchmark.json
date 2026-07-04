@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "buildId": "b7c8d9e0-f1a2-4b3c-8d4e-5f6a7b8c9d0e",
+  "projectKey": "pilot-android",
+  "startedAt": 1751510000000,
+  "finishedAt": 1751510038000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["assembleDebug"],
+  "mode": "benchmark",
+  "tags": { "scenario": "clean", "iteration": "3", "isolationMode": "no_build_cache" },
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileDebugKotlin",
+      "module": ":app",
+      "startMs": 1751510001000,
+      "durationMs": 12000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "benchmark": {
+    "scenario": "clean",
+    "iteration": 3,
+    "isolationMode": "no_build_cache",
+    "seedRef": "seed-2026-07-04"
+  }
+}

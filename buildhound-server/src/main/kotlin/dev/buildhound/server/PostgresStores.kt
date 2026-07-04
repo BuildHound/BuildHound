@@ -209,6 +209,12 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         filter.branch?.let { clauses.append(" AND branch = ?"); params.add(it) }
         filter.mode?.let { clauses.append(" AND mode = ?"); params.add(it) }
         filter.outcome?.let { clauses.append(" AND outcome = ?"); params.add(it) }
+        // Fleet-view exclusion (plan 030): NOT IN over bound params, order-matched with the values.
+        val excluded = filter.excludeModes.toList()
+        if (excluded.isNotEmpty()) {
+            clauses.append(" AND mode NOT IN (${excluded.joinToString(",") { "?" }})")
+            params.addAll(excluded)
+        }
         return clauses.toString() to params
     }
 
@@ -430,6 +436,55 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                             )
                         }
                     }
+                }
+            }
+        }
+
+    override fun benchmarkSeries(
+        projectId: String,
+        scenario: String?,
+        isolationMode: String?,
+        branch: String?,
+        days: Int,
+        nowMs: Long,
+    ): List<BenchmarkSeries> =
+        dataSource.connection.use { connection ->
+            // Benchmark keys live in the jsonb payload (no hot columns, no migration). Optional
+            // narrowing filters are bound params; grouping + percentiles happen in Kotlin over the
+            // shared calculator so in-memory and Postgres agree byte-for-byte.
+            val clauses = StringBuilder()
+            val strParams = mutableListOf<String>()
+            scenario?.let { clauses.append(" AND payload->'benchmark'->>'scenario' = ?"); strParams.add(it) }
+            isolationMode?.let { clauses.append(" AND payload->'benchmark'->>'isolationMode' = ?"); strParams.add(it) }
+            branch?.let { clauses.append(" AND branch = ?"); strParams.add(it) }
+            connection.prepareStatement(
+                """
+                SELECT build_id, started_at, duration_ms, hit_rate,
+                       payload->'benchmark'->>'scenario' AS scenario,
+                       payload->'benchmark'->>'isolationMode' AS isolation,
+                       payload->'benchmark'->>'iteration' AS iteration
+                FROM builds
+                WHERE project_id = ? AND mode = 'BENCHMARK' AND started_at >= ?
+                  AND payload->'benchmark'->>'scenario' IS NOT NULL$clauses
+                ORDER BY scenario, isolation NULLS FIRST, started_at
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                strParams.forEachIndexed { index, value -> statement.setString(index + 3, value) }
+                statement.executeQuery().use { rows ->
+                    val grouped = LinkedHashMap<Pair<String, String?>, MutableList<BenchmarkPoint>>()
+                    while (rows.next()) {
+                        val point = BenchmarkPoint(
+                            startedAt = rows.getObject("started_at", OffsetDateTime::class.java).toInstant().toEpochMilli(),
+                            buildId = rows.getString("build_id"),
+                            iteration = rows.getString("iteration")?.toIntOrNull(),
+                            durationMs = rows.getLong("duration_ms"),
+                            hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
+                        )
+                        grouped.getOrPut(rows.getString("scenario") to rows.getString("isolation")) { mutableListOf() }.add(point)
+                    }
+                    grouped.map { (key, points) -> BenchmarkSeries(key.first, key.second, points, summarize(points)) }
                 }
             }
         }

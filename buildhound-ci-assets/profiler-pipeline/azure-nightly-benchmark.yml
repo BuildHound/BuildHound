@@ -1,0 +1,68 @@
+# Scheduled gradle-profiler benchmark pipeline for BuildHound (spec §7, plan 030) — Azure Pipelines.
+#
+# Runs the pilot's real build under gradle-profiler once per (isolation, scenario) pair, exporting a
+# matching BUILDHOUND_BENCHMARK_* for each invocation. The plugin uploads each measured build as
+# mode=benchmark; the server excludes those from fleet trends and surfaces them at #/benchmark.
+#
+# BUILDHOUND_TOKEN is mapped from a pipeline secret variable and only ever leaves via the plugin's
+# Authorization header — never echoed. No OpenAI/BigQuery side channel (negative lesson from
+# Telltale/Bagan).
+
+schedules:
+  - cron: "0 3 * * *"          # 03:00 UTC nightly
+    displayName: Nightly benchmark
+    branches:
+      include: [main]
+    always: true
+
+trigger: none                   # scheduled + manual only
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  GRADLE_PROFILER_VERSION: "0.24.0"
+  # v1 wires two isolation modes (see isolation-modes.md); add more as recipe opt-ins.
+  ISOLATIONS: "full_cache no_build_cache"
+  SCENARIOS: "clean no_op incremental_non_abi cc_hit"
+
+steps:
+  - task: JavaToolInstaller@0
+    inputs:
+      versionSpec: "21"
+      jdkArchitectureOption: x64
+      jdkSourceOption: PreInstalled
+
+  - script: |
+      set -euo pipefail
+      curl -fsSL -o gradle-profiler.zip \
+        "https://repo.gradle.org/gradle/ext-releases-local/org/gradle/profiler/gradle-profiler/$(GRADLE_PROFILER_VERSION)/gradle-profiler-$(GRADLE_PROFILER_VERSION).zip"
+      unzip -q gradle-profiler.zip
+      echo "##vso[task.prependpath]$PWD/gradle-profiler-$(GRADLE_PROFILER_VERSION)/bin"
+    displayName: Install gradle-profiler
+
+  - script: |
+      set -euo pipefail
+      SEED_REF="$(date -u +%Y%m%dT%H%M%SZ)"
+      # gradle-profiler has no global gradle-args flag (those live in the scenario file), so the
+      # isolation control is a gradle.properties override on the pilot (see isolation-modes.md).
+      if [ -f gradle.properties ]; then cp gradle.properties gradle.properties.pristine; else : > gradle.properties.pristine; fi
+      for isolation in $ISOLATIONS; do
+        export BUILDHOUND_BENCHMARK_ISOLATION="$isolation"
+        cp gradle.properties.pristine gradle.properties          # full_cache = pristine warm baseline
+        [ "$isolation" = "no_build_cache" ] && echo "org.gradle.caching=false" >> gradle.properties
+        for scenario in $SCENARIOS; do
+          BUILDHOUND_BENCHMARK_SCENARIO="$scenario" \
+          BUILDHOUND_BENCHMARK_SEED_REF="$SEED_REF" \
+          gradle-profiler --benchmark \
+            --scenario-file buildhound-ci-assets/profiler-scenarios/buildhound.scenarios \
+            "$scenario"
+        done
+      done
+    displayName: Run benchmark series
+    # NOTE: run this against a checkout of the pilot project; adjust the paths above.
+    env:
+      BUILDHOUND_SERVER_URL: $(buildhoundServerUrl)
+      # Map the secret in the pipeline (Variables → keep secret); never echoed.
+      BUILDHOUND_TOKEN: $(BUILDHOUND_TOKEN)

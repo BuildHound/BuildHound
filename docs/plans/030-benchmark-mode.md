@@ -209,6 +209,22 @@ handoff to the comparison engine is documented, not code-coupled.
 - **Scope creep.** Bagan's K8s cartesian matrix is not adopted; the plan stays within
   gradle-profiler same-machine scenarios per the spec.
 
+## 6a. Review-driven changes (both clean-context reviews)
+
+- *`benchmark` block now routes through scrubber + capper.* Both reviews found the block bypassed
+  `PayloadScrubber` and `PayloadCapper` — `seedRef` is free-text env (`BUILDHOUND_BENCHMARK_SEED_REF`),
+  unlike the allowlisted `scenario`/`isolationMode`. Fix: `scrub()` now scrubs `scenario`/
+  `isolationMode`/`seedRef`, and `cap()` truncates an over-long `seedRef` to `maxValueChars` (a silent
+  truncation, no `CapsSummary` count) — so the plan's "strings pass the scrubber" claim is now true.
+- *Pipeline isolation mechanism corrected.* gradle-profiler has no global gradle-args CLI flag
+  (`gradle-args` is a scenario-file property); the draft's `--gradle-arg` would have been ignored, so
+  `no_build_cache` never disabled the cache. Fixed: the pipelines toggle the build cache via an
+  `org.gradle.caching=false` `gradle.properties` override on the pilot (reset to pristine per
+  isolation), matching `isolation-modes.md`.
+- *Accepted residual:* the gradle-profiler download is pinned (`0.24.0`) + https but has no checksum
+  (gradle-profiler publishes none). This matches the plan §6 bar (pinned + https, no unchecked fetch);
+  a checksum is a follow-up if upstream starts publishing one.
+
 ## 7. Exit criteria
 
 - `./gradlew build` green: new commons golden/unit, plugin unit + functionalTest, server unit +

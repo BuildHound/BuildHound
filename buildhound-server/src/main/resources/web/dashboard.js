@@ -931,6 +931,60 @@
         }
     }
 
+    // Benchmark series (plan 030): per-scenario percentile chips + a durationMs line chart, with an
+    // isolation-mode selector. Benchmark builds are excluded from fleet trends, so this is their home.
+    async function benchmarkView() {
+        const seq = ++renderSeq;
+        const series = await api("/v1/benchmark/series?days=90");
+        if (seq !== renderSeq) return;
+
+        app.textContent = "";
+        app.append(el("h2", "Benchmark series"));
+        if (!series.length) {
+            app.append(emptyState({
+                title: "No benchmark builds yet",
+                lines: [
+                    "Run the scheduled gradle-profiler pipeline against the pilot to populate this view.",
+                    "See buildhound-ci-assets/profiler-pipeline and the benchmark-and-experiments recipe.",
+                ],
+            }));
+            return;
+        }
+
+        const byScenario = new Map();
+        for (const s of series) {
+            if (!byScenario.has(s.scenario)) byScenario.set(s.scenario, []);
+            byScenario.get(s.scenario).push(s);
+        }
+        for (const [scenario, groups] of byScenario) {
+            const section = el("section");
+            section.append(el("h3", "Scenario: " + scenario));
+
+            const select = el("select");
+            for (const g of groups) select.append(new Option(g.isolationMode || "(default)", g.isolationMode || ""));
+
+            const holder = el("div");
+            const renderGroup = iso => {
+                holder.textContent = "";
+                const g = groups.find(x => (x.isolationMode || "") === iso) || groups[0];
+                const chips = el("ul", null, "chips");
+                chips.append(chipItem("p50", ms(g.summary.p50)));
+                chips.append(chipItem("p90", ms(g.summary.p90)));
+                chips.append(chipItem("min", ms(g.summary.min)));
+                chips.append(chipItem("runs", g.summary.count));
+                holder.append(chips);
+                // Reuse the trend chart: map each benchmark point to {day,durationMs} for its tooltip.
+                const points = g.points.map(p => ({ day: when(p.startedAt), durationMs: p.durationMs }));
+                holder.append(trendChart(points, p => p.durationMs, "#2563eb", ms));
+            };
+            select.addEventListener("change", () => renderGroup(select.value));
+            if (groups.length > 1) section.append(select);
+            section.append(holder);
+            app.append(section);
+            renderGroup(groups[0].isolationMode || "");
+        }
+    }
+
     function route() {
         // decodeURIComponent throws synchronously on malformed input (Firefox returns
         // location.hash pre-decoded, so a stored %xx can arrive re-broken) — the try
@@ -948,6 +1002,7 @@
                 : hash.startsWith("#/trends") ? trendsView({}, 30)
                 : hash.startsWith("#/tasks") ? tasksRollupView()
                 : hash.startsWith("#/tests") ? testsView()
+                : hash.startsWith("#/benchmark") ? benchmarkView()
                 : buildsView({}, 0);
             run.catch(fail);
         } catch (err) {

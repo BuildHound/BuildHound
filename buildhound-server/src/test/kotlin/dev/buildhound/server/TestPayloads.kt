@@ -1,5 +1,6 @@
 package dev.buildhound.server
 
+import dev.buildhound.commons.payload.BenchmarkInfo
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
@@ -26,6 +27,7 @@ object TestPayloads {
         runId: String? = null,
         buildUrl: String? = null,
         userId: String? = null,
+        benchmark: BenchmarkInfo? = null,
         tasks: List<TaskExecution> = emptyList(),
     ): BuildPayload = BuildPayload(
         buildId = buildId,
@@ -38,6 +40,7 @@ object TestPayloads {
         ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl) },
         derived = hitRate?.let { DerivedMetrics(cacheableHitRate = it) },
         environment = userId?.let { EnvironmentInfo(userId = it) },
+        benchmark = benchmark,
         tasks = tasks,
     )
 

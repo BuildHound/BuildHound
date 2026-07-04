@@ -85,6 +85,7 @@ class GoldenPayloadTest {
         assertNull(payload.kotlin)
         assertTrue(payload.tests.isEmpty())
         assertTrue(payload.processes.isEmpty())
+        assertNull(payload.benchmark)
         assertNull(payload.links)
         assertNull(payload.environment?.ide)
         assertNull(payload.environment?.aiAgent)
@@ -184,6 +185,22 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `schema v1 benchmark golden file deserializes with a populated benchmark block`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-benchmark.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        assertEquals(BuildMode.BENCHMARK, payload.mode)
+        val benchmark = payload.benchmark ?: error("expected a benchmark block")
+        assertEquals("clean", benchmark.scenario)
+        assertEquals(3, benchmark.iteration)
+        assertEquals("no_build_cache", benchmark.isolationMode)
+        assertEquals("seed-2026-07-04", benchmark.seedRef)
+        // The typed block is also mirrored into tags (the spec's tag contract).
+        assertEquals("clean", payload.tags["scenario"])
+        assertEquals("no_build_cache", payload.tags["isolationMode"])
+    }
+
+    @Test
     fun `round trip is lossless`() {
         for (name in listOf(
             "build-payload-v1.json",
@@ -194,6 +211,7 @@ class GoldenPayloadTest {
             "build-payload-v1-tests.json",
             "build-payload-v1-ci-env.json",
             "build-payload-v1-processes.json",
+            "build-payload-v1-benchmark.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

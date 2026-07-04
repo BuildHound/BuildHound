@@ -132,6 +132,24 @@ const responses = {
     "/v1/rollups/negative-avoidance?days=30": [
         { key: "checkstyle", count: 5, totalExcessMs: 12000, worstExcessMs: 4000 },
     ],
+    // Benchmark series (plan 030): one scenario with two isolation modes, percentile summaries.
+    "/v1/benchmark/series?days=90": [
+        {
+            scenario: "clean", isolationMode: "full_cache",
+            points: [
+                { startedAt: 1751450000000, buildId: "b1", iteration: 1, durationMs: 60000, hitRate: 0.9 },
+                { startedAt: 1751450100000, buildId: "b2", iteration: 2, durationMs: 62000, hitRate: 0.9 },
+            ],
+            summary: { p50: 62000, p90: 62000, min: 60000, count: 2 },
+        },
+        {
+            scenario: "clean", isolationMode: "no_build_cache",
+            points: [
+                { startedAt: 1751450000000, buildId: "b3", iteration: 1, durationMs: 120000, hitRate: 0.0 },
+            ],
+            summary: { p50: 120000, p90: 120000, min: 120000, count: 1 },
+        },
+    ],
 };
 // X-Total-Count values by path; a path absent here → header missing (tolerance case).
 const totals = {
@@ -309,6 +327,20 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "checkstyle")) throw new Error("negative-avoidance row missing");
     clickButton(byId["app"], "By type");
     if (!hasText(byId["app"], "Task types not populated yet")) throw new Error("by-type empty state missing when byTypeAvailable is false");
+
+    // Benchmark series (plan 030): per-scenario percentile chips + chart, isolation selector, empty state.
+    context.location.hash = "#/benchmark"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/benchmark/series?days=90")) throw new Error("benchmark view did not fetch the series");
+    if (!hasText(byId["app"], "Benchmark series")) throw new Error("benchmark header missing");
+    if (!hasText(byId["app"], "Scenario: clean")) throw new Error("benchmark scenario section missing");
+    if (!hasText(byId["app"], "p50")) throw new Error("benchmark percentile chips missing");
+    if (countTag(byId["app"], "svg") === 0) throw new Error("benchmark duration chart missing");
+    if (countTag(byId["app"], "select") < 1) throw new Error("benchmark isolation selector missing (two modes present)");
+    // Empty series → the honest empty state, not a blank page.
+    responses["/v1/benchmark/series?days=90"] = [];
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/benchmark"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "No benchmark builds yet")) throw new Error("benchmark empty state missing");
 
     // Empty rollups render without throwing (server-side never-fail analogue).
     responses["/v1/rollups/project-cost?days=30"] = [];

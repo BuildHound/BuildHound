@@ -135,6 +135,12 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.enabled.set(extension.enabled)
         }
 
+        // Benchmark activation (plan 030): reads BUILDHOUND_BENCHMARK_* at execution time (no CC input),
+        // same discipline as CiValueSource. A present, valid scenario forces mode=benchmark.
+        val benchmark = settings.providers.of(BenchmarkValueSource::class.java) { spec ->
+            spec.parameters.enabled.set(extension.enabled)
+        }
+
         // End-of-build JVM process probe (plan 029). enabled is master AND the block toggle; the exec
         // timeout is the plan-015 test-seam/escape-hatch property. All exec is inside obtain() at
         // execution time, so CC store/reuse and isolated projects are unaffected.
@@ -187,6 +193,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.environment.set(environment)
             spec.parameters.vcs.set(vcs)
             spec.parameters.ci.set(ci)
+            spec.parameters.benchmark.set(benchmark)
             spec.parameters.processes.set(processes)
             spec.parameters.configurationCacheRequested.set(buildFeatures.configurationCache.requested.getOrElse(false))
             // Lazy: the settings script sets rootProject.name after apply() runs.

@@ -72,6 +72,16 @@ object PayloadScrubber {
                     allCases = task.allCases.map { it.scrubMessage(projectRoots) },
                 )
             },
+            // Benchmark labels (plan 030): scenario/isolationMode are allowlist-validated plugin-side,
+            // but seedRef is free-text env — a mis-set BUILDHOUND_BENCHMARK_SEED_REF could carry a path
+            // or secret-shaped value, so route all three through the scrubber (defense-in-depth; §3.7).
+            benchmark = payload.benchmark?.let { b ->
+                b.copy(
+                    scenario = scrubText(b.scenario, projectRoots),
+                    isolationMode = b.isolationMode?.let { scrubText(it, projectRoots) },
+                    seedRef = b.seedRef?.let { scrubText(it, projectRoots) },
+                )
+            },
         )
 
     /**

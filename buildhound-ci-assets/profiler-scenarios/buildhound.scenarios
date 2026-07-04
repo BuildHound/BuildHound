@@ -1,0 +1,36 @@
+# gradle-profiler scenarios for BuildHound benchmark mode (spec §7, plan 030).
+#
+# Run ONE scenario per gradle-profiler invocation so the pipeline can export a matching
+# BUILDHOUND_BENCHMARK_SCENARIO for that invocation (the plugin reads it once per process):
+#
+#   BUILDHOUND_BENCHMARK_SCENARIO=clean \
+#   gradle-profiler --benchmark --scenario-file buildhound.scenarios clean
+#
+# Each measured build the profiler runs is uploaded by the plugin as mode=benchmark with the
+# scenario/isolation tags. The scenario names here MUST match the plugin's allowlist
+# (BenchmarkActivation.SCENARIOS): clean | no_op | incremental_non_abi | cc_hit.
+
+clean {
+    title = "Clean assemble"
+    tasks = ["assembleDebug"]
+    cleanup-tasks = ["clean"]
+}
+
+no_op {
+    title = "No-op (fully up-to-date) assemble"
+    tasks = ["assembleDebug"]
+}
+
+incremental_non_abi {
+    title = "Incremental non-ABI source change"
+    tasks = ["assembleDebug"]
+    # Point this at a real source file in the pilot; a non-ABI change (method body only)
+    # exercises incremental compilation without invalidating downstream ABI.
+    apply-non-abi-change-to = ["app/src/main/java/com/example/pilot/App.java"]
+}
+
+cc_hit {
+    title = "Configuration-cache hit assemble"
+    tasks = ["assembleDebug"]
+    gradle-args = ["--configuration-cache"]
+}

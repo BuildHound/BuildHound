@@ -13,10 +13,30 @@ class PayloadCapperTest {
         values: Map<String, String> = emptyMap(),
         tasks: List<TaskExecution> = emptyList(),
         caps: CapsSummary? = null,
+        benchmark: BenchmarkInfo? = null,
     ) = BuildPayload(
         buildId = "b", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
-        tags = tags, values = values, tasks = tasks, caps = caps,
+        tags = tags, values = values, tasks = tasks, caps = caps, benchmark = benchmark,
     )
+
+    @Test
+    fun benchmark_seedRef_is_truncated_without_a_caps_summary() {
+        val longSeed = "x".repeat(400)
+        val capped = PayloadCapper.cap(
+            payload(benchmark = BenchmarkInfo(scenario = "clean", seedRef = longSeed)),
+            PayloadCaps(maxValueChars = 300),
+        )
+        assertEquals(300, capped.benchmark?.seedRef?.length)
+        assertEquals("clean", capped.benchmark?.scenario)
+        // A silent truncation of one operator field carries no countable drop.
+        assertNull(capped.caps)
+    }
+
+    @Test
+    fun a_short_benchmark_seedRef_is_left_untouched() {
+        val input = payload(benchmark = BenchmarkInfo(scenario = "clean", seedRef = "seed-1"))
+        assertSame(input, PayloadCapper.cap(input))
+    }
 
     private fun task(
         path: String,

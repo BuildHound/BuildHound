@@ -39,11 +39,32 @@ data class BuildPayload(
     val links: LinksInfo? = null,
     /** End-of-build JVM process snapshot (plan 029, spec §3.6); empty when disabled or unobservable. */
     val processes: List<ProcessInfo> = emptyList(),
+    /** gradle-profiler benchmark context (plan 030, spec §7); null on non-benchmark builds. */
+    val benchmark: BenchmarkInfo? = null,
 ) {
     companion object {
         const val SCHEMA_VERSION: Int = 1
     }
 }
+
+/**
+ * Benchmark-run context (plan 030, spec §7): set when a gradle-profiler pipeline drives the pilot's
+ * real build with `BUILDHOUND_BENCHMARK_*` env. A typed block (not just tags) so the server can group
+ * + compute percentiles per (scenario, isolationMode) robustly; the same keys are *also* mirrored into
+ * `tags` (the spec's tag contract). [scenario] is allowlist-validated plugin-side so a typo can't mint
+ * a new series.
+ */
+@Serializable
+data class BenchmarkInfo(
+    /** One of "clean" | "no_op" | "incremental_non_abi" | "cc_hit". */
+    val scenario: String,
+    /** gradle-profiler measurement index within the scenario. */
+    val iteration: Int? = null,
+    /** Telltale cache-isolation label, e.g. "full_cache" | "no_build_cache". */
+    val isolationMode: String? = null,
+    /** Correlates measure builds back to their seed run. */
+    val seedRef: String? = null,
+)
 
 /**
  * One `Test` task's results, parsed from its JUnit XML output (plan 024, spec §3.5/§4). Per-class

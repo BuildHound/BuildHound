@@ -1,6 +1,7 @@
 package dev.buildhound.gradle
 
 import dev.buildhound.commons.ci.SourceLinks
+import dev.buildhound.commons.payload.BenchmarkInfo
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
@@ -25,12 +26,20 @@ import dev.buildhound.commons.payload.VcsInfo
  */
 internal object PayloadAssembler {
 
-    /** Mode resolution (spec §3.4): AUTO becomes ci exactly when a CI context exists. */
-    fun resolveMode(configured: TelemetryMode, ci: CollectedCi?): BuildMode? = when (configured) {
-        TelemetryMode.DISABLED -> null
-        TelemetryMode.CI -> BuildMode.CI
-        TelemetryMode.LOCAL -> BuildMode.LOCAL
-        TelemetryMode.AUTO -> if (ci != null) BuildMode.CI else BuildMode.LOCAL
+    /**
+     * Mode resolution (spec §3.4/§7): DISABLED short-circuits; an active benchmark forces BENCHMARK
+     * over AUTO/CI/LOCAL (the profiler pipeline sets env, not the DSL); else AUTO becomes ci exactly
+     * when a CI context exists.
+     */
+    fun resolveMode(configured: TelemetryMode, ci: CollectedCi?, benchmark: CollectedBenchmark?): BuildMode? {
+        if (configured == TelemetryMode.DISABLED) return null
+        if (benchmark != null) return BuildMode.BENCHMARK
+        return when (configured) {
+            TelemetryMode.CI -> BuildMode.CI
+            TelemetryMode.LOCAL -> BuildMode.LOCAL
+            TelemetryMode.AUTO -> if (ci != null) BuildMode.CI else BuildMode.LOCAL
+            TelemetryMode.DISABLED -> null
+        }
     }
 
     fun assemble(
@@ -54,7 +63,18 @@ internal object PayloadAssembler {
         kotlin: KotlinInfo? = null,
         tests: List<TestTaskResult> = emptyList(),
         processes: List<CollectedProcess> = emptyList(),
+        benchmark: CollectedBenchmark? = null,
     ): BuildPayload {
+        // Mirror the benchmark keys into tags (spec's tag contract), but user tags win on clash.
+        val mergedTags = if (benchmark == null) {
+            tags
+        } else {
+            buildMap {
+                put("scenario", benchmark.scenario)
+                benchmark.iteration?.let { put("iteration", it.toString()) }
+                benchmark.isolationMode?.let { put("isolationMode", it) }
+            } + tags
+        }
         val startedAt = tasks.minOfOrNull { it.startMs } ?: nowMs
         val finishedAt = (tasks.maxOfOrNull { it.startMs + it.durationMs } ?: nowMs).coerceAtLeast(startedAt)
         val payload = BuildPayload(
@@ -87,7 +107,16 @@ internal object PayloadAssembler {
             ci = ciInfo(ci),
             // Source/commit/PR links from the redacted remote + CI PR number (plan 027); github/gitlab only.
             links = SourceLinks.compose(vcs?.remoteUrl, vcs?.sha ?: ci?.commitSha, ci?.pullRequestId),
-            tags = tags,
+            tags = mergedTags,
+            // gradle-profiler benchmark context (plan 030); null on non-benchmark builds.
+            benchmark = benchmark?.let {
+                BenchmarkInfo(
+                    scenario = it.scenario,
+                    iteration = it.iteration,
+                    isolationMode = it.isolationMode,
+                    seedRef = it.seedRef,
+                )
+            },
             tasks = tasks,
             // Derived metrics are computed over the FULL task list, before any cap drops
             // rows — hit rate/utilization must not shift when the payload is truncated.

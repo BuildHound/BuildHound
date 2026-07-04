@@ -28,13 +28,24 @@ class PayloadAssemblerTest {
         buildUrl = "https://dev.azure.com/acme/mobile/_build/results?buildId=20260702",
     )
 
+    private val benchmark = CollectedBenchmark(scenario = "clean", iteration = 3, isolationMode = "no_build_cache")
+
     @Test
     fun `mode resolution follows the spec matrix`() {
-        assertEquals(BuildMode.CI, PayloadAssembler.resolveMode(TelemetryMode.AUTO, ci))
-        assertEquals(BuildMode.LOCAL, PayloadAssembler.resolveMode(TelemetryMode.AUTO, null))
-        assertEquals(BuildMode.CI, PayloadAssembler.resolveMode(TelemetryMode.CI, null))
-        assertEquals(BuildMode.LOCAL, PayloadAssembler.resolveMode(TelemetryMode.LOCAL, ci))
-        assertNull(PayloadAssembler.resolveMode(TelemetryMode.DISABLED, ci))
+        assertEquals(BuildMode.CI, PayloadAssembler.resolveMode(TelemetryMode.AUTO, ci, null))
+        assertEquals(BuildMode.LOCAL, PayloadAssembler.resolveMode(TelemetryMode.AUTO, null, null))
+        assertEquals(BuildMode.CI, PayloadAssembler.resolveMode(TelemetryMode.CI, null, null))
+        assertEquals(BuildMode.LOCAL, PayloadAssembler.resolveMode(TelemetryMode.LOCAL, ci, null))
+        assertNull(PayloadAssembler.resolveMode(TelemetryMode.DISABLED, ci, null))
+    }
+
+    @Test
+    fun `an active benchmark forces BENCHMARK over CI-LOCAL but not over DISABLED`() {
+        assertEquals(BuildMode.BENCHMARK, PayloadAssembler.resolveMode(TelemetryMode.AUTO, ci, benchmark))
+        assertEquals(BuildMode.BENCHMARK, PayloadAssembler.resolveMode(TelemetryMode.CI, ci, benchmark))
+        assertEquals(BuildMode.BENCHMARK, PayloadAssembler.resolveMode(TelemetryMode.LOCAL, null, benchmark))
+        // DISABLED still short-circuits — a benchmark env never re-enables a disabled build.
+        assertNull(PayloadAssembler.resolveMode(TelemetryMode.DISABLED, ci, benchmark))
     }
 
     @Test
@@ -217,6 +228,32 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `assemble sets the benchmark block and mirrors its keys into tags, user tags winning`() {
+        val payload = assemble(
+            tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)),
+            benchmark = CollectedBenchmark(scenario = "clean", iteration = 3, isolationMode = "no_build_cache", seedRef = "seed-1"),
+            tags = mapOf("scenario" to "user-override", "team" to "mobile"),
+        )
+        val bench = payload.benchmark ?: error("benchmark block")
+        assertEquals("clean", bench.scenario)
+        assertEquals(3, bench.iteration)
+        assertEquals("no_build_cache", bench.isolationMode)
+        assertEquals("seed-1", bench.seedRef)
+        // Mirrored into tags, but a user's explicit tag wins the clash (matches ciInfo's merge).
+        assertEquals("user-override", payload.tags["scenario"])
+        assertEquals("3", payload.tags["iteration"])
+        assertEquals("no_build_cache", payload.tags["isolationMode"])
+        assertEquals("mobile", payload.tags["team"])
+    }
+
+    @Test
+    fun `assemble leaves benchmark null and tags unmirrored on a non-benchmark build`() {
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)))
+        assertNull(payload.benchmark)
+        assertNull(payload.tags["scenario"])
+    }
+
+    @Test
     fun `assemble passes test results through and scrubs the failure message`() {
         val tests = listOf(
             dev.buildhound.commons.payload.TestTaskResult(
@@ -301,6 +338,7 @@ class PayloadAssemblerTest {
         kotlin: dev.buildhound.commons.payload.KotlinInfo? = null,
         tests: List<dev.buildhound.commons.payload.TestTaskResult> = emptyList(),
         processes: List<CollectedProcess> = emptyList(),
+        benchmark: CollectedBenchmark? = null,
         environment: CollectedEnvironment = CollectedEnvironment(
             os = "Linux", arch = "amd64", cores = 8, ramMb = 16_000,
             hostnameHash = "h_0123456789ab", userId = "u_0123456789ab",
@@ -329,6 +367,7 @@ class PayloadAssemblerTest {
         kotlin = kotlin,
         tests = tests,
         processes = processes,
+        benchmark = benchmark,
     )
 
     private fun task(

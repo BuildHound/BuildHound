@@ -79,10 +79,17 @@ object PayloadCapper {
             tasks = reasonCapped.filterIndexed { index, _ -> index in keep }
         }
 
+        // Benchmark seedRef is free-text env (plan 030); scenario/isolationMode are allowlist-bounded.
+        // Truncate an over-long seedRef defensively (a silent truncation, not a countable drop).
+        val cappedBenchmark = payload.benchmark?.let { b ->
+            val seed = b.seedRef
+            if (seed != null && seed.length > caps.maxValueChars) b.copy(seedRef = seed.substring(0, caps.maxValueChars)) else b
+        }
+
         // Strip any prior caps summary while working so the byte budget measures the same
         // shape on every pass (the summary is re-attached at the end) — this keeps re-capping
         // idempotent: the summary block itself must not count toward the budget it records.
-        var working = payload.copy(tags = tags.map, values = values.map, tasks = tasks, caps = null)
+        var working = payload.copy(tags = tags.map, values = values.map, tasks = tasks, benchmark = cappedBenchmark, caps = null)
 
         // Byte budget (spec §3.9 stages), only walked when the payload is actually oversized.
         if (encodedSize(working) > caps.maxPayloadBytes) {
@@ -118,8 +125,9 @@ object PayloadCapper {
             droppedTaskOutcomes = droppedOutcomes,
         )
 
-        // Nothing to record and nothing was previously recorded → the input is compliant.
-        if (fresh.isEmpty() && payload.caps == null) return payload
+        // Nothing countable to record and nothing was previously recorded → the input is compliant,
+        // except a possibly-truncated seedRef (a silent truncation carries no CapsSummary count).
+        if (fresh.isEmpty() && payload.caps == null) return if (cappedBenchmark == payload.benchmark) payload else working
         return working.copy(caps = merge(payload.caps, fresh))
     }
 

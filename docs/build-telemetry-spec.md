@@ -187,9 +187,17 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
                                       "durationMs": 0, "messageHash": "...", "message": "truncated" } ] } ],
   "processes": [ { "role": "KOTLIN_DAEMON", "heapUsedMb": 0, "heapCommittedMb": 0, "heapMaxMb": 0,
                    "configuredXmxMb": 0, "gcTimeMs": 0, "rssMb": 0, "uptimeS": 0 } ],
+  "benchmark": { "scenario": "clean", "iteration": 3, "isolationMode": "no_build_cache", "seedRef": "..." },
   "artifacts": { "apk": [ { "variant": "release", "sizeBytes": 0, "type": "AAB" } ] }
 }
 ```
+
+The `benchmark` block (plan 030) is present only on `mode=benchmark` builds; its `scenario`/
+`iteration`/`isolationMode` are **also** mirrored into `tags` (the tag contract). Benchmark builds
+are **excluded from fleet trends/lists by default** at the query layer (opt in with `mode=benchmark`
+or `includeBenchmark=true`) so a benchmark series never pollutes p50/p95; they have a dedicated
+per-`(scenario, isolationMode)` percentile series at `GET /v1/benchmark/series` + the `#/benchmark`
+dashboard view.
 
 ## 5. Ingestion service
 
@@ -237,7 +245,7 @@ Pages: **Overview/Bottlenecks** (what regressed in 7d: duration, hit rate, flaky
 
 - **Azure YAML template** (steps template): injects `BUILDHOUND_TOKEN`, validates gradle.properties, publishes the HTML artifact, optional verdict gate step. Equivalent GitHub Actions composite / GitLab include follow the connector order.
 - **Metric CLI**: a POSIX-sh `curl`-wrapper `buildhound-metric --name sign.duration --value 42 --unit s` reading correlation from provider env vars automatically (same env mappings as the plugin SPI — shared spec, reimplemented in shell for zero-JVM steps). *As built (plan 025):* server URL + token come only from the environment (`BUILDHOUND_SERVER_URL`/`BUILDHOUND_TOKEN`, never a flag — no token in `ps`); `BUILDHOUND_BUILD_ID` overrides correlation; it never fails the step by default (transport/config errors warn to stderr and exit 0), with `--strict` to opt into non-zero. The Azure steps template exposes a `verdictGate: off|warn|fail` parameter that polls `GET /v1/builds/{id}/verdict` after the build (§8).
-- **Benchmark mode**: scheduled pipeline template running gradle-profiler (scenarios: clean, no-op, incremental non-ABI, config-cache hit; warm-ups per profiler defaults) with the plugin active and `mode=benchmark, scenario, iteration` tags; docs explain reading the resulting low-noise series.
+- **Benchmark mode** (plan 030): scheduled gradle-profiler pipeline (`buildhound-ci-assets/profiler-pipeline/`) running the pilot per scenario (`clean`, `no_op`, `incremental_non_abi`, `cc_hit`; warm-ups per profiler defaults) with the plugin active. Activation is env-driven — `BUILDHOUND_BENCHMARK_{SCENARIO,ITERATION,ISOLATION,SEED_REF}` forces `mode=benchmark` + a typed `benchmark` block + mirrored `scenario`/`iteration`/`isolationMode` tags, so the pilot's `buildhound {}` DSL is invocation-independent. `scenario`/`isolationMode` are allowlist-validated plugin-side (a typo can't mint a series). Each run declares an **isolation mode** (Telltale's cache-cold labels — v1 wires `full_cache` + `no_build_cache`, ten more documented); **never compare across isolation modes**. Benchmark builds are **excluded from fleet trends/lists by default** at the query layer and get a dedicated per-`(scenario, isolationMode)` percentile series (`GET /v1/benchmark/series`, `#/benchmark`); the series shows **p50/p90/min over N iterations, never a single run**. Docs: `docs/recipes/benchmark-and-experiments.md` (reading the series + the three build-validation experiment pairs feeding the compare page).
 
 ## 8. Security, quality, distribution
 

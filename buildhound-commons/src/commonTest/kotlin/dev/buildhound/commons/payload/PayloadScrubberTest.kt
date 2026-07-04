@@ -25,6 +25,19 @@ class PayloadScrubberTest {
     }
 
     @Test
+    fun benchmark_seedRef_is_scrubbed() {
+        val payload = BuildPayload(
+            buildId = "b", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
+            benchmark = BenchmarkInfo(scenario = "clean", seedRef = "seed at /home/ci/agent/work/project/out and token=abc123XYZ"),
+        )
+        val scrubbed = PayloadScrubber.scrub(payload, root).benchmark!!
+        assertEquals("clean", scrubbed.scenario) // allowlisted label passes through unchanged
+        assertTrue(scrubbed.seedRef!!.contains("out"), "in-project path relativizes: ${scrubbed.seedRef}")
+        assertFalse(scrubbed.seedRef!!.contains("/home/ci/agent"), "out-of-root path stripped: ${scrubbed.seedRef}")
+        assertFalse(scrubbed.seedRef!!.contains("abc123XYZ"), "secret-shaped token redacted: ${scrubbed.seedRef}")
+    }
+
+    @Test
     fun long_dotfree_roots_still_relativize_instead_of_being_eaten_as_blobs() {
         // macOS temp shape: /private/var/folders/<xx>/<~30-char hash>/T/junitNNN/... —
         // a digit-bearing, dot-free run >= 32 chars. The blob regex used to eat the

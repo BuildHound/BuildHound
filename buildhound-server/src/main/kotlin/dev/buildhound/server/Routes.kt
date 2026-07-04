@@ -408,6 +408,26 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val days = call.daysParam()
             call.respondQuery { store.negativeAvoidance(project.id, days, System.currentTimeMillis()) }
         }
+
+        // Benchmark series (plan 030, spec §7): mode=BENCHMARK builds grouped by (scenario, isolation)
+        // with percentiles. Read-scope, tenant-scoped; optional scenario/isolationMode/branch narrowing.
+        // Benchmark builds are excluded from the fleet /trends + /builds views (buildFilterOrNull); this
+        // is the dedicated view for them. Unknown filter values simply return empty groups.
+        get("/benchmark/series") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            val params = call.request.queryParameters
+            call.respondQuery {
+                store.benchmarkSeries(
+                    project.id,
+                    scenario = params["scenario"],
+                    isolationMode = params["isolationMode"],
+                    branch = params["branch"],
+                    days = days,
+                    nowMs = System.currentTimeMillis(),
+                )
+            }
+        }
     }
 }
 
@@ -462,7 +482,11 @@ private fun ApplicationCall.buildFilterOrNull(): BuildFilter? {
     if (mode != null && mode !in BuildMode.entries.map { it.name }) return null
     val outcome = request.queryParameters["outcome"]?.uppercase()
     if (outcome != null && outcome !in BuildOutcome.entries.map { it.name }) return null
-    return BuildFilter(branch = request.queryParameters["branch"], mode = mode, outcome = outcome)
+    // Benchmark builds pollute fleet p50/p95 trends (plan 030), so exclude them by default — unless
+    // the caller explicitly asks for mode=benchmark or passes includeBenchmark=true.
+    val includeBenchmark = request.queryParameters["includeBenchmark"].toBoolean()
+    val excludeModes = if (mode == BuildMode.BENCHMARK.name || includeBenchmark) emptySet() else setOf(BuildMode.BENCHMARK.name)
+    return BuildFilter(branch = request.queryParameters["branch"], mode = mode, outcome = outcome, excludeModes = excludeModes)
 }
 
 private val ingestLogger = LoggerFactory.getLogger("dev.buildhound.server.Ingest")

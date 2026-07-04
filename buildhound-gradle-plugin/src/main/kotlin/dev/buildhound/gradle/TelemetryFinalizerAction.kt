@@ -58,6 +58,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Optional
         val ci: Property<CollectedCi>
 
+        /** Benchmark activation context (plan 030); optional/absent on non-benchmark builds. */
+        @get:Input
+        @get:Optional
+        val benchmark: Property<CollectedBenchmark>
+
         /** JVM process snapshot (plan 029); optional/empty when disabled or JDK tools are absent. */
         @get:Input
         @get:Optional
@@ -136,7 +141,8 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             if (configuredMode == TelemetryMode.DISABLED) return@runCatching
 
             val ci = parameters.ci.orNull
-            val mode = PayloadAssembler.resolveMode(configuredMode, ci) ?: return@runCatching
+            val benchmark = parameters.benchmark.orNull
+            val mode = PayloadAssembler.resolveMode(configuredMode, ci, benchmark) ?: return@runCatching
 
             val tasks = parameters.collector.get().snapshot()
             val ccState = configurationCacheState(parameters.configurationCacheRequested.getOrElse(false), execution)
@@ -202,6 +208,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 kotlin = kotlin,
                 tests = tests,
                 processes = parameters.processes.getOrElse(emptyList()),
+                benchmark = benchmark,
             )
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so
