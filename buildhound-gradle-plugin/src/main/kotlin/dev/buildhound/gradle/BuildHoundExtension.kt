@@ -47,6 +47,21 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     val tests: TestsSpec = objects.newInstance(TestsSpec::class.java)
 
     fun tests(action: Action<TestsSpec>) = action.execute(tests)
+
+    val upload: UploadSpec = objects.newInstance(UploadSpec::class.java)
+
+    fun upload(action: Action<UploadSpec>) = action.execute(upload)
+}
+
+/**
+ * `upload { ... }` (spec §3.4/§3.9, plan 027). `uploadInBackground` opts a **local** build out of
+ * blocking on the inline upload attempt — the payload is spooled and the next build's drain sends
+ * it. CI/benchmark are unaffected (short-lived agents must upload inline). No background thread is
+ * introduced (spec §3.9, plan 020): "background" here means "don't block this build on the send".
+ */
+abstract class UploadSpec {
+    /** Local builds spool instead of attempting an inline upload (default false). */
+    abstract val uploadInBackground: Property<Boolean>
 }
 
 /**

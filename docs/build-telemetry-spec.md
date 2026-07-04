@@ -79,7 +79,7 @@ data class CiContext(
 )
 ```
 
-Discovery: built-ins first (Azure DevOps, GitHub Actions, GitLab CI, Bitrise, Jenkins, CircleCI — each ~30 lines of env-var mapping), then `ServiceLoader` for third-party implementations on the settings classpath, then a **generic provider** honoring `BUILDHOUND_CI_*` env vars so unsupported CIs work with zero code. When no `BUILDHOUND_CI_*` variable is active, the generic provider still classifies the build as CI — provider `generic`, no mapped fields — if the conventional `CI` variable is set and not `false`/`0` (CircleCI, GitLab, Jenkins, Travis and most others set it). The same truthiness rule applies to `BUILDHOUND_CI`: truthy activates the mapping, and an explicit falsy value forces non-CI for the generic provider, overriding `BUILDHOUND_CI_PROVIDER` and the bare-`CI` fallback (plan 014). First non-null `detect()` wins; explicit override via `buildhound { ci.provider = "..." }`. Azure mapping: `TF_BUILD`→detected, `BUILD_BUILDID`→runId, `BUILD_DEFINITIONNAME`→pipelineName (fallback `SYSTEM_DEFINITIONNAME`), `BUILD_SOURCEBRANCH`, `BUILD_SOURCEVERSION`, `SYSTEM_PULLREQUEST_PULLREQUESTID`, `AGENT_NAME`, URL composed from `SYSTEM_COLLECTIONURI`+project+buildId. The same interface file lives in `buildhound-commons` and is documented as a public extension point (README recipe: "add your CI in 30 lines").
+Discovery: built-ins first, then `ServiceLoader` for third-party implementations on the settings classpath, then a **generic provider** honoring `BUILDHOUND_CI_*` env vars so unsupported CIs work with zero code. *As built (plan 027):* the built-in matrix is the CCUD 10 — Azure DevOps, GitHub Actions, GitLab, Jenkins, TeamCity (env-only partial), CircleCI, Bamboo, Travis, Bitrise, GoCD, Buildkite — registered most-specific-marker-first. GitHub carries `runAttempt` (+ an `/attempts/N` URL suffix so re-runs don't collide). When no `BUILDHOUND_CI_*` variable is active, the generic provider still classifies the build as CI — provider `generic`, no mapped fields — if the conventional `CI` variable is set and not `false`/`0` (CircleCI, GitLab, Jenkins, Travis and most others set it). The same truthiness rule applies to `BUILDHOUND_CI`: truthy activates the mapping, and an explicit falsy value forces non-CI for the generic provider, overriding `BUILDHOUND_CI_PROVIDER` and the bare-`CI` fallback (plan 014). First non-null `detect()` wins; explicit override via `buildhound { ci.provider = "..." }`. Azure mapping: `TF_BUILD`→detected, `BUILD_BUILDID`→runId, `BUILD_DEFINITIONNAME`→pipelineName (fallback `SYSTEM_DEFINITIONNAME`), `BUILD_SOURCEBRANCH`, `BUILD_SOURCEVERSION`, `SYSTEM_PULLREQUEST_PULLREQUESTID`, `AGENT_NAME`, URL composed from `SYSTEM_COLLECTIONURI`+project+buildId. The same interface file lives in `buildhound-commons` and is documented as a public extension point (README recipe: "add your CI in 30 lines").
 
 ### 3.4 Configuration DSL
 
@@ -102,9 +102,20 @@ buildhound {
     tests { collect = true }               // per-class rollup + failure/retry detail (locked)
     processProbe { enabled = true }
     htmlReport { enabled = true; outputDir = layout.buildDirectory.dir("reports/buildhound") }
-    upload { foregroundOnCi = true; spoolDir = default; maxPayloadMb = 20 }
+    upload { uploadInBackground = false } // plan 027: local builds spool instead of blocking on the send
 }
 ```
+
+Config overrides (plan 027, CCUD `Overrides` pattern): every DSL knob above **except `server.token`**
+is overridable via a `buildhound.<key>` gradle property or a `BUILDHOUND_<KEY>` env var (`<KEY>` =
+`<key>.uppercase().replace('.','_')`), precedence **explicit DSL value → override → default**. Keys:
+`enabled`, `mode`, `server.url`, `identity.pseudonymize`, `htmlReport.enabled`, `localBuilds.enabled`,
+`localBuilds.requireOptInFile`, `upload.uploadInBackground`. `server.token` is excluded by construction
+(an override would serialize the token into the on-disk CC entry). `uploadInBackground` opts a **local**
+build out of blocking on the inline upload — it spools and the next build's drain sends it (no new
+thread — §3.9); CI/benchmark always upload inline. New payload fields (spec §4): `environment.{ide,
+ideVersion,ideSync,aiAgent}`, `vcs.remoteUrl` (redacted, all-scheme, fail-closed), and top-level
+`links` (`commitUrl`/`pullRequestUrl`, github/gitlab, https-gated).
 
 Kotlin build reports: plugin does **not** silently mutate KGP properties; it reads whatever directory `kotlin.build.report.json.directory` names (it does not require a specific path), and emits a single copy-paste `gradle.properties` fix when the wiring is absent — either `kotlin.build.report.output=JSON` with no directory set, or no report wired at all on a build that ran Kotlin compilations (honest, CC-safe, no ordering hazards; non-Kotlin builds stay silent). Bundler reads the JSON files in the Finalizer and embeds them (schema-version tagged) in the payload. Ordering/staleness are handled by a modified-time window rather than assuming KGP writes before our Finalizer runs (plan 023 §4a): only reports touched within 60 s of build start are bundled, so a stale report from a prior build is treated as absent, never mis-attributed.
 

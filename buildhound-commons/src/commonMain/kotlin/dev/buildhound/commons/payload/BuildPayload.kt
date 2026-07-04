@@ -35,6 +35,8 @@ data class BuildPayload(
     val kotlin: KotlinInfo? = null,
     /** Per-test-task results parsed from JUnit XML (plan 024); empty when no test ran or disabled. */
     val tests: List<TestTaskResult> = emptyList(),
+    /** Source/commit/PR links composed from the git remote + CI context (plan 027); null when uncomposable. */
+    val links: LinksInfo? = null,
 ) {
     companion object {
         const val SCHEMA_VERSION: Int = 1
@@ -188,6 +190,13 @@ data class EnvironmentInfo(
     val userId: String? = null,
     val daemonReused: Boolean? = null,
     val configurationCache: ConfigurationCacheState? = null,
+    /** Host IDE (plan 027): "Android Studio"/"IntelliJ IDEA"/"Eclipse"/"VS Code"; null = command line. */
+    val ide: String? = null,
+    val ideVersion: String? = null,
+    /** True when the build ran inside an IDE Gradle sync rather than a user-triggered build. */
+    val ideSync: Boolean? = null,
+    /** Coarse AI-agent attribution (plan 027): "Claude Code"/"Cursor"/…; null when none detected. */
+    val aiAgent: String? = null,
 )
 
 @Serializable
@@ -207,6 +216,15 @@ data class VcsInfo(
     val branch: String? = null,
     val sha: String? = null,
     val dirty: Boolean? = null,
+    /** Git remote origin URL with any userInfo redacted, all schemes (plan 027); null when absent. */
+    val remoteUrl: String? = null,
+)
+
+/** Source-control web links composed from the remote URL + CI context (plan 027, spec §4). */
+@Serializable
+data class LinksInfo(
+    val commitUrl: String? = null,
+    val pullRequestUrl: String? = null,
 )
 
 @Serializable

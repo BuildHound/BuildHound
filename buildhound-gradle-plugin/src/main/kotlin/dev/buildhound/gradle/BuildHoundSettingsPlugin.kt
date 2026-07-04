@@ -28,12 +28,17 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
 
     override fun apply(settings: Settings) {
         val extension = settings.extensions.create("buildhound", BuildHoundExtension::class.java)
-        extension.enabled.convention(true)
-        extension.mode.convention(TelemetryMode.AUTO)
-        extension.identity.pseudonymize.convention(true)
-        extension.htmlReport.enabled.convention(true)
-        extension.localBuilds.enabled.convention(true)
-        extension.localBuilds.requireOptInFile.convention(true)
+        // Config overrides (plan 027): apply `buildhound.<key>`/`BUILDHOUND_<KEY>` as the convention
+        // fallback so precedence is explicit-DSL > override > default. server.token is NOT overridable.
+        val overrides = ConfigOverrides(settings.providers) { logger.info(it) }
+        extension.enabled.convention(overrides.bool("enabled") ?: true)
+        extension.mode.convention(overrides.mode("mode") ?: TelemetryMode.AUTO)
+        extension.identity.pseudonymize.convention(overrides.bool("identity.pseudonymize") ?: true)
+        extension.htmlReport.enabled.convention(overrides.bool("htmlReport.enabled") ?: true)
+        extension.localBuilds.enabled.convention(overrides.bool("localBuilds.enabled") ?: true)
+        extension.localBuilds.requireOptInFile.convention(overrides.bool("localBuilds.requireOptInFile") ?: true)
+        extension.upload.uploadInBackground.convention(overrides.bool("upload.uploadInBackground") ?: false)
+        overrides.string("server.url")?.let { extension.server.url.convention(it) }
         extension.kotlinReports.bundle.convention(true)
         extension.tests.collect.convention(true)
 
@@ -188,6 +193,8 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.serverToken.set(extension.server.token)
             spec.parameters.localBuildsEnabled.set(extension.localBuilds.enabled)
             spec.parameters.requireOptInFile.set(extension.localBuilds.requireOptInFile)
+            // uploadInBackground (plan 027): a local build spools instead of attempting the inline upload.
+            spec.parameters.uploadInBackground.set(extension.upload.uploadInBackground)
             // Test seam + advanced override; default (~/.buildhound/optin) resolves at execution.
             spec.parameters.optInFile.set(settings.providers.gradleProperty("buildhound.optin.file"))
         }

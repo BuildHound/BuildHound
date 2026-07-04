@@ -230,6 +230,38 @@ class PayloadAssemblerTest {
         assertFalse(scrubbed.contains("AKIA"), "no key fragment may survive: $scrubbed")
     }
 
+    @Test
+    fun `ide and agent detection map into the environment block`() {
+        val env = CollectedEnvironment(os = "Linux", ide = "IntelliJ IDEA", ideVersion = "2024.2", ideSync = true, aiAgent = "Claude Code")
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), environment = env)
+        assertEquals("IntelliJ IDEA", payload.environment?.ide)
+        assertEquals("2024.2", payload.environment?.ideVersion)
+        assertEquals(true, payload.environment?.ideSync)
+        assertEquals("Claude Code", payload.environment?.aiAgent)
+    }
+
+    @Test
+    fun `links compose from the redacted remote, sha, and the ci pr number`() {
+        val vcs = CollectedVcs(branch = "feature", sha = "a".repeat(40), remoteUrl = "https://github.com/org/repo.git")
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), vcs = vcs)
+        assertEquals("https://github.com/org/repo.git", payload.vcs?.remoteUrl)
+        assertEquals("https://github.com/org/repo/commit/${"a".repeat(40)}", payload.links?.commitUrl)
+        // The fixture ci carries pullRequestId "7".
+        assertEquals("https://github.com/org/repo/pull/7", payload.links?.pullRequestUrl)
+    }
+
+    @Test
+    fun `links are null without a supported remote`() {
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), vcs = CollectedVcs(sha = "a".repeat(40)))
+        assertNull(payload.links)
+    }
+
+    @Test
+    fun `ci attributes carry run attempt through`() {
+        val info = PayloadAssembler.ciInfo(ci.copy(attributes = mapOf("runAttempt" to "3")))!!
+        assertEquals("3", info.attributes["runAttempt"])
+    }
+
     private fun assemble(
         tasks: List<TaskExecution>,
         buildFailed: Boolean = false,
@@ -240,6 +272,13 @@ class PayloadAssemblerTest {
         fingerprints: dev.buildhound.commons.payload.FingerprintInfo? = null,
         kotlin: dev.buildhound.commons.payload.KotlinInfo? = null,
         tests: List<dev.buildhound.commons.payload.TestTaskResult> = emptyList(),
+        environment: CollectedEnvironment = CollectedEnvironment(
+            os = "Linux", arch = "amd64", cores = 8, ramMb = 16_000,
+            hostnameHash = "h_0123456789ab", userId = "u_0123456789ab",
+            gradleVersion = "8.14.3", jdkVersion = "21.0.10",
+        ),
+        vcs: CollectedVcs = CollectedVcs(branch = "main", sha = "c".repeat(40), dirty = false),
+        ci: CollectedCi? = this.ci,
     ) = PayloadAssembler.assemble(
         buildId = "test-build",
         projectKey = "fixture",
@@ -247,12 +286,8 @@ class PayloadAssemblerTest {
         buildFailed = buildFailed,
         requestedTasks = listOf("build"),
         tasks = tasks,
-        environment = CollectedEnvironment(
-            os = "Linux", arch = "amd64", cores = 8, ramMb = 16_000,
-            hostnameHash = "h_0123456789ab", userId = "u_0123456789ab",
-            gradleVersion = "8.14.3", jdkVersion = "21.0.10",
-        ),
-        vcs = CollectedVcs(branch = "main", sha = "c".repeat(40), dirty = false),
+        environment = environment,
+        vcs = vcs,
         ci = ci,
         configurationCache = ConfigurationCacheState.HIT,
         daemonReused = true,

@@ -50,6 +50,11 @@ internal class PayloadUploader(
      * spool for the next build; permanent rejections (other 4xx: bad token, bad payload)
      * are dropped with a warning — retrying them can never succeed.
      */
+    /** Spool without attempting a send (uploadInBackground, plan 027) — the next build's drain sends it. */
+    fun spoolDirectly(buildId: String, payloadJson: String) {
+        spool(buildId, gzip(payloadJson.encodeToByteArray()))
+    }
+
     fun uploadOrSpool(buildId: String, payloadJson: String) {
         val body = gzip(payloadJson.encodeToByteArray())
         when (post(body)) {

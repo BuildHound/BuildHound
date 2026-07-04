@@ -84,6 +84,10 @@ class GoldenPayloadTest {
         assertNull(payload.fingerprints)
         assertNull(payload.kotlin)
         assertTrue(payload.tests.isEmpty())
+        assertNull(payload.links)
+        assertNull(payload.environment?.ide)
+        assertNull(payload.environment?.aiAgent)
+        assertNull(payload.vcs?.remoteUrl)
     }
 
     @Test
@@ -113,6 +117,22 @@ class GoldenPayloadTest {
     private fun sha256(text: String): String =
         java.security.MessageDigest.getInstance("SHA-256").digest(text.encodeToByteArray())
             .joinToString("") { b -> ((b.toInt() and 0xff) + 0x100).toString(16).substring(1) }
+
+    @Test
+    fun `schema v1 ci-env golden file deserializes with populated ide, agent, remote, and links`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-ci-env.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        assertEquals("Android Studio", payload.environment?.ide)
+        assertEquals("2024.1", payload.environment?.ideVersion)
+        assertEquals(false, payload.environment?.ideSync)
+        assertEquals("Claude Code", payload.environment?.aiAgent)
+        assertEquals("https://******@gitlab.com/acme/app.git", payload.vcs?.remoteUrl)
+        assertEquals("gitlab", payload.ci?.provider)
+        assertEquals("2", payload.ci?.attributes?.get("runAttempt"))
+        assertTrue(payload.links?.commitUrl?.startsWith("https://gitlab.com/acme/app/-/commit/") == true)
+        assertTrue(payload.links?.pullRequestUrl?.contains("/-/merge_requests/") == true)
+    }
 
     @Test
     fun `TestUnitKey is the single canonical module-slash-class join key`() {
@@ -151,6 +171,7 @@ class GoldenPayloadTest {
             "build-payload-v1-fingerprints.json",
             "build-payload-v1-kotlin.json",
             "build-payload-v1-tests.json",
+            "build-payload-v1-ci-env.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

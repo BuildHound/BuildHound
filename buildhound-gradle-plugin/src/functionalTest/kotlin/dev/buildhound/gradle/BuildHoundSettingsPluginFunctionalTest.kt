@@ -272,8 +272,16 @@ class BuildHoundSettingsPluginFunctionalTest {
      * Extend this list whenever a new built-in provider (and its detection marker)
      * lands, or these tests misdetect on that CI.
      */
-    private fun ciNeutralEnv(): Map<String, String> = System.getenv().filterKeys {
-        it != "GITHUB_ACTIONS" && it != "TF_BUILD" && it != "CI" && !it.startsWith("BUILDHOUND_")
+    private fun ciNeutralEnv(): Map<String, String> = System.getenv().filterKeys { it !in CI_MARKERS && !it.startsWith("BUILDHOUND_") }
+
+    private companion object {
+        // Detection markers for every built-in provider (plan 027) + the bare CI var, stripped so a
+        // test's injected env alone steers detection regardless of the CI the suite runs on.
+        val CI_MARKERS = setOf(
+            "CI", "GITHUB_ACTIONS", "TF_BUILD", "GITLAB_CI", "JENKINS_URL", "TEAMCITY_VERSION",
+            "CIRCLECI", "CIRCLE_BUILD_URL", "bamboo_resultsUrl", "TRAVIS_JOB_ID", "BITRISE_BUILD_URL",
+            "GO_SERVER_URL", "BUILDKITE",
+        )
     }
 
     @Test

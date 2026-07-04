@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "buildId": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f",
+  "projectKey": "pilot",
+  "startedAt": 1751520000000,
+  "finishedAt": 1751520030000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["build"],
+  "mode": "ci",
+  "environment": {
+    "os": "Mac OS X",
+    "arch": "aarch64",
+    "cores": 10,
+    "ramMb": 32768,
+    "hostnameHash": "h_0123456789ab",
+    "userId": "u_9e1b44c0",
+    "ide": "Android Studio",
+    "ideVersion": "2024.1",
+    "ideSync": false,
+    "aiAgent": "Claude Code"
+  },
+  "vcs": {
+    "branch": "feature/ci-breadth",
+    "sha": "abcdef0123456789abcdef0123456789abcdef01",
+    "dirty": false,
+    "remoteUrl": "https://******@gitlab.com/acme/app.git"
+  },
+  "ci": {
+    "provider": "gitlab",
+    "runId": "9",
+    "pipelineName": "acme/app",
+    "attributes": { "pipelineUrl": "https://gitlab.com/acme/app/-/pipelines/9", "runAttempt": "2" }
+  },
+  "links": {
+    "commitUrl": "https://gitlab.com/acme/app/-/commit/abcdef0123456789abcdef0123456789abcdef01",
+    "pullRequestUrl": "https://gitlab.com/acme/app/-/merge_requests/12"
+  }
+}

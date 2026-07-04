@@ -1,6 +1,7 @@
 package dev.buildhound.gradle
 
 import dev.buildhound.commons.payload.BuildHoundJson
+import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.FingerprintInfo
@@ -106,6 +107,10 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
         @get:Input
         val requireOptInFile: Property<Boolean>
+
+        /** uploadInBackground (plan 027): a local build spools instead of an inline upload attempt. */
+        @get:Input
+        val uploadInBackground: Property<Boolean>
 
         /** Override for the opt-in marker path (`buildhound.optin.file`); default ~/.buildhound/optin. */
         @get:Input
@@ -231,16 +236,23 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             )
             when (decision) {
                 is UploadGate.Decision.Upload -> {
+                    val json = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
+                    // uploadInBackground opts a LOCAL build out of blocking on the send (plan 027):
+                    // spool directly, no inline attempt and no drain (a later CI/foreground build drains).
+                    // CI/benchmark always upload inline — short-lived agents can't defer to a next build.
+                    val deferLocal = parameters.uploadInBackground.getOrElse(false) && mode == BuildMode.LOCAL
                     PayloadUploader(
                         baseUrl = decision.url,
                         token = parameters.serverToken.orNull,
                         spoolDir = File(parameters.outputDir.get(), "spool"),
                     ).use { uploader ->
-                        uploader.drainSpool()
-                        uploader.uploadOrSpool(
-                            payload.buildId,
-                            BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload),
-                        )
+                        if (deferLocal) {
+                            uploader.spoolDirectly(payload.buildId, json)
+                            logger.lifecycle("[buildhound] upload deferred (uploadInBackground): spooled for the next build")
+                        } else {
+                            uploader.drainSpool()
+                            uploader.uploadOrSpool(payload.buildId, json)
+                        }
                     }
                 }
                 is UploadGate.Decision.Skip ->

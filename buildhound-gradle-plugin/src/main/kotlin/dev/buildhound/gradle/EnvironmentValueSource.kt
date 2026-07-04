@@ -1,5 +1,7 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.ci.CiEnvironment
+import dev.buildhound.commons.ci.EnvironmentDetection
 import java.io.Serializable
 import java.lang.management.ManagementFactory
 import java.net.InetAddress
@@ -23,6 +25,10 @@ data class CollectedEnvironment(
     val userId: String? = null,
     val gradleVersion: String? = null,
     val jdkVersion: String? = null,
+    val ide: String? = null,
+    val ideVersion: String? = null,
+    val ideSync: Boolean? = null,
+    val aiAgent: String? = null,
 ) : Serializable
 
 /**
@@ -53,6 +59,20 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
         val pseudonymize = parameters.pseudonymize.getOrElse(true)
         val salt = if (pseudonymize) guarded("salt") { IdentitySalt.readOrCreate(parameters.identitySaltFile.orNull) } else null
         val identity = IdentityHashing.identityFields(pseudonymize, salt, username, hostname)
+        // IDE + AI-agent detection (plan 027), pure over env + sysprop snapshots. IDE is skipped
+        // when a CI context is present (an IDE never runs CI); agent detection runs regardless.
+        val env = guarded("env") { System.getenv().toMap() } ?: emptyMap()
+        val sysProps = guarded("sysprops") {
+            System.getProperties().stringPropertyNames().associateWith { System.getProperty(it) ?: "" }
+        } ?: emptyMap()
+        val onCi = guarded("ci-detect") { CiEnvironment.detect(env) != null } ?: false
+        val ide = if (onCi) {
+            EnvironmentDetection.IdeInfo(null, null, null)
+        } else {
+            guarded("ide") { EnvironmentDetection.detectIde(sysProps, env) }
+                ?: EnvironmentDetection.IdeInfo(null, null, null)
+        }
+        val aiAgent = guarded("agent") { EnvironmentDetection.detectAgent(env, sysProps) }
         return CollectedEnvironment(
             os = guarded("os") { System.getProperty("os.name") },
             arch = guarded("arch") { System.getProperty("os.arch") },
@@ -62,6 +82,10 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
             userId = identity.userId,
             gradleVersion = guarded("gradle") { GradleVersion.current().version },
             jdkVersion = guarded("jdk") { System.getProperty("java.version") },
+            ide = ide.ide,
+            ideVersion = ide.version,
+            ideSync = ide.sync,
+            aiAgent = aiAgent,
         )
     }
 

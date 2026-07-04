@@ -217,3 +217,49 @@ fail-safe (unparseable → ignored, info log).
   a `buildhound.server.token` override is refused and tested.
 - Spec §3.3/§3.4/§4 and `docs/architecture.md` (incl. decision log) updated in the same PR; the new
   v1 golden is added and the existing one is byte-identical.
+
+## 8. Divergences from plan (2026-07-04, implementation)
+
+- **Redaction + links live on a commons `SourceLinks` object**, not a commons `VcsParsing` — the
+  plugin already has a `dev.buildhound.gradle.VcsParsing`, so `redactRemoteUrl` + `compose` sit on
+  one KMP-pure `dev.buildhound.commons.ci.SourceLinks` (no cross-module name clash). Both fail-closed.
+- **Redaction is pure-Kotlin string parsing**, not `java.net.URI` (which is JVM-only) — commons is
+  KMP, so the redaction runs in `commonMain` and the golden tests exercise it.
+- **`ConfigOverrides` injects an info sink** rather than holding a Gradle `Logging` field, so its
+  pure companion parsers (`parseBool`/`parseEnum`/`isOverridable`) load in the Gradle-less unit-test
+  JVM (the plan 023 `KotlinReportBundler` precedent). `server.token` exclusion is a tested invariant.
+- **The mode override is `overrides.mode("mode")`** (a concrete `TelemetryMode` accessor) rather than
+  a generic `enum()` — the only enum knob; the reified parse stays a pure companion helper.
+- **Overrides apply via `convention(override ?: default)`** so precedence is explicit-DSL > override
+  > default; a `server.url` override sets the convention only when present (unset stays offline).
+- **Functional override test drives `BUILDHOUND_MODE`** (the env branch) rather than `-Dbuildhound.mode`
+  — `providers.gradleProperty` reads `-P`/gradle.properties/`ORG_GRADLE_PROJECT_`, not `-D`; the env
+  path is the CCUD-style override and is unambiguous under TestKit.
+- Everything else as planned: additive schema + golden (existing untouched), the nine providers +
+  GHA runAttempt, IDE/agent detection (IDE skipped under CI), the redacted remote probe, the
+  assembler links, `upload { uploadInBackground }` (local spools, no new thread), and the docs.
+
+### Review-driven changes (2026-07-04, two clean-context reviews)
+
+Both reviews converged on one real bug (**Critical/High**, credential redaction) — fixed — and
+otherwise **SHIP** (token exclusion, javascript-gating, CC-at-rest, agent/IDE privacy all correct).
+
+- **[Critical] `redactRemoteUrl` split userInfo at the FIRST `@`** but took the host from the LAST
+  `@`, leaking the tail of a credential when the password/userInfo contained a raw `@` or `:`
+  (`https://user:p@ss@host` → `…******@ss@host`; `svc:token@host:path` returned unredacted). Git
+  stores such URLs raw and `vcs.remoteUrl` has no downstream scrubber, so the fragment reached the
+  payload/artifact/upload. Fixed: split at the **last** `@` (scheme authority) and anchor the scp
+  host colon to the first `:` after the last `@`. Added multi-`@`/colon-userinfo regression cases to
+  `a_credential_never_survives_redaction`.
+- **[Low] Un-gated attribute URLs** — Jenkins `controllerUrl` (`JENKINS_URL`) and GitLab
+  `pipelineUrl` (`CI_PIPELINE_URL`) now pass the `isHttpUrl` gate like every `buildUrl`, so a
+  hostile `javascript:` env value can't ride into an attribute that may be linked downstream.
+- **[Low] Generic fallback wrapped in `runCatching`** for symmetry with the built-in providers
+  (never-fail).
+- **`vcs.remoteUrl` deliberately stays outside `PayloadScrubber`**: the scrubber's long-blob rule
+  would mangle a legitimate commit URL (a 40-hex sha) and a long repo path, so `redactRemoteUrl`
+  (now robust + tested against `@`/`:`-in-userinfo) is the single, correct redaction point — a full
+  scrub pass was considered and rejected for that reason.
+- **Functional failure-injection (throwing provider, malformed remote)** stays at the unit layer
+  (`CiEnvironment.detect`'s per-provider `runCatching`; `SourceLinks` null-on-unparseable), not a
+  git-fixture TestKit case — accepted to avoid a git-availability-dependent functional test.

@@ -12,6 +12,8 @@ data class CollectedVcs(
     val branch: String? = null,
     val sha: String? = null,
     val dirty: Boolean? = null,
+    /** Redacted `remote.origin.url` (plan 027); userInfo stripped for all schemes, fail-closed. */
+    val remoteUrl: String? = null,
 ) : Serializable
 
 /**
@@ -44,6 +46,9 @@ abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Paramet
             branch = probe.run("rev-parse", "--abbrev-ref", "HEAD")?.let(VcsParsing::parseBranch),
             sha = probe.run("rev-parse", "HEAD")?.let(VcsParsing::parseSha),
             dirty = probe.run("status", "--porcelain")?.let(VcsParsing::parseDirty),
+            // Redacted before it ever leaves this ValueSource — a credentialed remote never lands.
+            remoteUrl = probe.run("config", "--get", "remote.origin.url")
+                ?.let { dev.buildhound.commons.ci.SourceLinks.redactRemoteUrl(it) },
         )
     }
 

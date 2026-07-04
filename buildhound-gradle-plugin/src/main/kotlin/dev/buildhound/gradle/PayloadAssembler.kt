@@ -1,5 +1,6 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.ci.SourceLinks
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
@@ -72,11 +73,18 @@ internal object PayloadAssembler {
                     userId = it.userId,
                     daemonReused = daemonReused,
                     configurationCache = configurationCache,
+                    // IDE + AI-agent detection (plan 027).
+                    ide = it.ide,
+                    ideVersion = it.ideVersion,
+                    ideSync = it.ideSync,
+                    aiAgent = it.aiAgent,
                 )
             },
             toolchain = environment?.let { ToolchainInfo(gradle = it.gradleVersion, jdk = it.jdkVersion) },
             vcs = vcsInfo(vcs, ci),
             ci = ciInfo(ci),
+            // Source/commit/PR links from the redacted remote + CI PR number (plan 027); github/gitlab only.
+            links = SourceLinks.compose(vcs?.remoteUrl, vcs?.sha ?: ci?.commitSha, ci?.pullRequestId),
             tags = tags,
             tasks = tasks,
             // Derived metrics are computed over the FULL task list, before any cap drops
@@ -101,8 +109,9 @@ internal object PayloadAssembler {
         val branch = vcs?.branch ?: ci?.branch
         val sha = vcs?.sha ?: ci?.commitSha
         val dirty = vcs?.dirty
-        if (branch == null && sha == null && dirty == null) return null
-        return VcsInfo(branch = branch, sha = sha, dirty = dirty)
+        val remoteUrl = vcs?.remoteUrl
+        if (branch == null && sha == null && dirty == null && remoteUrl == null) return null
+        return VcsInfo(branch = branch, sha = sha, dirty = dirty, remoteUrl = remoteUrl)
     }
 
     /**
