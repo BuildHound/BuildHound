@@ -41,6 +41,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         overrides.string("server.url")?.let { extension.server.url.convention(it) }
         extension.kotlinReports.bundle.convention(true)
         extension.tests.collect.convention(true)
+        extension.processProbe.enabled.convention(overrides.bool("processProbe.enabled") ?: true)
 
         // In a composite, only the root build observes: task events from included builds
         // already reach the root's listener, and a second flow action would consume the
@@ -134,6 +135,24 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.enabled.set(extension.enabled)
         }
 
+        // End-of-build JVM process probe (plan 029). enabled is master AND the block toggle; the exec
+        // timeout is the plan-015 test-seam/escape-hatch property. All exec is inside obtain() at
+        // execution time, so CC store/reuse and isolated projects are unaffected.
+        val processes = settings.providers.of(ProcessProbeValueSource::class.java) { spec ->
+            spec.parameters.enabled.set(
+                extension.enabled.zip(extension.processProbe.enabled) { master, probe -> master && probe },
+            )
+            spec.parameters.timeoutMillis.set(
+                settings.providers.gradleProperty("buildhound.processprobe.timeout.ms")
+                    .map { raw -> raw.toLongOrNull()?.takeIf { it > 0 } ?: GitExec.DEFAULT_TIMEOUT_MS },
+            )
+            // Internal seam: TestKit can't PATH-shadow the daemon's jps, so the timeout
+            // failure-injection test points this at a fake hanging binary. Absent → "jps".
+            spec.parameters.jpsExecutable.set(
+                settings.providers.gradleProperty("buildhound.internal.processprobe.jps"),
+            )
+        }
+
         // Build-level input fingerprints (plan 022). Allowlists flow as ValueSource params and
         // resolve at execution (after the DSL runs); Gradle-property *values* are pre-resolved
         // via `providers.gradleProperty` (they are CC inputs already). parallel/maxWorkers are
@@ -168,6 +187,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.environment.set(environment)
             spec.parameters.vcs.set(vcs)
             spec.parameters.ci.set(ci)
+            spec.parameters.processes.set(processes)
             spec.parameters.configurationCacheRequested.set(buildFeatures.configurationCache.requested.getOrElse(false))
             // Lazy: the settings script sets rootProject.name after apply() runs.
             spec.parameters.projectKey.set(settings.providers.provider { settings.rootProject.name })

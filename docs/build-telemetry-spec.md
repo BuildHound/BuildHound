@@ -125,7 +125,11 @@ Collector parses JUnit XML from test tasks (works for JVM + KMP jvm targets; And
 
 ### 3.6 Process probe
 
-End-of-build (Finalizer): enumerate JVMs via `ProcessHandle`/`jps` matching main classes (`GradleDaemon`, `KotlinCompileDaemon`, `GradleWorkerMain`), sample `jstat -gc` (fallback `jcmd GC.heap_info`), plus RSS from `/proc` on Linux agents. Record per process: role, pid age, heap used/committed/max, GC time, RSS, and configured `-Xmx` (from JVM args) → "configured vs used" delta. Time-series sampling: v1.x.
+End-of-build (Finalizer): enumerate JVMs via `jps -l` matching main classes (`GradleDaemon`, `KotlinCompileDaemon`, `GradleWorkerMain`), then per PID `jstat -gc` + `jstat -gccapacity`, `jinfo -flags`, and `ps` (as implemented, plan 029). Record per process: `role`, heap used/committed/max, GC time, RSS, configured `-Xmx`, uptime → the "configured vs used" delta.
+
+**Measurement math (locked, research §4.1):** heap **used** = `EU+OU+S0U+S1U` (survivors **included**); **committed** = `EC+OC+S0C+S1C`; **max** = `-gccapacity` `NGCMX+OGCMX` (JVM capacity, *distinct* from configured `-Xmx`); **GC time** = jstat `GCT` **total** column (never `YGCT+FGCT`, which omits `CGCT` and undercounts concurrent G1/ZGC); configured **`-Xmx`** = jinfo `-XX:MaxHeapSize`; **RSS** = `ps -o rss=` (portable, replacing the earlier Linux-only `/proc`); **uptime** = `ps -o etime=`. jstat columns are read **by header name**, not position (JDK layouts differ). **No PID or command line** is stored (host-local noise; jinfo/ps args can embed secrets — §3.7); `role` is the only key, so multiple workers are repeated `GRADLE_WORKER` rows.
+
+**Payload semantics / blind spots.** One snapshot, no sampling (time-series is v1.x). `processes: []` means "nothing observable" — not an error: JDK tools absent (JRE-only agent), a Kotlin daemon that exited before the finalizer, in-process compilation, or `processProbe { enabled = false }` all yield an empty list. A daemon killed before the finalizer runs never reports at all (that lost-build case is plan 033). Every exec is timeout-bounded; any failure degrades to `[]`, never a failed build.
 
 ### 3.7 Privacy & identity
 
@@ -181,7 +185,7 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
                "classes": [ { "class": "...", "passed": 0, "failed": 0, "skipped": 0, "durationMs": 0 } ],
                "failedOrRetried": [ { "class": "...", "name": "...", "outcomes": ["FAILED","PASSED"],
                                       "durationMs": 0, "messageHash": "...", "message": "truncated" } ] } ],
-  "processes": [ { "role": "KOTLIN_DAEMON", "heapUsedMb": 0, "heapMaxMb": 0,
+  "processes": [ { "role": "KOTLIN_DAEMON", "heapUsedMb": 0, "heapCommittedMb": 0, "heapMaxMb": 0,
                    "configuredXmxMb": 0, "gcTimeMs": 0, "rssMb": 0, "uptimeS": 0 } ],
   "artifacts": { "apk": [ { "variant": "release", "sizeBytes": 0, "type": "AAB" } ] }
 }

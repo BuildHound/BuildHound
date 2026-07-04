@@ -84,6 +84,7 @@ class GoldenPayloadTest {
         assertNull(payload.fingerprints)
         assertNull(payload.kotlin)
         assertTrue(payload.tests.isEmpty())
+        assertTrue(payload.processes.isEmpty())
         assertNull(payload.links)
         assertNull(payload.environment?.ide)
         assertNull(payload.environment?.aiAgent)
@@ -163,6 +164,26 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `schema v1 processes golden file deserializes with a configured-vs-used snapshot`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-processes.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        assertEquals(2, payload.processes.size)
+        val daemon = payload.processes.first { it.role == ProcessRole.GRADLE_DAEMON }
+        // The exit-criterion "configured vs used": used < configured Xmx, and capacity (heapMax) is
+        // pinned distinct from the configured Xmx so a refactor can't conflate the two.
+        assertEquals(1462, daemon.heapUsedMb)
+        assertEquals(4096, daemon.configuredXmxMb)
+        assertEquals(4096, daemon.heapMaxMb)
+        assertTrue(daemon.heapUsedMb!! < daemon.configuredXmxMb!!)
+        assertEquals(3120, daemon.gcTimeMs)
+        assertEquals(2711, daemon.rssMb)
+        val kotlin = payload.processes.first { it.role == ProcessRole.KOTLIN_DAEMON }
+        assertEquals(640, kotlin.heapUsedMb)
+        assertEquals(2048, kotlin.configuredXmxMb)
+    }
+
+    @Test
     fun `round trip is lossless`() {
         for (name in listOf(
             "build-payload-v1.json",
@@ -172,6 +193,7 @@ class GoldenPayloadTest {
             "build-payload-v1-kotlin.json",
             "build-payload-v1-tests.json",
             "build-payload-v1-ci-env.json",
+            "build-payload-v1-processes.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

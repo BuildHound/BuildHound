@@ -189,6 +189,34 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `assemble maps collected processes to ProcessInfo and survives scrubbing`() {
+        val processes = listOf(
+            CollectedProcess(
+                role = dev.buildhound.commons.payload.ProcessRole.GRADLE_DAEMON,
+                heapUsedMb = 1462, heapCommittedMb = 2048, heapMaxMb = 4096,
+                configuredXmxMb = 4096, gcTimeMs = 3120, rssMb = 2711, uptimeS = 812,
+            ),
+            CollectedProcess(role = dev.buildhound.commons.payload.ProcessRole.KOTLIN_DAEMON, heapUsedMb = 640),
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), processes = processes)
+        assertEquals(2, payload.processes.size)
+        val daemon = payload.processes.first { it.role == dev.buildhound.commons.payload.ProcessRole.GRADLE_DAEMON }
+        assertEquals(1462, daemon.heapUsedMb)
+        assertEquals(4096, daemon.configuredXmxMb)
+        assertEquals(3120, daemon.gcTimeMs)
+        // A field-sparse process (only a role + used) round-trips with the rest null, not dropped.
+        val kotlinDaemon = payload.processes.first { it.role == dev.buildhound.commons.payload.ProcessRole.KOTLIN_DAEMON }
+        assertEquals(640, kotlinDaemon.heapUsedMb)
+        assertNull(kotlinDaemon.configuredXmxMb)
+    }
+
+    @Test
+    fun `assemble defaults processes to an empty list`() {
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)))
+        assertTrue(payload.processes.isEmpty())
+    }
+
+    @Test
     fun `assemble passes test results through and scrubs the failure message`() {
         val tests = listOf(
             dev.buildhound.commons.payload.TestTaskResult(
@@ -272,6 +300,7 @@ class PayloadAssemblerTest {
         fingerprints: dev.buildhound.commons.payload.FingerprintInfo? = null,
         kotlin: dev.buildhound.commons.payload.KotlinInfo? = null,
         tests: List<dev.buildhound.commons.payload.TestTaskResult> = emptyList(),
+        processes: List<CollectedProcess> = emptyList(),
         environment: CollectedEnvironment = CollectedEnvironment(
             os = "Linux", arch = "amd64", cores = 8, ramMb = 16_000,
             hostnameHash = "h_0123456789ab", userId = "u_0123456789ab",
@@ -299,6 +328,7 @@ class PayloadAssemblerTest {
         fingerprints = fingerprints,
         kotlin = kotlin,
         tests = tests,
+        processes = processes,
     )
 
     private fun task(

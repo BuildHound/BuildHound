@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "buildId": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "projectKey": "pilot-android",
+  "startedAt": 1751500000000,
+  "finishedAt": 1751500052000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["assembleDebug"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileDebugKotlin",
+      "module": ":app",
+      "startMs": 1751500001000,
+      "durationMs": 9000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "processes": [
+    {
+      "role": "GRADLE_DAEMON",
+      "heapUsedMb": 1462,
+      "heapCommittedMb": 2048,
+      "heapMaxMb": 4096,
+      "configuredXmxMb": 4096,
+      "gcTimeMs": 3120,
+      "rssMb": 2711,
+      "uptimeS": 812
+    },
+    {
+      "role": "KOTLIN_DAEMON",
+      "heapUsedMb": 640,
+      "heapCommittedMb": 1024,
+      "heapMaxMb": 2048,
+      "configuredXmxMb": 2048,
+      "gcTimeMs": 410,
+      "rssMb": 1180,
+      "uptimeS": 205
+    }
+  ]
+}

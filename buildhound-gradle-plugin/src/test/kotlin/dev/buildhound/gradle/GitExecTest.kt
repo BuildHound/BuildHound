@@ -27,7 +27,7 @@ class GitExecTest {
     fun `captures stdout on exit zero`() {
         val exe = fakeGit("printf 'main\\n'")
         assertEquals(
-            GitExec.Result.Success("main\n"),
+            BoundedExec.Result.Success("main\n"),
             GitExec.run(dir, 10_000, listOf("rev-parse"), executable = exe),
         )
     }
@@ -35,13 +35,13 @@ class GitExecTest {
     @Test
     fun `nonzero exit yields NonZeroExit`() {
         val exe = fakeGit("exit 3")
-        assertIs<GitExec.Result.NonZeroExit>(GitExec.run(dir, 10_000, listOf("status"), executable = exe))
+        assertIs<BoundedExec.Result.NonZeroExit>(GitExec.run(dir, 10_000, listOf("status"), executable = exe))
     }
 
     @Test
     fun `missing executable yields Failed not an exception`() {
         val exe = File(dir, "no-such-git").absolutePath
-        assertIs<GitExec.Result.Failed>(GitExec.run(dir, 10_000, listOf("status"), executable = exe))
+        assertIs<BoundedExec.Result.Failed>(GitExec.run(dir, 10_000, listOf("status"), executable = exe))
     }
 
     @Test
@@ -50,7 +50,7 @@ class GitExecTest {
         val startedNs = System.nanoTime()
         val result = GitExec.run(dir, 250, listOf("status"), executable = exe)
         val elapsedMs = (System.nanoTime() - startedNs) / 1_000_000
-        assertIs<GitExec.Result.TimedOut>(result)
+        assertIs<BoundedExec.Result.TimedOut>(result)
         // Far below the fake's 300 s sleep; generous vs. the 250 ms bound to stay unflaky.
         assertTrue(elapsedMs < 30_000, "timed-out probe took $elapsedMs ms")
     }
@@ -61,7 +61,7 @@ class GitExecTest {
         // exit (and this test only pass) if the reader keeps draining past the cap.
         val exe = fakeGit("dd if=/dev/zero bs=1024 count=2048 2>/dev/null | tr '\\0' 'x'")
         val result = GitExec.run(dir, 30_000, listOf("status"), executable = exe)
-        val success = assertIs<GitExec.Result.Success>(result)
+        val success = assertIs<BoundedExec.Result.Success>(result)
         assertEquals(GitExec.MAX_CAPTURED_BYTES, success.stdout.length)
     }
 }

@@ -37,6 +37,8 @@ data class BuildPayload(
     val tests: List<TestTaskResult> = emptyList(),
     /** Source/commit/PR links composed from the git remote + CI context (plan 027); null when uncomposable. */
     val links: LinksInfo? = null,
+    /** End-of-build JVM process snapshot (plan 029, spec §3.6); empty when disabled or unobservable. */
+    val processes: List<ProcessInfo> = emptyList(),
 ) {
     companion object {
         const val SCHEMA_VERSION: Int = 1
@@ -262,4 +264,29 @@ data class DerivedMetrics(
     val criticalPathMs: Long? = null,
     val parallelUtilization: Double? = null,
     val configurationMs: Long? = null,
+)
+
+/** Which JVM a [ProcessInfo] snapshot describes (plan 029); the only correlation key — no PID. */
+@Serializable
+enum class ProcessRole { GRADLE_DAEMON, KOTLIN_DAEMON, GRADLE_WORKER }
+
+/**
+ * One JVM's end-of-build snapshot (plan 029, spec §3.6). All metrics nullable — a single JDK-tool
+ * exec (jstat/jinfo/ps) can fail per field without dropping the process. No PID or command line is
+ * carried (host-local noise; jinfo/ps args can embed secrets — spec §3.7): [role] is the only key,
+ * so multiple workers collapse to repeated `GRADLE_WORKER` rows.
+ *
+ * `heapMax` is JVM *capacity* (jstat `-gccapacity` NGCMX+OGCMX), distinct from [configuredXmxMb]
+ * (the `-Xmx`/`-XX:MaxHeapSize` the JVM was launched with) — "configured vs used" needs both.
+ */
+@Serializable
+data class ProcessInfo(
+    val role: ProcessRole,
+    val heapUsedMb: Long? = null,
+    val heapCommittedMb: Long? = null,
+    val heapMaxMb: Long? = null,
+    val configuredXmxMb: Long? = null,
+    val gcTimeMs: Long? = null,
+    val rssMb: Long? = null,
+    val uptimeS: Long? = null,
 )

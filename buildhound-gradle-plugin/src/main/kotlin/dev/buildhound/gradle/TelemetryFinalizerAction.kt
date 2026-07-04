@@ -58,6 +58,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Optional
         val ci: Property<CollectedCi>
 
+        /** JVM process snapshot (plan 029); optional/empty when disabled or JDK tools are absent. */
+        @get:Input
+        @get:Optional
+        val processes: ListProperty<CollectedProcess>
+
         @get:Input
         val configurationCacheRequested: Property<Boolean>
 
@@ -196,6 +201,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 fingerprints = fingerprints,
                 kotlin = kotlin,
                 tests = tests,
+                processes = parameters.processes.getOrElse(emptyList()),
             )
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so

@@ -59,6 +59,13 @@
             <tbody></tbody>
         </table>
     </section>
+    <section id="processes" hidden>
+        <h2>Process snapshot</h2>
+        <table id="processes-table">
+            <thead><tr><th>Process</th><th class="num">Heap used</th><th class="num">Committed</th><th class="num">Max</th><th class="num">-Xmx</th><th>Used vs -Xmx</th><th class="num">GC time</th><th class="num">RSS</th><th class="num">Uptime</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </section>
 </main>
 <script>
     // The shared timeline renderer is spliced in here at report time (defines the global
@@ -162,6 +169,38 @@
             }
             if (failures.length) failuresTable.hidden = false;
             document.getElementById("tests").hidden = false;
+        }
+
+        // Process snapshot (plan 029): daemon/Kotlin/worker JVM heap-used-vs-configured, GC, RSS.
+        // Hidden entirely when the probe collected nothing (disabled or JDK tools absent). Roles are
+        // an allowlisted enum; every value reaches the DOM via textContent.
+        const processes = d.processes || [];
+        if (processes.length) {
+            const ROLE_LABELS = { GRADLE_DAEMON: "Gradle daemon", KOTLIN_DAEMON: "Kotlin daemon", GRADLE_WORKER: "Gradle worker" };
+            const mb = n => n == null ? "" : (n >= 1024 ? (n / 1024).toFixed(1) + " GB" : n + " MB");
+            const pbody = document.getElementById("processes-table").querySelector("tbody");
+            for (const p of processes) {
+                const row = el("tr");
+                row.append(el("td", ROLE_LABELS[p.role] || p.role));
+                row.append(el("td", mb(p.heapUsedMb), "num"));
+                row.append(el("td", mb(p.heapCommittedMb), "num"));
+                row.append(el("td", mb(p.heapMaxMb), "num"));
+                row.append(el("td", mb(p.configuredXmxMb), "num"));
+                const barCell = el("td");
+                if (p.heapUsedMb != null && p.configuredXmxMb) {
+                    const bar = document.createElement("progress");
+                    bar.max = p.configuredXmxMb;
+                    bar.value = p.heapUsedMb;
+                    barCell.append(bar);
+                    barCell.append(el("span", " " + Math.round(p.heapUsedMb / p.configuredXmxMb * 100) + "%"));
+                }
+                row.append(barCell);
+                row.append(el("td", p.gcTimeMs != null ? ms(p.gcTimeMs) : "", "num"));
+                row.append(el("td", mb(p.rssMb), "num"));
+                row.append(el("td", p.uptimeS != null ? ms(p.uptimeS * 1000) : "", "num"));
+                pbody.append(row);
+            }
+            document.getElementById("processes").hidden = false;
         }
     })(buildhoundData);
 </script>

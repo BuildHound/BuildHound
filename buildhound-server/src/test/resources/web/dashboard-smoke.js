@@ -77,6 +77,10 @@ const responses = {
                 { taskPath: ":lib:compileKotlin", durationMs: 300, incremental: true, compilerTimesMs: { RUN_COMPILATION: 80 } },
             ],
         },
+        processes: [
+            { role: "GRADLE_DAEMON", heapUsedMb: 1462, heapCommittedMb: 2048, heapMaxMb: 4096, configuredXmxMb: 4096, gcTimeMs: 3120, rssMb: 2711, uptimeS: 812 },
+            { role: "KOTLIN_DAEMON", heapUsedMb: 640, configuredXmxMb: 2048 },
+        ],
         tests: [
             {
                 taskPath: ":app:testDebugUnitTest", module: ":app", durationMs: 44000, truncatedClasses: 3,
@@ -219,6 +223,11 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "Build stage")) throw new Error("ci-run stage span missing");
     if (!hasText(byId["app"], "Gradle build step")) throw new Error("ci-run nested step span missing");
 
+    // Process snapshot (plan 029): the panel renders per-JVM memory with a native <progress> used-vs-Xmx bar.
+    if (!hasText(byId["app"], "Process snapshot")) throw new Error("process panel header missing");
+    if (!hasText(byId["app"], "Gradle daemon")) throw new Error("process panel role row missing");
+    if (!hasText(byId["app"], "Kotlin daemon")) throw new Error("process panel second role row missing");
+
     // Minimal build (no tasks): ledger renders all-zero rows without dividing by zero.
     context.location.hash = "#/build/b2"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/builds/b2")) throw new Error("minimal detail view did not fetch");
@@ -229,6 +238,8 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (hasText(byId["app"], "Failures & retries")) throw new Error("tests section must be absent without results");
     // No connector run for b2 (ci-run 404) → the honest amber notice, never a hidden section.
     if (!hasText(byId["app"], "CI timeline not available")) throw new Error("ci-run degraded notice missing on a build with no run");
+    // No process data on b2 → the panel is absent (renders only with data).
+    if (hasText(byId["app"], "Process snapshot")) throw new Error("process panel must be absent without process data");
 
     // Tests page (plan 024): defaults to the latest build (b1), renders its tests panel.
     context.location.hash = "#/tests"; context._onhashchange(); await tick(); await tick();

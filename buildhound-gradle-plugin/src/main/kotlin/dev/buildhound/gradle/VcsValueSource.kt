@@ -62,9 +62,9 @@ abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Paramet
         fun run(vararg args: String): String? {
             if (timedOut) return null
             return when (val result = GitExec.run(workDir, timeoutMillis, args.toList())) {
-                is GitExec.Result.Success -> result.stdout
-                is GitExec.Result.NonZeroExit -> null
-                is GitExec.Result.TimedOut -> {
+                is BoundedExec.Result.Success -> result.stdout
+                is BoundedExec.Result.NonZeroExit -> null
+                is BoundedExec.Result.TimedOut -> {
                     timedOut = true
                     // Static probe args and millis only — process output can embed paths.
                     logger.warn(
@@ -74,7 +74,7 @@ abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Paramet
                     )
                     null
                 }
-                is GitExec.Result.Failed -> {
+                is BoundedExec.Result.Failed -> {
                     // Class name only — keep messages (which can embed paths) out of the log.
                     logger.info("[buildhound] git probe unavailable: {}", result.exceptionClass)
                     null

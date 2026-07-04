@@ -185,6 +185,20 @@ cardinality down — §6); role is the only key, multiple workers collapse to re
   that exited, or in-process compilation all yield `[]`. Documented as payload semantics
   (`processes: []` = "nothing observable"), not an error.
 
+## 6a. Implementation notes / review-driven changes
+
+- *Timeout short-circuit is exec-skipping, not result-discarding (code review).* The collection lives
+  in a Gradle-free `ProcessProbeCollector` over a `ProcessTools` interface; each per-PID probe is run
+  behind a lambda so once one exec times out, the latch **skips** every later exec (same PID and all
+  further PIDs) rather than running them and discarding the result — bounding the whole collection at
+  one timeout budget as claimed. A `ProcessProbeCollectorTest` fakes `ProcessTools` and asserts the
+  skip by counting invocations (deterministic, no wall-clock timing).
+- *Divergence: `<progress>`, not inline SVG.* Both the HTML artifact and the dashboard render the
+  configured-vs-used bar with a native `<progress>` element instead of the step-10 "inline-SVG bar via
+  `svgEl`". Reasons: it needs no CSS (the global `svg{width:100%}` would stretch a small bar) and it
+  keeps the process bars out of the dashboard's timeline-omission `svg`-count smoke assertion. CSP-safe
+  and identical across both surfaces.
+
 ## 7. Exit criteria
 
 - `./gradlew build` green; a real Kotlin-project build on an agent with JDK tools yields a

@@ -51,6 +51,20 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     val upload: UploadSpec = objects.newInstance(UploadSpec::class.java)
 
     fun upload(action: Action<UploadSpec>) = action.execute(upload)
+
+    val processProbe: ProcessProbeSpec = objects.newInstance(ProcessProbeSpec::class.java)
+
+    fun processProbe(action: Action<ProcessProbeSpec>) = action.execute(processProbe)
+}
+
+/**
+ * `processProbe { ... }` (spec §3.4/§3.6, plan 029): one end-of-build snapshot of the daemon /
+ * Kotlin / worker JVMs (heap used-vs-configured, GC time, RSS) via bounded `jps`/`jstat`/`jinfo`/`ps`
+ * execs. Read-only, never fails or hangs the build; yields `processes: []` when JDK tools are absent.
+ */
+abstract class ProcessProbeSpec {
+    /** Collect the JVM process snapshot (default true). */
+    abstract val enabled: Property<Boolean>
 }
 
 /**

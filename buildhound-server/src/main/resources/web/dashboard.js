@@ -444,6 +444,47 @@
         await show(builds[0].buildId);
     }
 
+    // Allowlisted role labels — a role from the payload never becomes markup, only a table cell.
+    const PROCESS_ROLE_LABELS = { GRADLE_DAEMON: "Gradle daemon", KOTLIN_DAEMON: "Kotlin daemon", GRADLE_WORKER: "Gradle worker" };
+    const memMb = n => n == null ? "" : (n >= 1024 ? (n / 1024).toFixed(1) + " GB" : n + " MB");
+
+    // Process snapshot (plan 029): per-JVM configured-vs-used memory with a native <progress> bar
+    // (same as the HTML artifact; CSP-safe and doesn't collide with the timeline's svg count), GC, RSS.
+    function processPanel(processes) {
+        const box = document.createDocumentFragment();
+        box.append(el("h3", "Process snapshot"));
+        const table = el("table");
+        const head = el("tr");
+        for (const columnName of ["Process", "Heap used", "Configured -Xmx", "Used vs -Xmx", "GC time", "RSS", "Uptime"]) {
+            head.append(el("th", columnName));
+        }
+        table.append(head);
+        for (const p of processes) {
+            const row = el("tr");
+            row.append(el("td", PROCESS_ROLE_LABELS[p.role] || p.role));
+            row.append(el("td", memMb(p.heapUsedMb), "num"));
+            row.append(el("td", memMb(p.configuredXmxMb), "num"));
+            row.append(usedVsXmxCell(p.heapUsedMb, p.configuredXmxMb));
+            row.append(el("td", p.gcTimeMs == null ? "" : ms(p.gcTimeMs), "num"));
+            row.append(el("td", memMb(p.rssMb), "num"));
+            row.append(el("td", p.uptimeS == null ? "" : ms(p.uptimeS * 1000), "num"));
+            table.append(row);
+        }
+        box.append(table);
+        return box;
+    }
+
+    function usedVsXmxCell(usedMb, xmxMb) {
+        const cell = el("td");
+        if (usedMb == null || !xmxMb) return cell;
+        const bar = document.createElement("progress");
+        bar.max = xmxMb;
+        bar.value = usedMb;
+        cell.append(bar);
+        cell.append(el("span", " " + Math.round(Math.max(0, Math.min(1, usedMb / xmxMb)) * 100) + "%", "muted"));
+        return cell;
+    }
+
     async function detailView(buildId) {
         const seq = ++renderSeq;
         const build = await api("/v1/builds/" + encodeURIComponent(buildId));
@@ -483,6 +524,10 @@
         // explicit zeros, share-of-all-tasks percentages, summed task time.
         app.append(el("h3", "Work avoidance"));
         app.append(ledgerTable(tasks));
+
+        // Process snapshot (plan 029): daemon/Kotlin/worker JVM memory. Hidden when the probe
+        // collected nothing (disabled or JDK tools absent) — the panel renders only with data.
+        if (Array.isArray(build.processes) && build.processes.length) app.append(processPanel(build.processes));
 
         // Task timeline (plan 017): the same renderer the HTML artifact inlines, served at
         // /timeline.js. Best-effort — a renderer defect or a missing global degrades to no
