@@ -135,6 +135,8 @@ End-of-build (Finalizer): enumerate JVMs via `jps -l` matching main classes (`Gr
 
 Identity fields: `userId = "u_" + hex12(hmacSha256(projectSalt, "user:" + username + "@" + hostname))`, `hostnameHash = "h_" + hex12(hmacSha256(projectSalt, "host:" + hostname))` — first 12 hex chars, domain-separated inputs; enumeration resistance rests on salt secrecy, not digest length, so truncation is safe. Salt generated per project on the server, fetched once and cached (interim until tenancy lands: generated locally into `.gradle/buildhound/identity.salt`, see plan 003). `pseudonymize=false` sends plaintext (team choice); `strict` sends nothing. Payloads never include absolute paths outside the project, env dumps, or tokens; a scrubber strips values matching secret-like patterns from execution reasons/failure text.
 
+Governance for the plan-027 source fields: `vcs.remoteUrl` is redacted for **every** scheme (userInfo stripped) and **fails closed** — when the value can't be confidently parsed (whitespace, or an ambiguous userInfo such as a raw `/` inside the password) it is dropped rather than emitted, so a credential never ships; the top-level `links` are host-gated (github/gitlab only) and always `https://`; `environment.aiAgent` is positive-only attribution (only a confirmed agent is named — a miss is silent). The `extensions` channel (plan 039) is opaque addon-owned JSON that core does **not** deep-scrub — each addon owns its own §3.7 bar; core only size-caps it (`caps.droppedExtensions`).
+
 ### 3.8 Standalone HTML artifact (locked: no CDN)
 
 Single self-contained `buildhound-report.html`: inlined CSS/JS (a small vendored chart lib or hand-rolled SVG — no external requests, so it renders inside Azure artifact viewers and email attachments). Content: header (build id, outcome, duration, env, toolchain), task timeline by concurrency lane (lanes computed greedily from per-task start/end overlaps — max observed parallelism — not the Gradle `worker` id, which stays unpopulated; plan 017), sortable task table with outcome/duration/type, cache summary donut + top cacheable misses, Kotlin panel (incremental %, rebuild reasons, slowest compilations), tests summary with failures, process snapshot, link to the dashboard build page when server configured. Data embedded as one JSON blob → the artifact doubles as an offline payload copy.
@@ -162,11 +164,19 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
   "requestedTasks": ["assembleDebug"], "mode": "ci|local|benchmark",
   "environment": { "os": "...", "arch": "...", "cores": 0, "ramMb": 0,
                    "hostnameHash": "...", "userId": "...", "daemonReused": true,
-                   "configurationCache": "HIT|MISS_STORED|DISABLED|INCOMPATIBLE" },
+                   "configurationCache": "HIT|MISS_STORED|DISABLED|INCOMPATIBLE",
+                   "ide": "...", "ideVersion": "...", "ideSync": false, "aiAgent": "..." },
+    // ^ ide/ideVersion/ideSync/aiAgent are additive (plan 027); aiAgent is positive-only attribution
+    //   (only a confirmed agent, e.g. CLAUDECODE, is named — a miss is silent, never a wrong guess)
   "toolchain": { "gradle": "9.x", "jdk": "...", "agp": "...", "kgp": "...", "ksp": "..." },
-  "vcs": { "branch": "...", "sha": "...", "dirty": false },
+  "vcs": { "branch": "...", "sha": "...", "dirty": false, "remoteUrl": "..." },
+    // ^ remoteUrl is redacted all-scheme + fail-closed (userInfo stripped; dropped when it can't be
+    //   confidently parsed — never a credential; §3.7). Additive (plan 027).
   "ci": { "provider": "azure-devops", "runId": "...", "pipelineName": "...",
-          "jobId": "...", "buildUrl": "...", "attributes": {} },
+          "jobId": "...", "buildUrl": "...", "runAttempt": 1, "attributes": {} },
+  "links": { "commitUrl": "https://…", "pullRequestUrl": "https://…" },
+    // ^ composed from the redacted remote — github/gitlab only, https-gated; null when nothing
+    //   composes (plan 027). Never a hyperlink to a non-https / non-supported origin.
   "tags": {}, "values": {},
   "tasks": [ { "path": ":app:compileDebugKotlin", "module": ":app", "type": "KotlinCompile",
                "startMs": 0, "durationMs": 0, "outcome": "FROM_CACHE", "cacheable": true,
@@ -176,8 +186,10 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
                "parallelUtilization": 0.0, "configurationMs": 0 },
   "caps": { "droppedTags": 0, "droppedValues": 0, "truncatedValues": 0,
             "droppedExecutionReasons": 0, "truncatedExecutionReasons": 0,
-            "truncatedNonCacheableReasons": 0, "droppedTasks": 0, "droppedTaskOutcomes": {} },
-    // ^ present only when the caps enforcement dropped/truncated something (plan 019); omitted otherwise
+            "truncatedNonCacheableReasons": 0, "droppedTasks": 0, "droppedTaskOutcomes": {},
+            "droppedArtifacts": 0, "droppedExtensions": 0 },
+    // ^ present only when the caps enforcement dropped/truncated something (plan 019); omitted otherwise.
+    //   droppedArtifacts (plan 031) and droppedExtensions (plan 039) count overflow drops in those arrays
   "fingerprints": { "build": { "jdk.home": "9f86d081884c7d65…", "env-CI": "18ac3e7343f01690…" },
                     "tasks": {} },
     // ^ salted 16-hex input hashes for cache-miss comparison (plan 022); `tasks` is reserved for
@@ -190,9 +202,20 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
   "processes": [ { "role": "KOTLIN_DAEMON", "heapUsedMb": 0, "heapCommittedMb": 0, "heapMaxMb": 0,
                    "configuredXmxMb": 0, "gcTimeMs": 0, "rssMb": 0, "uptimeS": 0 } ],
   "benchmark": { "scenario": "clean", "iteration": 3, "isolationMode": "no_build_cache", "seedRef": "..." },
-  "artifacts": { "android": [ { "variant": "release", "module": ":app", "type": "APK", "sizeBytes": 0 } ] }
+  "artifacts": { "android": [ { "variant": "release", "module": ":app", "type": "APK", "sizeBytes": 0 } ] },
+  "extensions": { "<addonId>": { "schemaVersion": 1, "…": "opaque addon-owned JSON" } }
 }
 ```
+
+The `links` block (plan 027) is present only when a redacted remote resolves to a github/gitlab
+host and a sha or PR number is available; both URLs are always `https://`, never a hyperlink to an
+unsupported or non-https origin.
+
+The `extensions` block (plan 039) is a reserved `Map<addonId, JSON>` carrying opaque, addon-owned
+contributions (each with its own `schemaVersion`). It is additive (new golden `build-payload-v2ext.json`;
+v1 golden untouched) and, unlike core fields, is **not deep-scrubbed by core** — each addon owns its
+own §3.7 bar. The plan-019 `PayloadCapper` bounds it to a 256 KiB budget (largest-first drop, counted
+in `caps.droppedExtensions`), enforced at plugin assembly and re-clamped on server ingest.
 
 The `artifacts` block (plan 031) is present only on Android builds; `android` is a single list mixing
 APK/AAB/AAR (disambiguated by `type`, not a filename-encoded key). Byte size only — no path or
