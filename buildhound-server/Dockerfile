@@ -28,6 +28,13 @@ RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
 
 COPY buildhound-commons/ buildhound-commons/
 COPY buildhound-server/ buildhound-server/
+# The server bundles buildhound-report's timeline.js (served at /timeline.js) and the OpenAPI spec
+# (served at /openapi.yaml, copied into resources from docs/api by processResources) — so their SOURCE,
+# not just the build script, must be in the context or the runtime resources are missing and
+# DashboardAssets/DocsAssets fail to initialize (only surfaces when the dashboard/docs are loaded, not
+# by the /health smoke test).
+COPY buildhound-report/ buildhound-report/
+COPY docs/api/openapi.yaml docs/api/openapi.yaml
 RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
     ./gradlew --no-daemon -Pbuildhound.toolchain=21 :buildhound-server:installDist
 

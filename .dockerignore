@@ -3,6 +3,9 @@
 .kotlin
 **/build
 docs
+# The server bundles the OpenAPI spec as a resource (served at /openapi.yaml), so this one file must
+# reach the build context even though the rest of docs/ is excluded.
+!docs/api/openapi.yaml
 buildhound-ci-assets
 deploy
 *.md
