@@ -27,6 +27,11 @@ class BuildOperationAdapter(private val rootDir: java.io.File) : BuildOperationL
 
     private val state = InternalAdaptersState
 
+    init {
+        // The project root for scrubbing caching-disabled free text (§3.7); stable per daemon.
+        state.setProjectRoot(rootDir.path)
+    }
+
     override fun started(descriptor: BuildOperationDescriptor, event: OperationStartEvent) {
         runCatching {
             val acc = state.accumulator()

@@ -479,7 +479,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
  * shape degrades to `(null, null)`, never a throw. Core stays internal-API-free: this touches only
  * JSON, and only two well-known optional keys of a reserved extension.
  */
-private fun internalAdaptersDerivedInputs(extensions: Map<String, JsonElement>): Pair<Long?, Map<String, List<String>>?> {
+internal fun internalAdaptersDerivedInputs(extensions: Map<String, JsonElement>): Pair<Long?, Map<String, List<String>>?> {
     val block = extensions["internalAdapters"] ?: return null to null
     return runCatching {
         val obj = block.jsonObject

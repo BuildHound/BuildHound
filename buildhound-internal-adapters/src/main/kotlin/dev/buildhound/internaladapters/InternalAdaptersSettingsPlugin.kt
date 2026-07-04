@@ -43,15 +43,38 @@ class InternalAdaptersSettingsPlugin : Plugin<Settings> {
             // persists across builds (that is how capture survives a CC hit); per-build data is
             // read-and-cleared by the collector, so the counter is the only registration guard needed.
             if (InternalAdaptersState.claimRegistration()) {
-                val gradle = settings.gradle as GradleInternal
-                val manager = gradle.services.get(BuildOperationListenerManager::class.java)
-                manager.addListener(BuildOperationAdapter(settings.rootProject.projectDir))
+                // Register-then-confirm: if addListener throws, release the claim so a later build in
+                // the daemon retries rather than losing capture for the JVM's life (review finding).
+                runCatching {
+                    val gradle = settings.gradle as GradleInternal
+                    val manager = gradle.services.get(BuildOperationListenerManager::class.java)
+                    manager.addListener(BuildOperationAdapter(settings.rootProject.projectDir))
+                }.onFailure {
+                    InternalAdaptersState.releaseRegistration()
+                    logger.warn("[buildhound-internal-adapters] listener registration failed (no capture this daemon): {}", it.message)
+                }
             }
 
-            // Config-time facts (stable across CC hits): the per-file opt-in, the Gradle version, and
-            // the dependency edge list for criticalPath. The graph walk is an isolated-projects
-            // violation by design → gated: on IP (or any failure) it degrades to no edges (null
-            // criticalPath), never an error, exactly as plan 016's allTasks walk.
+            // Version gate: a Gradle outside the tested range degrades to best-effort capture (the
+            // reflection guards handle per-field mismatches) — surface it once so a break is diagnosable.
+            if (VersionGate.bucket(GradleVersion.current().version) == GradleBucket.UNKNOWN) {
+                logger.info(
+                    "[buildhound-internal-adapters] Gradle {} is outside the tested 8.x/9.x range — capture is best-effort",
+                    GradleVersion.current().version,
+                )
+            }
+
+            // Per-input-file hashes are a v1.x follow-up on this module; warn rather than silently
+            // ignore the opt-in (review finding).
+            if (ext.perFileHashes.get()) {
+                logger.warn("[buildhound-internal-adapters] internalAdapters.perFileHashes is reserved for a v1.x follow-up and has no effect yet")
+            }
+
+            // Config-time facts: per-file opt-in, Gradle version, project root, and the **build-specific**
+            // dependency edge list for criticalPath. The graph walk is an isolated-projects violation by
+            // design → gated: on IP (or any failure) it degrades to no edges (null criticalPath), never
+            // an error (plan 016's allTasks-walk precedent). On a CC hit `whenReady` does not run, so
+            // the accumulator's edges stay empty and criticalPath is honestly null (review finding).
             settings.gradle.taskGraph.whenReady { graph ->
                 val edges = runCatching {
                     graph.allTasks.associate { task -> task.path to graph.getDependencies(task).map { it.path } }
@@ -59,7 +82,12 @@ class InternalAdaptersSettingsPlugin : Plugin<Settings> {
                     logger.info("[buildhound-internal-adapters] dependency-edge walk unavailable (criticalPath omitted): {}", it.message)
                     emptyMap()
                 }
-                InternalAdaptersState.configure(ext.perFileHashes.get(), GradleVersion.current().version, edges)
+                InternalAdaptersState.configure(
+                    perFile = ext.perFileHashes.get(),
+                    gradle = GradleVersion.current().version,
+                    root = settings.rootProject.projectDir.path,
+                    edges = edges,
+                )
             }
         }.onFailure {
             logger.warn("[buildhound-internal-adapters] setup failed (build unaffected): {}", it.message)

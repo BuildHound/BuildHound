@@ -1,6 +1,8 @@
 package dev.buildhound.internaladapters
 
 import dev.buildhound.commons.payload.BuildHoundJson
+import dev.buildhound.commons.payload.BuildMode
+import dev.buildhound.commons.payload.ExtensionContributionContext
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -71,7 +73,7 @@ class InternalAdaptersUnitTest {
     }
 
     @Test
-    fun `payload round-trips and derivedInputs extracts avoidedMs and edges`() {
+    fun `payload round-trips losslessly through the shared json`() {
         val payload = InternalAdaptersPayload(
             gradleVersion = "8.14.3",
             tasks = listOf(InternalTaskDetail(path = ":a:compileJava", cacheKey = "abcd…", origin = CacheOrigin.LOCAL_HIT)),
@@ -79,11 +81,57 @@ class InternalAdaptersUnitTest {
             dependencyEdges = mapOf(":a:test" to listOf(":a:compileJava")),
         )
         val element: JsonElement = BuildHoundJson.payload.encodeToJsonElement(InternalAdaptersPayload.serializer(), payload)
-        val (avoided, edges) = InternalAdaptersCollector.derivedInputs(element)
-        assertEquals(1234, avoided)
-        assertEquals(mapOf(":a:test" to listOf(":a:compileJava")), edges)
-        // A null / malformed element degrades to (null, empty), never throws.
-        assertEquals(null to emptyMap(), InternalAdaptersCollector.derivedInputs(null))
+        val decoded = BuildHoundJson.payload.decodeFromJsonElement(InternalAdaptersPayload.serializer(), element)
+        assertEquals(payload, decoded)
+        // Core (buildhound-gradle-plugin) reads avoidedMs + dependencyEdges out of this shape; that
+        // extractor is unit-tested there (InternalAdaptersDerivedTest) against these exact field names.
+    }
+
+    @Test
+    fun `the collector assembles the extension from captured state and then clears it`() {
+        InternalAdaptersState.resetForTest()
+        InternalAdaptersState.accumulator().forPath(":app:compileJava").apply {
+            cacheKeyRaw = byteArrayOf(1, 2, 3, 4)
+            localLoadHit = true
+            originExecutionTimeMs = 500
+        }
+        InternalAdaptersState.accumulator().forPath(":app:test").apply { executed = true }
+        InternalAdaptersState.setSalt(ByteArray(32) { 9 })
+        InternalAdaptersState.configure(perFile = false, gradle = "8.14.3", root = null, edges = mapOf(":app:test" to listOf(":app:compileJava")))
+
+        val ctx = ExtensionContributionContext(projectKey = "p", mode = BuildMode.CI, tasks = emptyList())
+        val json = InternalAdaptersCollector().contribute(ctx) ?: error("expected a contribution")
+        val payload = BuildHoundJson.payload.decodeFromJsonElement(InternalAdaptersPayload.serializer(), json)
+
+        assertEquals("8.14.3", payload.gradleVersion)
+        val compile = payload.tasks.single { it.path == ":app:compileJava" }
+        assertEquals(CacheOrigin.LOCAL_HIT, compile.origin)
+        assertNotNull(compile.cacheKey, "the raw cache key was salted into the payload")
+        assertEquals(CacheOrigin.MISS, payload.tasks.single { it.path == ":app:test" }.origin)
+        assertEquals(500, payload.avoidedMs, "avoidedMs = origin execution time of the cache-hit task")
+        assertEquals(mapOf(":app:test" to listOf(":app:compileJava")), payload.dependencyEdges)
+
+        // takeAccumulator installed a fresh accumulator: both per-task capture AND edges are cleared
+        // for the next build (edges are build-specific; salt persists per daemon).
+        assertTrue(InternalAdaptersState.accumulator().byPath.isEmpty())
+        assertTrue(InternalAdaptersState.accumulator().edges.isEmpty())
+    }
+
+    @Test
+    fun `a CC-hit build (tasks captured but no whenReady) emits empty edges so criticalPath degrades to null`() {
+        InternalAdaptersState.resetForTest()
+        // Simulate a config-cache hit: the listener captured this build's tasks, but the whenReady
+        // edge walk never ran (config skipped) — so the accumulator's edges stay empty.
+        InternalAdaptersState.accumulator().forPath(":app:compileJava").apply { executed = true }
+        InternalAdaptersState.setSalt(ByteArray(32) { 1 })
+
+        val ctx = ExtensionContributionContext(projectKey = "p", mode = BuildMode.CI, tasks = emptyList())
+        val json = InternalAdaptersCollector().contribute(ctx) ?: error("expected a contribution")
+        val payload = BuildHoundJson.payload.decodeFromJsonElement(InternalAdaptersPayload.serializer(), json)
+
+        // No stale graph from a prior invocation — edges empty ⇒ core computes null criticalPath.
+        assertTrue(payload.dependencyEdges.isEmpty(), "a CC-hit build must not emit another invocation's edges")
+        assertTrue(payload.tasks.isNotEmpty(), "task capture still works on a CC hit (listener is daemon-scoped)")
     }
 
     @Test

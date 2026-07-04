@@ -1,6 +1,22 @@
 # Plan 038 — Internal-adapters module: cache origin, cache keys, tier-(b) fingerprints, criticalPath/avoided
 
-**Status: in progress — commons foundation landed (df78f7a); mechanism spiked & proven** · 2026-07-03
+**Status: core delivered (df78f7a · 97c7ab4) — cache origin/keys + criticalPath/avoidedMs shipped & reviewed; per-property comparison-page upgrade deferred to v1.x** · 2026-07-03
+
+> **Delivered vs deferred (2026-07-04).** *Delivered:* the opt-in `buildhound-internal-adapters`
+> module — per-task cache key + `LOCAL_HIT`/`REMOTE_HIT`/`STORED`/`MISS` origin + caching-disabled
+> reason (salted), the config-time dependency graph, and the now-populated
+> `derived.avoidedMs`/`criticalPathMs` (roadmap phase-4 item-2's headline). All internal-API access is
+> version-gated + reflection-guarded to "unknown", never fails the build; core stays internal-API-free
+> and reads only `avoidedMs`/`dependencyEdges` out of the opaque extension. Covered by Gradle-free unit
+> tests (classifier/gate/caps/salt/model/contributor), a core extractor test, a core-absent functional
+> test, and the committed capture spike; full build green; two clean-context reviews run over the
+> `df78f7a..HEAD` diff. *Deferred to a v1.x follow-up on this module:* per-input-**property** value
+> hashes and the comparison-page **per-property** cause ranking + origin lane (server `BuildComparator`
+> + dashboard). The coarse "which task's cache key changed" signal is already reachable from the
+> captured keys; per-property *naming* waits on the property-hash capture. The end-to-end
+> **composite** (core + adapter in one TestKit build) is intentionally not run — cross-plugin TestKit
+> composition is costly, and the same guarantees are covered by the spike (real capture under CC) +
+> plan-039's fixture-addon test (ServiceLoader discovery) + the contributor/extractor unit tests.
 
 > **Spike result (2026-07-04) — the load-bearing risk is resolved.** A throwaway settings-plugin
 > spike (later discarded) empirically confirmed on Gradle 8.14 / JDK 21:
