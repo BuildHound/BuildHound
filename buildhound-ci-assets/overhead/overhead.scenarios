@@ -1,0 +1,47 @@
+// gradle-profiler scenarios for the BuildHound plugin-overhead budget (plan 034).
+//
+// Run the whole file once per plugin variant (on/off), passing the toggle as a Gradle arg, e.g.
+//
+//   gradle-profiler --benchmark --measure-config-time \
+//     --project-dir fixture --scenario-file overhead.scenarios \
+//     --gradle-user-home /tmp/guh-on \
+//     -Dorg.gradle.jvmargs=-Xmx1g \
+//     no_op incremental cc_hit no_op_upload
+//
+// with `-Pbuildhound.overhead.plugin=on` (or `off`) added via each scenario's gradle-args below —
+// run-overhead.sh injects it. Overhead per axis = mean(on) − mean(off) for the matching scenario;
+// the OverheadCalculator (buildhound-commons) turns the two benchmark.csv files into the verdict.
+
+no_op {
+    title = "No-op (fully up-to-date) build — finalizer axis"
+    tasks = ["build"]
+}
+
+incremental {
+    title = "Incremental non-ABI change — per-task axis"
+    tasks = ["build"]
+    // A method-body-only edit: lib-a recompiles, downstream ABI is unchanged.
+    apply-non-abi-change-to = ["lib-a/src/main/kotlin/dev/buildhound/overheadfixture/a/Greeter.kt"]
+}
+
+cc_hit {
+    title = "Configuration-cache hit — configuration axis"
+    tasks = ["build"]
+    gradle-args = ["--configuration-cache"]
+}
+
+no_op_upload {
+    title = "No-op with a loopback upload sink — upload axis"
+    tasks = ["build"]
+    // Force CI mode + a loopback server URL so the finalizer takes the synchronous upload path
+    // against a do-nothing sink (run-overhead.sh starts it and substitutes BUILDHOUND_OVERHEAD_SINK).
+    gradle-args = ["-Pbuildhound.mode=ci", "-Pbuildhound.server.url=${BUILDHOUND_OVERHEAD_SINK}"]
+}
+
+no_op_ci {
+    // The upload axis baseline: CI mode like no_op_upload but with NO server URL, so the
+    // no_op_upload − no_op_ci delta isolates the upload path (not the local→ci mode switch's cost).
+    title = "No-op in CI mode, no server — upload-axis baseline"
+    tasks = ["build"]
+    gradle-args = ["-Pbuildhound.mode=ci"]
+}

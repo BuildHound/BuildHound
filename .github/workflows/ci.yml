@@ -167,6 +167,59 @@ jobs:
       - name: Build
         run: gradle build
 
+  overhead-budget:
+    name: Plugin overhead budget (watched)
+    # Watched, non-blocking (plan 034): same-machine timing on shared runners is noisy, so the job
+    # stays green-optional until runner-to-runner variance is characterised — the promote-to-blocking
+    # criterion lives in docs/overhead-budget.md. It runs gradle-profiler on a synthetic fixture with
+    # the plugin toggled on/off and fails on a budget breach (OverheadCalculator, buildhound-commons).
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      # 26 for the build toolchain, 21 LAST so it launches Gradle (matches `build`, plan 011).
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: |
+            26
+            21
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.6.1"
+          cache-read-only: false
+
+      # Version + SHA-256 pinned at authoring time (Maven Central is gradle-profiler's distribution;
+      # the GitHub release carries no zip). The checksum makes a re-pointed tag or swapped asset a
+      # loud failure, not a silent binary swap — a bump is a deliberate, reviewed change of both.
+      - name: Install gradle-profiler
+        env:
+          PROFILER_VERSION: "0.24.0"
+          PROFILER_SHA256: "74f39882a444d6d5616d35b3e9197f7423cd252f63f339bd3e01f662573b319c"
+        run: |
+          curl -fsSL -o gradle-profiler.zip \
+            "https://repo1.maven.org/maven2/org/gradle/profiler/gradle-profiler/${PROFILER_VERSION}/gradle-profiler-${PROFILER_VERSION}.zip"
+          echo "${PROFILER_SHA256}  gradle-profiler.zip" | sha256sum -c -
+          unzip -q gradle-profiler.zip
+          echo "$PWD/gradle-profiler-${PROFILER_VERSION}/bin" >> "$GITHUB_PATH"
+
+      # GitHub's default bash sets `-o pipefail`, so a budget breach (non-zero) propagates through tee.
+      - name: Run overhead harness
+        run: buildhound-ci-assets/overhead/run-overhead.sh | tee overhead-table.md
+
+      - name: Upload overhead table
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: overhead-budget
+          path: |
+            overhead-table.md
+            buildhound-ci-assets/overhead/build/on/benchmark.csv
+            buildhound-ci-assets/overhead/build/off/benchmark.csv
+          if-no-files-found: warn
+
   build-windows:
     name: Build & test (Windows, watched)
     # Watched canary (plan 021): the OS-sensitive surfaces are the scrubber, spool paths, and

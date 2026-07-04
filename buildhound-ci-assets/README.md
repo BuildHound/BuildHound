@@ -11,6 +11,11 @@ deliberately not a Gradle module.
 | `profiler-scenarios/buildhound.scenarios` | gradle-profiler scenarios for benchmark mode: `clean`/`no_op`/`incremental_non_abi`/`cc_hit` (plan 030) |
 | `profiler-pipeline/{github,azure}-nightly-benchmark.yml` | scheduled gradle-profiler pipeline → `mode=benchmark` tagged series (plan 030) |
 | `profiler-pipeline/isolation-modes.md` | the cache-isolation (`BUILDHOUND_BENCHMARK_ISOLATION`) mode table |
+| `overhead/run-overhead.sh` | plugin-overhead self-benchmark: gradle-profiler on `overhead/fixture/` with the plugin toggled on/off → per-axis verdict vs the budget (plan 034); see [`docs/overhead-budget.md`](../docs/overhead-budget.md) |
+| `overhead/overhead.scenarios` | the four overhead scenarios: `no_op`/`incremental`/`cc_hit`/`no_op_upload` |
+| `overhead/bin/buildhound-overhead` | thin launcher over `OverheadCalculator` (buildhound-commons); exits non-zero on a budget breach |
+| `overhead/bin/loopback-sink.py` | do-nothing HTTP sink (202s + discards) for the upload cell — no BuildHound server needed |
+| `overhead/fixture/` | synthetic 3-module Kotlin/JVM project (no Android) with the `buildhound.overhead.plugin` toggle |
 
 ## Metric CLI
 

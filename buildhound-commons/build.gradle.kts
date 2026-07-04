@@ -49,3 +49,30 @@ kotlin {
 tasks.named<Test>("jvmTest") {
     useJUnitPlatform()
 }
+
+// Plugin-overhead verdict tool (plan 034): a thin JavaExec over the pure OverheadCalculator, run by
+// buildhound-ci-assets/overhead/bin/buildhound-overhead. Non-zero exit on a budget breach fails the
+// task (and the overhead-budget CI job). Pass the two gradle-profiler CSVs via -Poverhead.on/.off.
+// The `run {}` scope is LOAD-BEARING, not cosmetic: it makes `onCsv`/`offCsv` *locals* the
+// CommandLineArgumentProvider lambda captures directly (serializable Provider<String>), instead of
+// script-object fields — capturing the latter drags a non-serializable script reference into the
+// configuration cache and fails the task. Do not hoist these to script scope (the repo keeps CC on).
+run {
+    val onCsv = providers.gradleProperty("overhead.on")
+    val offCsv = providers.gradleProperty("overhead.off")
+    tasks.register<JavaExec>("overheadVerdict") {
+        group = "verification"
+        description = "Evaluate a gradle-profiler plugin-on/off overhead run against the budget (plan 034)."
+        val mainCompilation = kotlin.jvm().compilations.getByName("main")
+        classpath = files(mainCompilation.output.allOutputs, mainCompilation.runtimeDependencyFiles)
+        mainClass.set("dev.buildhound.commons.overhead.OverheadCliKt")
+        argumentProviders.add(
+            CommandLineArgumentProvider {
+                listOf(
+                    onCsv.orNull ?: error("set -Poverhead.on=<plugin-on benchmark.csv>"),
+                    offCsv.orNull ?: error("set -Poverhead.off=<plugin-off benchmark.csv>"),
+                )
+            },
+        )
+    }
+}

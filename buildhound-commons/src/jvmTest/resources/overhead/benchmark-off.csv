@@ -1,0 +1,13 @@
+scenario,no_op,incremental,cc_hit,no_op_upload,no_op_ci
+version,current,current,current,current,current
+tasks,help,assemble,help,help,help
+value,total execution time,total execution time,total execution time,total execution time,total execution time
+warm up build #1,610,3200,510,615,612
+measured build #1,600,3000,500,602,601
+measured build #2,602,3010,501,604,603
+measured build #3,601,3005,500,603,602
+mean,601.0,3005.0,500.3,603.0,602.0
+min,600,3000,500,602,601
+median,601,3005,500,603,602
+max,602,3010,501,604,603
+stddev,1.0,5.0,0.5,1.5,1.1

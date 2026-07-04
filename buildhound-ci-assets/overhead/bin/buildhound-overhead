@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+# Thin launcher (plan 034): evaluate two gradle-profiler benchmark.csv files against the plugin
+# overhead budget. All the verdict math is OverheadCalculator in buildhound-commons; this shells to
+# the Gradle :buildhound-commons:overheadVerdict task, which exits non-zero on a breach.
+#
+# Usage: buildhound-overhead <plugin-on benchmark.csv> <plugin-off benchmark.csv>
+set -eu
+
+if [ "$#" -ne 2 ]; then
+    echo "usage: buildhound-overhead <plugin-on benchmark.csv> <plugin-off benchmark.csv>" >&2
+    exit 2
+fi
+
+# Repo root is three levels up from this script (overhead/bin → overhead → buildhound-ci-assets → repo).
+repo=$(cd "$(dirname "$0")/../../.." && pwd)
+# Resolve the CSV paths to absolute so they survive `gradlew -p "$repo"` changing the working dir.
+on=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
+off=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
+
+exec "$repo/gradlew" -q --console=plain -p "$repo" \
+    :buildhound-commons:overheadVerdict \
+    -Poverhead.on="$on" -Poverhead.off="$off"
