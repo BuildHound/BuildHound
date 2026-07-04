@@ -53,6 +53,37 @@ internal object DashboardAssets {
         }.use { it.readBytes() }
 }
 
+/**
+ * Zero-CDN API docs (plan 042): the OpenAPI spec (`api/openapi.yaml`, copied onto the classpath at
+ * build time from the single source `docs/api/openapi.yaml`) plus a hand-rolled viewer under the same
+ * strict CSP as the dashboard — no Swagger-UI CDN. The viewer's script is a separate `/docs.js` so
+ * `script-src 'self'` holds; it `fetch`es `/openapi.yaml` (hence `connect-src 'self'`).
+ */
+internal object DocsAssets {
+    val openApiYaml: ByteArray = resource("api/openapi.yaml")
+    val docsHtml: ByteArray = resource("web/docs.html")
+    val docsJs: ByteArray = resource("web/docs.js")
+
+    /** Inline `<style>` in docs.html is hash-pinned (same posture as the dashboard) — no unsafe-inline. */
+    val csp: String = run {
+        val styleHashes = Regex("<style>(.*?)</style>", RegexOption.DOT_MATCHES_ALL)
+            .findAll(docsHtml.decodeToString())
+            .map { match ->
+                val digest = MessageDigest.getInstance("SHA-256").digest(match.groupValues[1].encodeToByteArray())
+                "'sha256-" + Base64.getEncoder().encodeToString(digest) + "'"
+            }
+            .toList()
+        val styleSrc = if (styleHashes.isEmpty()) "'none'" else styleHashes.joinToString(" ")
+        "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; " +
+            "style-src $styleSrc; script-src 'self'; connect-src 'self'"
+    }
+
+    private fun resource(path: String): ByteArray =
+        checkNotNull(javaClass.classLoader.getResourceAsStream(path)) {
+            "embedded docs resource missing: $path"
+        }.use { it.readBytes() }
+}
+
 fun Route.dashboardRoutes() {
     get("/") {
         call.dashboardHeaders()
@@ -66,6 +97,27 @@ fun Route.dashboardRoutes() {
         call.dashboardHeaders()
         call.respondBytes(DashboardAssets.timelineJs, ContentType.Text.JavaScript.withCharset(Charsets.UTF_8))
     }
+    // Zero-CDN API docs (plan 042): the spec is public (docs, not data); the viewer + its script are
+    // served under the docs CSP.
+    get("/openapi.yaml") {
+        call.docsHeaders()
+        call.respondBytes(DocsAssets.openApiYaml, ContentType("application", "yaml").withCharset(Charsets.UTF_8))
+    }
+    get("/docs") {
+        call.docsHeaders()
+        call.respondBytes(DocsAssets.docsHtml, ContentType.Text.Html.withCharset(Charsets.UTF_8))
+    }
+    get("/docs.js") {
+        call.docsHeaders()
+        call.respondBytes(DocsAssets.docsJs, ContentType.Text.JavaScript.withCharset(Charsets.UTF_8))
+    }
+}
+
+private fun ApplicationCall.docsHeaders() {
+    response.header("Content-Security-Policy", DocsAssets.csp)
+    response.header("X-Content-Type-Options", "nosniff")
+    response.header("X-Frame-Options", "DENY")
+    response.header("Cache-Control", "no-cache")
 }
 
 private fun ApplicationCall.dashboardHeaders() {

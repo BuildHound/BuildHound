@@ -70,6 +70,12 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
+// The OpenAPI spec (plan 042) has a single source of truth in docs/api/openapi.yaml; copy it onto the
+// classpath at build time (served at GET /openapi.yaml) so a committed resource twin can never drift.
+tasks.named<Copy>("processResources") {
+    from(rootProject.file("docs/api/openapi.yaml")) { into("api") }
+}
+
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }

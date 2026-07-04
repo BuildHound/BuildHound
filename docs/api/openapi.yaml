@@ -1,0 +1,260 @@
+openapi: 3.1.0
+info:
+  title: BuildHound ingest & query API
+  version: "1.0"
+  description: >
+    The BuildHound server API (spec §5). All routes are under `/v1` (except `/health`); `/v1` is the
+    major-version prefix and the API is **additive within a major** — new fields/routes may appear, but
+    existing shapes never break (mirroring the payload contract rule). Auth is a Bearer token whose
+    scope gates the route: `ingest` (write telemetry), `read` (query history), `addon` (addon namespace),
+    `admin` (retention/admin), or `all`. A missing token is `401`, a wrong scope `403`. Storage outages
+    are `503`, oversized bodies `413`, malformed input `400`/`422`. This document is kept in lockstep
+    with the live route table by `OpenApiContractTest`.
+  license:
+    name: Apache-2.0
+servers:
+  - url: /
+    description: The BuildHound server root.
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        A per-project token. Scopes — `ingest`, `read`, `addon`, `admin`, `all`. The tenant is derived
+        from the token, never the request body, so a token can only ever act on its own project.
+  responses:
+    Unauthorized:
+      description: Missing or unknown bearer token.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    Forbidden:
+      description: The token's scope does not permit this operation.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+    Unavailable:
+      description: Storage unavailable (transient) — safe to retry.
+      content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } }
+  schemas:
+    ApiError:
+      type: object
+      properties:
+        error: { type: string }
+      required: [error]
+paths:
+  /health:
+    get:
+      summary: Liveness probe.
+      security: []
+      responses:
+        "200": { description: The server is up. }
+  /v1/builds:
+    post:
+      summary: Ingest a build payload (gzip-compressed BuildPayload JSON).
+      description: Ingest scope. Body is size-capped; a malformed payload is 422, an oversized body 413.
+      responses:
+        "202": { description: Accepted and stored (or a duplicate build id, idempotent). }
+        "400": { description: Malformed request. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "413": { description: Payload too large. }
+        "422": { description: The payload failed schema validation. }
+        "503": { $ref: '#/components/responses/Unavailable' }
+    get:
+      summary: List builds (newest first), filterable by branch/mode/outcome.
+      responses:
+        "200": { description: A page of build summaries. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
+  /v1/builds/{buildId}:
+    get:
+      summary: Fetch one build's full payload.
+      parameters: [{ name: buildId, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: The build payload. }
+        "404": { description: No such build for this tenant. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/builds/{buildId}/verdict:
+    get:
+      summary: The regression verdict for a build (plan 025).
+      parameters: [{ name: buildId, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: The verdict (status + per-metric detail). }
+        "404": { description: No verdict computed for this build. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/builds/{buildId}/ci-run:
+    get:
+      summary: The enriched CI pipeline timeline for a build (plans 028/041).
+      parameters: [{ name: buildId, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Status + span tree + queue time + Gradle-share, or UNCONFIGURED. }
+        "404": { description: No such build for this tenant. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/builds/{a}/compare/{b}:
+    get:
+      summary: Compare two builds (plan 038).
+      parameters:
+        - { name: a, in: path, required: true, schema: { type: string } }
+        - { name: b, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The build-to-build comparison. }
+        "404": { description: One or both builds are absent for this tenant. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/trends:
+    get:
+      summary: Fleet duration/cache trend points over a window.
+      responses:
+        "200": { description: Trend points. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
+  /v1/artifacts/trends:
+    get:
+      summary: Android artifact-size trend points (plan 031).
+      responses:
+        "200": { description: Artifact-size trend points. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/benchmark/series:
+    get:
+      summary: Benchmark-mode series (plan 030).
+      responses:
+        "200": { description: Benchmark series points. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/flaky:
+    get:
+      summary: Flaky test classes over a window (plan 036).
+      responses:
+        "200": { description: Flaky records. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/project-cost:
+    get:
+      summary: Project cost rollup (plan 026).
+      responses:
+        "200": { description: Project-cost rows. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/task-duration:
+    get:
+      summary: Task-duration rollup (plan 026).
+      responses:
+        "200": { description: The task-duration rollup. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/negative-avoidance:
+    get:
+      summary: Negative-avoidance rollup (plan 026).
+      responses:
+        "200": { description: Negative-avoidance rows. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/bottlenecks:
+    get:
+      summary: Bottlenecks rollup (plan 032).
+      responses:
+        "200": { description: The bottlenecks rollup. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/toolchain:
+    get:
+      summary: Toolchain adoption rollup (plan 032).
+      responses:
+        "200": { description: The toolchain rollup. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/settings:
+    get:
+      summary: Read this project's regression settings (plan 025).
+      responses:
+        "200": { description: The project settings (defaults when no row). }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+    put:
+      summary: Write this project's regression settings (all scope).
+      responses:
+        "200": { description: The stored settings. }
+        "400": { description: Malformed settings JSON. }
+        "413": { description: Settings body too large. }
+        "422": { description: Settings failed validation. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/admin/retention:
+    get:
+      summary: Read this project's retention windows (plan 042). Admin scope.
+      responses:
+        "200": { description: The retention config (spec defaults when no row). }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+    put:
+      summary: Write this project's retention windows. Admin scope.
+      responses:
+        "200": { description: The stored retention config. }
+        "400": { description: Invalid windows (out of range or buildDays < rawDays). }
+        "413": { description: Config body too large. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/metrics:
+    post:
+      summary: Ingest a custom measure from the metric CLI (plan 025). Ingest scope.
+      responses:
+        "202": { description: Accepted (idempotent on the correlation key). }
+        "400": { description: Malformed metric. }
+        "413": { description: Body too large. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/connectors/azure-devops/hook:
+    post:
+      summary: Azure DevOps build.complete service hook (plan 028). Ingest scope.
+      description: The tenant is the token's; the outbound host is never taken from the hook body.
+      responses:
+        "202": { description: Accepted; enrichment is scheduled. }
+        "400": { description: Unrecognized or invalid hook body. }
+        "413": { description: Body too large. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/addons/test-sharding/plan:
+    post:
+      summary: Fetch/compute the idempotent shard plan for a CI run (plan 040). Ingest scope.
+      responses:
+        "200": { description: The shard plan for this reference. }
+        "400": { description: Malformed request. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/addons/{addonId}/data:
+    get:
+      summary: List an addon's stored keys (plan 039). Addon scope.
+      parameters: [{ name: addonId, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: The addon's key/value map for this tenant. }
+        "404": { description: The addon id is not registered. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/addons/{addonId}/data/{key}:
+    get:
+      summary: Read one addon value (plan 039). Addon scope.
+      parameters:
+        - { name: addonId, in: path, required: true, schema: { type: string } }
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The stored value. }
+        "404": { description: No such key (or addon not registered). }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+    put:
+      summary: Write one addon value (plan 039). Addon scope.
+      parameters:
+        - { name: addonId, in: path, required: true, schema: { type: string } }
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: The stored value. }
+        "400": { description: Malformed key or JSON body. }
+        "404": { description: The addon id is not registered. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
