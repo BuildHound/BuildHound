@@ -9,7 +9,10 @@ import java.util.concurrent.atomic.AtomicReference
  * execution by the service for suite discovery; [outcome] is recorded once the plan is fetched (or the
  * run-all fallback fires) and read-and-cleared by the collector. All access is execution/config-time
  * only — no CC fingerprint input (the `DaemonState` / internal-adapters precedent). On a CC hit the
- * `whenReady` walk doesn't run, so [testDirs] is empty and the service runs all tests (honest fallback).
+ * `whenReady` walk doesn't run, so [testDirs] holds whatever the last configuration set — for a
+ * same-project rebuild those dirs are identical, so the filter still applies correctly; on a cold
+ * daemon (no config ever ran) [testDirs] is empty and the service discovers nothing → runs all tests.
+ * CI shard jobs use fresh daemons, so the warm-daemon-different-invocation case is a local-dev edge.
  */
 object ShardingState {
 

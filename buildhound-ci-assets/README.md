@@ -16,6 +16,7 @@ deliberately not a Gradle module.
 | `overhead/bin/buildhound-overhead` | thin launcher over `OverheadCalculator` (buildhound-commons); exits non-zero on a budget breach |
 | `overhead/bin/loopback-sink.py` | do-nothing HTTP sink (202s + discards) for the upload cell — no BuildHound server needed |
 | `overhead/fixture/` | synthetic 3-module Kotlin/JVM project (no Android) with the `buildhound.overhead.plugin` toggle |
+| `sharding/shard-matrix-examples.md` | GitHub Actions + Azure DevOps shard-matrix snippets for the `dev.buildhound.test-sharding` addon (`BUILDHOUND_SHARD_INDEX`/`_TOTAL`/`_REFERENCE`), plan 040 |
 
 ## Metric CLI
 

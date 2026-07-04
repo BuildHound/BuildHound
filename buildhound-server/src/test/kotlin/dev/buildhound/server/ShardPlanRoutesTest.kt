@@ -66,6 +66,7 @@ class ShardPlanRoutesTest {
         assertEquals(HttpStatusCode.BadRequest, plan(req(index = 3, total = 2)).status) // index > total
         assertEquals(HttpStatusCode.BadRequest, plan(req(index = 1, total = 0)).status) // total < 1
         assertEquals(HttpStatusCode.BadRequest, plan(req(index = 1, reference = "")).status) // blank reference
+        assertEquals(HttpStatusCode.BadRequest, plan(req(index = 1, total = 2_000)).status) // total > MAX_SHARDS (DoS guard)
         assertEquals(HttpStatusCode.BadRequest, plan("not json").status)
     }
 

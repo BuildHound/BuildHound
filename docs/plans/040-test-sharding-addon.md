@@ -1,6 +1,32 @@
 # Plan 040 — `dev.buildhound.test-sharding` addon: server-balanced LPT shard plans
 
-**Status: planned — roadmap phase 4** · 2026-07-03
+**Status: delivered (851926a · b72b4b5) — reviewed & green** · 2026-07-03
+
+> **Divergences from this plan (as built).** (1) *Model placement.* `TestShardingExtension` and the
+> plan request/response types live in the **addon module** (`dev.buildhound.sharding`), not commons —
+> consistent with plan 038's internal-adapters (commons stays addon-shape-agnostic; the golden is a
+> raw-JSON `extensions["testSharding"]` block, deserialized as a `JsonObject`). (2) *Timing source.*
+> plan 024 stores per-class durations in the payload jsonb, not a dedicated timing table, so
+> `BuildStore.classTimings` reads windowed CI payloads' `tests` blocks (`classTimingsOf`, both stores)
+> — an on-demand jsonb scan, fine for the non-hot `/plan` endpoint. (3) *Response `assigned` field.*
+> Added `ShardPlanResponse.assigned` (the full plan's class set) so the last shard's client-side
+> catch-all can find drift-unassigned suites. (4) *Core-optional filter.* The shard **filter works
+> without core applied** — only the `extensions["testSharding"]` feedback needs core's finalizer to
+> discover the ServiceLoader contributor. A deliberate softening of the strict addon "warn+no-op
+> without core" contract, since sharding's value is the filter, not the telemetry. (5) *Whole-build
+> single fetch.* The service discovers **all** Test tasks' suites (via an IP-gated `whenReady` walk
+> captured into a daemon-static bridge) and POSTs once, so the plan covers the complete suite set —
+> the composite end-to-end is exercised by a real-JUnit-fixture + stub-server functional test rather
+> than a cross-plugin TestKit composite. (6) *CI examples location.* The shard-matrix examples are a
+> new `buildhound-ci-assets/sharding/shard-matrix-examples.md` (Azure + GHA) rather than an extension
+> of the reusable `buildhound-gradle-steps.yml` steps template — a shard matrix is a *pipeline*-level
+> `strategy.matrix` construct, not a steps-template concern, so a standalone doc is the natural home.
+> **Review fixes (2026-07-04):** the per-`Test`-task filter wiring uses `gradle.lifecycle.beforeProject`
+> via a top-level installer capturing only a boolean + the service name (the IsolatedAction never holds
+> a service reference — architecture §7), with an isolated-projects functional test; the endpoint
+> bounds `total ≤ 1000` (a hostile `total` would `Array(total)`-OOM the balancer); the client warns on
+> plaintext-http like the core uploader; the CC-reuse test now asserts the filter still applies on the
+> reuse run.
 
 ## 1. Source
 

@@ -6,6 +6,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import org.gradle.api.logging.Logging
 
 /**
  * Fetches the shard plan (plan 040) from `POST /v1/addons/test-sharding/plan`. Same JDK-`HttpClient`
@@ -15,11 +16,20 @@ import java.time.Duration
  */
 class ShardPlanClient(baseUrl: String, private val token: String?) {
 
+    private val logger = Logging.getLogger(ShardPlanClient::class.java)
     private val endpoint = URI.create(baseUrl.trimEnd('/') + "/v1/addons/test-sharding/plan")
     private val http = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .followRedirects(HttpClient.Redirect.NEVER)
         .build()
+
+    init {
+        // Match the core PayloadUploader: warn if the ingest token would ride plaintext http to a
+        // non-loopback host (the token is only ever a header, but the channel is unencrypted).
+        if (!token.isNullOrBlank() && endpoint.scheme == "http" && endpoint.host !in setOf("localhost", "127.0.0.1", "::1", "[::1]")) {
+            logger.warn("[buildhound-test-sharding] BUILDHOUND_SERVER_URL uses plaintext http — the token travels unencrypted; use https")
+        }
+    }
 
     fun fetch(request: ShardPlanRequest): ShardPlanResponse? = runCatching {
         val json = BuildHoundJson.payload.encodeToString(ShardPlanRequest.serializer(), request)

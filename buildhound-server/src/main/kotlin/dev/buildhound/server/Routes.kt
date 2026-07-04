@@ -559,6 +559,9 @@ data class ShardPlanResponse(
 /** Trailing window (days) the shard balancer's p90 timings are computed over (plan 040). */
 private const val SHARD_TIMING_DAYS: Int = 30
 
+/** Upper bound on shard count — `LptBalancer` allocates `total` lists, so a hostile `total` is a DoS. */
+private const val MAX_SHARDS: Int = 1000
+
 /**
  * Test-sharding addon capability (plan 040): `POST /v1/addons/test-sharding/plan`. A CI token
  * (ingest scope) posts its `{reference, index, total, suites}`; the server returns this shard's class
@@ -573,8 +576,8 @@ fun Route.testShardingRoutes(builds: BuildStore, shardPlans: ShardPlanStore, tok
             ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, ApiError("plan request too large"))
         val req = runCatching { BuildHoundJson.payload.decodeFromString(ShardPlanRequest.serializer(), body.decodeToString()) }
             .getOrElse { return@post call.respond(HttpStatusCode.BadRequest, ApiError("invalid plan request")) }
-        if (req.reference.isBlank() || req.total < 1 || req.index < 1 || req.index > req.total) {
-            return@post call.respond(HttpStatusCode.BadRequest, ApiError("reference must be non-blank and 1 <= index <= total"))
+        if (req.reference.isBlank() || req.total < 1 || req.total > MAX_SHARDS || req.index < 1 || req.index > req.total) {
+            return@post call.respond(HttpStatusCode.BadRequest, ApiError("reference must be non-blank and 1 <= index <= total <= $MAX_SHARDS"))
         }
         val result = call.runQuery {
             shardPlans.planOrCompute(project.id, req.reference, req.total) {

@@ -122,12 +122,70 @@ class TestShardingFunctionalTest {
     }
 
     @Test
+    fun `under isolated projects the build stays green and degrades to running all tests`() {
+        // A multi-project fixture (a single project can't surface IP). The cross-project task-graph
+        // walk is an IP violation → gated → no suites discovered → the shard runs all tests, green.
+        File(projectDir, "settings.gradle.kts").writeText(
+            """
+            plugins { id("dev.buildhound.test-sharding") }
+            rootProject.name = "sharding-ip-fixture"
+            include(":lib")
+            """.trimIndent(),
+        )
+        File(projectDir, "lib/build.gradle.kts").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                plugins { java }
+                repositories { mavenCentral() }
+                dependencies {
+                    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+                    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+                }
+                tasks.test { useJUnitPlatform() }
+                """.trimIndent(),
+            )
+        }
+        File(projectDir, "lib/src/test/java/com/example/LibTest.java").apply {
+            parentFile.mkdirs()
+            writeText(
+                """
+                package com.example;
+                import org.junit.jupiter.api.Test;
+                import java.io.File;
+                public class LibTest {
+                    @Test public void runs() throws Exception {
+                        new File("build/ran").mkdirs(); new File("build/ran/Lib").createNewFile();
+                    }
+                }
+                """.trimIndent(),
+            )
+        }
+        val url = stubServer(classes = listOf("com.example.LibTest"), assigned = listOf("com.example.LibTest"))
+        val result = GradleRunner.create().withProjectDir(projectDir).withPluginClasspath()
+            .withEnvironment(System.getenv().filterKeys { !it.startsWith("BUILDHOUND_") } + mapOf(
+                "BUILDHOUND_SHARD_INDEX" to "1", "BUILDHOUND_SHARD_TOTAL" to "2", "BUILDHOUND_SHARD_REFERENCE" to "run-ip", "BUILDHOUND_SERVER_URL" to url,
+            ))
+            .withArguments("test", "-Dorg.gradle.unsafe.isolated-projects=true")
+            .build()
+        // Build succeeds; the lib test ran (the addon degraded to run-all, never failed the build).
+        assertTrue(File(projectDir, "lib/build/ran/Lib").exists(), "the build stays green under IP:\n${result.output}")
+    }
+
+    @Test
     fun `the shard filter is applied at execution time so the configuration cache is reused`() {
         setUpProject()
         val url = stubServer(classes = listOf("com.example.FooTest"), assigned = listOf("com.example.FooTest", "com.example.BarTest"))
         val env = mapOf("BUILDHOUND_SHARD_INDEX" to "1", "BUILDHOUND_SHARD_TOTAL" to "2", "BUILDHOUND_SHARD_REFERENCE" to "run-1", "BUILDHOUND_SERVER_URL" to url)
         runner(env, "test").build()
-        val reuse = runner(env, "test").build()
+        // Clear the markers and re-run against the reused CC entry; the shard filter must STILL apply
+        // (the fetch is execution-time, and the reused config's dirs drive discovery on the CC hit).
+        File(projectDir, "build/ran").deleteRecursively()
+        // --rerun-tasks forces the test task to execute again (markers); the CONFIG cache is independent
+        // and is still reused, which is what we assert.
+        val reuse = runner(env, "test", "--rerun-tasks").build()
         assertTrue(reuse.output.contains("Reusing configuration cache"), reuse.output)
+        assertTrue(ran("FooTest"), "the filter still runs the assigned class on the CC-hit run")
+        assertFalse(ran("BarTest"), "the filter still excludes the other shard's class on the CC-hit run")
     }
 }
