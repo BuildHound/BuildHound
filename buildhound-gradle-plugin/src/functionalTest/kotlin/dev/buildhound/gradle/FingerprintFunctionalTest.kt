@@ -74,7 +74,7 @@ class FingerprintFunctionalTest {
         // Build-level fingerprints exist; the per-task map stays empty (plan 022 §8 deferral).
         val fp = readPayload().fingerprints
         assertTrue(fp?.build?.isNotEmpty() == true)
-        assertTrue(fp?.tasks.isNullOrEmpty(), "per-Test map must be empty while deferred: ${fp?.tasks}")
+        assertTrue(fp.tasks.isNullOrEmpty(), "per-Test map must be empty while deferred: ${fp.tasks}")
     }
 
     @Test

@@ -20,6 +20,9 @@ kotlin {
         apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
         freeCompilerArgs.add("-Xjdk-release=21")
+        // apiVersion 2.0 is a deliberate pin (Gradle's embedded Kotlin stdlib, architecture §2 rule 10);
+        // silence the newer build compiler's "2.0 is deprecated" advisory rather than bumping it.
+        freeCompilerArgs.add("-Xsuppress-version-warnings")
     }
     jvmToolchain {
         languageVersion.set(JavaLanguageVersion.of(buildToolchain))

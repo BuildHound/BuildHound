@@ -60,9 +60,9 @@ class CiSpanStoreIntegrationTest {
         val stored = store.findRun(projectId, "b1")!!
         assertEquals(CiRunStatus.OK, stored.status)
         assertEquals(2, stored.run!!.spans.size)
-        assertEquals(5000, stored.run!!.queuedMs)
-        assertEquals("agent-7", stored.run!!.spans.single { it.id == "r1" }.workerName)
-        assertEquals(SpanResult.FAILED, stored.run!!.spans.single { it.id == "r2" }.result)
+        assertEquals(5000, stored.run.queuedMs)
+        assertEquals("agent-7", stored.run.spans.single { it.id == "r1" }.workerName)
+        assertEquals(SpanResult.FAILED, stored.run.spans.single { it.id == "r2" }.result)
     }
 
     @Test

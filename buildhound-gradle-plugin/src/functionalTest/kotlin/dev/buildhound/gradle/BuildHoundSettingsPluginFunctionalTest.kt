@@ -231,7 +231,7 @@ class BuildHoundSettingsPluginFunctionalTest {
         val vcs = readPayload().vcs
         assertEquals("main", vcs?.branch, "probes before the hung one must still deliver")
         assertNotNull(vcs?.sha, "probes before the hung one must still deliver")
-        assertNull(vcs?.dirty, "the hung status probe must degrade to null")
+        assertNull(vcs.dirty, "the hung status probe must degrade to null")
         assertEquals(
             1,
             result.output.lineSequence().count { it.contains("[buildhound] git") && it.contains("timed out") },

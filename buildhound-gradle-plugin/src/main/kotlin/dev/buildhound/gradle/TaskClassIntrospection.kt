@@ -70,6 +70,9 @@ internal object TaskClassIntrospection {
     // kotlin.Annotation has no accessor; the JDK proxy behind it is a java.lang.annotation.Annotation.
     private fun Annotation.typeName(): String = annotationType().name
 
+    // The cast to java.lang.annotation.Annotation is deliberate — annotationType() is a JDK method
+    // with no kotlin.Annotation equivalent; suppress the platform-class-mapping advisory.
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
     private fun Annotation.annotationType(): Class<out Annotation> =
         (this as java.lang.annotation.Annotation).annotationType()
 }

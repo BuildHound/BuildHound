@@ -185,7 +185,7 @@ class GoldenPayloadTest {
         assertEquals("gitlab", payload.ci?.provider)
         assertEquals("2", payload.ci?.attributes?.get("runAttempt"))
         assertTrue(payload.links?.commitUrl?.startsWith("https://gitlab.com/acme/app/-/commit/") == true)
-        assertTrue(payload.links?.pullRequestUrl?.contains("/-/merge_requests/") == true)
+        assertTrue(payload.links.pullRequestUrl?.contains("/-/merge_requests/") == true)
     }
 
     @Test

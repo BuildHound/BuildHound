@@ -33,8 +33,8 @@ class PayloadScrubberTest {
         val scrubbed = PayloadScrubber.scrub(payload, root).benchmark!!
         assertEquals("clean", scrubbed.scenario) // allowlisted label passes through unchanged
         assertTrue(scrubbed.seedRef!!.contains("out"), "in-project path relativizes: ${scrubbed.seedRef}")
-        assertFalse(scrubbed.seedRef!!.contains("/home/ci/agent"), "out-of-root path stripped: ${scrubbed.seedRef}")
-        assertFalse(scrubbed.seedRef!!.contains("abc123XYZ"), "secret-shaped token redacted: ${scrubbed.seedRef}")
+        assertFalse(scrubbed.seedRef.contains("/home/ci/agent"), "out-of-root path stripped: ${scrubbed.seedRef}")
+        assertFalse(scrubbed.seedRef.contains("abc123XYZ"), "secret-shaped token redacted: ${scrubbed.seedRef}")
     }
 
     @Test

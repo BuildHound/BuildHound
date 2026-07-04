@@ -14,6 +14,9 @@ kotlin {
     // NoSuchMethodError at runtime (architecture §2 rule 10).
     compilerOptions {
         apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
+        // The 2.0 pin above is deliberate; silence the build compiler's "2.0 is deprecated" advisory
+        // (bumping would risk NoSuchMethodError on Gradle 8.14's embedded stdlib — see the note above).
+        freeCompilerArgs.add("-Xsuppress-version-warnings")
     }
 
     jvmToolchain {
