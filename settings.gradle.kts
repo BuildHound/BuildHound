@@ -42,5 +42,8 @@ include(":buildhound-internal-adapters")
 // Opt-in test-sharding addon (plan 040): a settings plugin that fetches a server-balanced shard plan
 // and filters Test tasks. commons-only, off the core plugin's classpath, applied alongside core.
 include(":buildhound-addon-test-sharding")
+// Opt-in, separately-shipped MCP server (plan 042): a stdio read-only query surface over the /v1 API.
+// Never bundled into the ingest image (a hardened, network-facing service) — its own artifact.
+include(":buildhound-mcp")
 // buildhound-ci-assets is intentionally not a Gradle module: it holds CI templates and
 // shell assets that must be consumable without a JVM (see docs/architecture.md).
