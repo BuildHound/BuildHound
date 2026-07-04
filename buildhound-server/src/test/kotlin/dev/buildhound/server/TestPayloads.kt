@@ -24,6 +24,7 @@ object TestPayloads {
         pipelineName: String? = "android-ci",
         provider: String? = "azure-devops",
         runId: String? = null,
+        buildUrl: String? = null,
         userId: String? = null,
         tasks: List<TaskExecution> = emptyList(),
     ): BuildPayload = BuildPayload(
@@ -34,7 +35,7 @@ object TestPayloads {
         mode = mode,
         requestedTasks = requestedTasks,
         vcs = branch?.let { VcsInfo(branch = it) },
-        ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName) },
+        ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl) },
         derived = hitRate?.let { DerivedMetrics(cacheableHitRate = it) },
         environment = userId?.let { EnvironmentInfo(userId = it) },
         tasks = tasks,

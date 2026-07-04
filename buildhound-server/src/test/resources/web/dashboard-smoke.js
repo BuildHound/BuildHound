@@ -104,6 +104,18 @@ const responses = {
         missesToExplain: [":app:compileKotlin"],
         diffs: [{ key: "jdk.home", scope: "BUILD", valueA: "aaaa1111…", valueB: "bbbb2222…", differingTaskCount: 0, coverage: 1.0, note: "JDK install path differs" }],
     },
+    // CI span tree (plan 028): a completed, enriched run — nested stage→job→step spans + derived views.
+    "/v1/builds/b1/ci-run": {
+        status: "OK",
+        queuedMs: 4200,
+        gradleSharePct: 0.35,
+        spans: [
+            { id: "s1", kind: "STAGE", name: "Build stage", startMs: 0, finishMs: 300000, result: "SUCCEEDED" },
+            { id: "j1", parentId: "s1", kind: "JOB", name: "Compile job", startMs: 1000, finishMs: 120000, result: "SUCCEEDED" },
+            { id: "t1", parentId: "j1", kind: "STEP", name: "Gradle build step", startMs: 2000, finishMs: 118000, result: "FAILED" },
+        ],
+    },
+    // b2 has no ci-run response → 404 → the honest amber "not available" notice.
     // Tasks explorer rollups (plan 026). byTypeAvailable false → the by-type toggle shows an empty state.
     "/v1/rollups/project-cost?days=30": [
         { module: ":app", builds: 12, executedBuilds: 9, buildImpactedUsers: 3, serialTaskMs: 45000, buildAvgDurationMs: 60000, buildPercentage: 0.8, buildCostScalar: 4800000 },
@@ -144,7 +156,7 @@ const context = {
     fetch: fetchStub,
     URLSearchParams,
     Option: function (label, value) { const n = makeNode("option"); n.textContent = label; n.value = value; return n; },
-    Date, Math, Object, String, Number, Array, Boolean, isFinite, Set, Error, console,
+    Date, Math, Object, String, Number, Array, Boolean, isFinite, Set, Map, Error, console,
     setTimeout, // not used, but harmless
 };
 context.globalThis = context;
@@ -199,6 +211,14 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "FAILED → PASSED")) throw new Error("retry outcome sequence missing");
     if (!hasText(byId["app"], "Slowest classes")) throw new Error("tests slowest-classes table missing");
 
+    // CI span tree (plan 028): the enriched pipeline section renders with queue-time + Gradle-share
+    // chips and the nested stage→job→step span names.
+    if (!hasText(byId["app"], "CI pipeline")) throw new Error("ci-run section header missing");
+    if (!hasText(byId["app"], "queue time")) throw new Error("ci-run queue-time chip missing");
+    if (!hasText(byId["app"], "gradle share")) throw new Error("ci-run gradle-share chip missing");
+    if (!hasText(byId["app"], "Build stage")) throw new Error("ci-run stage span missing");
+    if (!hasText(byId["app"], "Gradle build step")) throw new Error("ci-run nested step span missing");
+
     // Minimal build (no tasks): ledger renders all-zero rows without dividing by zero.
     context.location.hash = "#/build/b2"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/builds/b2")) throw new Error("minimal detail view did not fetch");
@@ -207,6 +227,8 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (hasText(byId["app"], "Kotlin compilation")) throw new Error("kotlin panel must be absent without a report");
     // No test results on b2 → no Tests section either.
     if (hasText(byId["app"], "Failures & retries")) throw new Error("tests section must be absent without results");
+    // No connector run for b2 (ci-run 404) → the honest amber notice, never a hidden section.
+    if (!hasText(byId["app"], "CI timeline not available")) throw new Error("ci-run degraded notice missing on a build with no run");
 
     // Tests page (plan 024): defaults to the latest build (b1), renders its tests panel.
     context.location.hash = "#/tests"; context._onhashchange(); await tick(); await tick();

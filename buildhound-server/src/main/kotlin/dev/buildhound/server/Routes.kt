@@ -5,6 +5,13 @@ import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.PayloadCapper
+import dev.buildhound.server.connector.CiEvent
+import dev.buildhound.server.connector.CiRunView
+import dev.buildhound.server.connector.CiSpanStore
+import dev.buildhound.server.connector.ConnectorConfig
+import dev.buildhound.server.connector.ConnectorRegistry
+import dev.buildhound.server.connector.EnrichmentQueue
+import dev.buildhound.server.connector.GradleShare
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.header
@@ -48,7 +55,12 @@ fun Route.healthRoutes() {
  * (project, buildId). The token — not the payload's `projectKey` — determines the
  * tenant. Fails closed: no resolvable token, no ingest.
  */
-fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore, evaluator: VerdictEvaluator) {
+fun Route.ingestRoutes(
+    store: BuildStore,
+    tokens: TokenStore,
+    evaluator: VerdictEvaluator,
+    enrichment: EnrichmentQueue,
+) {
     route("/v1") {
         post("/builds") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsIngest) ?: return@post
@@ -109,10 +121,59 @@ fun Route.ingestRoutes(store: BuildStore, tokens: TokenStore, evaluator: Verdict
             // never block or fail ingest (its own runCatching). The alert HTTP call inside is async.
             if (stored) evaluator.evaluate(project.id, project.key, capped)
 
+            // CI-connector enrichment (plan 028): fire-and-forget; no-ops unless a registered connector
+            // handles ci.provider. buildUrl is the ingested (attacker-controlled) source parsed for the
+            // collection/project — the connector's host allowlist is the SSRF guard, not this call.
+            if (stored) {
+                enrichment.submit(project.id, capped.buildId, capped.ci?.provider, capped.ci?.runId, capped.ci?.buildUrl)
+            }
+
             call.respond(
                 HttpStatusCode.Accepted,
                 IngestResponse(buildId = payload.buildId, status = if (stored) "accepted" else "duplicate"),
             )
+        }
+    }
+}
+
+/**
+ * `POST /v1/connectors/azure-devops/hook` (plan 028): an Azure `build.complete` service hook can push
+ * completion so enrichment re-fetches a now-finished timeline instead of waiting on the poll budget.
+ * Ingest-scoped and tenant-scoped — the tenant is the token's project, **never** the hook body. The
+ * body only names the provider run id; we correlate it to our build via `{provider, runId}` and reuse
+ * that build's ingested `ci.buildUrl` (the hook can't redirect the outbound host). Junk → 400.
+ */
+fun Route.connectorHookRoutes(
+    builds: BuildStore,
+    tokens: TokenStore,
+    connectors: ConnectorRegistry,
+    enrichment: EnrichmentQueue,
+) {
+    route("/v1/connectors") {
+        post("/azure-devops/hook") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsIngest) ?: return@post
+            val body = call.receiveBounded(256 * 1024)
+                ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, ApiError("hook body too large"))
+            // Provider is fixed by the route path for v1; when plan 041 adds GHA/GitLab hooks this
+            // becomes a `/{provider}/hook` path parameter resolved through the same registry.
+            val connector = connectors.byId("azure-devops")
+                ?: return@post call.respond(HttpStatusCode.ServiceUnavailable, ApiError("connector not available"))
+            val event = connector.parseWebhook(emptyMap(), body.decodeToString(), ConnectorConfig())
+                ?: return@post call.respond(HttpStatusCode.BadRequest, ApiError("unrecognized hook body"))
+            when (event) {
+                is CiEvent.RunCompleted -> {
+                    // Resolve the provider run id to OUR build id (tenant-scoped); reuse its buildUrl.
+                    val resolved = call.runQuery {
+                        val buildId = builds.resolveBuildId(project.id, event.ref.provider, event.ref.runId)
+                        buildId to buildId?.let { builds.findById(project.id, it)?.ci?.buildUrl }
+                    } ?: return@post
+                    val (buildId, buildUrl) = resolved.value
+                    if (buildId != null) {
+                        enrichment.submit(project.id, buildId, event.ref.provider, event.ref.runId, buildUrl)
+                    }
+                }
+            }
+            call.respond(HttpStatusCode.Accepted, IngestResponse(buildId = event.ref.runId, status = "accepted"))
         }
     }
 }
@@ -242,7 +303,7 @@ private fun validateSettings(s: ProjectSettings): String? = when {
  * computed on read over the indexed hot columns; materialized aggregates come when
  * volume demands them.
  */
-fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenStore) {
+fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenStore, ciSpans: CiSpanStore) {
     route("/v1") {
         get("/builds") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
@@ -280,6 +341,27 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             verdict.value
                 ?.let { call.respond(it) }
                 ?: call.respond(HttpStatusCode.NotFound, ApiError("no verdict for this build"))
+        }
+
+        // Normalized CI span tree + derived queue time and Gradle share (plan 028, spec §5).
+        // Read-scope, tenant-scoped: a foreign/unknown build (or one never enriched) reads as 404.
+        get("/builds/{buildId}/ci-run") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val buildId = call.parameters.getOrFail("buildId")
+            val view = call.runQuery {
+                val stored = ciSpans.findRun(project.id, buildId) ?: return@runQuery null
+                // The Gradle build's wall-clock comes from the ingested build; null when it is gone.
+                val buildDurationMs = store.findById(project.id, buildId)?.let { it.finishedAt - it.startedAt }
+                CiRunView(
+                    status = stored.status,
+                    queuedMs = stored.run?.queuedMs,
+                    spans = stored.run?.spans.orEmpty(),
+                    gradleSharePct = GradleShare.percent(buildDurationMs, stored.run),
+                )
+            } ?: return@get
+            view.value
+                ?.let { call.respond(it) }
+                ?: call.respond(HttpStatusCode.NotFound, ApiError("no ci run for this build"))
         }
 
         // Compare two builds' inputs to explain B's cache misses vs A (plan 022, spec §5).

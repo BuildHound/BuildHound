@@ -520,6 +520,84 @@
 
         // Test results, when any test task's JUnit XML was collected for this build.
         if (Array.isArray(build.tests) && build.tests.length) app.append(testsPanel(build.tests));
+
+        // CI span tree (plan 028): the connector-enriched pipeline timeline, queue time, and Gradle
+        // share. Best-effort and honest — a 404 (no run) or a non-OK status renders an amber notice
+        // rather than a hidden section (UX honesty rule); a fetch error just omits it.
+        try {
+            const ci = await apiMaybe("/v1/builds/" + encodeURIComponent(buildId) + "/ci-run");
+            if (seq !== renderSeq) return;
+            app.append(ciRunSection(ci));
+        } catch (e) { /* keep the rest of the detail page */ }
+    }
+
+    // Like api() but returns null on 404 instead of throwing — for optional sub-resources.
+    async function apiMaybe(path) {
+        const response = await fetch(path, { headers: { Authorization: "Bearer " + token() } });
+        if (response.status === 404) return null;
+        if (response.status === 401 || response.status === 403) {
+            tokenBar.hidden = false;
+            throw new Error(response.status === 401 ? "token required" : "token lacks read scope");
+        }
+        if (!response.ok) throw new Error("request failed: " + response.status);
+        return response.json();
+    }
+
+    // Span results reuse the allowlisted badge classes (no new CSS class from untrusted data):
+    // SUCCEEDED→SUCCESS, FAILED→FAILED, SKIPPED→SKIPPED; CANCELED/UNKNOWN render unstyled.
+    const SPAN_BADGE = { SUCCEEDED: "SUCCESS", FAILED: "FAILED", SKIPPED: "SKIPPED", CANCELED: "", UNKNOWN: "" };
+    const spanBadgeClass = result => SPAN_BADGE[result] || "";
+
+    function ciRunSection(ci) {
+        const section = document.createDocumentFragment();
+        section.append(el("h3", "CI pipeline"));
+        if (!ci || ci.status !== "OK") {
+            const reason = !ci ? "no connector run for this build"
+                : ci.status === "UNCONFIGURED" ? "connector not configured"
+                : ci.status === "PENDING" ? "timeline pending — the pipeline had not finished"
+                : "timeline fetch failed";
+            section.append(el("p", "CI timeline not available (" + reason + ")", "notice-warn"));
+            return section;
+        }
+        const chips = el("ul", null, "chips");
+        if (ci.queuedMs != null) chips.append(chipItem("queue time", ms(ci.queuedMs)));
+        if (ci.gradleSharePct != null) chips.append(chipItem("gradle share", Math.round(ci.gradleSharePct * 100) + "%"));
+        if (chips.children.length) section.append(chips);
+        section.append(spanTree(ci.spans || []));
+        return section;
+    }
+
+    // Nested stage→job→step list built from parentId. A `seen` set + depth cap keep a corrupt or
+    // cyclic parent chain from looping (Azure timelines are trees; this is defensive).
+    function spanTree(spans) {
+        const ids = new Set(spans.map(s => s.id));
+        const byParent = new Map();
+        for (const s of spans) {
+            const key = (s.parentId != null && ids.has(s.parentId)) ? s.parentId : "__root__";
+            if (!byParent.has(key)) byParent.set(key, []);
+            byParent.get(key).push(s);
+        }
+        const seen = new Set();
+        function build(key, depth) {
+            if (depth > 12) return null;
+            const kids = (byParent.get(key) || []).filter(s => !seen.has(s.id))
+                .sort((a, b) => (a.startMs || 0) - (b.startMs || 0));
+            if (!kids.length) return null;
+            const ul = el("ul", null, "span-tree");
+            for (const s of kids) {
+                seen.add(s.id);
+                const li = el("li");
+                li.append(el("span", s.kind || "", "muted span-kind"));
+                li.append(el("span", s.name || ""));
+                if (s.result) li.append(el("span", " " + s.result, "badge " + spanBadgeClass(s.result)));
+                if (s.startMs != null && s.finishMs != null) li.append(el("span", " " + ms(s.finishMs - s.startMs), "muted"));
+                const sub = build(s.id, depth + 1);
+                if (sub) li.append(sub);
+                ul.append(li);
+            }
+            return ul;
+        }
+        return build("__root__", 0) || el("p", "no spans", "muted");
     }
 
     const SVG_NS = "http://www.w3.org/2000/svg";

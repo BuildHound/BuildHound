@@ -51,6 +51,11 @@ dependencies {
     implementation(libs.ktor.server.call.logging)
     implementation(libs.ktor.server.rate.limit)
     implementation(libs.ktor.serialization.kotlinx.json)
+    // Outbound HTTP for CI connectors (plan 028): the CIO engine is pure-JVM (no native deps).
+    // Timeline JSON is parsed defensively via JsonElement (schema-drift tolerant), so no client
+    // content-negotiation is needed.
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.cio)
     implementation(libs.logback.classic)
     implementation(libs.postgresql)
     implementation(libs.flyway.core)
@@ -59,6 +64,7 @@ dependencies {
 
     testImplementation(kotlin("test"))
     testImplementation(libs.ktor.server.test.host)
+    testImplementation(libs.ktor.client.mock)
     testImplementation(libs.testcontainers.postgresql)
     testImplementation(libs.testcontainers.junit)
     testRuntimeOnly(libs.junit.platform.launcher)

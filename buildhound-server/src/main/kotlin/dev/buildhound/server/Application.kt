@@ -1,6 +1,16 @@
 package dev.buildhound.server
 
 import dev.buildhound.commons.payload.BuildHoundJson
+import dev.buildhound.server.connector.AzureDevOpsConnector
+import dev.buildhound.server.connector.CiSpanStore
+import dev.buildhound.server.connector.ConnectorConfigStore
+import dev.buildhound.server.connector.ConnectorEnricher
+import dev.buildhound.server.connector.ConnectorHttpClient
+import dev.buildhound.server.connector.ConnectorRegistry
+import dev.buildhound.server.connector.EnrichmentQueue
+import dev.buildhound.server.connector.EnvConnectorConfigStore
+import dev.buildhound.server.connector.InMemoryCiSpanStore
+import dev.buildhound.server.connector.PostgresCiSpanStore
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
@@ -27,7 +37,17 @@ class ServerStores(
     val settings: SettingsStore = InMemorySettingsStore(),
     val alerts: AlertDispatcher = RecordingAlertDispatcher(),
     val dashboardBaseUrl: String? = null,
-)
+    // CI-connector framework (plan 028). Defaults are the honest no-op: no registered connector →
+    // nothing enriches, ci-run reads 404, ingest is unchanged. Production wires the Azure connector.
+    val ciSpans: CiSpanStore = InMemoryCiSpanStore(),
+    val connectors: ConnectorRegistry = ConnectorRegistry(emptyList()),
+    val connectorConfigs: ConnectorConfigStore = EnvConnectorConfigStore(emptyMap()),
+    enrichment: EnrichmentQueue? = null,
+) {
+    /** Bounded single-worker enrichment queue; built from the connector wiring unless injected (tests). */
+    val enrichment: EnrichmentQueue =
+        enrichment ?: EnrichmentQueue(ConnectorEnricher(connectors, connectorConfigs, ciSpans))
+}
 
 /**
  * Request ceilings (spec §8), per minute; 0 disables a limiter. The per-host limiter
@@ -101,6 +121,11 @@ fun storesFromEnvironment(env: Map<String, String>): ServerStores {
             // The server's only outbound caller — real HTTP in prod; https-only enforced in the dispatcher.
             alerts = HttpAlertDispatcher(),
             dashboardBaseUrl = env["BUILDHOUND_DASHBOARD_URL"],
+            // CI connector framework (plan 028): ship the Azure connector; credentials + host allowlist
+            // come from env only (UNCONFIGURED and inert until a PAT is set).
+            ciSpans = PostgresCiSpanStore(dataSource),
+            connectors = ConnectorRegistry(listOf(AzureDevOpsConnector(ConnectorHttpClient.create()))),
+            connectorConfigs = EnvConnectorConfigStore(env),
         )
     } else {
         logger.warn("storage: IN-MEMORY (no BUILDHOUND_DB_URL) — data is lost on restart")
@@ -175,11 +200,12 @@ fun Application.buildHoundModule(
         // the host layer sees every /v1 request first, then the per-token layer.
         maybeRateLimited(hostOn, HOST_LIMIT) {
             maybeRateLimited(ingestOn, INGEST_LIMIT) {
-                ingestRoutes(stores.builds, stores.tokens, evaluator)
+                ingestRoutes(stores.builds, stores.tokens, evaluator, stores.enrichment)
                 metricsRoutes(stores.builds, stores.metrics, stores.tokens)
+                connectorHookRoutes(stores.builds, stores.tokens, stores.connectors, stores.enrichment)
             }
             maybeRateLimited(queryOn, QUERY_LIMIT) {
-                queryRoutes(stores.builds, stores.verdicts, stores.tokens)
+                queryRoutes(stores.builds, stores.verdicts, stores.tokens, stores.ciSpans)
                 settingsRoutes(stores.settings, stores.tokens)
             }
         }

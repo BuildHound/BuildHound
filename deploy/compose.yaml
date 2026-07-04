@@ -33,6 +33,15 @@ services:
       # BUILDHOUND_INGEST_RPM: "60"
       # BUILDHOUND_QUERY_RPM: "120"
       # BUILDHOUND_HOST_RPM: "600"
+      # Azure DevOps CI connector (plan 028): set the PAT to enable timeline enrichment.
+      # The PAT is env-only — never in code/DSL/image layers — and unset means the connector
+      # is inert (ci-run reads UNCONFIGURED). _HOSTS is the SSRF allowlist (defaults to the
+      # SaaS host dev.azure.com); a self-hosted Azure DevOps Server host MUST be named here,
+      # or an ingested build URL can never be dialled. Use a secret manager for real deploys.
+      # BUILDHOUND_CONNECTOR_AZURE_PAT: "<azure-devops-personal-access-token>"
+      # BUILDHOUND_CONNECTOR_AZURE_HOSTS: "dev.azure.com"
+      # BUILDHOUND_CONNECTOR_AZURE_BASEURL: "https://dev.azure.com/your-org"
+      # BUILDHOUND_CONNECTOR_AZURE_PROJECT: "your-project"
     depends_on:
       db:
         condition: service_healthy

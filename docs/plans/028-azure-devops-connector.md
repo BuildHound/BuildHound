@@ -261,6 +261,21 @@ hiding the section (UX research §4.1.4 honesty rule). All span text via `textCo
   their own worker → duplicate fetches, but `saveRun` is idempotent so the stored result is
   consistent; acceptable for the one-instance pilot, revisit on scale-out.
 
+**Review-driven hardening (added during implementation, both clean-context reviews):**
+
+- *Outbound redirects disabled.* The host allowlist is enforced once against the request URL; a
+  3xx that Ktor silently followed would carry the `Authorization: Basic <PAT>` header to an
+  unvalidated (allowlisted-but-compromised / open-redirect) host. `ConnectorHttpClient` sets
+  `followRedirects = false`; a redirect surfaces as a non-2xx the connector treats as a failed fetch.
+- *Request-amplification cap.* `ci.provider`/`runId`/`buildUrl` are attacker-controlled, so a tenant
+  could flood fabricated `azure-devops` builds to monopolize the global queue and grind the shared
+  PAT against the victim org. `EnrichmentQueue` adds a **per-project in-flight cap** (default 32) on
+  top of the global capacity; excess is dropped + logged, never queued.
+- *Timeline-failure honesty.* A completed build whose timeline fetch fails no longer stores a
+  permanent empty `OK`: `fetchRun` returns null so the poll retries (→ eventually `FAILED`).
+- *Per-attempt retry.* A transient exception on one poll attempt is retried with backoff like a
+  null/incomplete result, not treated as an immediate whole-poll abort (latent trap for plan 041).
+
 ## 7. Exit criteria
 
 - Ingesting an `azure-devops` build with a configured PAT + allowlisted host produces, after
