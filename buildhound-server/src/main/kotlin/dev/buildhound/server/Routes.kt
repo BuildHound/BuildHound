@@ -548,7 +548,13 @@ private suspend fun ApplicationCall.addonKeyOrNull(): String? {
 data class ShardPlanRequest(val reference: String, val index: Int, val total: Int, val suites: List<String> = emptyList())
 
 @Serializable
-data class ShardPlanResponse(val shardPlanId: String, val index: Int, val classes: List<String>)
+data class ShardPlanResponse(
+    val shardPlanId: String,
+    val index: Int,
+    val classes: List<String>,
+    /** Every class the plan assigns to *some* shard — lets the last shard catch any drift-unassigned suite. */
+    val assigned: List<String> = emptyList(),
+)
 
 /** Trailing window (days) the shard balancer's p90 timings are computed over (plan 040). */
 private const val SHARD_TIMING_DAYS: Int = 30
@@ -577,9 +583,10 @@ fun Route.testShardingRoutes(builds: BuildStore, shardPlans: ShardPlanStore, tok
                 LptBalancer.plan(req.suites, req.total, p90)
             }
         } ?: return@post
-        val classes = result.value.getOrElse(req.index - 1) { emptyList() }
+        val plan = result.value
+        val classes = plan.getOrElse(req.index - 1) { emptyList() }
         val shardPlanId = sha256Hex("${project.id}|${req.reference}|${req.total}").substring(0, 12)
-        call.respond(ShardPlanResponse(shardPlanId = shardPlanId, index = req.index, classes = classes))
+        call.respond(ShardPlanResponse(shardPlanId = shardPlanId, index = req.index, classes = classes, assigned = plan.flatten()))
     }
 }
 
