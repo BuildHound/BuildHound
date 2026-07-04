@@ -125,6 +125,63 @@ class DerivedMetricsCalculatorTest {
         assertNull(metrics.configurationMs)
     }
 
+    // --- criticalPathMs: DAG longest weighted path (plan 038) ---
+
+    private fun node(path: String, durationMs: Long) =
+        TaskExecution(path = path, startMs = 0, durationMs = durationMs, outcome = TaskOutcome.EXECUTED)
+
+    @Test
+    fun critical_path_is_null_without_dependency_edges() {
+        assertNull(DerivedMetricsCalculator.criticalPathMs(listOf(node(":a", 100)), null))
+        assertNull(DerivedMetricsCalculator.criticalPathMs(listOf(node(":a", 100)), emptyMap()))
+    }
+
+    @Test
+    fun critical_path_of_a_linear_chain_is_the_sum() {
+        val tasks = listOf(node(":a", 100), node(":b", 200), node(":c", 300))
+        val edges = mapOf(":c" to listOf(":b"), ":b" to listOf(":a"), ":a" to emptyList())
+        assertEquals(600, DerivedMetricsCalculator.criticalPathMs(tasks, edges))
+    }
+
+    @Test
+    fun critical_path_of_a_diamond_is_the_longest_branch() {
+        // a → {b,c} → d; longest branch a(10)→b(50)→d(20) = 80, not a→c(30)→d = 60.
+        val tasks = listOf(node(":a", 10), node(":b", 50), node(":c", 30), node(":d", 20))
+        val edges = mapOf(":d" to listOf(":b", ":c"), ":b" to listOf(":a"), ":c" to listOf(":a"))
+        assertEquals(80, DerivedMetricsCalculator.criticalPathMs(tasks, edges))
+    }
+
+    @Test
+    fun critical_path_of_disconnected_tasks_is_the_longest_single_task() {
+        val tasks = listOf(node(":a", 100), node(":b", 250))
+        val edges = mapOf(":a" to emptyList<String>(), ":b" to emptyList())
+        assertEquals(250, DerivedMetricsCalculator.criticalPathMs(tasks, edges))
+    }
+
+    @Test
+    fun critical_path_counts_a_dependency_absent_from_the_task_list_as_zero_weight() {
+        // :b is only referenced as a dependency (no duration) → contributes 0.
+        val tasks = listOf(node(":a", 100))
+        val edges = mapOf(":a" to listOf(":b"))
+        assertEquals(100, DerivedMetricsCalculator.criticalPathMs(tasks, edges))
+    }
+
+    @Test
+    fun critical_path_returns_null_on_a_cycle_instead_of_hanging() {
+        val tasks = listOf(node(":a", 100), node(":b", 200))
+        val edges = mapOf(":a" to listOf(":b"), ":b" to listOf(":a"))
+        assertNull(DerivedMetricsCalculator.criticalPathMs(tasks, edges))
+    }
+
+    @Test
+    fun compute_passes_avoided_ms_through_and_computes_critical_path() {
+        val tasks = listOf(node(":a", 100), node(":b", 200))
+        val edges = mapOf(":b" to listOf(":a"), ":a" to emptyList())
+        val metrics = DerivedMetricsCalculator.compute(tasks, cores = 2, avoidedMs = 1234, dependencyEdges = edges)!!
+        assertEquals(1234, metrics.avoidedMs)
+        assertEquals(300, metrics.criticalPathMs)
+    }
+
     private fun na(outcome: TaskOutcome, durationMs: Long, type: String? = null, path: String = ":t") =
         TaskExecution(path = path, startMs = 0, durationMs = durationMs, outcome = outcome, type = type)
 

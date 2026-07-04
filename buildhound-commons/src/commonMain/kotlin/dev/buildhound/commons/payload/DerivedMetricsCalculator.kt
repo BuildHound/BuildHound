@@ -4,9 +4,10 @@ package dev.buildhound.commons.payload
  * Derived metrics over the task list (spec §4 `derived` block). Pure schema logic so
  * plugin and server rollups compute identical numbers.
  *
- * v0 honesty: `avoidedMs` needs origin execution timings (v1.x cache-origin work) and
- * `criticalPathMs` needs the task dependency graph — both stay null rather than being
- * approximated wrongly (plan 005).
+ * `avoidedMs` needs origin execution timings and `criticalPathMs` needs the task dependency graph
+ * — both stay null (plan 005 honest-nulls) unless the opt-in `buildhound-internal-adapters` module
+ * (plan 038) supplies them: it passes `avoidedMs` (from cache-transfer/origin timings) and a
+ * dependency edge list through [compute], which this calculator turns into a weighted longest path.
  */
 object DerivedMetricsCalculator {
 
@@ -14,16 +15,60 @@ object DerivedMetricsCalculator {
      * @param cores executor cores, for utilization; null or non-positive → utilization null.
      * @param configurationMs configuration-phase duration (plan 016): measured value,
      *   `0` on a config-cache hit, null when unmeasurable. Passed straight through.
+     * @param avoidedMs cache-avoided milliseconds (plan 038): adapter-supplied, passed through; null
+     *   when the internal-adapters module is not applied.
+     * @param dependencyEdges task path → its dependency task paths (plan 038): drives
+     *   [criticalPathMs]; null when the graph is unavailable (module absent, or isolated projects).
      */
-    fun compute(tasks: List<TaskExecution>, cores: Int?, configurationMs: Long? = null): DerivedMetrics? {
+    fun compute(
+        tasks: List<TaskExecution>,
+        cores: Int?,
+        configurationMs: Long? = null,
+        avoidedMs: Long? = null,
+        dependencyEdges: Map<String, List<String>>? = null,
+    ): DerivedMetrics? {
         if (tasks.isEmpty()) return null
         return DerivedMetrics(
             cacheableHitRate = cacheableHitRate(tasks),
-            avoidedMs = null,
-            criticalPathMs = null,
+            avoidedMs = avoidedMs,
+            criticalPathMs = criticalPathMs(tasks, dependencyEdges),
             parallelUtilization = parallelUtilization(tasks, cores),
             configurationMs = configurationMs,
         )
+    }
+
+    /**
+     * Longest weighted path (ms) through the task dependency DAG (plan 038): each task's weight is
+     * its `durationMs`, edges point a task → the tasks it depends on. Returns **null** when
+     * [dependencyEdges] is null/empty (the graph is an internal-adapters deliverable core has never
+     * had) or when a cycle is detected (degrade to null, never hang). A path referenced only as a
+     * dependency but absent from [tasks] weighs 0 (its duration is unknown).
+     */
+    fun criticalPathMs(tasks: List<TaskExecution>, dependencyEdges: Map<String, List<String>>?): Long? {
+        if (dependencyEdges.isNullOrEmpty()) return null
+        val durationByPath = tasks.associate { it.path to it.durationMs }
+        val memo = HashMap<String, Long>()
+        val onStack = HashSet<String>()
+        var cyclic = false
+
+        fun finish(path: String): Long {
+            memo[path]?.let { return it }
+            if (!onStack.add(path)) { cyclic = true; return 0 } // back-edge → cycle
+            val deps = dependencyEdges[path].orEmpty()
+            val longestDep = deps.maxOfOrNull { finish(it) } ?: 0L
+            onStack.remove(path)
+            val result = (durationByPath[path] ?: 0L) + longestDep
+            memo[path] = result
+            return result
+        }
+
+        var max = 0L
+        for (node in durationByPath.keys + dependencyEdges.keys) {
+            val f = finish(node)
+            if (cyclic) return null
+            if (f > max) max = f
+        }
+        return max
     }
 
     /**

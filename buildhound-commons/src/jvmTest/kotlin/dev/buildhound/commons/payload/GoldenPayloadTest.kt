@@ -100,6 +100,23 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `internal-adapters golden populates derived avoided-critical and the extensions block`() {
+        val payload =
+            BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-internal-adapters.json"))
+
+        assertEquals(1, payload.schemaVersion, "tier-b detail is additive — the envelope stays schema v1")
+        // The long-null derived fields (plan 005) are now populated (plan 038).
+        assertEquals(8000, payload.derived?.avoidedMs)
+        assertEquals(29000, payload.derived?.criticalPathMs)
+        // The internal-op detail rides in the additive extensions map with its own schemaVersion.
+        val internal = payload.extensions.getValue("internalAdapters").jsonObject
+        assertEquals(1, internal.getValue("schemaVersion").jsonPrimitive.int)
+        val tasks = internal.getValue("tasks").let { it as kotlinx.serialization.json.JsonArray }
+        assertEquals(2, tasks.size)
+        assertEquals("LOCAL_HIT", tasks[0].jsonObject.getValue("origin").jsonPrimitive.content)
+    }
+
+    @Test
     fun `extensions golden file deserializes with two addon-owned blocks`() {
         val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v2ext.json"))
 
@@ -278,6 +295,7 @@ class GoldenPayloadTest {
             "build-payload-v1-artifacts.json",
             "build-payload-interrupted-v1.json",
             "build-payload-v2ext.json",
+            "build-payload-v1-internal-adapters.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

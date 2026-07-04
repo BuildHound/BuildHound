@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "buildId": "b7e3a1c9-2d4f-4a6b-8c0e-1f2a3b4c5d6e",
+  "projectKey": "pilot-android",
+  "startedAt": 1751450000000,
+  "finishedAt": 1751450042000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["assembleDebug"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileDebugKotlin",
+      "module": ":app",
+      "type": "KotlinCompile",
+      "startMs": 1751450001000,
+      "durationMs": 8000,
+      "outcome": "FROM_CACHE",
+      "cacheable": true,
+      "incremental": false,
+      "worker": 3,
+      "executionReasons": []
+    },
+    {
+      "path": ":app:testDebugUnitTest",
+      "module": ":app",
+      "type": "Test",
+      "startMs": 1751450010000,
+      "durationMs": 21000,
+      "outcome": "EXECUTED",
+      "cacheable": true,
+      "incremental": false,
+      "worker": 1,
+      "executionReasons": ["Output property 'binaryResultsDirectory' file has been removed."]
+    }
+  ],
+  "derived": {
+    "cacheableHitRate": 0.5,
+    "avoidedMs": 8000,
+    "criticalPathMs": 29000,
+    "parallelUtilization": 0.62,
+    "configurationMs": 900
+  },
+  "extensions": {
+    "internalAdapters": {
+      "schemaVersion": 1,
+      "gradleVersion": "8.14.3",
+      "tasks": [
+        {
+          "path": ":app:compileDebugKotlin",
+          "cacheKey": "9f86d081884c7d65…",
+          "origin": "LOCAL_HIT",
+          "originBuildInvocationId": "fcde2b2edba56bf4…",
+          "originCacheKey": "9f86d081884c7d65…",
+          "propertyHashes": { "source": "2c26b46b68ffc68f…", "compilerOptions": "fcde2b2edba56bf4…" }
+        },
+        {
+          "path": ":app:testDebugUnitTest",
+          "cacheKey": "486ea46224d1bb4f…",
+          "origin": "MISS",
+          "cachingDisabledReason": null,
+          "propertyHashes": { "testClassesDirs": "1b16b1df538ba12d…" }
+        }
+      ]
+    }
+  }
+}
