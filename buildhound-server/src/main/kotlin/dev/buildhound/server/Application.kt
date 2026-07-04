@@ -104,6 +104,12 @@ fun main() {
     val port = env["BUILDHOUND_PORT"]?.toIntOrNull() ?: 8080
     val stores = storesFromEnvironment(env)
     val rateLimits = rateLimitsFromEnvironment(env)
+    // Retention sweep (plan 042): daemon thread, only from main() so testApplication never spawns it.
+    // Default 24h; 0 disables. Instance-local — run one replica or advisory-lock guard it (arch §5).
+    startRetentionSweeper(
+        RetentionSweeper(stores.builds, stores.settings),
+        sweepHours = env["BUILDHOUND_RETENTION_SWEEP_HOURS"]?.toLongOrNull() ?: 24,
+    )
     embeddedServer(Netty, port = port, host = "0.0.0.0") { buildHoundModule(stores, rateLimits) }
         .start(wait = true)
 }

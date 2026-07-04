@@ -37,6 +37,9 @@ fun migrate(dataSource: DataSource) {
         .migrate()
 }
 
+/** Retention purge batch size (plan 042): bounds per-statement lock time on a large delete. */
+private const val PURGE_BATCH: Int = 5000
+
 class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
 
     override fun save(projectId: String, payload: BuildPayload): Boolean =
@@ -63,6 +66,46 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 runCatching { connection.autoCommit = true }
             }
         }
+
+    override fun allProjectIds(): List<String> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement("SELECT id FROM projects").use { statement ->
+                statement.executeQuery().use { rows ->
+                    buildList { while (rows.next()) add(rows.getObject("id").toString()) }
+                }
+            }
+        }
+
+    override fun purgeOlderThan(projectId: String, buildCutoffMs: Long, rawCutoffMs: Long): RetentionPurge {
+        val id = UUID.fromString(projectId)
+        // Raw per-task rows first (they reference builds by id, not FK, but purging them first keeps a
+        // crash from ever leaving a build with orphaned raw rows). Each batch commits on its own so a
+        // large purge never holds a long lock (autoCommit is on by default).
+        dataSource.connection.use { connection ->
+            val rawRows = batchedDeleteByStartedAt(connection, "task_executions", id, rawCutoffMs)
+            val builds = batchedDeleteByStartedAt(connection, "builds", id, buildCutoffMs)
+            return RetentionPurge(builds = builds, rawRows = rawRows)
+        }
+    }
+
+    /** Deletes `table` rows for [id] with `started_at` before the cutoff, [PURGE_BATCH] at a time. */
+    private fun batchedDeleteByStartedAt(connection: java.sql.Connection, table: String, id: UUID, cutoffMs: Long): Long {
+        val cutoff = OffsetDateTime.ofInstant(Instant.ofEpochMilli(cutoffMs), ZoneOffset.UTC)
+        // `table` is a compile-time literal ("builds"/"task_executions"), never user input — no injection.
+        val sql = "DELETE FROM $table WHERE ctid IN " +
+            "(SELECT ctid FROM $table WHERE project_id = ? AND started_at < ? LIMIT $PURGE_BATCH)"
+        var total = 0L
+        while (true) {
+            val deleted = connection.prepareStatement(sql).use { statement ->
+                statement.setObject(1, id)
+                statement.setObject(2, cutoff)
+                statement.executeUpdate()
+            }
+            total += deleted
+            if (deleted < PURGE_BATCH) break
+        }
+        return total
+    }
 
     private fun insertBuild(connection: java.sql.Connection, projectId: String, payload: BuildPayload): Boolean =
         connection.prepareStatement(

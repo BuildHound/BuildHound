@@ -253,7 +253,20 @@ interface BuildStore {
      * timing source. Grouped from windowed CI payloads' `tests` blocks; the caller takes a p90 per key.
      */
     fun classTimings(projectId: String, days: Int, nowMs: Long): Map<String, List<Long>>
+
+    /** Every project id with stored data (retention sweep, plan 042); default empty for a store that has none. */
+    fun allProjectIds(): List<String> = emptyList()
+
+    /**
+     * Retention purge (plan 042): delete this project's builds started before [buildCutoffMs] and its
+     * raw per-task rows before [rawCutoffMs]. Tenant-scoped, batched to bound lock time; returns the
+     * counts deleted. Default no-op so a store without raw storage degrades safely.
+     */
+    fun purgeOlderThan(projectId: String, buildCutoffMs: Long, rawCutoffMs: Long): RetentionPurge = RetentionPurge(0, 0)
 }
+
+/** Row counts a single retention sweep deleted for one project (plan 042). */
+data class RetentionPurge(val builds: Long, val rawRows: Long)
 
 /** Custom measures (plan 025); idempotent upsert so a retried CI step never duplicates. */
 interface MetricStore {
@@ -372,6 +385,16 @@ class InMemoryBuildStore : BuildStore {
 
     override fun findById(projectId: String, buildId: String): BuildPayload? =
         builds[projectId to buildId]
+
+    override fun allProjectIds(): List<String> = builds.keys.map { it.first }.distinct()
+
+    override fun purgeOlderThan(projectId: String, buildCutoffMs: Long, rawCutoffMs: Long): RetentionPurge {
+        // In-memory keeps task detail inside the build payload (no separate raw table), so the build
+        // window governs everything; rawCutoffMs is honored by the Postgres store's task_executions table.
+        val stale = builds.entries.filter { it.key.first == projectId && it.value.startedAt < buildCutoffMs }
+        stale.forEach { builds.remove(it.key) }
+        return RetentionPurge(builds = stale.size.toLong(), rawRows = 0)
+    }
 
     override fun count(projectId: String, filter: BuildFilter): Long =
         matching(projectId, filter).size.toLong()
