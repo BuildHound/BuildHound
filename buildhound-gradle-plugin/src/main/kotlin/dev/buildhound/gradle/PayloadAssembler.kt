@@ -92,6 +92,8 @@ internal object PayloadAssembler {
         benchmark: CollectedBenchmark? = null,
         artifacts: List<ArtifactSize> = emptyList(),
         extensions: Map<String, JsonElement> = emptyMap(),
+        avoidedMs: Long? = null,
+        dependencyEdges: Map<String, List<String>>? = null,
     ): BuildPayload {
         // Mirror the benchmark keys into tags (spec's tag contract), but user tags win on clash.
         val mergedTags = if (benchmark == null) {
@@ -147,8 +149,9 @@ internal object PayloadAssembler {
             },
             tasks = tasks,
             // Derived metrics are computed over the FULL task list, before any cap drops
-            // rows — hit rate/utilization must not shift when the payload is truncated.
-            derived = DerivedMetricsCalculator.compute(tasks, environment?.cores, configurationMs),
+            // rows — hit rate/utilization must not shift when the payload is truncated. avoidedMs +
+            // dependencyEdges are supplied by the opt-in internal-adapters module (plan 038), else null.
+            derived = DerivedMetricsCalculator.compute(tasks, environment?.cores, configurationMs, avoidedMs, dependencyEdges),
             // Salted input fingerprints (plan 022); null when uncaptured or unsaltable.
             fingerprints = fingerprints?.takeIf { it.build.isNotEmpty() || it.tasks.isNotEmpty() },
             // Bundled Kotlin build report (plan 023); null when unwired/unobservable.

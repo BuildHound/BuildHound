@@ -14,6 +14,12 @@ import dev.buildhound.report.ReportAssets
 import java.io.File
 import java.util.ServiceLoader
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import org.gradle.api.flow.FlowAction
 import org.gradle.api.flow.FlowParameters
 import org.gradle.api.logging.Logging
@@ -229,6 +235,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 emptyMap()
             }
 
+            // avoidedMs + criticalPath edges are core `derived` inputs sourced from the opt-in
+            // internal-adapters module (plan 038). Core stays internal-API-free: it reads two
+            // well-known optional fields out of the addon's opaque JSON, never a Gradle-internal type.
+            val (avoidedMs, dependencyEdges) = internalAdaptersDerivedInputs(extensions)
+
             val payload = PayloadAssembler.assemble(
                 // Shared with the collector's start-marker (plan 033): same id both places so this
                 // build's own marker is the one deleted during reconciliation above.
@@ -254,6 +265,8 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 benchmark = benchmark,
                 artifacts = artifacts,
                 extensions = extensions,
+                avoidedMs = avoidedMs,
+                dependencyEdges = dependencyEdges,
             )
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so
@@ -458,4 +471,22 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         /** Wire format stays [BuildHoundJson.payload]; pretty printing is for the local file only. */
         val prettyJson = Json(from = BuildHoundJson.payload) { prettyPrint = true }
     }
+}
+
+/**
+ * Reads the two `derived` inputs (`avoidedMs`, `dependencyEdges`) out of the internal-adapters
+ * module's opaque `extensions["internalAdapters"]` block (plan 038), defensively — a missing/malformed
+ * shape degrades to `(null, null)`, never a throw. Core stays internal-API-free: this touches only
+ * JSON, and only two well-known optional keys of a reserved extension.
+ */
+private fun internalAdaptersDerivedInputs(extensions: Map<String, JsonElement>): Pair<Long?, Map<String, List<String>>?> {
+    val block = extensions["internalAdapters"] ?: return null to null
+    return runCatching {
+        val obj = block.jsonObject
+        val avoidedMs = obj["avoidedMs"]?.jsonPrimitive?.longOrNull
+        val edges = obj["dependencyEdges"]?.jsonObject?.mapValues { (_, v) ->
+            v.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull }
+        }
+        avoidedMs to edges
+    }.getOrElse { null to null }
 }

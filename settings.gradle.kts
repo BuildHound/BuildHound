@@ -36,5 +36,8 @@ include(":buildhound-commons")
 include(":buildhound-gradle-plugin")
 include(":buildhound-server")
 include(":buildhound-report")
+// Opt-in, separately-shipped module: the single sanctioned exception to the no-internal-Gradle-APIs
+// rule (spec §3.1, plan 038). Never on the core plugin's classpath — applying it is the consent.
+include(":buildhound-internal-adapters")
 // buildhound-ci-assets is intentionally not a Gradle module: it holds CI templates and
 // shell assets that must be consumable without a JVM (see docs/architecture.md).
