@@ -42,6 +42,8 @@ class ServerStores(
     // registers one; core boots and serves builds with zero addons active.
     val addons: AddonStore = InMemoryAddonStore(),
     val registeredAddons: Set<String> = emptySet(),
+    // Test-sharding addon (plan 040): idempotent LPT shard-plan memo.
+    val shardPlans: ShardPlanStore = InMemoryShardPlanStore(),
     // CI-connector framework (plan 028). Defaults are the honest no-op: no registered connector →
     // nothing enriches, ci-run reads 404, ingest is unchanged. Production wires the Azure connector.
     val ciSpans: CiSpanStore = InMemoryCiSpanStore(),
@@ -142,6 +144,8 @@ fun storesFromEnvironment(env: Map<String, String>): ServerStores {
             connectorConfigs = EnvConnectorConfigStore(env),
             // Addon foundation (plan 039): jsonb store present, allowlist empty until a consumer ships.
             addons = PostgresAddonStore(dataSource),
+            // Test-sharding addon (plan 040): idempotent shard-plan memo.
+            shardPlans = PostgresShardPlanStore(dataSource),
         )
     } else {
         logger.warn("storage: IN-MEMORY (no BUILDHOUND_DB_URL) — data is lost on restart")
@@ -226,6 +230,8 @@ fun Application.buildHoundModule(
                 ingestRoutes(stores.builds, stores.tokens, evaluator, flakyAlerter, stores.enrichment)
                 metricsRoutes(stores.builds, stores.metrics, stores.tokens)
                 connectorHookRoutes(stores.builds, stores.tokens, stores.connectors, stores.enrichment)
+                // Test-sharding plan (plan 040): a CI POST with ingest scope — shares the ingest limiter.
+                testShardingRoutes(stores.builds, stores.shardPlans, stores.tokens)
             }
             maybeRateLimited(queryOn, QUERY_LIMIT) {
                 queryRoutes(stores.builds, stores.verdicts, stores.tokens, stores.ciSpans)

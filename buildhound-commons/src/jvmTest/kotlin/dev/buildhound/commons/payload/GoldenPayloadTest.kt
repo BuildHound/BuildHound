@@ -117,6 +117,19 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `test-sharding golden populates the testSharding extension block`() {
+        val payload =
+            BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-sharding.json"))
+
+        assertEquals(1, payload.schemaVersion, "an addon block is additive — the envelope stays schema v1")
+        val sharding = payload.extensions.getValue("testSharding").jsonObject
+        assertEquals(1, sharding.getValue("schemaVersion").jsonPrimitive.int)
+        assertEquals(2, sharding.getValue("shardIndex").jsonPrimitive.int)
+        assertEquals(4, sharding.getValue("shardTotal").jsonPrimitive.int)
+        assertEquals(true, sharding.getValue("appliedFilter").jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
     fun `extensions golden file deserializes with two addon-owned blocks`() {
         val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v2ext.json"))
 
@@ -296,6 +309,7 @@ class GoldenPayloadTest {
             "build-payload-interrupted-v1.json",
             "build-payload-v2ext.json",
             "build-payload-v1-internal-adapters.json",
+            "build-payload-v1-sharding.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

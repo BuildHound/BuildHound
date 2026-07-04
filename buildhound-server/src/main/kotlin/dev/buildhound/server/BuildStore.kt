@@ -60,6 +60,16 @@ internal fun classOutcomesOf(payload: BuildPayload): List<ClassOutcome> {
         }
 }
 
+/**
+ * Per-test-class durations from a payload's `tests` block (plan 040): `TestUnitKey.of(module, class)`
+ * → this build's class duration. The shard balancer's timing source; both stores group these over a
+ * CI window and hand them to [LptBalancer], so the plan is computed from the same numbers everywhere.
+ */
+internal fun classTimingsOf(payload: BuildPayload): List<Pair<String, Long>> =
+    payload.tests.flatMap { task ->
+        task.classes.map { cls -> TestUnitKey.of(task.module, cls.className) to cls.durationMs }
+    }
+
 /** Query-API filters (plan 010); values are validated at the route, bound in SQL. */
 data class BuildFilter(
     val branch: String? = null,
@@ -237,6 +247,12 @@ interface BuildStore {
      * outcomes, ranked by flake rate. Both stores feed the same detector so results agree byte-for-byte.
      */
     fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord>
+
+    /**
+     * Per-`TestUnitKey` CI test-class durations over the last [days] (plan 040): the shard balancer's
+     * timing source. Grouped from windowed CI payloads' `tests` blocks; the caller takes a p90 per key.
+     */
+    fun classTimings(projectId: String, days: Int, nowMs: Long): Map<String, List<Long>>
 }
 
 /** Custom measures (plan 025); idempotent upsert so a retried CI step never duplicates. */
@@ -273,6 +289,23 @@ interface SettingsStore {
     fun get(projectId: String): ProjectSettings?
 
     fun put(projectId: String, settings: ProjectSettings)
+}
+
+/**
+ * Idempotent shard-plan memo for the test-sharding addon (plan 040). Keyed `(projectId, reference,
+ * total)`: the first CI job for a reference computes+stores the LPT plan; every later job reads the
+ * same plan, so inter-job suite-discovery drift can't reshuffle shards mid-run. Tenant-scoped.
+ */
+interface ShardPlanStore {
+    /** The stored plan for the key, or the result of [compute] stored atomically on first call. */
+    fun planOrCompute(projectId: String, reference: String, total: Int, compute: () -> List<List<String>>): List<List<String>>
+}
+
+class InMemoryShardPlanStore : ShardPlanStore {
+    private val plans = ConcurrentHashMap<Triple<String, String, Int>, List<List<String>>>()
+
+    override fun planOrCompute(projectId: String, reference: String, total: Int, compute: () -> List<List<String>>): List<List<String>> =
+        plans.computeIfAbsent(Triple(projectId, reference, total)) { compute() }
 }
 
 /**
@@ -508,6 +541,16 @@ class InMemoryBuildStore : BuildStore {
             )
             .take(FlakyDetector.MAX_OUTCOME_ROWS)
         return FlakyDetector.detect(rows)
+    }
+
+    override fun classTimings(projectId: String, days: Int, nowMs: Long): Map<String, List<Long>> {
+        val cutoff = nowMs - days.toLong() * 86_400_000
+        return builds.entries
+            .filter { it.key.first == projectId }
+            .map { it.value }
+            .filter { it.mode.name == "CI" && it.startedAt >= cutoff }
+            .flatMap { classTimingsOf(it) }
+            .groupBy({ it.first }, { it.second })
     }
 
     /** Non-benchmark builds whose startedAt ∈ [fromMs, toMs) — the fleet-view window (plan 032). */

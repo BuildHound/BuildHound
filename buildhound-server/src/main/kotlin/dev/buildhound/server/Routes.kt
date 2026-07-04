@@ -544,6 +544,45 @@ private suspend fun ApplicationCall.addonKeyOrNull(): String? {
     return key
 }
 
+@Serializable
+data class ShardPlanRequest(val reference: String, val index: Int, val total: Int, val suites: List<String> = emptyList())
+
+@Serializable
+data class ShardPlanResponse(val shardPlanId: String, val index: Int, val classes: List<String>)
+
+/** Trailing window (days) the shard balancer's p90 timings are computed over (plan 040). */
+private const val SHARD_TIMING_DAYS: Int = 30
+
+/**
+ * Test-sharding addon capability (plan 040): `POST /v1/addons/test-sharding/plan`. A CI token
+ * (ingest scope) posts its `{reference, index, total, suites}`; the server returns this shard's class
+ * list from an **idempotent** per-(project, reference, total) LPT plan balanced over 30-day p90 CI
+ * class timings. The first job for a reference fixes the plan; later jobs read it — so inter-job
+ * discovery drift can't reshuffle shards. Tenant is the token's project, never the body.
+ */
+fun Route.testShardingRoutes(builds: BuildStore, shardPlans: ShardPlanStore, tokens: TokenStore) {
+    post("/v1/addons/test-sharding/plan") {
+        val project = call.authenticatedProject(tokens, TokenScope::allowsIngest) ?: return@post
+        val body = call.receiveBounded(1024 * 1024)
+            ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, ApiError("plan request too large"))
+        val req = runCatching { BuildHoundJson.payload.decodeFromString(ShardPlanRequest.serializer(), body.decodeToString()) }
+            .getOrElse { return@post call.respond(HttpStatusCode.BadRequest, ApiError("invalid plan request")) }
+        if (req.reference.isBlank() || req.total < 1 || req.index < 1 || req.index > req.total) {
+            return@post call.respond(HttpStatusCode.BadRequest, ApiError("reference must be non-blank and 1 <= index <= total"))
+        }
+        val result = call.runQuery {
+            shardPlans.planOrCompute(project.id, req.reference, req.total) {
+                val p90 = builds.classTimings(project.id, SHARD_TIMING_DAYS, System.currentTimeMillis())
+                    .mapValues { LptBalancer.p90(it.value) }
+                LptBalancer.plan(req.suites, req.total, p90)
+            }
+        } ?: return@post
+        val classes = result.value.getOrElse(req.index - 1) { emptyList() }
+        val shardPlanId = sha256Hex("${project.id}|${req.reference}|${req.total}").substring(0, 12)
+        call.respond(ShardPlanResponse(shardPlanId = shardPlanId, index = req.index, classes = classes))
+    }
+}
+
 /** Window size in days, defaulting to 30 and clamped to [1, 365] like /trends. */
 private fun ApplicationCall.daysParam(): Int =
     (request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)

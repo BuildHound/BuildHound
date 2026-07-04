@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "buildId": "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f",
+  "projectKey": "pilot-android",
+  "startedAt": 1751450000000,
+  "finishedAt": 1751450042000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["test"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:testDebugUnitTest",
+      "module": ":app",
+      "type": "Test",
+      "startMs": 1751450010000,
+      "durationMs": 12000,
+      "outcome": "EXECUTED",
+      "cacheable": true,
+      "incremental": false,
+      "worker": 1,
+      "executionReasons": []
+    }
+  ],
+  "extensions": {
+    "testSharding": {
+      "schemaVersion": 1,
+      "shardPlanId": "a1b2c3d4e5f6",
+      "shardIndex": 2,
+      "shardTotal": 4,
+      "appliedFilter": true
+    }
+  }
+}

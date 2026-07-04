@@ -771,6 +771,26 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 }
             }
         }
+
+    override fun classTimings(projectId: String, days: Int, nowMs: Long): Map<String, List<Long>> =
+        dataSource.connection.use { connection ->
+            // Per-class CI durations from the payload jsonb over the window (plan 040); on-demand only
+            // (the /plan endpoint isn't hot), so a windowed scan is fine — same shape the in-memory
+            // store flattens, both grouped by TestUnitKey and handed to LptBalancer.
+            connection.prepareStatement(
+                "SELECT payload FROM builds WHERE project_id = ? AND started_at >= ? AND mode = 'CI'",
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")))
+                        }
+                    }
+                }
+            }.flatMap { classTimingsOf(it) }.groupBy({ it.first }, { it.second })
+        }
 }
 
 class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
@@ -1098,6 +1118,46 @@ class PostgresAddonStore(private val dataSource: DataSource) : AddonStore {
                             put(rows.getString("key"), BuildHoundJson.payload.decodeFromString(elementSerializer, rows.getString("value")))
                         }
                     }
+                }
+            }
+        }
+}
+
+/** Idempotent shard-plan memo (plan 040), tenant-scoped, keyed (project_id, reference, total). */
+class PostgresShardPlanStore(private val dataSource: DataSource) : ShardPlanStore {
+
+    private val planSerializer = ListSerializer(ListSerializer(String.serializer()))
+
+    override fun planOrCompute(projectId: String, reference: String, total: Int, compute: () -> List<List<String>>): List<List<String>> {
+        readPlan(projectId, reference, total)?.let { return it }
+        val computed = compute()
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "INSERT INTO shard_plans (project_id, reference, total, plan) VALUES (?, ?, ?, ?) " +
+                    "ON CONFLICT (project_id, reference, total) DO NOTHING",
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, reference)
+                statement.setInt(3, total)
+                statement.setObject(4, jsonb(BuildHoundJson.payload.encodeToString(planSerializer, computed)))
+                statement.executeUpdate()
+            }
+        }
+        // Re-read so a caller that lost the ON CONFLICT race returns the winner's (same-key) plan.
+        return readPlan(projectId, reference, total) ?: computed
+    }
+
+    private fun readPlan(projectId: String, reference: String, total: Int): List<List<String>>? =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT plan FROM shard_plans WHERE project_id = ? AND reference = ? AND total = ?",
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, reference)
+                statement.setInt(3, total)
+                statement.executeQuery().use { rows ->
+                    if (!rows.next()) null
+                    else BuildHoundJson.payload.decodeFromString(planSerializer, rows.getString("plan"))
                 }
             }
         }
