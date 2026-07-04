@@ -222,3 +222,38 @@ transitions fire a plan-025 alert → `GET /v1/flaky` and the dashboard read the
 - The precision-validation method is documented and produces a precision number on the pilot;
   plan 037 references this plan's ≥ 0.90 gate. `./gradlew :buildhound-server:test` green (plus the
   Testcontainers leg where Docker is present).
+
+## 8. Divergences from this plan (as built)
+
+- **No separate `FlakyStore`.** The detector reads a narrow `test_class_outcomes` hot table
+  projected on ingest inside `BuildStore.save()` (the `task_executions`/`apk_sizes` project-on-write
+  precedent), and detection is exposed as `BuildStore.flaky(projectId, days, nowMs)` — both the
+  in-memory and Postgres stores fetch raw rows and defer to the one pure `FlakyDetector`, with
+  byte-for-byte parity pinned by a Testcontainers test. A standalone store would have duplicated the
+  windowing/projection already living in the build store. `module` is stored `''` for null (PK-safe;
+  `TestUnitKey` treats null==`''`) and read back `''`→null so the two stores agree.
+- **`AlertContext` became a sealed interface.** Reusing plan 025's dispatcher for a second alert kind
+  required `AlertContext` → `sealed interface AlertContext { summary(); webhookJson() }` with
+  `VerdictAlert` (plan 025) and `FlakyAlert` (this plan) subtypes + top-level `@Serializable`
+  `VerdictWebhookBody`/`FlakyWebhookBody`. The https-only, redirect-refusing, host-checked delivery
+  loop is untouched — only the body construction is now polymorphic.
+- **Precision-validation method (concrete):** export `GET /v1/flaky?days=30` for the pilot, have a
+  human label each flagged (module, class) as truly-flaky or not, then
+  `precision = truly-flaky ÷ flagged`. The **≥ 0.90** gate is plan 037's entry condition; the fixed
+  window (no decay) keeps the flagged set stable enough to label before that first measurement.
+- **`affectedModules` dropped from `FlakyRecord`.** §3 sketched an `affectedModules` field; records are
+  keyed per `(module, class)`, so a record already *is* one module — the field was redundant at that
+  grain and omitted.
+- **Benchmark builds are not excluded** from the flaky reads, unlike the fleet timing rollups (plan
+  030). A same-sha benchmark rerun is legitimate cross-run flakiness evidence (it exercises the same
+  test code repeatedly), not the timing noise the fleet exclusion exists to remove; both stores
+  include them identically, so parity holds.
+- **Defensive row cap (review finding).** §6 promised the window read would "cap rows"; the shipped
+  reads bound the fetch to `FlakyDetector.MAX_OUTCOME_ROWS` most-recent rows in **both** stores
+  (Postgres `ORDER BY started_at DESC … LIMIT`, in-memory the identical sort + `take`) so an
+  authenticated tenant with a huge/ churning test history can't pull an unbounded set onto the ingest
+  hot path. Detection is order-invariant, so below the cap both stores see the identical full set.
+- **Within-build class aggregation (review finding).** `classOutcomesOf` sums a class reported by
+  more than one `Test` task in the same build into a single `(module, class)` row, matching the
+  Postgres PK + `ON CONFLICT` so the two stores agree by construction and no single build can look
+  divergent to the cross-run signal (a `test`/`integrationTest` split, or plan-040 shards).

@@ -201,6 +201,13 @@ fun Application.buildHoundModule(
         alerts = stores.alerts,
         dashboardBaseUrl = stores.dashboardBaseUrl,
     )
+    // Post-ingest flaky-alert hook (plan 036); edge-triggered, never blocks or fails ingest.
+    val flakyAlerter = FlakyAlerter(
+        builds = stores.builds,
+        settings = stores.settings,
+        alerts = stores.alerts,
+        dashboardBaseUrl = stores.dashboardBaseUrl,
+    )
 
     routing {
         healthRoutes()
@@ -209,7 +216,7 @@ fun Application.buildHoundModule(
         // the host layer sees every /v1 request first, then the per-token layer.
         maybeRateLimited(hostOn, HOST_LIMIT) {
             maybeRateLimited(ingestOn, INGEST_LIMIT) {
-                ingestRoutes(stores.builds, stores.tokens, evaluator, stores.enrichment)
+                ingestRoutes(stores.builds, stores.tokens, evaluator, flakyAlerter, stores.enrichment)
                 metricsRoutes(stores.builds, stores.metrics, stores.tokens)
                 connectorHookRoutes(stores.builds, stores.tokens, stores.connectors, stores.enrichment)
             }

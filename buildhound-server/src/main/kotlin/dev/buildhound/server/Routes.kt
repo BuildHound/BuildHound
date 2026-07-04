@@ -59,6 +59,7 @@ fun Route.ingestRoutes(
     store: BuildStore,
     tokens: TokenStore,
     evaluator: VerdictEvaluator,
+    flakyAlerter: FlakyAlerter,
     enrichment: EnrichmentQueue,
 ) {
     route("/v1") {
@@ -120,6 +121,8 @@ fun Route.ingestRoutes(
             // Post-save regression evaluation (plan 025): only on a fresh store, wrapped so it can
             // never block or fail ingest (its own runCatching). The alert HTTP call inside is async.
             if (stored) evaluator.evaluate(project.id, project.key, capped)
+            // Flaky-alert hook (plan 036): edge-triggered, best-effort, never fails ingest.
+            if (stored) flakyAlerter.evaluate(project.id, project.key, capped)
 
             // CI-connector enrichment (plan 028): fire-and-forget; no-ops unless a registered connector
             // handles ci.provider. buildUrl is the ingested (attacker-controlled) source parsed for the
@@ -458,6 +461,14 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val days = call.daysParam()
             call.respondQuery { store.toolchainAdoption(project.id, days, System.currentTimeMillis()) }
+        }
+
+        // Flaky-test detection (plan 036, spec §5): two-signal per-(module, class) records over the
+        // window, ranked by flake rate. Read-scope, tenant-scoped, days clamped like /trends.
+        get("/flaky") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.flaky(project.id, days, System.currentTimeMillis()) }
         }
     }
 }

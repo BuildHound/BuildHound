@@ -16,7 +16,7 @@ class AlertDispatcherTest {
     private fun dispatcher(send: HttpSend, allowLoopbackHttp: Boolean = false) =
         HttpAlertDispatcher(send = send, allowLoopbackHttp = allowLoopbackHttp, executor = directExecutor, resolver = publicResolver)
 
-    private val context = AlertContext(
+    private val context = VerdictAlert(
         projectKey = "pilot",
         buildId = "b-1",
         baselineKey = "android-ci|sig|main|CI",
@@ -96,6 +96,50 @@ class AlertDispatcherTest {
         // No task detail, tags, values, identity, or token material.
         for (forbidden in listOf("token", "hostnameHash", "userId", "tags", "values", "executionReasons")) {
             assertTrue(!body.contains(forbidden), "alert body must not carry '$forbidden': $body")
+        }
+    }
+
+    // --- Flaky alert body (plan 036): the second AlertContext kind through the real dispatcher. ---
+
+    private val flakyContext = FlakyAlert(
+        projectKey = "pilot",
+        record = FlakyRecord(
+            module = ":lib",
+            className = "com.example.FooTest",
+            signal = FlakySignal.CROSS_RUN.name,
+            flakeRate = 0.3333,
+            sampleCount = 6,
+            firstSeenMs = 1_000,
+            lastSeenMs = 2_000,
+            affectedBuildIds = listOf("b1", "b2"),
+        ),
+        dashboardBaseUrl = "https://buildhound.example.com/",
+    )
+
+    @Test
+    fun `a flaky alert dispatches a text summary with the class, rate, and flaky deep-link`() {
+        val send = RecordingSend()
+        dispatcher(send).dispatch(listOf(AlertChannel("slack", "https://hooks.slack.com/services/xxx")), flakyContext)
+        val body = send.calls.single().second
+        assertTrue(body.contains("\"text\""))
+        // The one-liner names the class, the rounded percentage, the signal, and the #/flaky link.
+        for (fragment in listOf(":lib/com.example.FooTest", "33%", "CROSS_RUN", "/#/flaky")) {
+            assertTrue(body.contains(fragment), "flaky summary must contain '$fragment': $body")
+        }
+    }
+
+    @Test
+    fun `the flaky webhook body carries only pseudonymized flaky data, no identity or secrets`() {
+        val send = RecordingSend()
+        dispatcher(send).dispatch(listOf(AlertChannel("webhook", "https://hooks.example.com/generic")), flakyContext)
+        val body = send.calls.single().second
+        assertTrue(body.contains("\"kind\":\"buildhound.flaky\""), body)
+        for (present in listOf(":lib", "com.example.FooTest", "CROSS_RUN", "flakeRate", "sampleCount", "/#/flaky")) {
+            assertTrue(body.contains(present), "flaky webhook body must contain '$present': $body")
+        }
+        // Narrower than the source: no build ids, identity, or token material cross the wire.
+        for (forbidden in listOf("token", "hostnameHash", "userId", "affectedBuildIds", "firstSeenMs", "buildId")) {
+            assertTrue(!body.contains(forbidden), "flaky webhook body must not carry '$forbidden': $body")
         }
     }
 }

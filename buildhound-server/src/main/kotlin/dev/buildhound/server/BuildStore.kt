@@ -3,6 +3,7 @@ package dev.buildhound.server
 import dev.buildhound.commons.payload.BenchmarkSeriesCalculator
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
+import dev.buildhound.commons.payload.TestUnitKey
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -17,6 +18,45 @@ internal fun summarize(points: List<BenchmarkPoint>): BenchmarkSummary {
     val s = BenchmarkSeriesCalculator.summarize(points.map { it.durationMs })
         ?: return BenchmarkSummary(p50 = 0, p90 = 0, min = 0, count = 0) // groups are never empty in practice
     return BenchmarkSummary(p50 = s.p50, p90 = s.p90, min = s.min, count = s.count)
+}
+
+/**
+ * Flatten a payload's `tests` block into **one** per-class outcome row per `(module, class)` (plan
+ * 036) — the shape both stores feed [FlakyDetector]. When a class is reported by more than one `Test`
+ * task in the same build (e.g. a `test` + `integrationTest` split, or plan-040 shards), its counts are
+ * summed into a single row: `PostgresBuildStore`'s PK is `(project, build, module, class)` with
+ * `ON CONFLICT DO NOTHING`, so it can physically hold only one such row — aggregating here (rather
+ * than emitting duplicates the in-memory store would keep but Postgres would drop) is what makes the
+ * two stores agree *by construction*, and keeps the cross-run signal genuinely build-scoped (a single
+ * build's merged row is either green or red for a class, never both). The in-memory store computes
+ * flaky over these directly; `PostgresBuildStore` inserts them on save and reads them back.
+ */
+internal fun classOutcomesOf(payload: BuildPayload): List<ClassOutcome> {
+    val sha = payload.vcs?.sha
+    return payload.tests.flatMap { task ->
+        val retryByClass = task.failedOrRetried
+            .filter { detail -> FlakyDetector.failedThenPassed(detail.outcomes.map { it.name }) }
+            .groupingBy { it.className }.eachCount()
+        task.classes.map { cls ->
+            ClassOutcome(
+                buildId = payload.buildId,
+                startedAtMs = payload.startedAt,
+                sha = sha,
+                module = task.module,
+                classFqcn = cls.className,
+                passed = cls.passed,
+                failed = cls.failed,
+                retryFlakyCases = retryByClass[cls.className] ?: 0,
+            )
+        }
+    }.groupBy { TestUnitKey.of(it.module, it.classFqcn) }
+        .map { (_, rows) ->
+            rows.first().copy(
+                passed = rows.sumOf { it.passed },
+                failed = rows.sumOf { it.failed },
+                retryFlakyCases = rows.sumOf { it.retryFlakyCases },
+            )
+        }
 }
 
 /** Query-API filters (plan 010); values are validated at the route, bound in SQL. */
@@ -190,6 +230,12 @@ interface BuildStore {
      * distinct-user count + "who is behind". AGP/KGP/KSP report `available=false` until populated.
      */
     fun toolchainAdoption(projectId: String, days: Int, nowMs: Long): ToolchainRollup
+
+    /**
+     * Flaky-test records over the last [days] (plan 036): the two-signal [FlakyDetector] over per-class
+     * outcomes, ranked by flake rate. Both stores feed the same detector so results agree byte-for-byte.
+     */
+    fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord>
 }
 
 /** Custom measures (plan 025); idempotent upsert so a retried CI step never duplicates. */
@@ -422,6 +468,27 @@ class InMemoryBuildStore : BuildStore {
             kgp = ToolchainCalculator.dimension(samples { it.toolchain?.kgp }),
             ksp = ToolchainCalculator.dimension(samples { it.toolchain?.ksp }),
         )
+    }
+
+    override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> {
+        val cutoff = nowMs - days.toLong() * 86_400_000
+        val rows = builds.entries
+            .filter { it.key.first == projectId }
+            .map { it.value }
+            .filter { it.startedAt >= cutoff }
+            .flatMap { classOutcomesOf(it) }
+            // Same most-recent-first order + cap as the Postgres LIMIT, so the two stores read the
+            // identical bounded set (FlakyDetector.MAX_OUTCOME_ROWS). Benchmark builds are deliberately
+            // *not* excluded here: unlike the fleet timing rollups (plan 030), same-sha benchmark reruns
+            // are legitimate cross-run flakiness evidence, not noise.
+            .sortedWith(
+                compareByDescending<ClassOutcome> { it.startedAtMs }
+                    .thenBy { it.buildId }
+                    .thenBy { it.module ?: "" }
+                    .thenBy { it.classFqcn },
+            )
+            .take(FlakyDetector.MAX_OUTCOME_ROWS)
+        return FlakyDetector.detect(rows)
     }
 
     /** Non-benchmark builds whose startedAt ∈ [fromMs, toMs) — the fleet-view window (plan 032). */

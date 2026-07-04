@@ -10,6 +10,10 @@ import dev.buildhound.commons.payload.DerivedMetrics
 import dev.buildhound.commons.payload.EnvironmentInfo
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
+import dev.buildhound.commons.payload.TestCaseDetail
+import dev.buildhound.commons.payload.TestCaseOutcome
+import dev.buildhound.commons.payload.TestClassResult
+import dev.buildhound.commons.payload.TestTaskResult
 import dev.buildhound.commons.payload.ToolchainInfo
 import dev.buildhound.commons.payload.VcsInfo
 
@@ -33,6 +37,8 @@ object TestPayloads {
         artifacts: ArtifactSizes? = null,
         toolchain: ToolchainInfo? = null,
         tasks: List<TaskExecution> = emptyList(),
+        sha: String? = null,
+        tests: List<TestTaskResult> = emptyList(),
     ): BuildPayload = BuildPayload(
         buildId = buildId,
         startedAt = startedAt,
@@ -40,7 +46,7 @@ object TestPayloads {
         outcome = outcome,
         mode = mode,
         requestedTasks = requestedTasks,
-        vcs = branch?.let { VcsInfo(branch = it) },
+        vcs = if (branch != null || sha != null) VcsInfo(branch = branch, sha = sha) else null,
         ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl) },
         derived = hitRate?.let { DerivedMetrics(cacheableHitRate = it) },
         environment = userId?.let { EnvironmentInfo(userId = it) },
@@ -48,6 +54,23 @@ object TestPayloads {
         artifacts = artifacts,
         toolchain = toolchain,
         tasks = tasks,
+        tests = tests,
+    )
+
+    /** A test-task result for flaky fixtures (plan 036): one class + optional fail-then-pass retries. */
+    fun testTask(
+        module: String? = ":app",
+        className: String = "com.example.FooTest",
+        passed: Int = 5,
+        failed: Int = 0,
+        retriedCases: List<String> = emptyList(),
+    ): TestTaskResult = TestTaskResult(
+        taskPath = "${module ?: ""}:test",
+        module = module,
+        classes = listOf(TestClassResult(className = className, passed = passed, failed = failed)),
+        failedOrRetried = retriedCases.map {
+            TestCaseDetail(className = className, name = it, outcomes = listOf(TestCaseOutcome.FAILED, TestCaseOutcome.PASSED))
+        },
     )
 
     /** A task row for rollup fixtures; startMs is derived so timestamps are consistent. */

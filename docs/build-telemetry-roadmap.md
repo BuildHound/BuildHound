@@ -102,9 +102,13 @@ configured-vs-used memory; bottlenecks page answers "what got worse this week".
 ## Phase 4 — Differentiators & addon ecosystem (XL, order flexible)
 
 1. **Flaky detection** (Tuist's two signals: intra-run retry divergence + cross-run divergence
-   keyed on (commit, module, test)) → flaky page. After precision is validated on the pilot:
-   **`dev.buildhound.test-quarantine` addon** (skipped/muted modes via `excludeTestsMatching` /
-   `ignoreFailures` + re-fail) — addon because it mutates Test tasks (locked gate #3 stands).
+   keyed on (commit, module, test)) → flaky page. **Detection + page delivered plan 036**
+   (server-only over the plan-024 `tests` block: pure `FlakyDetector`, `GET /v1/flaky`,
+   edge-triggered `FLAKY` alert, `#/flaky` page; same-sha confounder guard; no decay in v1).
+   After precision is validated on the pilot (labelled flagged-set precision **≥ 0.90** —
+   plan 037's entry gate): **`dev.buildhound.test-quarantine` addon** (skipped/muted modes via
+   `excludeTestsMatching` / `ignoreFailures` + re-fail) — addon because it mutates Test tasks
+   (locked gate #3 stands).
 2. **Internal-adapters module**: cache origin local/remote + per-task cache keys + tier-(b)
    input fingerprints via `SnapshotTaskInputsBuildOperationType`,
    `ExecuteWorkBuildOperationType` (execution reasons, caching-disabled reason, origin cache

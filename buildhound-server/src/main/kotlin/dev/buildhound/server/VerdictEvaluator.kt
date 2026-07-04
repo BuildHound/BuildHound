@@ -46,7 +46,7 @@ class VerdictEvaluator(
             if (verdict.status == VerdictStatus.FAIL.name && prior != VerdictStatus.FAIL.name) {
                 alerts.dispatch(
                     cfg.alertChannels,
-                    AlertContext(projectKey, payload.buildId, baselineKey, verdict, dashboardBaseUrl),
+                    VerdictAlert(projectKey, payload.buildId, baselineKey, verdict, dashboardBaseUrl),
                 )
             }
         }.onFailure {

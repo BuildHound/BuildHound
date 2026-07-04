@@ -1187,6 +1187,53 @@
         }
     }
 
+    // Flaky tests (plan 036): the server's two-signal detection over the last 30 days. Signal is a
+    // fixed server enum (RETRY|CROSS_RUN|BOTH) mapped to an allowlisted CSS class — never a class name
+    // from untrusted data. All text via textContent.
+    const FLAKY_SIGNAL_CLASS = { RETRY: "flaky-retry", CROSS_RUN: "flaky-cross", BOTH: "flaky-both" };
+    const flakySignalClass = signal => FLAKY_SIGNAL_CLASS[signal] || "";
+
+    async function flakyView() {
+        const seq = ++renderSeq;
+        const records = await api("/v1/flaky?days=30");
+        if (seq !== renderSeq) return;
+
+        app.textContent = "";
+        app.append(el("h2", "Flaky tests — last 30 days"));
+        if (!records.length) {
+            app.append(emptyState({
+                title: "No flaky tests detected",
+                lines: [
+                    "A class is flagged when a case fails-then-passes on retry (intra-run), or the same class",
+                    "passes and fails at the same commit across runs (cross-run) — a same-sha requirement keeps",
+                    "a real regression from reading as flaky.",
+                ],
+            }));
+            return;
+        }
+        app.append(el("p", records.length + (records.length === 1 ? " flaky class" : " flaky classes"), "summary-sentence"));
+        const table = el("table");
+        const head = el("tr");
+        for (const columnName of ["Module", "Class", "Flake rate", "Signal", "Samples", "First seen", "Last seen"]) {
+            head.append(el("th", columnName));
+        }
+        table.append(head);
+        for (const r of records) {
+            const row = el("tr");
+            row.append(el("td", r.module || "(root)"));
+            row.append(el("td", r.caseName ? r.className + " · " + r.caseName : r.className));
+            row.append(el("td", Math.round(r.flakeRate * 100) + "%", "num"));
+            const signalCell = el("td");
+            signalCell.append(el("span", r.signal, "badge " + flakySignalClass(r.signal)));
+            row.append(signalCell);
+            row.append(el("td", r.sampleCount, "num"));
+            row.append(el("td", when(r.firstSeenMs)));
+            row.append(el("td", when(r.lastSeenMs)));
+            table.append(row);
+        }
+        app.append(table);
+    }
+
     function route() {
         // decodeURIComponent throws synchronously on malformed input (Firefox returns
         // location.hash pre-decoded, so a stored %xx can arrive re-broken) — the try
@@ -1207,6 +1254,7 @@
                 : hash.startsWith("#/trends") ? trendsView({}, 30)
                 : hash.startsWith("#/tasks") ? tasksRollupView()
                 : hash.startsWith("#/tests") ? testsView()
+                : hash.startsWith("#/flaky") ? flakyView()
                 : hash.startsWith("#/benchmark") ? benchmarkView()
                 : hash.startsWith("#/bottlenecks") ? bottlenecksView(7)
                 : bottlenecksView(7);

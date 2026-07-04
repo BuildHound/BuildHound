@@ -12,13 +12,89 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import org.slf4j.LoggerFactory
 
-/** What an alert carries — pseudonymized verdict data only (no task detail, identity, or secrets). */
-data class AlertContext(
-    val projectKey: String,
+/** What an alert carries (plan 025/036) — pseudonymized data only (no task detail, identity, secrets). */
+sealed interface AlertContext {
+    val projectKey: String
+
+    /** One-liner for slack/teams text bodies. */
+    fun summary(): String
+
+    /** Structured JSON body for a generic webhook channel. */
+    fun webhookJson(): String
+}
+
+/** A regression verdict crossing to FAIL (plan 025). */
+data class VerdictAlert(
+    override val projectKey: String,
     val buildId: String,
     val baselineKey: String,
     val verdict: Verdict,
     val dashboardBaseUrl: String?,
+) : AlertContext {
+    override fun summary(): String {
+        val regressed = verdict.metrics.filter { it.status == VerdictStatus.FAIL.name || it.status == VerdictStatus.WARN.name }
+            .joinToString(", ") { it.name }
+        val link = dashboardBaseUrl?.let { " ${it.trimEnd('/')}/#/build/$buildId" } ?: ""
+        return "BuildHound ${verdict.status}: $projectKey [$baselineKey] build $buildId" +
+            (if (regressed.isNotEmpty()) " — regressed: $regressed" else "") + link
+    }
+
+    override fun webhookJson(): String =
+        BuildHoundJson.payload.encodeToString(
+            VerdictWebhookBody.serializer(),
+            VerdictWebhookBody(
+                projectKey = projectKey, buildId = buildId, baselineKey = baselineKey,
+                status = verdict.status, metrics = verdict.metrics,
+                dashboardUrl = dashboardBaseUrl?.let { "${it.trimEnd('/')}/#/build/$buildId" },
+            ),
+        )
+}
+
+/** A test class newly crossing the flake-rate threshold (plan 036); edge-triggered per (project, class). */
+data class FlakyAlert(
+    override val projectKey: String,
+    val record: FlakyRecord,
+    val dashboardBaseUrl: String?,
+) : AlertContext {
+    override fun summary(): String {
+        val loc = listOfNotNull(record.module, record.className).joinToString("/")
+        val pct = Math.round(record.flakeRate * 100)
+        val link = dashboardBaseUrl?.let { " ${it.trimEnd('/')}/#/flaky" } ?: ""
+        return "BuildHound flaky: $projectKey — $loc ($pct% over ${record.sampleCount} runs, signal ${record.signal})$link"
+    }
+
+    override fun webhookJson(): String =
+        BuildHoundJson.payload.encodeToString(
+            FlakyWebhookBody.serializer(),
+            FlakyWebhookBody(
+                projectKey = projectKey, module = record.module, className = record.className,
+                signal = record.signal, flakeRate = record.flakeRate, sampleCount = record.sampleCount,
+                dashboardUrl = dashboardBaseUrl?.let { "${it.trimEnd('/')}/#/flaky" },
+            ),
+        )
+}
+
+@Serializable
+data class VerdictWebhookBody(
+    val kind: String = "buildhound.verdict",
+    val projectKey: String,
+    val buildId: String,
+    val baselineKey: String,
+    val status: String,
+    val metrics: List<MetricVerdict>,
+    val dashboardUrl: String? = null,
+)
+
+@Serializable
+data class FlakyWebhookBody(
+    val kind: String = "buildhound.flaky",
+    val projectKey: String,
+    val module: String? = null,
+    val className: String,
+    val signal: String,
+    val flakeRate: Double,
+    val sampleCount: Int,
+    val dashboardUrl: String? = null,
 )
 
 interface AlertDispatcher {
@@ -106,40 +182,15 @@ class HttpAlertDispatcher(
 
     /** Slack: `{text}`. Teams: a MessageCard (its incoming webhook rejects a bare `{text}`). */
     private fun bodyFor(channel: AlertChannel, context: AlertContext): String = when (channel.kind.lowercase()) {
-        "slack" -> textBody(mapOf("text" to summary(context)))
+        "slack" -> textBody(mapOf("text" to context.summary()))
         "teams" -> textBody(
-            mapOf("@type" to "MessageCard", "@context" to "http://schema.org/extensions", "text" to summary(context)),
+            mapOf("@type" to "MessageCard", "@context" to "http://schema.org/extensions", "text" to context.summary()),
         )
-        else -> BuildHoundJson.payload.encodeToString(WebhookBody.serializer(), WebhookBody(context))
+        else -> context.webhookJson()
     }
 
     private fun textBody(fields: Map<String, String>): String =
         BuildHoundJson.payload.encodeToString(MapSerializer(String.serializer(), String.serializer()), fields)
-
-    private fun summary(c: AlertContext): String {
-        val regressed = c.verdict.metrics.filter { it.status == VerdictStatus.FAIL.name || it.status == VerdictStatus.WARN.name }
-            .joinToString(", ") { it.name }
-        val link = c.dashboardBaseUrl?.let { " ${it.trimEnd('/')}/#/build/${c.buildId}" } ?: ""
-        return "BuildHound ${c.verdict.status}: ${c.projectKey} [${c.baselineKey}] build ${c.buildId}" +
-            (if (regressed.isNotEmpty()) " — regressed: $regressed" else "") + link
-    }
-
-    @Serializable
-    data class WebhookBody(
-        val kind: String = "buildhound.verdict",
-        val projectKey: String,
-        val buildId: String,
-        val baselineKey: String,
-        val status: String,
-        val metrics: List<MetricVerdict>,
-        val dashboardUrl: String? = null,
-    ) {
-        constructor(c: AlertContext) : this(
-            projectKey = c.projectKey, buildId = c.buildId, baselineKey = c.baselineKey,
-            status = c.verdict.status, metrics = c.verdict.metrics,
-            dashboardUrl = c.dashboardBaseUrl?.let { "${it.trimEnd('/')}/#/build/${c.buildId}" },
-        )
-    }
 
     companion object {
         private val logger = LoggerFactory.getLogger("dev.buildhound.server.Alert")

@@ -51,6 +51,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 if (inserted && payload.artifacts?.android?.isNotEmpty() == true) {
                     insertArtifactRows(connection, projectId, payload)
                 }
+                // Per-class test outcomes for flaky detection (plan 036); projected in the same txn.
+                if (inserted && payload.tests.isNotEmpty()) insertTestClassOutcomes(connection, projectId, payload)
                 connection.commit()
                 inserted
             } catch (e: Throwable) {
@@ -143,6 +145,33 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.setString(5, artifact.variant)
                 statement.setString(6, artifact.type.name)
                 statement.setLong(7, artifact.sizeBytes)
+                statement.addBatch()
+            }
+            statement.executeBatch()
+        }
+    }
+
+    /** Batch-insert per-class test outcomes (plan 036); module stored NOT NULL '' for null (PK safety). */
+    private fun insertTestClassOutcomes(connection: java.sql.Connection, projectId: String, payload: BuildPayload) {
+        connection.prepareStatement(
+            """
+            INSERT INTO test_class_outcomes
+                (project_id, build_id, started_at, sha, module, class_fqcn, passed, failed, retry_flaky_cases)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (project_id, build_id, module, class_fqcn) DO NOTHING
+            """.trimIndent(),
+        ).use { statement ->
+            val startedAt = OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC)
+            for (row in classOutcomesOf(payload)) {
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, row.buildId)
+                statement.setObject(3, startedAt)
+                statement.setString(4, row.sha)
+                statement.setString(5, row.module ?: "")
+                statement.setString(6, row.classFqcn)
+                statement.setInt(7, row.passed)
+                statement.setInt(8, row.failed)
+                statement.setInt(9, row.retryFlakyCases)
                 statement.addBatch()
             }
             statement.executeBatch()
@@ -695,6 +724,49 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                         kgp = ToolchainCalculator.dimension(kgp),
                         ksp = ToolchainCalculator.dimension(ksp),
                     )
+                }
+            }
+        }
+
+    override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> =
+        dataSource.connection.use { connection ->
+            // Read the narrow per-class outcome table (indexed on (project, sha, module, class)) and
+            // hand it to the shared FlakyDetector — same rows the in-memory store flattens, so parity.
+            connection.prepareStatement(
+                // ORDER BY … LIMIT bounds the rows read into the JVM (FlakyDetector.MAX_OUTCOME_ROWS,
+                // plan §6 "cap rows"): most-recent first, so truncation only ever drops the oldest of a
+                // pathological history. Detection is order-invariant, so below the cap the in-memory
+                // store (identical sort + take) sees the same set — parity holds.
+                """
+                SELECT build_id, (extract(epoch from started_at) * 1000)::bigint AS started_ms,
+                       sha, module, class_fqcn, passed, failed, retry_flaky_cases
+                FROM test_class_outcomes
+                WHERE project_id = ? AND started_at >= ?
+                ORDER BY started_at DESC, build_id, module, class_fqcn
+                LIMIT ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.setInt(3, FlakyDetector.MAX_OUTCOME_ROWS)
+                statement.executeQuery().use { rows ->
+                    val outcomes = buildList {
+                        while (rows.next()) {
+                            add(
+                                ClassOutcome(
+                                    buildId = rows.getString("build_id"),
+                                    startedAtMs = rows.getLong("started_ms"),
+                                    sha = rows.getString("sha"),
+                                    module = rows.getString("module").ifEmpty { null }, // '' → null (PK convention)
+                                    classFqcn = rows.getString("class_fqcn"),
+                                    passed = rows.getInt("passed"),
+                                    failed = rows.getInt("failed"),
+                                    retryFlakyCases = rows.getInt("retry_flaky_cases"),
+                                ),
+                            )
+                        }
+                    }
+                    FlakyDetector.detect(outcomes)
                 }
             }
         }

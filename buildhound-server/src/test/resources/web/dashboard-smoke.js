@@ -195,6 +195,11 @@ const responses = {
         regressedTasks: [], slowestWork: [], negativeAvoidance: [], cacheMissHotspots: [],
         cacheDataAvailable: true, budgetBreaches: null, trendRegressions: null,
     },
+    // Flaky tests (plan 036): two records — a cross-run and a retry — with an allowlisted signal badge.
+    "/v1/flaky?days=30": [
+        { module: ":app", className: "com.example.CartTest", signal: "CROSS_RUN", flakeRate: 0.4, sampleCount: 5, firstSeenMs: 1751440000000, lastSeenMs: 1751450000000, affectedBuildIds: ["b1", "b2"] },
+        { module: ":lib", className: "com.example.PayTest", signal: "RETRY", flakeRate: 0.2, sampleCount: 10, firstSeenMs: 1751440000000, lastSeenMs: 1751450000000, affectedBuildIds: ["b3"] },
+    ],
     // Toolchain adoption (plan 032): gradle has a behind list (8.9 < 8.10), jdk is uniform, and
     // agp/kgp/ksp are honestly unavailable (available:false) until the plugin reports them.
     "/v1/rollups/toolchain?days=30": {
@@ -453,6 +458,20 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
     context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
     if (!hasText(byId["app"], "Cacheability not collected yet")) throw new Error("cache-miss degraded notice missing");
+
+    // Flaky page (plan 036): renders the records with the allowlisted signal badge classes.
+    context.location.hash = "#/flaky"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/flaky?days=30")) throw new Error("flaky view did not fetch");
+    if (!hasText(byId["app"], "Flaky tests")) throw new Error("flaky header missing");
+    if (!hasText(byId["app"], "com.example.CartTest")) throw new Error("flaky cross-run row missing");
+    if (!hasText(byId["app"], "com.example.PayTest")) throw new Error("flaky retry row missing");
+    if (findAll(byId["app"], n => (n.className || "").indexOf("flaky-cross") >= 0).length === 0) throw new Error("cross-run signal badge class missing");
+    if (findAll(byId["app"], n => (n.className || "").indexOf("flaky-retry") >= 0).length === 0) throw new Error("retry signal badge class missing");
+    // Empty flaky → honest empty state.
+    responses["/v1/flaky?days=30"] = [];
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/flaky"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "No flaky tests detected")) throw new Error("flaky empty state missing");
 
     // Empty rollups render without throwing (server-side never-fail analogue).
     responses["/v1/rollups/project-cost?days=30"] = [];
