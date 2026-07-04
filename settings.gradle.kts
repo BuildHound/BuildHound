@@ -36,14 +36,19 @@ include(":buildhound-commons")
 include(":buildhound-gradle-plugin")
 include(":buildhound-server")
 include(":buildhound-report")
-// Opt-in, separately-shipped module: the single sanctioned exception to the no-internal-Gradle-APIs
-// rule (spec §3.1, plan 038). Never on the core plugin's classpath — applying it is the consent.
-include(":buildhound-internal-adapters")
-// Opt-in test-sharding addon (plan 040): a settings plugin that fetches a server-balanced shard plan
-// and filters Test tasks. commons-only, off the core plugin's classpath, applied alongside core.
-include(":buildhound-addon-test-sharding")
-// Opt-in, separately-shipped MCP server (plan 042): a stdio read-only query surface over the /v1 API.
-// Never bundled into the ingest image (a hardened, network-facing service) — its own artifact.
-include(":buildhound-mcp")
+
+// Opt-in, separately-shipped modules — included only when their directory is present. The server OCI
+// image builds from a minimal context (buildhound-server/Dockerfile copies just the core modules), and
+// Gradle 9 rejects an included project whose directory does not exist; a full checkout has all three, so
+// `./gradlew build` is unchanged. Each is off the core plugin's classpath — applying/shipping is the consent.
+listOf(
+    // The single sanctioned exception to the no-internal-Gradle-APIs rule (spec §3.1, plan 038).
+    "buildhound-internal-adapters",
+    // Test-sharding addon (plan 040): a settings plugin that fetches a server-balanced shard plan and
+    // filters Test tasks across CI shards. commons-only, applied alongside core.
+    "buildhound-addon-test-sharding",
+    // MCP server (plan 042): a stdio read-only query surface over /v1. Never bundled into the ingest image.
+    "buildhound-mcp",
+).forEach { module -> if (rootDir.resolve(module).isDirectory) include(":$module") }
 // buildhound-ci-assets is intentionally not a Gradle module: it holds CI templates and
 // shell assets that must be consumable without a JVM (see docs/architecture.md).
