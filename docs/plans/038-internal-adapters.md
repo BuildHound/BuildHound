@@ -1,6 +1,28 @@
 # Plan 038 — Internal-adapters module: cache origin, cache keys, tier-(b) fingerprints, criticalPath/avoided
 
-**Status: planned — roadmap phase 4** · 2026-07-03
+**Status: in progress — commons foundation landed (df78f7a); mechanism spiked & proven** · 2026-07-03
+
+> **Spike result (2026-07-04) — the load-bearing risk is resolved.** A throwaway settings-plugin
+> spike (later discarded) empirically confirmed on Gradle 8.14 / JDK 21:
+> - `gradleApi()` (via `java-gradle-plugin`) puts the internal types on the compile classpath —
+>   `org.gradle.internal.operations.{BuildOperationListener,BuildOperationListenerManager,
+>   BuildOperationDescriptor,OperationFinishEvent}` and
+>   `org.gradle.api.internal.tasks.SnapshotTaskInputsBuildOperationType` all resolve and compile.
+> - A `Plugin<Settings>` obtains `(gradle as GradleInternal).services.get(BuildOperationListenerManager)`
+>   and `addListener(...)`; the listener **receives `SnapshotTaskInputsBuildOperationType.Result`
+>   finished events and `result.hashBytes` (the cache key) is populated** when the build cache is on.
+> - **It fires under configuration cache**: the second run of a `--configuration-cache --build-cache`
+>   pair was a CC hit (`Reusing configuration cache`) yet still captured 2 snapshot ops with a cache
+>   key. So the internal-op path is *not* defeated by CC — the plan's #1 risk.
+>
+> **Caveat for the real impl (not yet built):** the `BuildOperationListenerManager` is **daemon-scoped**
+> — a listener `addListener`-ed in one build persists into the next build in the same daemon (this is
+> *why* capture survived the CC hit). The real adapter must therefore (a) register at most once per
+> daemon (a daemon-static `AtomicBoolean` guard, `DaemonState` precedent) and (b) reset its
+> per-build accumulation at a build boundary (e.g. keyed by the core buildId, or a fresh accumulator
+> published to a static bridge per build), so counts don't leak across builds in a warm daemon.
+> Remaining steps 4–13 build the real module (adapter + service + registry contribution + core
+> wiring + server comparator + dashboard + functional matrix) on this proven mechanism.
 
 ## 1. Source
 
