@@ -10,6 +10,7 @@ import dev.buildhound.commons.payload.DerivedMetrics
 import dev.buildhound.commons.payload.EnvironmentInfo
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
+import dev.buildhound.commons.payload.ToolchainInfo
 import dev.buildhound.commons.payload.VcsInfo
 
 /** Builds schema-v1 [BuildPayload]s for server tests without hand-writing JSON each time. */
@@ -30,6 +31,7 @@ object TestPayloads {
         userId: String? = null,
         benchmark: BenchmarkInfo? = null,
         artifacts: ArtifactSizes? = null,
+        toolchain: ToolchainInfo? = null,
         tasks: List<TaskExecution> = emptyList(),
     ): BuildPayload = BuildPayload(
         buildId = buildId,
@@ -44,6 +46,7 @@ object TestPayloads {
         environment = userId?.let { EnvironmentInfo(userId = it) },
         benchmark = benchmark,
         artifacts = artifacts,
+        toolchain = toolchain,
         tasks = tasks,
     )
 
@@ -54,6 +57,7 @@ object TestPayloads {
         durationMs: Long,
         type: String? = null,
         startMs: Long = 0,
+        cacheable: Boolean? = null,
     ): TaskExecution = TaskExecution(
         path = path,
         module = path.substringBeforeLast(':').ifEmpty { ":" },
@@ -61,5 +65,6 @@ object TestPayloads {
         startMs = startMs,
         durationMs = durationMs,
         outcome = outcome,
+        cacheable = cacheable,
     )
 }

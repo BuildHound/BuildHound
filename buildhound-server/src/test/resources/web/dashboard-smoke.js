@@ -155,6 +155,60 @@ const responses = {
             summary: { p50: 120000, p90: 120000, min: 120000, count: 1 },
         },
     ],
+    // Bottlenecks landing rollup (plan 032): headline KPI deltas + four ranked families incl. a
+    // regressed/new/vanished trio and a cache-miss hotspot. budget/trend counts null → card omitted.
+    "/v1/rollups/bottlenecks?period=7": {
+        period: 7,
+        buildCount: { current: 12, prior: 10, deltaPct: 0.2 },
+        successRate: { current: 0.9, prior: 0.95, deltaPct: -0.052632 },
+        avgDurationMs: { current: 65000, prior: 60000, deltaPct: 0.083333 },
+        hitRate: { current: 0.7, prior: 0.6, deltaPct: 0.166667 },
+        regressedTasks: [
+            { key: "KotlinCompile", module: ":app", currentMs: 5000, priorMs: 3000, deltaMs: 2000, deltaPct: 0.666667, isNew: false, isVanished: false, count: 8 },
+            { key: "NewType", currentMs: 800, priorMs: null, deltaMs: 800, deltaPct: null, isNew: true, isVanished: false, count: 4 },
+            { key: "VanishedType", currentMs: 0, priorMs: 500, deltaMs: -500, deltaPct: null, isNew: false, isVanished: true, count: 0 },
+        ],
+        slowestWork: [{ key: "Test", module: ":app", currentMs: 44000, count: 20 }],
+        negativeAvoidance: [{ key: "checkstyle", currentMs: 12000, count: 5 }],
+        cacheMissHotspots: [{ key: "CacheMissType", module: ":app", currentMs: 1200, count: 3 }],
+        cacheDataAvailable: true,
+        budgetBreaches: null,
+        trendRegressions: null,
+    },
+    "/v1/rollups/bottlenecks?period=14": {
+        period: 14,
+        buildCount: { current: 20, prior: 18, deltaPct: 0.111111 },
+        successRate: { current: 0.92, prior: 0.9, deltaPct: 0.022222 },
+        avgDurationMs: { current: 61000, prior: 62000, deltaPct: -0.016129 },
+        hitRate: { current: 0.65, prior: 0.66, deltaPct: -0.015152 },
+        regressedTasks: [], slowestWork: [], negativeAvoidance: [], cacheMissHotspots: [],
+        cacheDataAvailable: true, budgetBreaches: null, trendRegressions: null,
+    },
+    "/v1/rollups/bottlenecks?period=30": {
+        period: 30,
+        buildCount: { current: 40, prior: 39, deltaPct: 0.025641 },
+        successRate: { current: 0.93, prior: 0.93, deltaPct: 0.0 },
+        avgDurationMs: { current: 60000, prior: 60000, deltaPct: 0.0 },
+        hitRate: { current: 0.67, prior: 0.64, deltaPct: 0.046875 },
+        regressedTasks: [], slowestWork: [], negativeAvoidance: [], cacheMissHotspots: [],
+        cacheDataAvailable: true, budgetBreaches: null, trendRegressions: null,
+    },
+    // Toolchain adoption (plan 032): gradle has a behind list (8.9 < 8.10), jdk is uniform, and
+    // agp/kgp/ksp are honestly unavailable (available:false) until the plugin reports them.
+    "/v1/rollups/toolchain?days=30": {
+        gradle: {
+            available: true,
+            versions: [
+                { version: "8.10", builds: 9, sharePct: 0.75, distinctUsers: 3, lastSeenMs: 1751450000000 },
+                { version: "8.9", builds: 3, sharePct: 0.25, distinctUsers: 1, lastSeenMs: 1751440000000 },
+            ],
+            behind: [{ version: "8.9", builds: 3, sharePct: 0.25, distinctUsers: 1, lastSeenMs: 1751440000000 }],
+        },
+        jdk: { available: true, versions: [{ version: "21", builds: 12, sharePct: 1.0, distinctUsers: 3, lastSeenMs: 1751450000000 }], behind: [] },
+        agp: { available: false, versions: [], behind: [] },
+        kgp: { available: false, versions: [], behind: [] },
+        ksp: { available: false, versions: [], behind: [] },
+    },
 };
 // X-Total-Count values by path; a path absent here → header missing (tolerance case).
 const totals = {
@@ -208,7 +262,12 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     byId["token-save"].listeners.click[0]();
     await tick(); await tick();
     if (store["buildhound.token"] !== "s3cr3t-token-value") throw new Error("token not trimmed/saved: " + JSON.stringify(store));
-    if (!fetched.includes("/v1/builds?limit=50&offset=0")) throw new Error("builds view did not fetch after token save");
+    // Landing page is Bottlenecks (plan 032): saving a token renders it and fetches its rollups.
+    if (!fetched.includes("/v1/rollups/bottlenecks?period=7")) throw new Error("bottlenecks landing did not fetch after token save");
+    if (!hasText(byId["app"], "What got worse")) throw new Error("bottlenecks landing summary missing");
+    // The Builds page is reachable via its own hash and shows the filter-aware count.
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/builds?limit=50&offset=0")) throw new Error("builds view did not fetch");
     if (!hasText(byId["app"], "2 builds")) throw new Error("builds count-summary sentence missing");
 
     // Detail view: timeline svg (present), work-avoidance ledger with the unknown-cacheability
@@ -351,6 +410,40 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
     context.location.hash = "#/benchmark"; context._onhashchange(); await tick(); await tick();
     if (!hasText(byId["app"], "No benchmark builds yet")) throw new Error("benchmark empty state missing");
+
+    // Bottlenecks landing (plan 032): KPI strip with semantic delta chips (colour = goodness, not
+    // sign), four ranked families incl. new/vanished flags, cache-miss hotspots, and toolchain
+    // adoption with a behind list + honest agp/kgp/ksp "not collected" panels.
+    const hasExact = (node, text) => findAll(node, n => (n.textContent || "") === text).length > 0;
+    const hasClass = (node, cls) => findAll(node, n => (n.className || "").indexOf(cls) >= 0).length > 0;
+    context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/rollups/bottlenecks?period=7")) throw new Error("bottlenecks did not fetch the rollup");
+    if (!fetched.includes("/v1/rollups/toolchain?days=30")) throw new Error("bottlenecks did not fetch toolchain adoption");
+    if (!hasText(byId["app"], "Success rate")) throw new Error("KPI strip missing");
+    if (!hasClass(byId["app"], "delta-good")) throw new Error("no green (good) delta chip — semantic colouring missing");
+    if (!hasClass(byId["app"], "delta-bad")) throw new Error("no red (bad) delta chip — semantic colouring missing");
+    if (!hasText(byId["app"], "Regressed tasks")) throw new Error("regressed-tasks section missing");
+    if (!hasText(byId["app"], "KotlinCompile")) throw new Error("regressed row missing");
+    if (!hasExact(byId["app"], "new")) throw new Error("new-group flag missing");
+    if (!hasExact(byId["app"], "gone")) throw new Error("vanished-group flag missing");
+    if (!hasText(byId["app"], "CacheMissType")) throw new Error("cache-miss hotspot row missing");
+    if (!hasText(byId["app"], "Toolchain adoption")) throw new Error("toolchain section missing");
+    if (!hasText(byId["app"], "8.10")) throw new Error("toolchain version row missing");
+    if (!hasText(byId["app"], "behind the latest")) throw new Error("toolchain behind list missing");
+    if (!hasText(byId["app"], "Not collected yet")) throw new Error("agp/kgp/ksp degraded panel missing");
+    // Verdict card omitted while budget/trend counts are null.
+    if (hasText(byId["app"], "budget breaches")) throw new Error("verdict card must be omitted when counts are null");
+
+    // Period toggle refetches the new window.
+    clickButton(byId["app"], "14 days");
+    await tick(); await tick();
+    if (!fetched.includes("/v1/rollups/bottlenecks?period=14")) throw new Error("period toggle did not refetch period=14");
+
+    // Cacheability unavailable → the honest degraded notice, never an empty table read as consensus.
+    responses["/v1/rollups/bottlenecks?period=7"] = Object.assign({}, responses["/v1/rollups/bottlenecks?period=7"], { cacheDataAvailable: false, cacheMissHotspots: [] });
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "Cacheability not collected yet")) throw new Error("cache-miss degraded notice missing");
 
     // Empty rollups render without throwing (server-side never-fail analogue).
     responses["/v1/rollups/project-cost?days=30"] = [];

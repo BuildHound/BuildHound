@@ -1008,6 +1008,177 @@
         }
     }
 
+    // Bottlenecks landing page (plan 032): "what got worse this window". Headline KPIs with semantic
+    // delta chips, four ranked families, and toolchain adoption. textContent-only (task keys, versions,
+    // and module names are the same untrusted class as task paths rendered elsewhere).
+    const pctFmt = v => Math.round(v * 100) + "%";
+    const signedMs = d => (d > 0 ? "+" : d < 0 ? "−" : "") + ms(Math.abs(d));
+
+    // A delta whose COLOUR encodes goodness, not sign (plan 032): for "up is good" KPIs (success,
+    // hit rate) a rise is green; for "up is bad" (duration) a rise is red; neutral KPIs stay grey.
+    // A null percent (no prior window, or a brand-new group) shows an em dash, never ∞ or −100 %.
+    function deltaChip(deltaPct, upIsGood) {
+        if (deltaPct == null) return el("span", "—", "delta delta-flat");
+        const pct = Math.round(deltaPct * 100);
+        const good = (pct === 0 || upIsGood == null) ? "delta-flat"
+            : (upIsGood ? pct > 0 : pct < 0) ? "delta-good" : "delta-bad";
+        return el("span", (pct > 0 ? "+" : "") + pct + "%", "delta " + good);
+    }
+
+    function kpiCard(label, kpi, format, upIsGood) {
+        const card = el("div", null, "kpi");
+        card.append(el("div", label, "kpi-label"));
+        card.append(el("div", kpi.current == null ? "—" : format(kpi.current), "kpi-value"));
+        card.append(deltaChip(kpi.deltaPct, upIsGood));
+        card.append(el("div", kpi.prior == null ? "no prior window" : "prev " + format(kpi.prior), "muted"));
+        return card;
+    }
+
+    // One toolchain dimension: an honest "not collected yet" notice when unavailable (never an empty
+    // table read as consensus), else a distribution table with the behind-the-latest rows highlighted.
+    function toolchainPanel(label, dim) {
+        const box = document.createDocumentFragment();
+        box.append(el("h3", label));
+        if (!dim.available) {
+            box.append(el("p", "Not collected yet — this dimension populates once the plugin reports it.", "notice-warn"));
+            return box;
+        }
+        const behindSet = new Set(dim.behind.map(v => v.version));
+        const table = el("table");
+        const head = el("tr");
+        for (const columnName of ["Version", "Builds", "Share", "Distinct users", "Last seen"]) head.append(el("th", columnName));
+        table.append(head);
+        for (const v of dim.versions) {
+            const row = el("tr", null, behindSet.has(v.version) ? "behind" : null);
+            row.append(el("td", v.version));
+            row.append(el("td", v.builds, "num"));
+            row.append(el("td", pctFmt(v.sharePct), "num"));
+            row.append(el("td", v.distinctUsers, "num"));
+            row.append(el("td", when(v.lastSeenMs), "num"));
+            table.append(row);
+        }
+        box.append(table);
+        if (dim.behind.length) {
+            box.append(el("p", dim.behind.length + " version(s) behind the latest: " + dim.behind.map(v => v.version).join(", "), "muted"));
+        }
+        return box;
+    }
+
+    function rankedTable(columns, rows, cellsOf) {
+        const table = el("table");
+        const head = el("tr");
+        for (const columnName of columns) head.append(el("th", columnName));
+        table.append(head);
+        for (const r of rows) {
+            const row = el("tr");
+            for (const cell of cellsOf(r)) row.append(cell);
+            table.append(row);
+        }
+        return table;
+    }
+
+    // A task/module label cell: the group key with the owning module (when unambiguous) in muted text.
+    function keyCell(row) {
+        const cell = el("td");
+        cell.append(el("span", row.key));
+        if (row.module) cell.append(el("span", " " + row.module, "muted"));
+        return cell;
+    }
+
+    async function bottlenecksView(period) {
+        const seq = ++renderSeq;
+        const p = period || 7;
+        const b = await api("/v1/rollups/bottlenecks?period=" + p);
+        // Toolchain is best-effort: its failure must not blank the whole landing page.
+        let toolchain = null;
+        try { toolchain = await api("/v1/rollups/toolchain?days=30"); } catch (e) { /* omit the section */ }
+        if (seq !== renderSeq) return;
+
+        app.textContent = "";
+        app.append(el("p", "What got worse — the last " + p + " days vs the previous " + p, "summary-sentence"));
+
+        const bar = el("div", null, "filters");
+        for (const range of [7, 14, 30]) {
+            const button = el("button", range + " days");
+            if (range === p) button.disabled = true;
+            button.addEventListener("click", () => bottlenecksView(range).catch(fail));
+            bar.append(button);
+        }
+        app.append(bar);
+
+        const strip = el("div", null, "kpi-strip");
+        strip.append(kpiCard("Builds", b.buildCount, n => String(Math.round(n)), null));
+        strip.append(kpiCard("Success rate", b.successRate, pctFmt, true));
+        strip.append(kpiCard("Avg duration", b.avgDurationMs, ms, false));
+        strip.append(kpiCard("Cache hit rate", b.hitRate, pctFmt, true));
+        app.append(strip);
+
+        // Verdict rollup (plan 025): only rendered when a verdict store is wired — null omits the card.
+        if (b.budgetBreaches != null || b.trendRegressions != null) {
+            const chips = el("ul", null, "chips");
+            if (b.budgetBreaches != null) chips.append(chipItem("budget breaches", b.budgetBreaches));
+            if (b.trendRegressions != null) chips.append(chipItem("trend regressions", b.trendRegressions));
+            app.append(chips);
+        }
+
+        app.append(el("h3", "Regressed tasks (slower to execute than the previous window)"));
+        if (!b.regressedTasks.length) {
+            app.append(el("p", "Nothing regressed — execution held steady or improved.", "muted"));
+        } else {
+            app.append(rankedTable(["Task", "Now", "Before", "Δ", "Change"], b.regressedTasks, r => {
+                const changeCell = el("td");
+                if (r.isNew) changeCell.append(el("span", "new", "delta delta-flat"));
+                else if (r.isVanished) changeCell.append(el("span", "gone", "delta delta-flat"));
+                else changeCell.append(deltaChip(r.deltaPct, false));
+                return [
+                    keyCell(r),
+                    el("td", r.isVanished ? "—" : ms(r.currentMs), "num"),
+                    el("td", r.isNew ? "—" : ms(r.priorMs), "num"),
+                    el("td", signedMs(r.deltaMs), "num"),
+                    changeCell,
+                ];
+            }));
+        }
+
+        app.append(el("h3", "Slowest work (most total time this window)"));
+        if (!b.slowestWork.length) {
+            app.append(el("p", "No task work in this window.", "muted"));
+        } else {
+            app.append(rankedTable(["Task", "Total time", "Runs"], b.slowestWork, r =>
+                [keyCell(r), el("td", ms(r.currentMs), "num"), el("td", r.count, "num")]));
+        }
+
+        app.append(el("h3", "Negative avoidance (avoiding cost more than doing)"));
+        if (!b.negativeAvoidance.length) {
+            app.append(el("p", "No negative-avoidance signal — avoidance is paying off.", "muted"));
+        } else {
+            app.append(rankedTable(["Group", "Total excess", "Count"], b.negativeAvoidance, r =>
+                [keyCell(r), el("td", ms(r.currentMs), "num"), el("td", r.count, "num")]));
+        }
+
+        app.append(el("h3", "Cache-miss hotspots (cacheable work that still executed)"));
+        if (!b.cacheDataAvailable) {
+            app.append(el("p", "Cacheability not collected yet — deploy the plan-016 plugin to surface cache-miss hotspots.", "notice-warn"));
+        } else if (!b.cacheMissHotspots.length) {
+            app.append(el("p", "No cacheable task executed this window — the cache is doing its job.", "muted"));
+        } else {
+            app.append(rankedTable(["Task", "Executed time", "Misses"], b.cacheMissHotspots, r =>
+                [keyCell(r), el("td", ms(r.currentMs), "num"), el("td", r.count, "num")]));
+        }
+
+        app.append(el("h2", "Toolchain adoption — last 30 days"));
+        if (!toolchain) {
+            app.append(el("p", "Toolchain data unavailable.", "muted"));
+        } else {
+            for (const [label, dim] of [
+                ["Gradle", toolchain.gradle], ["JDK", toolchain.jdk],
+                ["Android Gradle Plugin", toolchain.agp], ["Kotlin Gradle Plugin", toolchain.kgp], ["KSP", toolchain.ksp],
+            ]) {
+                app.append(toolchainPanel(label, dim));
+            }
+        }
+    }
+
     function route() {
         // decodeURIComponent throws synchronously on malformed input (Firefox returns
         // location.hash pre-decoded, so a stored %xx can arrive re-broken) — the try
@@ -1016,17 +1187,21 @@
             // No token yet → a friendly first-run panel instead of a request that 401s
             // and paints red error text as the first thing a pilot user sees (plan 018).
             if (!token()) { firstRunView(); return; }
-            const hash = location.hash || "#/builds";
+            // Bottlenecks is the landing page (plan 032): a bare "#/", "#", or empty hash lands there.
+            let hash = location.hash || "#/bottlenecks";
+            if (hash === "#/" || hash === "#") hash = "#/bottlenecks";
             const detail = hash.match(/^#\/build\/(.+)$/);
             const compare = hash.match(/^#\/compare\/([^/]+)\/(.+)$/);
             const run = detail ? detailView(decodeURIComponent(detail[1]))
                 : compare ? comparisonView(decodeURIComponent(compare[1]), decodeURIComponent(compare[2]))
                 : hash.startsWith("#/compare") ? compareView()
+                : hash.startsWith("#/builds") ? buildsView({}, 0)
                 : hash.startsWith("#/trends") ? trendsView({}, 30)
                 : hash.startsWith("#/tasks") ? tasksRollupView()
                 : hash.startsWith("#/tests") ? testsView()
                 : hash.startsWith("#/benchmark") ? benchmarkView()
-                : buildsView({}, 0);
+                : hash.startsWith("#/bottlenecks") ? bottlenecksView(7)
+                : bottlenecksView(7);
             run.catch(fail);
         } catch (err) {
             fail(err);

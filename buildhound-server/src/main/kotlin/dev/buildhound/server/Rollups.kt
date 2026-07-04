@@ -56,6 +56,8 @@ data class TaskRow(
     val outcome: String,
     val durationMs: Long,
     val buildWallMs: Long,
+    /** Cacheability flag (plan 016); null on pre-016 payloads → cache-miss hotspots degrade (plan 032). */
+    val cacheable: Boolean? = null,
 )
 
 /**

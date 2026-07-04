@@ -437,12 +437,36 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
                 )
             }
         }
+
+        // "What got worse" landing rollup (plan 032, spec §6): this window vs the prior equal window.
+        // Read-scope, tenant-scoped; period clamped to [1, 90] (two windows = up to 180 days scanned).
+        get("/rollups/bottlenecks") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val period = call.periodParam()
+            call.respondQuery { store.bottlenecks(project.id, period, System.currentTimeMillis()) }
+        }
+
+        // Toolchain adoption (plan 032, spec §6): per-dimension version distribution + hashed distinct
+        // users + "who is behind". Read-scope, tenant-scoped, days clamped like /trends. AGP/KGP/KSP
+        // report available=false until the plugin collects them.
+        get("/rollups/toolchain") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.toolchainAdoption(project.id, days, System.currentTimeMillis()) }
+        }
     }
 }
 
 /** Window size in days, defaulting to 30 and clamped to [1, 365] like /trends. */
 private fun ApplicationCall.daysParam(): Int =
     (request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)
+
+/**
+ * Bottlenecks comparison window in days, default 7, clamped to [1, 90] (plan 032). The store scans two
+ * back-to-back windows, so 90 bounds the read at 180 days — the fleet-scale cap that keeps it honest.
+ */
+private fun ApplicationCall.periodParam(): Int =
+    (request.queryParameters["period"]?.toIntOrNull() ?: 7).coerceIn(1, 90)
 
 private class QueryResult<T>(val value: T)
 

@@ -43,12 +43,22 @@
         .span-tree .span-tree { padding-left: 1.25rem; border-left: 1px solid #8884; }
         .span-tree li { margin: .15rem 0; }
         .span-kind { font-size: .7rem; text-transform: uppercase; letter-spacing: .03em; margin-right: .35rem; }
+        .kpi-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .75rem; margin: 1rem 0; }
+        .kpi { border: 1px solid #8884; border-radius: .5rem; padding: .75rem; display: flex; flex-direction: column; gap: .15rem; }
+        .kpi-label { font-size: .8rem; color: #888; }
+        .kpi-value { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .delta { font-size: .85rem; font-weight: 600; }
+        .delta-good { color: #15803d; }
+        .delta-bad { color: #b91c1c; }
+        .delta-flat { color: #888; }
+        tr.behind td { background: #fef3c744; }
     </style>
 </head>
 <body>
 <header>
     <h1>BuildHound</h1>
     <nav>
+        <a href="#/bottlenecks">Bottlenecks</a>
         <a href="#/builds">Builds</a>
         <a href="#/trends">Trends</a>
         <a href="#/tasks">Tasks</a>

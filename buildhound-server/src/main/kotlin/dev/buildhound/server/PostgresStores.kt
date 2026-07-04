@@ -323,6 +323,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
     private fun cutoff(days: Int, nowMs: Long): OffsetDateTime =
         OffsetDateTime.ofInstant(Instant.ofEpochMilli(nowMs - days.toLong() * 86_400_000), ZoneOffset.UTC)
 
+    private fun atMs(ms: Long): OffsetDateTime =
+        OffsetDateTime.ofInstant(Instant.ofEpochMilli(ms), ZoneOffset.UTC)
+
     override fun projectCost(projectId: String, days: Int, nowMs: Long): List<ProjectCostRow> =
         dataSource.connection.use { connection ->
             connection.prepareStatement(
@@ -551,6 +554,142 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                             )
                         }
                     }
+                }
+            }
+        }
+
+    override fun bottlenecks(projectId: String, period: Int, nowMs: Long): BottlenecksRollup =
+        dataSource.connection.use { connection ->
+            // Both windows are fetched as raw rows and handed to the shared BottleneckCalculator, so
+            // Postgres and in-memory agree byte-for-byte (the plan-026 parity discipline). Half-open
+            // [from, to) windows match the in-memory `startedAt in from until to` filter exactly.
+            val windowMs = period.toLong() * 86_400_000
+            val now = atMs(nowMs)
+            val currentFrom = atMs(nowMs - windowMs)
+            val priorFrom = atMs(nowMs - 2 * windowMs)
+            BottleneckCalculator.compute(
+                currentTasks = taskRowsBetween(connection, projectId, currentFrom, now),
+                priorTasks = taskRowsBetween(connection, projectId, priorFrom, currentFrom),
+                currentBuilds = kpiRowsBetween(connection, projectId, currentFrom, now),
+                priorBuilds = kpiRowsBetween(connection, projectId, priorFrom, currentFrom),
+                period = period,
+            )
+        }
+
+    /** Flat task rows for a half-open window (plan 032); benchmark builds excluded (fleet view). */
+    private fun taskRowsBetween(
+        connection: java.sql.Connection,
+        projectId: String,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ): List<TaskRow> =
+        connection.prepareStatement(
+            """
+            SELECT te.build_id, te.user_id, te.module, te.name, te.type, te.outcome,
+                   te.duration_ms, te.cacheable, b.duration_ms AS wall
+            FROM task_executions te
+            JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
+            WHERE te.project_id = ? AND te.started_at >= ? AND te.started_at < ? AND b.mode <> 'BENCHMARK'
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setObject(1, UUID.fromString(projectId))
+            statement.setObject(2, from)
+            statement.setObject(3, to)
+            statement.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        add(
+                            TaskRow(
+                                buildId = rows.getString("build_id"),
+                                userId = rows.getString("user_id"),
+                                module = rows.getString("module"),
+                                name = rows.getString("name"),
+                                type = rows.getString("type"),
+                                outcome = rows.getString("outcome"),
+                                durationMs = rows.getLong("duration_ms"),
+                                buildWallMs = rows.getLong("wall"),
+                                cacheable = rows.getBoolean("cacheable").takeUnless { rows.wasNull() },
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    /** Build-level KPI rows for a half-open window (plan 032); benchmark builds excluded. */
+    private fun kpiRowsBetween(
+        connection: java.sql.Connection,
+        projectId: String,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ): List<BuildKpiRow> =
+        connection.prepareStatement(
+            """
+            SELECT outcome, duration_ms, hit_rate FROM builds
+            WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setObject(1, UUID.fromString(projectId))
+            statement.setObject(2, from)
+            statement.setObject(3, to)
+            statement.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        add(
+                            BuildKpiRow(
+                                outcome = rows.getString("outcome"),
+                                durationMs = rows.getLong("duration_ms"),
+                                hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+    override fun toolchainAdoption(projectId: String, days: Int, nowMs: Long): ToolchainRollup =
+        dataSource.connection.use { connection ->
+            // Every dimension read from the jsonb payload in one pass; distribution/behind math is the
+            // shared ToolchainCalculator so both stores agree. userId is already the pseudonymized u_…
+            // HMAC (spec §3.7) — distinctUsers is count(distinct) over hashes, never de-pseudonymized.
+            connection.prepareStatement(
+                """
+                SELECT payload->'environment'->>'userId' AS user_id,
+                       (extract(epoch from started_at) * 1000)::bigint AS started_ms,
+                       payload->'toolchain'->>'gradle' AS gradle,
+                       payload->'toolchain'->>'jdk' AS jdk,
+                       payload->'toolchain'->>'agp' AS agp,
+                       payload->'toolchain'->>'kgp' AS kgp,
+                       payload->'toolchain'->>'ksp' AS ksp
+                FROM builds
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.setObject(3, atMs(nowMs))
+                statement.executeQuery().use { rows ->
+                    val gradle = mutableListOf<ToolchainSample>()
+                    val jdk = mutableListOf<ToolchainSample>()
+                    val agp = mutableListOf<ToolchainSample>()
+                    val kgp = mutableListOf<ToolchainSample>()
+                    val ksp = mutableListOf<ToolchainSample>()
+                    while (rows.next()) {
+                        val userId = rows.getString("user_id")
+                        val startedMs = rows.getLong("started_ms")
+                        gradle.add(ToolchainSample(rows.getString("gradle"), userId, startedMs))
+                        jdk.add(ToolchainSample(rows.getString("jdk"), userId, startedMs))
+                        agp.add(ToolchainSample(rows.getString("agp"), userId, startedMs))
+                        kgp.add(ToolchainSample(rows.getString("kgp"), userId, startedMs))
+                        ksp.add(ToolchainSample(rows.getString("ksp"), userId, startedMs))
+                    }
+                    ToolchainRollup(
+                        gradle = ToolchainCalculator.dimension(gradle),
+                        jdk = ToolchainCalculator.dimension(jdk),
+                        agp = ToolchainCalculator.dimension(agp),
+                        kgp = ToolchainCalculator.dimension(kgp),
+                        ksp = ToolchainCalculator.dimension(ksp),
+                    )
                 }
             }
         }
