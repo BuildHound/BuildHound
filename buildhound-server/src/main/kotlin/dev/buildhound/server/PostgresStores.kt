@@ -13,6 +13,7 @@ import javax.sql.DataSource
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.JsonElement
 import org.flywaydb.core.Flyway
 import org.postgresql.util.PGobject
 
@@ -1043,4 +1044,61 @@ class PostgresSettingsStore(private val dataSource: DataSource) : SettingsStore 
             }
         }
     }
+}
+
+/** Tenant-scoped jsonb addon storage (plan 039); every query carries project_id + addon_id. */
+class PostgresAddonStore(private val dataSource: DataSource) : AddonStore {
+
+    private val elementSerializer = JsonElement.serializer()
+
+    override fun get(projectId: String, addonId: String, key: String): JsonElement? =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT value FROM addon_data WHERE project_id = ? AND addon_id = ? AND key = ?",
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, addonId)
+                statement.setString(3, key)
+                statement.executeQuery().use { rows ->
+                    if (!rows.next()) null
+                    else BuildHoundJson.payload.decodeFromString(elementSerializer, rows.getString("value"))
+                }
+            }
+        }
+
+    override fun put(projectId: String, addonId: String, key: String, value: JsonElement) {
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO addon_data (project_id, addon_id, key, value, updated_at)
+                VALUES (?, ?, ?, ?, now())
+                ON CONFLICT (project_id, addon_id, key)
+                DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, addonId)
+                statement.setString(3, key)
+                statement.setObject(4, jsonb(BuildHoundJson.payload.encodeToString(elementSerializer, value)))
+                statement.executeUpdate()
+            }
+        }
+    }
+
+    override fun all(projectId: String, addonId: String): Map<String, JsonElement> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "SELECT key, value FROM addon_data WHERE project_id = ? AND addon_id = ? ORDER BY key",
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, addonId)
+                statement.executeQuery().use { rows ->
+                    buildMap {
+                        while (rows.next()) {
+                            put(rows.getString("key"), BuildHoundJson.payload.decodeFromString(elementSerializer, rows.getString("value")))
+                        }
+                    }
+                }
+            }
+        }
 }

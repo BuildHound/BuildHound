@@ -2,6 +2,7 @@ package dev.buildhound.commons.payload
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /**
  * Payload schema v1 (spec §4). One build == one document, gzip-compressed on the wire,
@@ -43,6 +44,15 @@ data class BuildPayload(
     val benchmark: BenchmarkInfo? = null,
     /** APK/AAB/AAR sizes for an Android build (plan 031, spec §4); null on non-Android builds. */
     val artifacts: ArtifactSizes? = null,
+    /**
+     * Addon-contributed payload sections (plan 039), keyed by addon id (e.g. `"testQuarantine"`).
+     * The value is addon-owned JSON carrying its own `schemaVersion`, so core stays decoupled from
+     * addon types and needs no schema bump when an addon evolves. Empty on a build with no addon
+     * applied. Contributors are `ServiceLoader`-discovered via [BuildHoundCollectorRegistry]; the
+     * plan-019 size budget still applies (the largest offending entries are dropped, never the
+     * envelope). Additive-only — an addon must never require a core schema change (spec §4).
+     */
+    val extensions: Map<String, JsonElement> = emptyMap(),
 ) {
     companion object {
         const val SCHEMA_VERSION: Int = 1
@@ -211,6 +221,8 @@ data class CapsSummary(
     val droppedTaskOutcomes: Map<String, Int> = emptyMap(),
     /** Android artifact records dropped past the per-payload cap (plan 031), smallest-first. */
     val droppedArtifacts: Int = 0,
+    /** Addon `extensions` entries dropped past the extensions byte budget (plan 039), largest-first. */
+    val droppedExtensions: Int = 0,
 )
 
 /**

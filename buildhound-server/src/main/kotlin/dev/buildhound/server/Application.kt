@@ -37,6 +37,11 @@ class ServerStores(
     val settings: SettingsStore = InMemorySettingsStore(),
     val alerts: AlertDispatcher = RecordingAlertDispatcher(),
     val dashboardBaseUrl: String? = null,
+    // Addon foundation (plan 039): generic jsonb store + the server-side allowlist of registered
+    // addon ids. Empty by default — every `/v1/addons/{id}` id 404s until a consumer (plan 040)
+    // registers one; core boots and serves builds with zero addons active.
+    val addons: AddonStore = InMemoryAddonStore(),
+    val registeredAddons: Set<String> = emptySet(),
     // CI-connector framework (plan 028). Defaults are the honest no-op: no registered connector →
     // nothing enriches, ci-run reads 404, ingest is unchanged. Production wires the Azure connector.
     val ciSpans: CiSpanStore = InMemoryCiSpanStore(),
@@ -135,6 +140,8 @@ fun storesFromEnvironment(env: Map<String, String>): ServerStores {
             ciSpans = PostgresCiSpanStore(dataSource),
             connectors = ConnectorRegistry(listOf(AzureDevOpsConnector(ConnectorHttpClient.create()))),
             connectorConfigs = EnvConnectorConfigStore(env),
+            // Addon foundation (plan 039): jsonb store present, allowlist empty until a consumer ships.
+            addons = PostgresAddonStore(dataSource),
         )
     } else {
         logger.warn("storage: IN-MEMORY (no BUILDHOUND_DB_URL) — data is lost on restart")
@@ -223,6 +230,8 @@ fun Application.buildHoundModule(
             maybeRateLimited(queryOn, QUERY_LIMIT) {
                 queryRoutes(stores.builds, stores.verdicts, stores.tokens, stores.ciSpans)
                 settingsRoutes(stores.settings, stores.tokens)
+                // Addon API namespace (plan 039): shares the query limiter — no new flood vector.
+                addonRoutes(stores.addons, stores.tokens, stores.registeredAddons)
             }
         }
     }

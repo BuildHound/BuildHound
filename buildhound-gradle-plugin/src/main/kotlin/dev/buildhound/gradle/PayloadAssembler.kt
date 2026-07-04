@@ -22,6 +22,7 @@ import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TestTaskResult
 import dev.buildhound.commons.payload.ToolchainInfo
 import dev.buildhound.commons.payload.VcsInfo
+import kotlinx.serialization.json.JsonElement
 
 /**
  * Merges the collectors' outputs into a schema-v1 [BuildPayload] (spec §4). Pure and
@@ -90,6 +91,7 @@ internal object PayloadAssembler {
         processes: List<CollectedProcess> = emptyList(),
         benchmark: CollectedBenchmark? = null,
         artifacts: List<ArtifactSize> = emptyList(),
+        extensions: Map<String, JsonElement> = emptyMap(),
     ): BuildPayload {
         // Mirror the benchmark keys into tags (spec's tag contract), but user tags win on clash.
         val mergedTags = if (benchmark == null) {
@@ -170,6 +172,10 @@ internal object PayloadAssembler {
                     uptimeS = it.uptimeS,
                 )
             },
+            // Addon-contributed sections (plan 039), keyed by addon id. Opaque JSON — the scrubber
+            // leaves it untouched (core can't know an addon's shape; addons carry the §3.7 bar
+            // themselves), the capper bounds it to its byte budget.
+            extensions = extensions,
         )
         // Spec §3.7 then §3.9: scrub whole free-text values first (so secret patterns see
         // the complete string, never a truncated slice), then enforce the payload budgets.

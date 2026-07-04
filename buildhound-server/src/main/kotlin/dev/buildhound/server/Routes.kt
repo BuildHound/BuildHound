@@ -473,6 +473,77 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
     }
 }
 
+/**
+ * Addon API namespace (plan 039): `/v1/addons/{addonId}/…`, walled off from ingest/read tokens by a
+ * dedicated `ADDON` scope. `{addonId}` is validated against [registeredAddons] — a **server-side
+ * allowlist**, so it never names a table or route dynamically; an unregistered id is a flat 404
+ * (empty allowlist ⇒ every id 404 until a consumer registers one). Storage is a generic tenant-scoped
+ * jsonb key/value scaffold; plan 040 (sharding) adds the first concrete sub-route as a consumer.
+ */
+fun Route.addonRoutes(addons: AddonStore, tokens: TokenStore, registeredAddons: Set<String>) {
+    route("/v1/addons/{addonId}") {
+        get("/data") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsAddon) ?: return@get
+            val addonId = call.registeredAddonId(registeredAddons) ?: return@get
+            call.respondQuery { addons.all(project.id, addonId) }
+        }
+        get("/data/{key}") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsAddon) ?: return@get
+            val addonId = call.registeredAddonId(registeredAddons) ?: return@get
+            val key = call.addonKeyOrNull() ?: return@get
+            val result = call.runQuery { addons.get(project.id, addonId, key) } ?: return@get
+            result.value?.let { call.respond(it) }
+                ?: call.respond(HttpStatusCode.NotFound, ApiError("no such key"))
+        }
+        put("/data/{key}") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsAddon) ?: return@put
+            val addonId = call.registeredAddonId(registeredAddons) ?: return@put
+            val key = call.addonKeyOrNull() ?: return@put
+            val body = call.receiveBounded(64 * 1024)
+                ?: return@put call.respond(HttpStatusCode.PayloadTooLarge, ApiError("addon value too large"))
+            val json = runCatching { BuildHoundJson.payload.parseToJsonElement(body.decodeToString()) }
+                .getOrElse { return@put call.respond(HttpStatusCode.BadRequest, ApiError("invalid json body")) }
+            // Mirror ingest's classification: a data-shaped failure (SQLSTATE 22xxx, e.g. a NUL byte
+            // in jsonb) is a permanent client error -> 400; anything else is a storage outage -> 503.
+            try {
+                addons.put(project.id, addonId, key, json)
+            } catch (e: SQLException) {
+                return@put if (e.sqlState?.startsWith("22") == true) {
+                    call.respond(HttpStatusCode.BadRequest, ApiError("value not storable"))
+                } else {
+                    ingestLogger.warn("storage unavailable: {}", e::class.java.simpleName)
+                    call.respond(HttpStatusCode.ServiceUnavailable, ApiError("storage unavailable"))
+                }
+            }
+            call.respond(HttpStatusCode.OK, AddonAck(status = "stored"))
+        }
+    }
+}
+
+@Serializable
+data class AddonAck(val status: String)
+
+/** 404s (returns null) when `{addonId}` is not on the server-side allowlist — never a dynamic name. */
+private suspend fun ApplicationCall.registeredAddonId(registered: Set<String>): String? {
+    val addonId = parameters.getOrFail("addonId")
+    if (addonId !in registered) {
+        respond(HttpStatusCode.NotFound, ApiError("unknown addon"))
+        return null
+    }
+    return addonId
+}
+
+/** Validates the addon KV key: a bounded identifier (bound in SQL anyway; this rejects junk early). */
+private suspend fun ApplicationCall.addonKeyOrNull(): String? {
+    val key = parameters.getOrFail("key")
+    val ascii = { c: Char -> c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c in "._-" }
+    if (key.isEmpty() || key.length > 200 || !key.all(ascii)) {
+        respond(HttpStatusCode.BadRequest, ApiError("invalid addon key"))
+        return null
+    }
+    return key
+}
+
 /** Window size in days, defaulting to 30 and clamped to [1, 365] like /trends. */
 private fun ApplicationCall.daysParam(): Int =
     (request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)

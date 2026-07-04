@@ -378,6 +378,47 @@ class PayloadAssemblerTest {
         assertEquals("3", info.attributes["runAttempt"])
     }
 
+    // --- Addon extensions (plan 039) ---
+
+    @Test
+    fun `extensions round-trip onto the payload and survive scrubbing untouched`() {
+        // A value that the scrubber WOULD redact in a declared free-text field — proving core treats
+        // addon JSON as opaque (it never deep-scrubs it; the addon owns the §3.7 bar).
+        val ext = mapOf(
+            "testQuarantine" to kotlinx.serialization.json.buildJsonObject {
+                put("schemaVersion", kotlinx.serialization.json.JsonPrimitive(1))
+                put("secretish", kotlinx.serialization.json.JsonPrimitive("ghp_0123456789abcdefABCDEF0123456789abcd"))
+            },
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), extensions = ext)
+        assertEquals(setOf("testQuarantine"), payload.extensions.keys)
+        assertEquals(ext, payload.extensions, "opaque addon JSON passes through the scrubber unchanged")
+    }
+
+    @Test
+    fun `no contributed extensions leaves an empty map`() {
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)))
+        assertTrue(payload.extensions.isEmpty())
+    }
+
+    @Test
+    fun `the extensions byte budget drops the largest entry and keeps the envelope plus smaller entries`() {
+        val ext = mapOf(
+            "big" to kotlinx.serialization.json.JsonPrimitive("x".repeat(500)),
+            "small" to kotlinx.serialization.json.JsonPrimitive("y"),
+        )
+        val payload = assemble(
+            tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)),
+            caps = PayloadCaps(maxExtensionsBytes = 64),
+            extensions = ext,
+        )
+        assertEquals(setOf("small"), payload.extensions.keys, "largest-first drop keeps the small entry")
+        assertEquals(1, payload.caps?.droppedExtensions)
+        // The build envelope always survives a cap.
+        assertEquals("test-build", payload.buildId)
+        assertEquals(BuildOutcome.SUCCESS, payload.outcome)
+    }
+
     private fun assemble(
         tasks: List<TaskExecution>,
         buildFailed: Boolean = false,
@@ -398,6 +439,7 @@ class PayloadAssemblerTest {
         ),
         vcs: CollectedVcs = CollectedVcs(branch = "main", sha = "c".repeat(40), dirty = false),
         ci: CollectedCi? = this.ci,
+        extensions: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap(),
     ) = PayloadAssembler.assemble(
         buildId = "test-build",
         projectKey = "fixture",
@@ -421,6 +463,7 @@ class PayloadAssemblerTest {
         processes = processes,
         benchmark = benchmark,
         artifacts = artifacts,
+        extensions = extensions,
     )
 
     private fun task(

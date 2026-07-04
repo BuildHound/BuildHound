@@ -5,6 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 
 class PayloadCapperTest {
 
@@ -15,10 +17,32 @@ class PayloadCapperTest {
         caps: CapsSummary? = null,
         benchmark: BenchmarkInfo? = null,
         artifacts: ArtifactSizes? = null,
+        extensions: Map<String, JsonElement> = emptyMap(),
     ) = BuildPayload(
         buildId = "b", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
         tags = tags, values = values, tasks = tasks, caps = caps, benchmark = benchmark, artifacts = artifacts,
+        extensions = extensions,
     )
+
+    @Test
+    fun over_budget_extensions_are_dropped_largest_first_and_counted() {
+        // The server ingest re-cap bounds a hostile/oversized extensions map the same way (plan 039):
+        // keep the small entry, drop the large one, count it, leave the envelope intact.
+        val ext = mapOf(
+            "big" to JsonPrimitive("x".repeat(500)) as JsonElement,
+            "small" to JsonPrimitive("y") as JsonElement,
+        )
+        val capped = PayloadCapper.cap(payload(extensions = ext), PayloadCaps(maxExtensionsBytes = 64))
+        assertEquals(setOf("small"), capped.extensions.keys)
+        assertEquals(1, capped.caps?.droppedExtensions)
+        assertEquals("b", capped.buildId) // envelope survives
+    }
+
+    @Test
+    fun extensions_under_budget_leave_the_payload_compliant() {
+        val input = payload(extensions = mapOf("a" to JsonPrimitive(1) as JsonElement))
+        assertSame(input, PayloadCapper.cap(input))
+    }
 
     @Test
     fun benchmark_seedRef_is_truncated_without_a_caps_summary() {

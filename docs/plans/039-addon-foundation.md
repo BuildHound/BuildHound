@@ -208,3 +208,20 @@ warn + no-op (never fail). The two first consumers follow this convention verbat
   clean DB; the core server boots and serves builds with zero addons registered.
 - `docs/architecture.md` has an "Addon architecture" section + decision-log row; plans 037 and
   040 can be written as pure consumers with no further foundation work.
+
+## 8. Divergences from this plan (as built)
+
+- **The extensions size cap lives in `PayloadCapper`, not the assembler** (plan step 5 said "in
+  `assemble` or the action"). Consequence, deliberately better than the plan: because
+  `PayloadCapper.cap` also runs on the **server ingest re-cap**, a hostile plugin POSTing an oversized
+  `extensions` map is bounded server-side too (exactly like the artifacts array), not just
+  plugin-side. Recorded via an additive `CapsSummary.droppedExtensions` count + a 256 KiB
+  `maxExtensionsBytes` budget; the budget is independent of the 20 MiB total-byte stage.
+- **A generic `/data/{key}` KV scaffold ships now** rather than "empty of concrete addon logic". It
+  is the minimal tenant-scoped jsonb get/put/all that exercises `AddonStore` end-to-end; plan 040
+  adds its own concrete sub-routes as a consumer. The addon PUT mirrors ingest's SQLSTATE-`22xxx` →
+  400 (else 503) classification.
+- **Deferred follow-ups (flagged by review, out of scope here):** (1) a shared JSON nesting-depth
+  guard on the parse paths (`parseToJsonElement` / ingest `decodeFromString`) — a pre-existing
+  exposure the tighter 64 KiB addon PUT does not widen; (2) an `addon_data` retention/TTL policy —
+  the table is empty until a consumer ships, so retention is addressed when **plan 040** lands.

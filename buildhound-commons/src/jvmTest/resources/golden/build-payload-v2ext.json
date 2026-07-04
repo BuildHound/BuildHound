@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "buildId": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "projectKey": "pilot-android",
+  "startedAt": 1751450000000,
+  "finishedAt": 1751450042000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["test"],
+  "mode": "ci",
+  "tags": { "team": "mobile" },
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:testDebugUnitTest",
+      "module": ":app",
+      "type": "Test",
+      "startMs": 1751450010000,
+      "durationMs": 21000,
+      "outcome": "EXECUTED",
+      "cacheable": true,
+      "incremental": false,
+      "worker": 1,
+      "executionReasons": []
+    }
+  ],
+  "extensions": {
+    "testQuarantine": {
+      "schemaVersion": 1,
+      "mode": "muted",
+      "applied": [":app/com.example.FlakyTest"],
+      "observed": [
+        { "unit": ":app/com.example.FlakyTest", "outcome": "FAILED" }
+      ]
+    },
+    "testSharding": {
+      "schemaVersion": 1,
+      "shardIndex": 2,
+      "shardCount": 4,
+      "assignedUnits": [":app/com.example.CartTest", ":lib/com.example.AuthTest"]
+    }
+  }
+}

@@ -4,6 +4,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Golden-file contract test (roadmap phase 0): every historical schema version must keep
@@ -91,6 +94,24 @@ class GoldenPayloadTest {
         assertNull(payload.environment?.ide)
         assertNull(payload.environment?.aiAgent)
         assertNull(payload.vcs?.remoteUrl)
+        // Additive guarantee (plan 039): a payload without an `extensions` block defaults to empty,
+        // and the v1 golden — authored before the field existed — still deserializes.
+        assertTrue(payload.extensions.isEmpty())
+    }
+
+    @Test
+    fun `extensions golden file deserializes with two addon-owned blocks`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v2ext.json"))
+
+        assertEquals(1, payload.schemaVersion, "the core envelope stays schema v1 — addons don't bump it")
+        assertEquals(setOf("testQuarantine", "testSharding"), payload.extensions.keys)
+        // Each addon owns its own nested schemaVersion, so core reads opaque JsonElement and stays
+        // decoupled from addon types (plan 039).
+        val quarantine = payload.extensions.getValue("testQuarantine").jsonObject
+        assertEquals(1, quarantine.getValue("schemaVersion").jsonPrimitive.int)
+        assertEquals("muted", quarantine.getValue("mode").jsonPrimitive.content)
+        val sharding = payload.extensions.getValue("testSharding").jsonObject
+        assertEquals(4, sharding.getValue("shardCount").jsonPrimitive.int)
     }
 
     @Test
@@ -256,6 +277,7 @@ class GoldenPayloadTest {
             "build-payload-v1-benchmark.json",
             "build-payload-v1-artifacts.json",
             "build-payload-interrupted-v1.json",
+            "build-payload-v2ext.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

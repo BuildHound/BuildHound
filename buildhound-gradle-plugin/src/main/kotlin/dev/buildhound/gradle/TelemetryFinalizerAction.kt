@@ -1,14 +1,18 @@
 package dev.buildhound.gradle
 
 import dev.buildhound.commons.payload.ArtifactSize
+import dev.buildhound.commons.payload.BuildHoundCollectorRegistry
+import dev.buildhound.commons.payload.BuildHoundExtensionContributor
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.ConfigurationCacheState
+import dev.buildhound.commons.payload.ExtensionContributionContext
 import dev.buildhound.commons.payload.FingerprintInfo
 import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.report.ReportAssets
 import java.io.File
+import java.util.ServiceLoader
 import kotlinx.serialization.json.Json
 import org.gradle.api.flow.FlowAction
 import org.gradle.api.flow.FlowParameters
@@ -199,6 +203,32 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // runCatching → warn + marker, never a failed build (§3 finalizer read).
             val artifacts = parameters.rootDir.orNull?.let { readArtifacts(File(it)) }.orEmpty()
 
+            // Addon extensions (plan 039): ServiceLoader-discover contributors on the settings
+            // classpath and merge their JSON sections. Execution-time only (adds no CC input — the
+            // functional test asserts CC reuse); every failure degrades to no extensions. Each
+            // contributor is individually guarded inside the registry so one bad addon can't suppress
+            // another, and the whole block is wrapped so discovery itself can never fail the build.
+            val extensions = runCatching {
+                val contributors = ServiceLoader.load(BuildHoundExtensionContributor::class.java, javaClass.classLoader).toList()
+                if (contributors.isEmpty()) {
+                    emptyMap()
+                } else {
+                    BuildHoundCollectorRegistry.collect(
+                        contributors,
+                        ExtensionContributionContext(
+                            projectKey = parameters.projectKey.orNull,
+                            mode = mode,
+                            tasks = tasks,
+                            ci = PayloadAssembler.ciInfo(ci),
+                        ),
+                        onWarn = { logger.warn("[buildhound] {}", it) },
+                    )
+                }
+            }.getOrElse {
+                logger.warn("[buildhound] addon extension discovery skipped (build unaffected): {}", it.message)
+                emptyMap()
+            }
+
             val payload = PayloadAssembler.assemble(
                 // Shared with the collector's start-marker (plan 033): same id both places so this
                 // build's own marker is the one deleted during reconciliation above.
@@ -223,14 +253,17 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 processes = parameters.processes.getOrElse(emptyList()),
                 benchmark = benchmark,
                 artifacts = artifacts,
+                extensions = extensions,
             )
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so
             // keys and values never reach the log (plan 019).
             payload.caps?.let { caps ->
                 logger.warn(
-                    "[buildhound] payload capped to budget: {} tag(s), {} value(s), {} reason(s) dropped; {} task(s) dropped",
+                    "[buildhound] payload capped to budget: {} tag(s), {} value(s), {} reason(s) dropped; " +
+                        "{} task(s) dropped; {} addon extension(s) dropped",
                     caps.droppedTags, caps.droppedValues, caps.droppedExecutionReasons, caps.droppedTasks,
+                    caps.droppedExtensions,
                 )
             }
 

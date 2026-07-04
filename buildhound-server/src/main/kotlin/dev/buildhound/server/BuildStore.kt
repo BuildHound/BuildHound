@@ -9,6 +9,7 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /** The tenant a request acts as — resolved from its token, never from the payload. */
 data class ProjectRef(val id: String, val key: String)
@@ -274,14 +275,32 @@ interface SettingsStore {
     fun put(projectId: String, settings: ProjectSettings)
 }
 
+/**
+ * Tenant-scoped jsonb key/value storage for addon APIs (plan 039). Keyed `(projectId, addonId, key)`;
+ * `value` is opaque addon-owned JSON. jsonb keeps ingest schema-stable — no per-addon DDL. Every
+ * operation carries `projectId`, so one tenant never sees another's addon data (architecture §5).
+ */
+interface AddonStore {
+    fun get(projectId: String, addonId: String, key: String): JsonElement?
+
+    fun put(projectId: String, addonId: String, key: String, value: JsonElement)
+
+    /** All keys stored for [addonId] within [projectId], key → value. */
+    fun all(projectId: String, addonId: String): Map<String, JsonElement>
+}
+
 /** Token scopes (spec §5): a leaked CI ingest token must not read history. */
 object TokenScope {
     const val INGEST = "ingest"
     const val READ = "read"
+    const val ADDON = "addon"
     const val ALL = "all"
 
     fun allowsIngest(scope: String): Boolean = scope == INGEST || scope == ALL
     fun allowsRead(scope: String): Boolean = scope == READ || scope == ALL
+
+    /** Addon APIs (plan 039): a dedicated scope walls the `/v1/addons` namespace off from ingest/read tokens. */
+    fun allowsAddon(scope: String): Boolean = scope == ADDON || scope == ALL
 
     /** Admin operations (e.g. writing project settings) require the unrestricted token. */
     fun allowsAll(scope: String): Boolean = scope == ALL
@@ -617,6 +636,23 @@ class InMemorySettingsStore : SettingsStore {
     override fun put(projectId: String, settings: ProjectSettings) {
         this.settings[projectId] = settings
     }
+}
+
+class InMemoryAddonStore : AddonStore {
+    // (projectId, addonId, key) -> jsonb value; the composite key mirrors the Postgres PK.
+    private val data = ConcurrentHashMap<Triple<String, String, String>, JsonElement>()
+
+    override fun get(projectId: String, addonId: String, key: String): JsonElement? =
+        data[Triple(projectId, addonId, key)]
+
+    override fun put(projectId: String, addonId: String, key: String, value: JsonElement) {
+        data[Triple(projectId, addonId, key)] = value
+    }
+
+    override fun all(projectId: String, addonId: String): Map<String, JsonElement> =
+        data.entries
+            .filter { it.key.first == projectId && it.key.second == addonId }
+            .associate { it.key.third to it.value }
 }
 
 class InMemoryTokenStore : TokenStore {

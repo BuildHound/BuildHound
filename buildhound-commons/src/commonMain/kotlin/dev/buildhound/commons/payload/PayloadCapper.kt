@@ -1,5 +1,7 @@
 package dev.buildhound.commons.payload
 
+import kotlinx.serialization.json.JsonElement
+
 /**
  * Payload budgets (plan 019). Entry counts and key/value lengths mirror the spec-§5
  * metric-CLI numbers; 20 MiB of uncompressed JSON gzips comfortably under the 8 MiB spool
@@ -15,6 +17,8 @@ data class PayloadCaps(
     val maxReasonChars: Int = 500,
     val maxTasks: Int = 20_000,
     val maxArtifacts: Int = 200,
+    /** Total byte budget for all addon `extensions` entries (plan 039); largest dropped first. */
+    val maxExtensionsBytes: Int = 256 * 1024,
     val maxPayloadBytes: Int = 20 * 1024 * 1024,
 ) {
     companion object {
@@ -100,12 +104,36 @@ object PayloadCapper {
             }
         }
 
+        // Addon extensions (plan 039): opaque, addon-authored JSON that core does not scrub. It must
+        // not balloon the payload, so bound the whole map to its own byte budget by dropping the
+        // largest entries first (they carry the most abuse potential) until it fits. Runs on both the
+        // plugin's assembly and the server's defensive ingest re-cap — a hostile POST is bounded too.
+        // This budget is independent of maxPayloadBytes: extensions are bounded here first and are NOT
+        // touched by the later total-byte stages (which shed reasons/tasks), so under total-byte
+        // pressure a sub-budget extensions map is retained while tasks are dropped — deliberate, since
+        // 256 KiB of extensions can never dominate the 20 MiB envelope.
+        var droppedExtensions = 0
+        var cappedExtensions = payload.extensions
+        if (cappedExtensions.isNotEmpty()) {
+            var total = cappedExtensions.values.sumOf { encodedElementSize(it) }
+            if (total > caps.maxExtensionsBytes) {
+                val kept = LinkedHashMap(cappedExtensions) // preserves insertion order of survivors
+                for (entry in cappedExtensions.entries.sortedByDescending { encodedElementSize(it.value) }) {
+                    if (total <= caps.maxExtensionsBytes) break
+                    total -= encodedElementSize(entry.value)
+                    kept.remove(entry.key)
+                    droppedExtensions++
+                }
+                cappedExtensions = kept
+            }
+        }
+
         // Strip any prior caps summary while working so the byte budget measures the same
         // shape on every pass (the summary is re-attached at the end) — this keeps re-capping
         // idempotent: the summary block itself must not count toward the budget it records.
         var working = payload.copy(
             tags = tags.map, values = values.map, tasks = tasks,
-            benchmark = cappedBenchmark, artifacts = cappedArtifacts, caps = null,
+            benchmark = cappedBenchmark, artifacts = cappedArtifacts, extensions = cappedExtensions, caps = null,
         )
 
         // Byte budget (spec §3.9 stages), only walked when the payload is actually oversized.
@@ -141,6 +169,7 @@ object PayloadCapper {
             droppedTasks = droppedTasks,
             droppedTaskOutcomes = droppedOutcomes,
             droppedArtifacts = droppedArtifacts,
+            droppedExtensions = droppedExtensions,
         )
 
         // Nothing countable to record and nothing was previously recorded → the input is compliant,
@@ -183,10 +212,13 @@ object PayloadCapper {
     private fun encodedSize(payload: BuildPayload): Int =
         BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload).encodeToByteArray().size
 
+    private fun encodedElementSize(element: JsonElement): Int =
+        BuildHoundJson.payload.encodeToString(JsonElement.serializer(), element).encodeToByteArray().size
+
     private fun CapsSummary.isEmpty(): Boolean =
         droppedTags == 0 && droppedValues == 0 && truncatedValues == 0 &&
             droppedExecutionReasons == 0 && truncatedExecutionReasons == 0 && truncatedNonCacheableReasons == 0 &&
-            droppedTasks == 0 && droppedTaskOutcomes.isEmpty() && droppedArtifacts == 0
+            droppedTasks == 0 && droppedTaskOutcomes.isEmpty() && droppedArtifacts == 0 && droppedExtensions == 0
 
     private fun merge(existing: CapsSummary?, fresh: CapsSummary): CapsSummary {
         if (existing == null) return fresh
@@ -202,6 +234,7 @@ object PayloadCapper {
             droppedTasks = existing.droppedTasks + fresh.droppedTasks,
             droppedTaskOutcomes = outcomes,
             droppedArtifacts = existing.droppedArtifacts + fresh.droppedArtifacts,
+            droppedExtensions = existing.droppedExtensions + fresh.droppedExtensions,
         )
     }
 }
