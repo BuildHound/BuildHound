@@ -1,6 +1,16 @@
 # Plan 037 — `dev.buildhound.test-quarantine` addon (skipped/muted modes)
 
-**Status: planned — roadmap phase 4** · 2026-07-03
+**Status: BLOCKED — deferred behind plan 039 and locked gate #3** · 2026-07-03
+
+> **Why deferred (recorded 2026-07-04).** This plan is a *pure consumer* of the addon foundation
+> (`extensions` map, `BuildHoundCollectorRegistry`, `/v1/addons/<id>/…`) that **plan 039 solely
+> owns** — none of that exists in code yet (see §3), so 037 cannot compile its payload contribution
+> or server routes until **039 lands** (hard dependency; §2, §4 step 1). Additionally, locked
+> **gate #3** ships the quarantine loop *only after 036's detection precision is validated on the
+> pilot* (≥ 0.90 labelled precision) — a human-in-the-loop validation against real pilot data that
+> cannot be performed in the autonomous implementation loop. Order of unblock: **039 → (038, 040) →
+> 037** once the pilot precision gate is met. Until then this plan stays in `docs/plans/` (not
+> `implemented/`). Plan 036 (flaky detection) is the gate's producing side and is already shipped.
 
 ## 1. Source
 
