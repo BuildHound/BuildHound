@@ -1,0 +1,84 @@
+# Composite GitHub Action (spec §7, plan 041): run Gradle with BuildHound telemetry wired, then
+# optionally gate the run on the per-build regression verdict (plan 025).
+#
+# Usage from a consumer workflow:
+#
+#   jobs:
+#     build:
+#       runs-on: ubuntu-latest
+#       steps:
+#         - uses: actions/checkout@v4
+#         - uses: your-org/buildhound/buildhound-ci-assets/github@main
+#           with:
+#             gradle-tasks: "build"
+#             server-url: "https://buildhound.example.com"
+#             token: ${{ secrets.BUILDHOUND_TOKEN }}
+#             verdict-gate: "warn"   # off | warn | fail
+#
+# The plugin auto-detects the GitHub Actions run (owner/repo/run-id/run-attempt) from the standard
+# GITHUB_* env, so the server-side github-actions connector can pull the run timeline later. The token
+# only ever leaves via an Authorization header — never echoed. Pass it as a secret, never a literal.
+
+name: "BuildHound Gradle telemetry"
+description: "Run Gradle with BuildHound build telemetry, then optionally gate on the regression verdict."
+
+inputs:
+  gradle-tasks:
+    description: "Gradle tasks to run."
+    required: false
+    default: "build"
+  server-url:
+    description: "BuildHound ingest base URL (e.g. https://buildhound.example.com). Empty = collect but do not upload."
+    required: false
+    default: ""
+  token:
+    description: "BuildHound project token. Pass a secret — never a literal."
+    required: false
+    default: ""
+  verdict-gate:
+    description: "off | warn | fail — gate the run on the per-build regression verdict."
+    required: false
+    default: "off"
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Gradle build (with build telemetry)"
+      shell: bash
+      run: ./gradlew ${{ inputs.gradle-tasks }}
+      env:
+        # Map a secret in the consuming workflow; never echo it.
+        BUILDHOUND_TOKEN: ${{ inputs.token }}
+        BUILDHOUND_SERVER_URL: ${{ inputs.server-url }}
+
+    - name: "BuildHound verdict gate (${{ inputs.verdict-gate }})"
+      if: ${{ inputs.verdict-gate != 'off' }}
+      shell: bash
+      env:
+        BUILDHOUND_TOKEN: ${{ inputs.token }}
+        BUILDHOUND_SERVER_URL: ${{ inputs.server-url }}
+        VERDICT_GATE: ${{ inputs.verdict-gate }}
+      run: |
+        set -eu
+        payload="build/buildhound/build-payload.json"
+        if [ ! -f "$payload" ]; then echo "buildhound: no payload written; skipping verdict gate"; exit 0; fi
+        build_id=$(sed -n 's/.*"buildId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$payload" | head -n1)
+        if [ -z "$build_id" ]; then echo "buildhound: no buildId in payload; skipping"; exit 0; fi
+        if [ -z "${BUILDHOUND_SERVER_URL:-}" ]; then echo "buildhound: no server url; skipping"; exit 0; fi
+        # The verdict is computed post-ingest, so poll briefly for it to appear.
+        status=""
+        i=0
+        while [ "$i" -lt 10 ]; do
+          body=$(curl -s -H "Authorization: Bearer $BUILDHOUND_TOKEN" "${BUILDHOUND_SERVER_URL%/}/v1/builds/$build_id/verdict" || echo "")
+          status=$(printf '%s' "$body" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+          if [ -n "$status" ]; then break; fi
+          i=$((i + 1)); sleep 2
+        done
+        echo "buildhound verdict: ${status:-unknown}"
+        if [ "$status" = "FAIL" ]; then
+          if [ "$VERDICT_GATE" = "fail" ]; then
+            echo "::error::BuildHound flagged a regression against baseline"
+            exit 1
+          fi
+          echo "::warning::BuildHound flagged a regression against baseline"
+        fi

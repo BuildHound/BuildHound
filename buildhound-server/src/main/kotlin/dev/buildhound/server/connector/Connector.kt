@@ -39,6 +39,8 @@ data class CiRunRef(
     val runId: String,
     val collectionUri: String? = null,
     val project: String? = null,
+    /** GitHub Actions re-run attempt (plan 041); null/1 = the original run. Chooses the jobs endpoint. */
+    val attempt: Int? = null,
 )
 
 @Serializable

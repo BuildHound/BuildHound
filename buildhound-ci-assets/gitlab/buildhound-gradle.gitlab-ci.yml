@@ -1,0 +1,53 @@
+# Includable GitLab CI/CD template (spec §7, plan 041): run Gradle with BuildHound telemetry wired,
+# then optionally gate the job on the per-build regression verdict (plan 025).
+#
+# Usage from a consumer .gitlab-ci.yml:
+#
+#   include:
+#     - project: 'your-group/buildhound'
+#       ref: main
+#       file: '/buildhound-ci-assets/gitlab/buildhound-gradle.gitlab-ci.yml'
+#
+#   build:
+#     extends: .buildhound-gradle
+#     variables:
+#       BUILDHOUND_GRADLE_TASKS: "build"
+#       BUILDHOUND_VERDICT_GATE: "warn"   # off | warn | fail
+#
+# BUILDHOUND_SERVER_URL and BUILDHOUND_TOKEN come from masked, protected CI/CD variables — never
+# inline them here. The plugin auto-detects the GitLab pipeline (project path + pipeline id from
+# CI_PIPELINE_URL), so the server-side gitlab connector can pull the pipeline timeline later. The
+# token only ever leaves via an Authorization header — never echoed.
+
+.buildhound-gradle:
+  variables:
+    BUILDHOUND_GRADLE_TASKS: "build"
+    # off = no gate; warn = log a warning on a FAIL verdict; fail = fail the job on FAIL.
+    BUILDHOUND_VERDICT_GATE: "off"
+  script:
+    - ./gradlew ${BUILDHOUND_GRADLE_TASKS}
+    - |
+      set -eu
+      if [ "${BUILDHOUND_VERDICT_GATE}" = "off" ]; then exit 0; fi
+      payload="build/buildhound/build-payload.json"
+      if [ ! -f "$payload" ]; then echo "buildhound: no payload written; skipping verdict gate"; exit 0; fi
+      build_id=$(sed -n 's/.*"buildId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$payload" | head -n1)
+      if [ -z "$build_id" ]; then echo "buildhound: no buildId in payload; skipping"; exit 0; fi
+      if [ -z "${BUILDHOUND_SERVER_URL:-}" ]; then echo "buildhound: no server url; skipping"; exit 0; fi
+      # The verdict is computed post-ingest, so poll briefly for it to appear.
+      status=""
+      i=0
+      while [ "$i" -lt 10 ]; do
+        body=$(curl -s -H "Authorization: Bearer ${BUILDHOUND_TOKEN}" "${BUILDHOUND_SERVER_URL%/}/v1/builds/$build_id/verdict" || echo "")
+        status=$(printf '%s' "$body" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+        if [ -n "$status" ]; then break; fi
+        i=$((i + 1)); sleep 2
+      done
+      echo "buildhound verdict: ${status:-unknown}"
+      if [ "$status" = "FAIL" ]; then
+        if [ "${BUILDHOUND_VERDICT_GATE}" = "fail" ]; then
+          echo "BuildHound flagged a regression against baseline" >&2
+          exit 1
+        fi
+        echo "warning: BuildHound flagged a regression against baseline" >&2
+      fi

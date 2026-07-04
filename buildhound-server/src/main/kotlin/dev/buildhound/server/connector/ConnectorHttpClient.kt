@@ -13,10 +13,11 @@ import io.ktor.client.plugins.HttpTimeout
  * supply a `MockEngine` instead of dialling the network.
  *
  * `followRedirects = false` is a security control, not a nicety: the SSRF host allowlist is
- * enforced once against the request URL (`AzureDevOpsConnector.isAllowedHost`), so a 3xx that Ktor
- * silently followed would carry the `Authorization: Basic <PAT>` header to an unvalidated host
- * (an allowlisted-but-compromised or open-redirect Azure host → credential exfiltration). Instead a
- * redirect surfaces as a non-2xx status the connector treats as a failed fetch.
+ * enforced once against the request URL (`ConnectorNet.isAllowedHost`, shared by every connector), so
+ * a 3xx that Ktor silently followed would carry the credential header (`Authorization: Basic`/`Bearer`
+ * or `PRIVATE-TOKEN`, per provider) to an unvalidated host (an allowlisted-but-compromised or
+ * open-redirect host → credential exfiltration). Instead a redirect surfaces as a non-2xx status the
+ * connector treats as a failed fetch.
  */
 object ConnectorHttpClient {
     fun create(engine: HttpClientEngine = CIO.create()): HttpClient = HttpClient(engine) {

@@ -42,6 +42,18 @@ services:
       # BUILDHOUND_CONNECTOR_AZURE_HOSTS: "dev.azure.com"
       # BUILDHOUND_CONNECTOR_AZURE_BASEURL: "https://dev.azure.com/your-org"
       # BUILDHOUND_CONNECTOR_AZURE_PROJECT: "your-project"
+      # GitHub Actions CI connector (plan 041): poll-only, same env-only posture. Unset = inert.
+      # _HOSTS defaults to api.github.com; GitHub Enterprise names its host AND points _BASEURL at
+      # its REST root (https://ghe.host/api/v3). The token is a fine-grained PAT with Actions:read.
+      # BUILDHOUND_CONNECTOR_GITHUB_TOKEN: "<github-actions-read-token>"
+      # BUILDHOUND_CONNECTOR_GITHUB_HOSTS: "api.github.com"
+      # BUILDHOUND_CONNECTOR_GITHUB_BASEURL: "https://api.github.com"
+      # GitLab CI connector (plan 041): poll-only. _HOSTS defaults to gitlab.com; a self-managed
+      # instance names its host AND points _BASEURL at its v4 API (https://gitlab.host/api/v4).
+      # The token is a project/personal access token with the read_api scope.
+      # BUILDHOUND_CONNECTOR_GITLAB_TOKEN: "<gitlab-read_api-token>"
+      # BUILDHOUND_CONNECTOR_GITLAB_HOSTS: "gitlab.com"
+      # BUILDHOUND_CONNECTOR_GITLAB_BASEURL: "https://gitlab.com/api/v4"
     depends_on:
       db:
         condition: service_healthy

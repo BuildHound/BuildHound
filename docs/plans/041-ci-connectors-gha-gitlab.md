@@ -232,6 +232,26 @@ and the never-fail-ingest degradation contract — with `GitHubActionsConnector`
   connector is unreachable (no `provider=="gitlab"` payloads) and GHA falls back to attempt 1 —
   degraded, not broken. Noted so review sequences the merges.
 
+## 6b. Divergences from this plan (recorded per CLAUDE.md)
+
+Two deliberate departures from §"no framework change", both additive and reviewed:
+
+1. **`CiRunRef` gains an optional `attempt: Int? = null` field.** The plan said the framework
+   was untouched, but GitHub's re-run jobs live at a *different* endpoint
+   (`…/runs/{id}/attempts/{n}/jobs`), and `refFrom(provider, runId, buildUrl)` is the only place
+   the attempt (parsed from the build URL's `/attempts/N` suffix) can be captured — the SPI does
+   not thread `ci.attributes`. Carrying it on `CiRunRef` is the minimal honest way; the field is
+   default-null and Azure ignores it, so nothing else changes.
+2. **Shared connector helpers extracted to `connector/ConnectorNet.kt`.** `isAllowedHost`
+   (the SSRF guard) plus two JSON helpers are now single-sourced; Azure's private `isAllowedHost`
+   copy was deleted and it calls the shared one. This is a security win (three connectors parsing
+   attacker-controlled build URLs must share one host-allowlist implementation) rather than a
+   scope change.
+
+Also: the GitLab connector parses the project path from the ingested `CI_JOB_URL` (a `/-/jobs/`
+URL — what plan 027's provider actually stamps as `ci.buildUrl`), splitting on the `/-/` route
+separator; the pipeline id is the correlation `runId` (`CI_PIPELINE_ID`), not taken from the URL.
+
 ## 7. Exit criteria
 
 - Ingesting a `github-actions` build (with `BUILDHOUND_CONNECTOR_GITHUB_TOKEN` + allowlisted

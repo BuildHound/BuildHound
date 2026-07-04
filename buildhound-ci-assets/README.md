@@ -6,6 +6,8 @@ deliberately not a Gradle module.
 | Asset | Purpose |
 |---|---|
 | `azure-pipelines/buildhound-gradle-steps.yml` | Reusable Azure Pipelines steps template: token injection, Gradle build, optional `verdictGate` step polling `GET /v1/builds/{id}/verdict` |
+| `github/action.yml` | Composite GitHub Action: Gradle build with telemetry + optional `verdict-gate` (`::warning::`/`::error::`), plan 041 |
+| `gitlab/buildhound-gradle.gitlab-ci.yml` | Includable GitLab CI template (`.buildhound-gradle` hidden job to `extends`): Gradle build + optional verdict gate, plan 041 |
 | `bin/buildhound-metric` | Metric CLI for non-Gradle steps → `POST /v1/metrics` (Datadog tag/measure model) |
 | `test/metric-cli-test.sh` | Stubbed-`curl` harness for the metric CLI (`sh buildhound-ci-assets/test/metric-cli-test.sh`); `shellcheck`-clean |
 | `profiler-scenarios/buildhound.scenarios` | gradle-profiler scenarios for benchmark mode: `clean`/`no_op`/`incremental_non_abi`/`cc_hit` (plan 030) |
@@ -76,3 +78,35 @@ rejected `400`/`413`.
 The enriched timeline appears on the dashboard **build detail** page as a "CI pipeline" section with
 queue-time and Gradle-share chips; `GET /v1/builds/{id}/ci-run` (read scope) returns the same data as
 JSON. Builds with no connector configured show an honest amber "not available" notice.
+
+## GitHub Actions & GitLab CI connectors (server-side, plan 041)
+
+Same server-side model as Azure, for two more providers. Both are **poll-only** in v1 (no webhook)
+and share the identical security posture: **https-only**, host must be in the `_HOSTS` allowlist, the
+token is env-only and never logged, and a connector failure never affects ingest.
+
+**GitHub Actions** (`ci.provider=github-actions`) — pulls the workflow-run + jobs REST APIs into a
+JOB → STEP span tree, with **queue time** (`run_started_at − created_at`) and per-job runner names. A
+re-run is enriched against its own attempt. Token: a fine-grained PAT with **Actions: read**.
+
+```sh
+BUILDHOUND_CONNECTOR_GITHUB_TOKEN="<token>"           # Actions:read; unset ⇒ inert (UNCONFIGURED)
+BUILDHOUND_CONNECTOR_GITHUB_HOSTS="api.github.com"    # SSRF allowlist; default api.github.com
+BUILDHOUND_CONNECTOR_GITHUB_BASEURL="https://api.github.com"   # GitHub Enterprise: https://ghe.host/api/v3
+```
+
+**GitLab CI** (`ci.provider=gitlab`) — pulls the pipeline + jobs REST APIs into a STAGE → JOB span
+tree (stages are synthesized from each job's `stage`, in order), with **queue time**
+(`queued_duration`) and per-job runner descriptions. Token: a project/personal token with the
+**read_api** scope.
+
+```sh
+BUILDHOUND_CONNECTOR_GITLAB_TOKEN="<token>"           # read_api; unset ⇒ inert (UNCONFIGURED)
+BUILDHOUND_CONNECTOR_GITLAB_HOSTS="gitlab.com"        # SSRF allowlist; default gitlab.com
+BUILDHOUND_CONNECTOR_GITLAB_BASEURL="https://gitlab.com/api/v4"   # self-managed: https://gitlab.host/api/v4
+```
+
+For **GitHub Enterprise** / **self-managed GitLab**, name the host in `_HOSTS` **and** point
+`_BASEURL` at its API root — an ingested build URL supplies only the owner/repo (or project path) and
+run id, never the outbound host. See [`docs/extending-ci-provider.md`](../docs/extending-ci-provider.md)
+to add a new provider.

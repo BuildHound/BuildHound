@@ -7,6 +7,8 @@ import dev.buildhound.server.connector.ConnectorConfigStore
 import dev.buildhound.server.connector.ConnectorEnricher
 import dev.buildhound.server.connector.ConnectorHttpClient
 import dev.buildhound.server.connector.ConnectorRegistry
+import dev.buildhound.server.connector.GitHubActionsConnector
+import dev.buildhound.server.connector.GitLabConnector
 import dev.buildhound.server.connector.EnrichmentQueue
 import dev.buildhound.server.connector.EnvConnectorConfigStore
 import dev.buildhound.server.connector.InMemoryCiSpanStore
@@ -137,10 +139,13 @@ fun storesFromEnvironment(env: Map<String, String>): ServerStores {
             // The server's only outbound caller — real HTTP in prod; https-only enforced in the dispatcher.
             alerts = HttpAlertDispatcher(),
             dashboardBaseUrl = env["BUILDHOUND_DASHBOARD_URL"],
-            // CI connector framework (plan 028): ship the Azure connector; credentials + host allowlist
-            // come from env only (UNCONFIGURED and inert until a PAT is set).
+            // CI connectors (plan 028 framework, plan 041 GitHub/GitLab): ship all three; credentials +
+            // host allowlist come from env only (each is UNCONFIGURED and inert until its token is set).
+            // One shared outbound client (timeout-bounded, no-redirect) across every connector.
             ciSpans = PostgresCiSpanStore(dataSource),
-            connectors = ConnectorRegistry(listOf(AzureDevOpsConnector(ConnectorHttpClient.create()))),
+            connectors = ConnectorRegistry(ConnectorHttpClient.create().let { http ->
+                listOf(AzureDevOpsConnector(http), GitHubActionsConnector(http), GitLabConnector(http))
+            }),
             connectorConfigs = EnvConnectorConfigStore(env),
             // Addon foundation (plan 039): jsonb store present, allowlist empty until a consumer ships.
             addons = PostgresAddonStore(dataSource),

@@ -4,7 +4,6 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
-import java.net.URI
 import java.time.Instant
 import java.util.Base64
 import kotlinx.serialization.json.Json
@@ -116,12 +115,7 @@ class AzureDevOpsConnector(
     private companion object {
         val logger = LoggerFactory.getLogger("dev.buildhound.server.connector.Azure")
 
-        fun isAllowedHost(baseUrl: String, allowed: Set<String>): Boolean {
-            val uri = runCatching { URI(baseUrl) }.getOrNull() ?: return false
-            if (!uri.scheme.equals("https", ignoreCase = true)) return false
-            val host = uri.host ?: return false
-            return allowed.any { it.equals(host, ignoreCase = true) }
-        }
+        // isAllowedHost is shared with the other connectors (ConnectorNet.kt) — one SSRF guard, no drift.
 
         fun spanKind(type: String?): SpanKind = when (type?.lowercase()) {
             "stage" -> SpanKind.STAGE
