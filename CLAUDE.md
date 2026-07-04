@@ -90,6 +90,50 @@ Findings are fixed (or explicitly accepted with a note in the PR) before merge. 
 review invalidates an architectural assumption, update `docs/architecture.md` — including
 its decision log — in the same PR.
 
+#### Subagent fleet & review routing
+
+The §3 reviews above run through the per-stack reviewer fleet (user scope,
+`~/.claude/agents/`, hot-reloaded — nothing to install). Route by changed paths:
+
+| Changed paths | Code & architecture review (§3.1) |
+|---|---|
+| `*.kt`, `*.kts`, `buildhound-commons`, `buildhound-gradle-plugin`, `buildhound-server` | `kotlin-gradle-reviewer` |
+| `Dockerfile`, `deploy/compose.yaml`, CI yml, `buildhound-ci-assets`, deploy scripts | `infra-reviewer` |
+| `buildhound-report` (HTML artifact) | `frontend-reviewer` (optional — flag if the rendered-build-data templating looks risky) |
+
+**The §3.2 Security & privacy review stays authoritative and always runs for
+plugin/commons/server changes** — no fleet agent covers Ktor app-security or BuildHound's
+privacy spec (§3.7 pseudonymization, scrubber coverage). Do not substitute a generic
+security-reviewer-* agent for it. The fleet only adds:
+- `security-reviewer-infra` for Dockerfile/compose/CI paths (secrets in layers/traces,
+  token scope, supply chain) — in addition to, not instead of, §3.2.
+
+Cross-stack diffs (e.g. plugin change + Dockerfile bump) get both quality reviewers, each
+scoped to its own paths, plus the mandatory §3.2 review.
+
+The generic `code-reviewer` agent is scoped to KMP/Compose **mobile** projects — do not use
+it here.
+
+Operational agents:
+- `gh-ci-babysitter` (background) — after every push to a branch with an open **GitHub**
+  PR; watches Actions in chunked ≤8-min polls (the Bash tool caps a single call at 10 min),
+  classifies failures, surfaces failed jobs marked `allow_failure`/continue-on-error.
+- `review-env-verifier` (background) — after a deploy goes green; pass the base URL +
+  checklist in the prompt.
+- `plan-scaffolder` — when a `docs/plans/NNN-*.md` plan is approved: writes the handoff doc
+  and emits the fresh-context kickoff prompt.
+
+Standing rules:
+- **Never set `CLAUDE_CODE_SUBAGENT_MODEL`** (env or settings) — it overrides every agent's
+  `model` frontmatter and flattens the fleet's haiku/sonnet cost routing.
+- Reviewers are report-only; implementation fixes findings after reviews complete.
+- The `isolation: worktree` agent option branches from the **default branch** — never use
+  it for agents that must land work on a feature branch; read-only agents only.
+
+Not yet built (candidates if reviews keep flagging the same gaps): a
+`config-cache-reviewer`-style pre-TestKit check, and a habit-agent for the "versions from
+Maven Central metadata, never from memory" convention above.
+
 ### 4. Keep the architecture document alive
 
 `docs/architecture.md` is a living document: improve it whenever a better practice is
