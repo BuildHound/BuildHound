@@ -18,7 +18,7 @@
 
     // Outcome strings come from the server but are untrusted in principle; only
     // allowlisted values may become CSS class names (everything else renders unstyled).
-    const BADGE_CLASSES = ["SUCCESS", "FAILED", "EXECUTED", "UP_TO_DATE", "FROM_CACHE", "SKIPPED", "NO_SOURCE"];
+    const BADGE_CLASSES = ["SUCCESS", "FAILED", "INTERRUPTED", "EXECUTED", "UP_TO_DATE", "FROM_CACHE", "SKIPPED", "NO_SOURCE"];
     const badgeClass = outcome => BADGE_CLASSES.includes(outcome) ? outcome : "";
 
     // Views are async; only the most recently started render may touch the DOM.
@@ -176,7 +176,7 @@
         for (const value of ["", "ci", "local", "benchmark"]) mode.append(new Option(value || "any mode", value));
         mode.value = current.mode || "";
         const outcome = document.createElement("select");
-        for (const value of ["", "success", "failed"]) outcome.append(new Option(value || "any outcome", value));
+        for (const value of ["", "success", "failed", "interrupted"]) outcome.append(new Option(value || "any outcome", value));
         outcome.value = current.outcome || "";
         const apply = el("button", "Apply");
         apply.addEventListener("click", () => onApply({
@@ -519,6 +519,14 @@
             + " in " + moduleCount + (moduleCount === 1 ? " module" : " modules")
             + " — " + ms(taskTime) + " total task time",
             "summary-sentence"));
+
+        // Lost build (plan 033): a marker-only INTERRUPTED build never finalized, so it carries no
+        // tasks. Say so honestly rather than showing an all-zero ledger read as "a build that did
+        // nothing". A finalized build never reaches this state (empty tasks + INTERRUPTED only).
+        if (build.outcome === "INTERRUPTED" && tasks.length === 0) {
+            app.append(el("p", "This build did not finish — the daemon died before telemetry was written, so no task detail was captured.", "notice-warn"));
+            return;
+        }
 
         // Work-avoidance ledger replaces the v0 outcome-count chips: every category with
         // explicit zeros, share-of-all-tasks percentages, summed task time.

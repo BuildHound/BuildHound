@@ -170,6 +170,11 @@ fun Route.connectorHookRoutes(
                     val (buildId, buildUrl) = resolved.value
                     if (buildId != null) {
                         enrichment.submit(project.id, buildId, event.ref.provider, event.ref.runId, buildUrl)
+                    } else {
+                        // Expected-build fallback (plan 033): the run completed on the Timeline but no
+                        // payload ever arrived (the build died on an ephemeral agent). Confirm + record
+                        // an INTERRUPTED build asynchronously so it stops vanishing.
+                        enrichment.submitExpectedBuildCheck(project.id, event.ref.provider, event.ref.runId, buildUrl)
                     }
                 }
             }

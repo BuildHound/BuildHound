@@ -213,8 +213,14 @@ data class CapsSummary(
     val droppedArtifacts: Int = 0,
 )
 
+/**
+ * Terminal build state. `INTERRUPTED` (plan 033, additive) is a build that started but never
+ * finalized — the daemon died mid-build (OOM kill, `kill -9`, agent eviction) so the in-process Flow
+ * finalizer never ran. It is synthesized from a start-marker by the *next* build's finalizer (or by
+ * the connector expected-build check), never emitted by a build that reaches finalization.
+ */
 @Serializable
-enum class BuildOutcome { SUCCESS, FAILED }
+enum class BuildOutcome { SUCCESS, FAILED, INTERRUPTED }
 
 @Serializable
 enum class BuildMode {

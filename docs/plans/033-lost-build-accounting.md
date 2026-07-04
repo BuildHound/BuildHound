@@ -92,6 +92,18 @@ marker and the eventual finalizer payload carry the same id (today the finalizer
 UUID at `TelemetryFinalizerAction.kt:112`; move that generation to a CC-safe value the
 service and finalizer both read).
 
+> **Implementation divergence (as built).** The marker carries `buildId`, `startedAtMs`,
+> `requestedTasks`, `projectKey`, and resolved `mode` — but **not** `ci`/`vcs`. A build-service
+> parameter value is snapshotted into the configuration-cache entry and replayed *stale* on a hit
+> (the same mechanism by which `taskMetadata` goes empty under isolated projects), so wiring the
+> ci/vcs value sources into the collector would bake last-build's ci/vcs and misreport them on every
+> CC-enabled build — exactly the CI builds where it matters. Instead the buildId lives on the
+> collector service (`by lazy`, shared with the finalizer via its existing `@ServiceReference`), and
+> the marker's config-stable fields ride a single `MarkerContext` param; `mode` is resolved with no
+> CI context (an `AUTO` build's marker is `LOCAL`). The connector expected-build fallback carries
+> authoritative CI correlation for the CI case, and a local build has no ci context anyway, so
+> nothing of value is lost. `assembleInterrupted(marker, projectRoots)` therefore builds ci/vcs = null.
+
 **Reconciliation (plugin, finalizer).** At the top of a normal finalization: (1) delete this
 build's own marker (it finalized → not interrupted); (2) scan `started/` for markers whose
 buildId ≠ the current build's, and for each, synthesize an `INTERRUPTED` payload

@@ -3,6 +3,7 @@ package dev.buildhound.gradle
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.ConfigurationCacheState
+import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
 import dev.buildhound.commons.payload.PayloadCaps
@@ -46,6 +47,29 @@ class PayloadAssemblerTest {
         assertEquals(BuildMode.BENCHMARK, PayloadAssembler.resolveMode(TelemetryMode.LOCAL, null, benchmark))
         // DISABLED still short-circuits — a benchmark env never re-enables a disabled build.
         assertNull(PayloadAssembler.resolveMode(TelemetryMode.DISABLED, ci, benchmark))
+    }
+
+    @Test
+    fun `assembleInterrupted synthesizes a never-finalized payload from a marker`() {
+        val marker = StartMarker(
+            buildId = "dead-build-id",
+            startedAtMs = 1_751_450_000_000,
+            mode = BuildMode.CI,
+            projectKey = "pilot",
+            requestedTasks = listOf("assembleDebug"),
+        )
+        val payload = PayloadAssembler.assembleInterrupted(marker, projectRoots = emptyList())
+
+        assertEquals("dead-build-id", payload.buildId)
+        assertEquals(BuildOutcome.INTERRUPTED, payload.outcome)
+        assertEquals(BuildMode.CI, payload.mode)
+        assertEquals("pilot", payload.projectKey)
+        assertEquals(listOf("assembleDebug"), payload.requestedTasks)
+        assertEquals(marker.startedAtMs, payload.startedAt)
+        assertEquals(marker.startedAtMs, payload.finishedAt, "finishedAt == startedAt for a lost build")
+        assertTrue(payload.tasks.isEmpty())
+        assertNull(payload.derived)
+        assertNull(payload.caps, "an empty payload is below every cap")
     }
 
     @Test

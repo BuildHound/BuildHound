@@ -22,11 +22,38 @@ class ConnectorEnricher(
     private val maxPollAttempts: Int = 6,
     private val backoff: (attempt: Int) -> Long = { attempt -> minOf(5_000L shl (attempt - 1), 120_000L) },
     private val sleep: suspend (Long) -> Unit = { delay(it) },
+    /**
+     * Expected-build fallback sink (plan 033): given a completed [CiRun] with no ingested payload,
+     * record a server-originated INTERRUPTED build. Default no-op keeps the connector package
+     * decoupled from [dev.buildhound.server.BuildStore]; production wires it in `ServerStores`.
+     */
+    private val recordInterrupted: (projectId: String, provider: String, runId: String, run: CiRun) -> Unit =
+        { _, _, _, _ -> },
 ) {
     private val logger = LoggerFactory.getLogger("dev.buildhound.server.connector.Enrich")
 
     /** True when a registered connector can pull a timeline for this provider (ingest guard). */
     fun canEnrich(provider: String?): Boolean = registry.canEnrich(provider)
+
+    /**
+     * Expected-build check (plan 033): a `build.complete` hook fired for a run with no ingested
+     * payload. Fetch the Timeline once; if the run has finished, hand it to [recordInterrupted] to
+     * synthesize an INTERRUPTED build. Never throws (mirrors [enrich]) and no-ops when the connector
+     * or credential is absent, or the run is still running.
+     */
+    suspend fun checkExpectedBuild(projectId: String, provider: String, runId: String, buildUrl: String?) {
+        runCatching {
+            if (!registry.canEnrich(provider)) return
+            val connector = registry.byProvider(provider)
+            if (!connector.capabilities.contains(Capability.TIMELINE_PULL)) return
+            val config = configs.forProject(projectId, provider) ?: return
+            if (config.credential == null) return
+            val ref = connector.refFrom(provider, runId, buildUrl)
+            val run = connector.fetchRun(ref, config) ?: return
+            if (run.finishedAt == null) return // still running → not interrupted
+            recordInterrupted(projectId, provider, runId, run)
+        }.onFailure { logger.warn("expected-build check failed for {}:{}: {}", provider, runId, it::class.java.simpleName) }
+    }
 
     suspend fun enrich(
         projectId: String,

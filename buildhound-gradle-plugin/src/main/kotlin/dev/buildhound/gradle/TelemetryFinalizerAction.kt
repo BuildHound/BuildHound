@@ -6,9 +6,9 @@ import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.FingerprintInfo
+import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.report.ReportAssets
 import java.io.File
-import java.util.UUID
 import kotlinx.serialization.json.Json
 import org.gradle.api.flow.FlowAction
 import org.gradle.api.flow.FlowParameters
@@ -145,7 +145,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             val benchmark = parameters.benchmark.orNull
             val mode = PayloadAssembler.resolveMode(configuredMode, ci, benchmark) ?: return@runCatching
 
-            val tasks = parameters.collector.get().snapshot()
+            val collector = parameters.collector.get()
+            val tasks = collector.snapshot()
+            // Lost-build reconciliation (plan 033): before this build's own payload, delete this
+            // build's marker (it finalized → not interrupted) and synthesize+route an INTERRUPTED
+            // build for any *other* stale marker in `started/`. Best-effort; never fails the build.
+            reconcileStartMarkers(parameters, ownBuildId = collector.buildId)
             val ccState = configurationCacheState(parameters.configurationCacheRequested.getOrElse(false), execution)
             // Config-cache hit skips configuration entirely; entry-load time is not
             // measured, so report 0 rather than the (absent) marks. Otherwise the marked
@@ -180,7 +185,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // captured at config time and ride the collector service (replayed on a CC hit).
             val tests = if (parameters.testsCollect.getOrElse(true)) {
                 TestResultCollector.collect(
-                    locations = parameters.collector.get().snapshotLocations(),
+                    locations = collector.snapshotLocations(),
                     taskOutcomes = tasks.associate { it.path to it.outcome },
                     warn = { logger.warn(it) },
                     failInjection = parameters.failTestCollection.getOrElse(false),
@@ -195,7 +200,9 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             val artifacts = parameters.rootDir.orNull?.let { readArtifacts(File(it)) }.orEmpty()
 
             val payload = PayloadAssembler.assemble(
-                buildId = UUID.randomUUID().toString(),
+                // Shared with the collector's start-marker (plan 033): same id both places so this
+                // build's own marker is the one deleted during reconciliation above.
+                buildId = collector.buildId,
                 projectKey = parameters.projectKey.orNull,
                 mode = mode,
                 buildFailed = parameters.buildFailed.get(),
@@ -281,6 +288,82 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         }.onFailure { failure ->
             logger.warn("[buildhound] telemetry finalization failed (build unaffected): {}", failure.message)
             parameters.writeFailureMarker(failure)
+        }
+    }
+
+    /**
+     * Lost-build reconciliation (plan 033): delete this build's own start-marker (it reached
+     * finalization, so it is not interrupted), then for every *other* stale marker in `started/`
+     * synthesize an `INTERRUPTED` payload and route it through the same gate/uploader as a normal
+     * build. Bounded + TTL-pruned via [MarkerReconciler] so a dead server can't grow the dir. Wholly
+     * best-effort: the outer body and each marker are guarded, so nothing here can fail or hang the
+     * build. A corrupt marker is deleted (it can never parse) rather than retried forever.
+     */
+    private fun reconcileStartMarkers(parameters: Parameters, ownBuildId: String) {
+        runCatching {
+            val startedDir = File(parameters.outputDir.get(), "started")
+            // Own marker first, unconditionally — even if the scan below finds nothing.
+            runCatching { File(startedDir, "$ownBuildId.json").delete() }
+            val files = startedDir.listFiles { file -> file.isFile && file.name.endsWith(".json") } ?: return@runCatching
+            val found = files.mapNotNull { file ->
+                if (file.name == "$ownBuildId.json") return@mapNotNull null
+                runCatching {
+                    file to BuildHoundJson.payload.decodeFromString(StartMarker.serializer(), file.readText())
+                }.getOrElse {
+                    runCatching { file.delete() } // corrupt/partial marker → drop, never retry or throw
+                    null
+                }
+            }
+            val byId = found.associate { (file, marker) -> marker.buildId to file }
+            val plan = MarkerReconciler.plan(found.map { it.second }, nowMs = System.currentTimeMillis())
+            for (buildId in plan.prune) runCatching { byId[buildId]?.delete() }
+            for (marker in plan.reconcile) {
+                runCatching {
+                    routeInterruptedBuild(parameters, marker)
+                    byId[marker.buildId]?.delete()
+                }.onFailure {
+                    // Genuine error (e.g. disk) → leave the marker for a later build (TTL bounds it);
+                    // an upload failure already spooled+retries. Never stop the other markers.
+                    logger.info("[buildhound] interrupted-build reconcile deferred for {}: {}", marker.buildId, it.message)
+                }
+            }
+            // Bound the local interrupted/ mirror the same way markers + the spool are bounded
+            // (plan 033 reviews): drop copies older than the marker TTL, by mtime. Best-effort.
+            val cutoff = System.currentTimeMillis() - MarkerReconciler.TTL_MS
+            File(parameters.outputDir.get(), "interrupted")
+                .listFiles { file -> file.isFile && file.name.endsWith(".json") && file.lastModified() < cutoff }
+                ?.forEach { file -> runCatching { file.delete() } }
+        }.onFailure { logger.info("[buildhound] start-marker reconciliation skipped (build unaffected): {}", it.message) }
+    }
+
+    /**
+     * Persist a reconciled `INTERRUPTED` build locally (a distinct per-buildId file — never clobbering
+     * the current build's `build-payload.json`) so a lost build is visible even with no server, then
+     * upload/spool it through the same [UploadGate]/[PayloadUploader] as a normal build of the dead
+     * build's own mode (a local build with no opt-in is written locally and not uploaded).
+     */
+    private fun routeInterruptedBuild(parameters: Parameters, marker: StartMarker) {
+        val payload = PayloadAssembler.assembleInterrupted(marker, scrubRoots(parameters.rootDir.orNull))
+        val json = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
+        val localDir = File(parameters.outputDir.get(), "interrupted").apply { mkdirs() }
+        File(localDir, "${payload.buildId}.json").writeText(prettyJson.encodeToString(BuildPayload.serializer(), payload))
+        val decision = UploadGate.decide(
+            enabled = true,
+            serverUrl = parameters.serverUrl.orNull,
+            mode = marker.mode,
+            localBuildsEnabled = parameters.localBuildsEnabled.getOrElse(true),
+            requireOptInFile = parameters.requireOptInFile.getOrElse(true),
+            optInFileExists = optInMarkerExists(parameters.optInFile.orNull),
+        )
+        when (decision) {
+            is UploadGate.Decision.Upload ->
+                PayloadUploader(
+                    baseUrl = decision.url,
+                    token = parameters.serverToken.orNull,
+                    spoolDir = File(parameters.outputDir.get(), "spool"),
+                ).use { uploader -> uploader.uploadOrSpool(payload.buildId, json) }
+            is UploadGate.Decision.Skip ->
+                logger.info("[buildhound] interrupted build {} kept local: {}", payload.buildId, decision.reason)
         }
     }
 

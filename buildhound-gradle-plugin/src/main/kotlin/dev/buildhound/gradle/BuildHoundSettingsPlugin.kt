@@ -71,6 +71,24 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         ) { spec ->
             spec.parameters.taskMetadata.set(settings.providers.provider { taskMetadataHolder.get() })
             spec.parameters.testResultLocations.set(settings.providers.provider { testLocationsHolder.get() })
+            // Start-marker context (plan 033): only CC-stable fields (no ci/vcs value source — a
+            // service param bakes and replays stale on a hit). Null when telemetry is off → no marker.
+            // Mode is resolved with no CI context (an AUTO build's marker is LOCAL); the connector
+            // fallback upgrades genuine CI cases. requestedTasks is part of the CC key, so it is never
+            // stale on a hit; projectKey/startedDir are stable across builds.
+            spec.parameters.markerContext.set(
+                settings.providers.provider {
+                    if (!extension.enabled.get()) return@provider null
+                    val markerMode = PayloadAssembler.resolveMode(extension.mode.get(), ci = null, benchmark = null)
+                        ?: return@provider null
+                    MarkerContext(
+                        startedDir = File(settings.rootDir, "build/buildhound/started").absolutePath,
+                        projectKey = settings.rootProject.name,
+                        requestedTasks = settings.startParameter.taskNames.toList(),
+                        mode = markerMode,
+                    )
+                },
+            )
         }
 
         eventsListenerRegistry.onTaskCompletion(collector)

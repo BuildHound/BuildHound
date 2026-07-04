@@ -283,13 +283,17 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         dataSource.connection.use { connection ->
             val (clauses, params) = filterSql(filter)
             connection.prepareStatement(
+                // Interrupted builds (plan 033) are counted separately and excluded from the
+                // duration/hit-rate aggregates (their duration is synthetic) — mirrors the in-memory
+                // store's filter so the two agree. coalesce keeps an interrupted-only day at 0, not null.
                 """
                 SELECT (started_at AT TIME ZONE 'UTC')::date AS day,
                        count(*) AS builds,
                        count(*) FILTER (WHERE outcome = 'FAILED') AS failures,
-                       avg(duration_ms)::bigint AS avg_duration,
-                       max(duration_ms) AS max_duration,
-                       avg(hit_rate) AS avg_hit_rate
+                       count(*) FILTER (WHERE outcome = 'INTERRUPTED') AS interrupted,
+                       coalesce(avg(duration_ms) FILTER (WHERE outcome IN ('SUCCESS','FAILED')), 0)::bigint AS avg_duration,
+                       coalesce(max(duration_ms) FILTER (WHERE outcome IN ('SUCCESS','FAILED')), 0) AS max_duration,
+                       avg(hit_rate) FILTER (WHERE outcome IN ('SUCCESS','FAILED')) AS avg_hit_rate
                 FROM builds
                 WHERE project_id = ? AND started_at >= ?$clauses
                 GROUP BY day ORDER BY day
@@ -312,6 +316,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                                     avgDurationMs = rows.getLong("avg_duration"),
                                     maxDurationMs = rows.getLong("max_duration"),
                                     avgHitRate = rows.getDouble("avg_hit_rate").takeUnless { rows.wasNull() },
+                                    interrupted = rows.getInt("interrupted"),
                                 ),
                             )
                         }

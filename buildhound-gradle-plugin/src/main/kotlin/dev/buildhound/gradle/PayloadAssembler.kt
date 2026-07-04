@@ -17,6 +17,7 @@ import dev.buildhound.commons.payload.PayloadCapper
 import dev.buildhound.commons.payload.PayloadCaps
 import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.commons.payload.ProcessInfo
+import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TestTaskResult
 import dev.buildhound.commons.payload.ToolchainInfo
@@ -42,6 +43,28 @@ internal object PayloadAssembler {
             TelemetryMode.AUTO -> if (ci != null) BuildMode.CI else BuildMode.LOCAL
             TelemetryMode.DISABLED -> null
         }
+    }
+
+    /**
+     * Synthesize an `INTERRUPTED` payload (plan 033) from a dead build's [StartMarker]: a build that
+     * started but never finalized. `finishedAt == startedAt`, no tasks, no derived metrics, no
+     * environment/ci/vcs (the marker carries none). Scrubbed for defense-in-depth even though every
+     * field is already sanitized — `projectKey`/`requestedTasks` cannot carry a path, but the scrub is
+     * cheap and keeps one code path. Never capped (an empty payload is below every budget).
+     */
+    fun assembleInterrupted(marker: StartMarker, projectRoots: List<String>): BuildPayload {
+        val payload = BuildPayload(
+            buildId = marker.buildId,
+            projectKey = marker.projectKey,
+            startedAt = marker.startedAtMs,
+            finishedAt = marker.startedAtMs,
+            outcome = BuildOutcome.INTERRUPTED,
+            requestedTasks = marker.requestedTasks,
+            mode = marker.mode,
+            tasks = emptyList(),
+            derived = null,
+        )
+        return PayloadScrubber.scrub(payload, projectRoots)
     }
 
     fun assemble(

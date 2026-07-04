@@ -84,6 +84,12 @@ data class TrendPoint(
     val avgDurationMs: Long,
     val maxDurationMs: Long,
     val avgHitRate: Double? = null,
+    /**
+     * Never-finalized builds this day (plan 033). Counted separately and **excluded** from
+     * [failures] and the duration/hit-rate aggregates — an interrupted build's duration is synthetic
+     * (`finishedAt == startedAt`), so folding it in would skew baselines.
+     */
+    val interrupted: Int = 0,
 )
 
 /** The columns that key a rolling baseline (spec §5, plan 025). */
@@ -291,15 +297,19 @@ class InMemoryBuildStore : BuildStore {
             .groupBy { LocalDate.ofInstant(Instant.ofEpochMilli(it.startedAt), ZoneOffset.UTC) }
             .toSortedMap()
             .map { (day, dayBuilds) ->
-                val durations = dayBuilds.map { it.finishedAt - it.startedAt }
-                val hitRates = dayBuilds.mapNotNull { it.derived?.cacheableHitRate }
+                // Interrupted builds (plan 033) are counted but never fed to the duration/hit-rate
+                // aggregates (their duration is synthetic) — only SUCCESS/FAILED builds are.
+                val finished = dayBuilds.filter { it.outcome.name == "SUCCESS" || it.outcome.name == "FAILED" }
+                val durations = finished.map { it.finishedAt - it.startedAt }
+                val hitRates = finished.mapNotNull { it.derived?.cacheableHitRate }
                 TrendPoint(
                     day = day.toString(),
                     builds = dayBuilds.size,
                     failures = dayBuilds.count { it.outcome.name == "FAILED" },
-                    avgDurationMs = Math.round(durations.average()),
-                    maxDurationMs = durations.max(),
+                    avgDurationMs = if (durations.isEmpty()) 0 else Math.round(durations.average()),
+                    maxDurationMs = durations.maxOrNull() ?: 0,
                     avgHitRate = hitRates.takeIf { it.isNotEmpty() }?.average(),
+                    interrupted = dayBuilds.count { it.outcome.name == "INTERRUPTED" },
                 )
             }
     }

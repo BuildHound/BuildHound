@@ -36,21 +36,38 @@ class EnrichmentQueue(
 
     fun submit(projectId: String, buildId: String, provider: String?, runId: String?, buildUrl: String?) {
         if (provider == null || runId == null || !enricher.canEnrich(provider)) return
+        enqueue(projectId, label = buildId) { enricher.enrich(projectId, buildId, provider, runId, buildUrl) }
+    }
+
+    /**
+     * Expected-build check (plan 033): a `build.complete` hook fired for a run with no ingested
+     * payload. Same bounded/per-project-capped single worker as [submit]; it confirms the run
+     * completed on the Timeline and records an INTERRUPTED build. Fire-and-forget, never throws.
+     */
+    fun submitExpectedBuildCheck(projectId: String, provider: String?, runId: String?, buildUrl: String?) {
+        if (provider == null || runId == null || !enricher.canEnrich(provider)) return
+        enqueue(projectId, label = "interrupted:$provider:$runId") {
+            enricher.checkExpectedBuild(projectId, provider, runId, buildUrl)
+        }
+    }
+
+    /** Shared load-shedding + per-project fairness guard + job tracking for both submit paths. */
+    private fun enqueue(projectId: String, label: String, work: suspend () -> Unit) {
         active.removeAll { it.isCompleted }
         if (active.size >= capacity) {
-            logger.warn("enrichment queue full ({}); dropping build {}", capacity, buildId)
+            logger.warn("enrichment queue full ({}); dropping {}", capacity, label)
             return
         }
         // Reserve a per-project slot atomically; roll back and drop if the tenant is over its cap.
         if (inFlightByProject.merge(projectId, 1, Int::plus)!! > perProjectCap) {
             inFlightByProject.merge(projectId, -1) { old, delta -> (old + delta).takeIf { it > 0 } }
-            logger.warn("enrichment per-project cap ({}) reached for project; dropping build {}", perProjectCap, buildId)
+            logger.warn("enrichment per-project cap ({}) reached for project; dropping {}", perProjectCap, label)
             return
         }
         val job = scope.launch {
             try {
-                runCatching { enricher.enrich(projectId, buildId, provider, runId, buildUrl) }
-                    .onFailure { logger.warn("enrichment worker crashed for build {}: {}", buildId, it::class.java.simpleName) }
+                runCatching { work() }
+                    .onFailure { logger.warn("enrichment worker crashed for {}: {}", label, it::class.java.simpleName) }
             } finally {
                 inFlightByProject.merge(projectId, -1) { old, delta -> (old + delta).takeIf { it > 0 } }
             }

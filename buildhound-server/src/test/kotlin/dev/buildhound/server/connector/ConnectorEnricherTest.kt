@@ -49,6 +49,54 @@ class ConnectorEnricherTest {
         sleep = {}, // instant — no real backoff in tests
     )
 
+    // --- expected-build fallback (plan 033) ---
+
+    private fun expectedBuildEnricher(
+        connector: CiConnector,
+        cfg: ConnectorConfig?,
+        record: (String, String, String, CiRun) -> Unit,
+    ) = ConnectorEnricher(
+        registry = ConnectorRegistry(listOf(connector)),
+        configs = configs(cfg),
+        spans = store,
+        sleep = {},
+        recordInterrupted = record,
+    )
+
+    @Test
+    fun `checkExpectedBuild records interrupted for a completed run`() = runBlocking {
+        val recorded = mutableListOf<Triple<String, String, CiRun>>()
+        val connector = StubConnector(onFetch = { _, _ -> CiRun(startedAt = 100, finishedAt = 400) })
+        expectedBuildEnricher(connector, config) { _, provider, runId, run -> recorded += Triple(provider, runId, run) }
+            .checkExpectedBuild("proj", "azure-devops", "99", null)
+        assertEquals(1, recorded.size)
+        assertEquals("99", recorded.single().second)
+        assertEquals(400L, recorded.single().third.finishedAt)
+    }
+
+    @Test
+    fun `checkExpectedBuild does nothing for a still-running run`() = runBlocking {
+        var called = false
+        val connector = StubConnector(onFetch = { _, _ -> CiRun(startedAt = 100, finishedAt = null) })
+        expectedBuildEnricher(connector, config) { _, _, _, _ -> called = true }
+            .checkExpectedBuild("proj", "azure-devops", "99", null)
+        assertTrue(!called, "a run still in progress is not interrupted")
+    }
+
+    @Test
+    fun `checkExpectedBuild no-ops without a credential and never throws on a bad fetch`() = runBlocking {
+        var called = false
+        val noCred = StubConnector(onFetch = { _, _ -> CiRun(finishedAt = 1) })
+        expectedBuildEnricher(noCred, config.copy(credential = null)) { _, _, _, _ -> called = true }
+            .checkExpectedBuild("proj", "azure-devops", "99", null)
+        assertTrue(!called, "no credential → no synthesis")
+
+        val throwing = StubConnector(onFetch = { _, _ -> throw RuntimeException("boom") })
+        expectedBuildEnricher(throwing, config) { _, _, _, _ -> called = true }
+            .checkExpectedBuild("proj", "azure-devops", "99", null) // must not throw
+        assertTrue(!called)
+    }
+
     @Test
     fun `a finished run stores OK with the tree`() = runBlocking {
         val connector = StubConnector(onFetch = { _, _ ->

@@ -46,7 +46,16 @@ class ServerStores(
 ) {
     /** Bounded single-worker enrichment queue; built from the connector wiring unless injected (tests). */
     val enrichment: EnrichmentQueue =
-        enrichment ?: EnrichmentQueue(ConnectorEnricher(connectors, connectorConfigs, ciSpans))
+        enrichment ?: EnrichmentQueue(
+            ConnectorEnricher(
+                connectors, connectorConfigs, ciSpans,
+                // Expected-build fallback (plan 033): a completed-but-never-ingested CI run is recorded
+                // as an idempotent, tenant-scoped INTERRUPTED build so it stops vanishing.
+                recordInterrupted = { projectId, provider, runId, run ->
+                    InterruptedBuild.recordIfMissing(builds, projectId, provider, runId, run)
+                },
+            ),
+        )
 }
 
 /**

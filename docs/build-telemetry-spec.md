@@ -147,6 +147,8 @@ Payloads are gzipped and **size-capped before upload** (see §4 `caps`, plan 019
 
 *Deliberately not a background thread:* the original v0.1 sketch's local background/JVM-exit-flush upload was dropped — there is no reliable flush guarantee at daemon shutdown, and Talaiot's `publishOnNewThread` during `BuildService.close()` silently drops data (plan 008). *Planned, not shipped:* an opt-out `uploadInBackground` knob for local builds (Tuist parity — an opt-out from blocking local builds, not the default; plan 027), and an optional CI logging-command annotation emitted on spool (future `buildhound-ci-assets` work).
 
+*As built (plan 033) — lost-build accounting:* a build that dies mid-run (OOM kill, `kill -9`, agent eviction) never reaches the Flow finalizer, so it used to vanish. `BuildOutcome` now has a third, additive value `INTERRUPTED` for a never-finalized build. **Primary (plugin):** the execution-time collector writes a tiny `build/buildhound/started/<buildId>.json` start-marker on its first task event (CC-safe — execution-time IO only, no ci/vcs value source since a build-service param bakes and replays stale on a hit); the *next* build's finalizer deletes its own marker, then synthesizes an `INTERRUPTED` payload (`finishedAt == startedAt`, empty tasks, no derived) for any *other* stale marker and routes it through the same gate/uploader (bounded ≤20/build, TTL-pruned ~14 d). **Fallback (server, Azure-only, opt-in):** on a `build.complete` connector hook for a run with no ingested payload, an expected-build check fetches the Timeline and — if it completed — records a deterministic-id `interrupted:<provider>:<runId>` build (idempotent, tenant-scoped), covering the ephemeral-agent case the marker cannot. Both are additive and never mistaken for a finalized build (empty tasks + `INTERRUPTED`). `/v1/trends` counts interrupted builds separately and **excludes** them from duration/hit-rate/failure aggregates (their duration is synthetic); the regression engine (plan 025) must exclude them too.
+
 ## 4. Payload schema (v1, `schemaVersion: 1`)
 
 Top-level document (kotlinx-serialization models in `buildhound-commons`; server tolerates unknown fields):
@@ -155,7 +157,7 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
 {
   "schemaVersion": 1,
   "buildId": "uuid", "projectKey": "from-token",
-  "startedAt": 0, "finishedAt": 0, "outcome": "SUCCESS|FAILED",
+  "startedAt": 0, "finishedAt": 0, "outcome": "SUCCESS|FAILED|INTERRUPTED",
   "failure": { "taskPath": "...", "exceptionClass": "...", "messageHash": "..." },
   "requestedTasks": ["assembleDebug"], "mode": "ci|local|benchmark",
   "environment": { "os": "...", "arch": "...", "cores": 0, "ramMb": 0,

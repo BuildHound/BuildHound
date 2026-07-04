@@ -216,6 +216,33 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `schema v1 interrupted golden file deserializes as a never-finalized build`() {
+        val payload =
+            BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-interrupted-v1.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        assertEquals(BuildOutcome.INTERRUPTED, payload.outcome)
+        assertEquals(BuildMode.LOCAL, payload.mode)
+        // A never-finalized build carries no work and no derived metrics — finishedAt == startedAt.
+        assertTrue(payload.tasks.isEmpty(), "an interrupted build has no task rows")
+        assertNull(payload.derived, "an interrupted build has no derived metrics")
+        assertEquals(payload.startedAt, payload.finishedAt)
+    }
+
+    @Test
+    fun `StartMarker round-trips losslessly`() {
+        val marker = StartMarker(
+            buildId = "7c2a1b90-4d5e-4f6a-8b7c-1d2e3f4a5b6c",
+            startedAtMs = 1751450000000,
+            mode = BuildMode.CI,
+            projectKey = "pilot-android",
+            requestedTasks = listOf("assembleDebug", "test"),
+        )
+        val json = BuildHoundJson.payload.encodeToString(StartMarker.serializer(), marker)
+        assertEquals(marker, BuildHoundJson.payload.decodeFromString(StartMarker.serializer(), json))
+    }
+
+    @Test
     fun `round trip is lossless`() {
         for (name in listOf(
             "build-payload-v1.json",
@@ -228,6 +255,7 @@ class GoldenPayloadTest {
             "build-payload-v1-processes.json",
             "build-payload-v1-benchmark.json",
             "build-payload-v1-artifacts.json",
+            "build-payload-interrupted-v1.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

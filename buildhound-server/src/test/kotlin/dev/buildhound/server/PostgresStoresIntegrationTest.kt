@@ -77,6 +77,31 @@ class PostgresStoresIntegrationTest {
     }
 
     @Test
+    fun `an INTERRUPTED build round-trips, re-ingests idempotently, and stays out of duration trends`() {
+        val project = tokens.ensureProjectWithToken("interrupted-project", sha256Hex("ip"))
+        val now = System.currentTimeMillis()
+        // A deliberately huge (900s) duration so that failing to EXCLUDE it from the average is visible.
+        val interrupted = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            """{"schemaVersion":1,"buildId":"i-1","startedAt":${now - 3_600_000},"finishedAt":${now - 3_600_000 + 900_000},"outcome":"INTERRUPTED","mode":"ci"}""",
+        )
+        assertTrue(builds.save(project.id, interrupted), "first save inserts")
+        assertFalse(builds.save(project.id, interrupted), "re-ingest of the same buildId is a no-op")
+
+        val stored = builds.findById(project.id, "i-1") ?: error("interrupted build must round-trip")
+        assertEquals(dev.buildhound.commons.payload.BuildOutcome.INTERRUPTED, stored.outcome)
+
+        // A 60s SUCCESS + the 900s INTERRUPTED on the same day: interrupted is counted but excluded
+        // from the duration/failure aggregates (mirrors the in-memory store).
+        builds.save(project.id, payload("s-1", startedAt = now - 3_500_000, outcome = "SUCCESS"))
+        val point = builds.trends(project.id, BuildFilter(), days = 1, nowMs = now).single()
+        assertEquals(2, point.builds)
+        assertEquals(1, point.interrupted)
+        assertEquals(0, point.failures)
+        assertEquals(60_000, point.avgDurationMs, "only the 60s SUCCESS counts; the 900s interrupted is excluded")
+    }
+
+    @Test
     fun `list and trends aggregate over real sql`() {
         val project = tokens.ensureProjectWithToken("query-project", sha256Hex("q"))
         val now = System.currentTimeMillis()

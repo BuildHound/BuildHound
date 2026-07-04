@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "buildId": "7c2a1b90-4d5e-4f6a-8b7c-1d2e3f4a5b6c",
+  "projectKey": "pilot-android",
+  "startedAt": 1751450000000,
+  "finishedAt": 1751450000000,
+  "outcome": "INTERRUPTED",
+  "requestedTasks": ["assembleDebug"],
+  "mode": "local",
+  "tasks": []
+}

@@ -97,6 +97,8 @@ const responses = {
     },
     // Missing-optional-keys build: everything the schema allows to be absent, absent.
     "/v1/builds/b2": { buildId: "b2", startedAt: 1, finishedAt: 2, outcome: "FAILED", mode: "LOCAL" },
+    // Lost build (plan 033): a never-finalized INTERRUPTED build — empty tasks, synthetic zero duration.
+    "/v1/builds/int-1": { buildId: "int-1", startedAt: 1751450000000, finishedAt: 1751450000000, outcome: "INTERRUPTED", mode: "LOCAL", tasks: [] },
     "/v1/trends?days=30": [
         { day: "2026-06-30", builds: 3, failures: 1, avgDurationMs: 60000, avgHitRate: 0.5 },
         { day: "2026-07-01", builds: 2, failures: 0, avgDurationMs: null, avgHitRate: null },
@@ -323,6 +325,13 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     // No process data on b2 → the panel is absent (renders only with data).
     if (hasText(byId["app"], "Process snapshot")) throw new Error("process panel must be absent without process data");
 
+    // Lost build (plan 033): an INTERRUPTED, empty-task build renders the honest amber "did not
+    // finish" note (not an all-zero ledger) and stops there, never throwing.
+    context.location.hash = "#/build/int-1"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/builds/int-1")) throw new Error("interrupted detail did not fetch");
+    if (!hasText(byId["app"], "did not finish")) throw new Error("interrupted amber note missing");
+    if (hasText(byId["app"], "Work avoidance")) throw new Error("interrupted build must not render the work-avoidance ledger");
+
     // Tests page (plan 024): defaults to the latest build (b1), renders its tests panel.
     context.location.hash = "#/tests"; context._onhashchange(); await tick(); await tick();
     if (!hasText(byId["app"], "Test results")) throw new Error("tests page header missing");
@@ -457,6 +466,15 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     delete totals["/v1/builds?limit=50&offset=0"];
     context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
     if (countTag(byId["app"], "table") === 0) throw new Error("builds view must tolerate a missing X-Total-Count");
+
+    // Builds list (plan 033): an INTERRUPTED row carries the INTERRUPTED badge class, and the
+    // outcome filter offers "interrupted".
+    responses["/v1/builds?limit=50&offset=0"] = [
+        { buildId: "int-1", startedAt: 1751450000000, durationMs: 0, outcome: "INTERRUPTED", mode: "LOCAL", branch: "main" },
+    ];
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    if (findAll(byId["app"], n => (n.className || "").indexOf("INTERRUPTED") >= 0).length === 0) throw new Error("INTERRUPTED badge class missing in the builds list");
+    if (findAll(byId["app"], n => n.tag === "option" && n.value === "interrupted").length === 0) throw new Error("interrupted outcome filter option missing");
 
     // Unfiltered empty project → get-started state: env-var snippet, never the token value.
     responses["/v1/builds?limit=50&offset=0"] = [];
