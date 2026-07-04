@@ -34,6 +34,11 @@ object SourceLinks {
         // final '@' and everything before it is userInfo — redact it whole (splitting at the first
         // '@' would leak the tail of an '@'-bearing credential; C1). Empty userInfo (`@host`) stays.
         val at = authority.lastIndexOf('@')
+        // A '@' that falls AFTER the first '/' (so it never landed in `authority`) means the userInfo
+        // carries a raw, unencoded '/' in the password — common in base64/URL-encoded tokens. Splitting
+        // the authority at that '/' mis-locates the userInfo, so the credential would survive verbatim.
+        // Fail closed: drop the whole value rather than leak it (§3.7; honours the fail-closed KDoc).
+        if (at < 0 && afterScheme.indexOf('@') >= 0) return null
         val redactedAuthority = if (at > 0) "******" + authority.substring(at) else authority
         if (redactedAuthority.substringAfterLast('@').isEmpty()) return null // no host → drop
         return "$scheme://$redactedAuthority$rest"

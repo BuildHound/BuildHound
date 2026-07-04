@@ -125,6 +125,16 @@ class AzureDevOpsConnectorTest {
     }
 
     @Test
+    fun `fetchRun refuses a non-numeric run id and makes no request`() = runBlocking {
+        val (azure, engine) = connector()
+        // runId is ingest-supplied; a non-numeric value could smuggle an extra path/query segment into
+        // the outbound URL (a path pivot on the allowlisted host, authorized by the PAT). Reject first.
+        val run = azure.fetchRun(ref.copy(runId = "42/logs/1?api-version=7.1&x="), config)
+        assertNull(run)
+        assertTrue(engine.requestHistory.isEmpty(), "must short-circuit before any outbound call")
+    }
+
+    @Test
     fun `fetchRun refuses a non-https base url`() = runBlocking {
         val (azure, engine) = connector()
         val run = azure.fetchRun(

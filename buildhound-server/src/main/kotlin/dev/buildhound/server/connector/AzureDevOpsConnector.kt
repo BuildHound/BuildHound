@@ -38,6 +38,13 @@ class AzureDevOpsConnector(
             logger.warn("azure connector: refusing outbound host not in the allowlist")
             return null
         }
+        // runId is ingested (attacker-controlled). An Azure build id is numeric — reject anything else
+        // so it cannot inject an extra path/query segment into the outbound URL (a path pivot within the
+        // allowlisted host, using the shared PAT). Matches the GitHub/GitLab connectors' guard.
+        if (ref.runId.toLongOrNull() == null) {
+            logger.warn("azure connector: non-numeric build id — refusing outbound call")
+            return null
+        }
         val auth = "Basic " + Base64.getEncoder().encodeToString(":$pat".encodeToByteArray())
 
         val buildJson = getJson("$base/$project/_apis/build/builds/${ref.runId}?api-version=$apiVersion", auth) ?: return null

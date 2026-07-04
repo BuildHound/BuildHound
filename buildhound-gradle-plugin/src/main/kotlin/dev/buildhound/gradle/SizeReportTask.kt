@@ -43,12 +43,16 @@ abstract class ApkSizeReportTask : DefaultTask() {
 
     @TaskAction
     fun report() {
-        val loaded = builtArtifactsLoader.get().load(apkDir.get())
-        val lines = loaded?.elements.orEmpty().mapNotNull { element ->
-            val file = File(element.outputFile)
-            if (file.isFile) ArtifactRecordIo.encode(module.get(), variant.get(), ArtifactType.APK, file.length()) else null
-        }
-        output.get().asFile.writeText(lines.joinToString("\n"))
+        // Never fail the build (architecture §2 rule 3): an AGP built-artifacts format drift or a write
+        // failure (disk full, read-only FS) must degrade to no artifact record, never break the build.
+        runCatching {
+            val loaded = builtArtifactsLoader.get().load(apkDir.get())
+            val lines = loaded?.elements.orEmpty().mapNotNull { element ->
+                val file = File(element.outputFile)
+                if (file.isFile) ArtifactRecordIo.encode(module.get(), variant.get(), ArtifactType.APK, file.length()) else null
+            }
+            output.get().asFile.writeText(lines.joinToString("\n"))
+        }.onFailure { logger.info("buildhound: APK size probe skipped ({})", it::class.java.simpleName) }
     }
 }
 
@@ -77,9 +81,12 @@ abstract class FileSizeReportTask : DefaultTask() {
 
     @TaskAction
     fun report() {
-        val type = ArtifactType.entries.firstOrNull { it.name == artifactType.get() } ?: return
-        val file = artifact.get().asFile
-        val line = if (file.isFile) ArtifactRecordIo.encode(module.get(), variant.get(), type, file.length()) else ""
-        output.get().asFile.writeText(line)
+        // Never fail the build (architecture §2 rule 3): a write failure must degrade to no record.
+        runCatching {
+            val type = ArtifactType.entries.firstOrNull { it.name == artifactType.get() } ?: return@runCatching
+            val file = artifact.get().asFile
+            val line = if (file.isFile) ArtifactRecordIo.encode(module.get(), variant.get(), type, file.length()) else ""
+            output.get().asFile.writeText(line)
+        }.onFailure { logger.info("buildhound: artifact size probe skipped ({})", it::class.java.simpleName) }
     }
 }

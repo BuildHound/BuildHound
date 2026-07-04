@@ -47,6 +47,9 @@ class SourceLinksTest {
         assertNull(SourceLinks.redactRemoteUrl("has spaces://x")) // whitespace → fail closed
         assertNull(SourceLinks.redactRemoteUrl("://host/path")) // empty scheme
         assertNull(SourceLinks.redactRemoteUrl("nonsense")) // no scheme, no host:path colon
+        // A '/' inside the password mis-splits the authority; drop rather than leak the credential verbatim.
+        assertNull(SourceLinks.redactRemoteUrl("https://x:AbCd/EfGh12+3@nexus.acme.com/repo.git"))
+        assertNull(SourceLinks.redactRemoteUrl("https://user:p/w@gitlab.com/o/r.git"))
     }
 
     @Test

@@ -45,8 +45,13 @@ runs:
   steps:
     - name: "Gradle build (with build telemetry)"
       shell: bash
-      run: ./gradlew ${{ inputs.gradle-tasks }}
+      # gradle-tasks is bound to an env var and referenced as $GRADLE_TASKS — never interpolated into
+      # the run: script with ${{ }}. Inlining it would let a caller wiring untrusted data (e.g. a PR
+      # title) into gradle-tasks inject shell commands into this runner (which holds BUILDHOUND_TOKEN).
+      # Unquoted $GRADLE_TASKS preserves multi-task word-splitting (e.g. "build test").
+      run: ./gradlew $GRADLE_TASKS
       env:
+        GRADLE_TASKS: ${{ inputs.gradle-tasks }}
         # Map a secret in the consuming workflow; never echo it.
         BUILDHOUND_TOKEN: ${{ inputs.token }}
         BUILDHOUND_SERVER_URL: ${{ inputs.server-url }}
