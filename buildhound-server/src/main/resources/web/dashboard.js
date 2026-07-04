@@ -1234,11 +1234,91 @@
         app.append(table);
     }
 
+    // Admin / retention page (plan 042). Uses its OWN admin-scoped token in a separate sessionStorage
+    // slot — a read token can't reach /v1/admin (403). Every string reaches the DOM via textContent.
+    async function adminView() {
+        tokenBar.hidden = true; // the read-token bar is irrelevant here; admin has its own field
+        app.textContent = "";
+        app.append(el("p", "Retention settings", "summary-sentence"));
+
+        const adminTokenKey = "buildhound.adminToken";
+        const adminToken = () => sessionStorage.getItem(adminTokenKey) || "";
+
+        const tokenRow = el("div", null, "admin-token-row");
+        tokenRow.append(el("label", "Admin token: "));
+        const tokenInput = el("input");
+        tokenInput.type = "password";
+        tokenInput.setAttribute("autocomplete", "off");
+        tokenRow.append(tokenInput);
+        const useBtn = el("button", "Use");
+        tokenRow.append(useBtn);
+        app.append(tokenRow);
+
+        const status = el("p", "", "muted");
+        app.append(status);
+        const form = el("div", null, "retention-form");
+        app.append(form);
+
+        function adminFetch(method, body) {
+            const opts = { method: method, headers: { Authorization: "Bearer " + adminToken() } };
+            if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = body; }
+            return fetch("/v1/admin/retention", opts);
+        }
+
+        function say(text, cls) { status.textContent = text; status.className = cls || "muted"; }
+
+        function renderForm(cfg) {
+            form.textContent = "";
+            const rawInput = el("input"); rawInput.type = "number"; rawInput.value = String(cfg.rawDays);
+            const buildInput = el("input"); buildInput.type = "number"; buildInput.value = String(cfg.buildDays);
+            const rawLabel = el("label", "Raw per-build rows kept (days): "); rawLabel.append(rawInput);
+            const buildLabel = el("label", "Build history kept (days): "); buildLabel.append(buildInput);
+            form.append(rawLabel, buildLabel);
+            const save = el("button", "Save");
+            save.addEventListener("click", async () => {
+                say("Saving…");
+                try {
+                    const res = await adminFetch("PUT", JSON.stringify({ rawDays: Number(rawInput.value), buildDays: Number(buildInput.value) }));
+                    if (res.status === 401 || res.status === 403) return say("An admin-scoped token is required.", "error");
+                    if (res.status === 400) { const b = await res.json(); return say("Rejected: " + (b.error || "invalid windows"), "error"); }
+                    if (!res.ok) return say("Save failed: " + res.status, "error");
+                    say("Saved.");
+                } catch (e) { say("Save failed: " + (e && e.message || e), "error"); }
+            });
+            form.append(save);
+        }
+
+        async function load() {
+            form.textContent = "";
+            if (!adminToken()) return say("Enter an admin-scoped token to view and edit retention windows.");
+            say("Loading…");
+            try {
+                const res = await adminFetch("GET");
+                if (res.status === 401 || res.status === 403) return say("An admin-scoped token is required.", "error");
+                if (!res.ok) return say("Could not load retention: " + res.status, "error");
+                const cfg = await res.json();
+                say("Daily aggregates are always kept; these windows purge raw rows and build history.");
+                renderForm(cfg);
+            } catch (e) { say("Could not load retention: " + (e && e.message || e), "error"); }
+        }
+
+        useBtn.addEventListener("click", () => {
+            sessionStorage.setItem(adminTokenKey, tokenInput.value.trim());
+            tokenInput.value = ""; // never leave the token in the live DOM
+            load();
+        });
+
+        await load();
+    }
+
     function route() {
         // decodeURIComponent throws synchronously on malformed input (Firefox returns
         // location.hash pre-decoded, so a stored %xx can arrive re-broken) — the try
         // must cover it, not just the promise.
         try {
+            // Admin/retention (plan 042) uses its own admin token, not the read token — reachable even
+            // without a read token, so it's handled before the read-token first-run gate.
+            if ((location.hash || "").startsWith("#/admin")) { adminView().catch(fail); return; }
             // No token yet → a friendly first-run panel instead of a request that 401s
             // and paints red error text as the first thing a pilot user sees (plan 018).
             if (!token()) { firstRunView(); return; }

@@ -227,6 +227,19 @@ const fetched = [];
 async function fetchStub(path, opts) {
     fetched.push(path);
     if (!opts.headers.Authorization.startsWith("Bearer ")) throw new Error("no bearer header");
+    const headersOnly = { get: name => (name === "X-Total-Count" && totals[path] != null ? String(totals[path]) : null) };
+    // Admin retention (plan 042): GET returns the current config; PUT validates the windows like the
+    // server (invalid → 400) so the smoke exercises both the save and the validation-error branch.
+    if (path === "/v1/admin/retention") {
+        if (opts.method === "PUT") {
+            const cfg = JSON.parse(opts.body);
+            if (cfg.rawDays < 1 || cfg.buildDays < cfg.rawDays) {
+                return { ok: false, status: 400, json: async () => ({ error: "buildDays must be >= rawDays" }), headers: headersOnly };
+            }
+            return { ok: true, status: 200, json: async () => cfg, headers: headersOnly };
+        }
+        return { ok: true, status: 200, json: async () => ({ rawDays: 90, buildDays: 395 }), headers: headersOnly };
+    }
     const body = responses[path];
     const headers = { get: name => (name === "X-Total-Count" && totals[path] != null ? String(totals[path]) : null) };
     if (body === undefined) return { ok: false, status: 404, json: async () => ({}), headers };
@@ -500,6 +513,21 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
     if (!hasText(byId["app"], "BUILDHOUND_TOKEN")) throw new Error("get-started snippet missing the env-var provider");
     if (hasText(byId["app"], "s3cr3t-token-value")) throw new Error("get-started snippet must never contain the session token");
+
+    // Admin/retention page (plan 042): its own admin-token slot (not the read token) loads the form
+    // from GET, a valid PUT confirms "Saved.", and an inverted window shows the rejection — no throw.
+    store["buildhound.adminToken"] = "admin-tok";
+    context.location.hash = "#/admin"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/admin/retention")) throw new Error("admin view did not fetch retention");
+    if (!hasText(byId["app"], "Retention settings")) throw new Error("admin header missing");
+    const numInputs = () => findTag(byId["app"], "input").filter(i => i.type === "number");
+    if (numInputs().length !== 2) throw new Error("admin form must render two number inputs from the GET config");
+    numInputs()[0].value = "30"; numInputs()[1].value = "180";
+    clickButton(byId["app"], "Save"); await tick(); await tick();
+    if (!hasText(byId["app"], "Saved.")) throw new Error("admin valid save did not confirm");
+    numInputs()[0].value = "200"; numInputs()[1].value = "100"; // buildDays < rawDays → rejected
+    clickButton(byId["app"], "Save"); await tick(); await tick();
+    if (!hasText(byId["app"], "Rejected")) throw new Error("admin invalid save did not show the validation error");
 
     console.log("dashboard smoke OK — fetched " + fetched.length + " request(s)");
 })().catch(err => { console.error("SMOKE FAILURE:", err); process.exit(1); });
