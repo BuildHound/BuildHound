@@ -1,6 +1,42 @@
 # Plan 035 — Configuration-cache miss-reason capture, best-effort
 
-**Status: planned — roadmap phase 3** · 2026-07-03
+**Status: BLOCKED / not implemented — 2026-07-04** (was: planned, roadmap phase 3 · 2026-07-03)
+
+## 0. Blocked: the report-file-in-the-Flow-action mechanism is not implementable
+
+Implementation-time investigation (plan §4 step 1) invalidated the plan's core assumption — that a
+`MISS_STORED` build's `configuration-cache-report.html` can be read from the Flow finalizer. **Two
+independent, Gradle-design-level blockers, confirmed empirically on Gradle 9.6.1:**
+
+1. **The report is written only when there are CC problems** (`totalProblemCount > 0`), *not* on a
+   clean store or a clean invalidation. A clean miss prints its reason to the *console*
+   ("Calculating task graph as configuration cache cannot be reused because file 'X' has changed.")
+   but persists **nothing machine-readable** — `.gradle/configuration-cache/` is all binary
+   (`*.bin`), and no file carries the reason text. (The 85 reports found in this repo's `build/` are
+   all historical, from earlier problem-builds; a current clean build writes none.)
+2. **The report is written *after* the Flow `buildWorkResult` action runs.** Gradle finalizes the
+   HTML report at build shutdown (it must wait for execution-time problems too), and prints
+   "See the report at …" as the last lines — after the finalizer has already assembled and uploaded
+   the payload. A TestKit finalizer that locates `<rootDir>/build/reports/configuration-cache/…`
+   sees `report=null` for **both** execution-time and config-time CC problems, even though the file
+   exists moments later. The Flow action can never observe the current build's report.
+
+There is no public Gradle API to (a) force the report on a clean build, (b) read the invalidation
+reason at execution time, or (c) order the Flow action after the report writer. A working capture
+would need a *different mechanism entirely* — the most plausible being the **plan-033 next-build
+pattern**: build N records a marker; build N+1's finalizer reads N's now-written report and ships a
+**separate, buildId-correlated CC-miss enrichment** (a new server table + endpoint, like plan 028's
+`ci_runs`), since N's payload is already stored and immutable. That is materially larger than this
+plan and is left as a follow-up; the roadmap bullet is re-scoped to it.
+
+**Outcome:** no code shipped. The commons schema, plugin parser/locator, finalizer wiring, and server
+rollup were prototyped and reverted once the blocker was proven (the parser + locator worked on real
+report files; they simply never receive one at a usable time). This document records the negative
+result so the infeasibility is not re-discovered. The sections below are the *original* plan, kept for
+context.
+
+---
+
 
 ## 1. Source
 
