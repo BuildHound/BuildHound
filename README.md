@@ -25,31 +25,107 @@ fully standalone HTML report artifact. Apache-2.0. Home: [buildhound.dev](https:
 ```bash
 # Build everything (unit + TestKit functional tests)
 ./gradlew build
-
-# Run the ingest server locally
-./gradlew :buildhound-server:run
-curl http://localhost:8080/health
-
-# Or the full stack as containers
-docker compose -f deploy/compose.yaml up --build
 ```
 
-To run BuildHound for a team, see **[docs/self-hosting.md](docs/self-hosting.md)** (compose + generic-OCI
-deployment, the env-var contract, token provisioning, retention, and backup/restore). The API is
-documented at `GET /docs` (rendered from [docs/api/openapi.yaml](docs/api/openapi.yaml)).
+Then wire up the two halves — the **ingest server** (the webservice) and the **plugin** — and
+watch a build's telemetry land. The fastest path is the ready-made
+[`samples/nowinandroid`](samples/) harness (see [end-to-end below](#try-it-end-to-end)).
 
-Apply the plugin in a test project's `settings.gradle.kts` (once published; during
-development use an included build or `mavenLocal`):
+### 1. Run the ingest server (webservice)
+
+```bash
+# Full stack: server + TimescaleDB (closest to production)
+docker compose -f deploy/compose.yaml up --build
+
+# …or a quick, DB-less loop straight from Gradle (in-memory storage, lost on restart)
+./gradlew :buildhound-server:run
+```
+
+Either way it comes up on `http://localhost:8080`:
+
+```bash
+curl http://localhost:8080/health   # liveness
+open  http://localhost:8080/        # dashboard (paste a read token on first visit)
+open  http://localhost:8080/docs    # API reference (from docs/api/openapi.yaml)
+```
+
+The Compose stack **bootstraps a project and an ingest token** on first boot, so you can send
+builds immediately — see [local development credentials](#local-development-credentials). The
+dashboard's queries are authenticated: paste the local-dev token into its token bar on first visit.
+
+### 2. Apply the plugin and point it at the server
+
+BuildHound is a **settings plugin**, so it goes in `settings.gradle.kts`. Once published you
+apply it by version; during development consume it from this repo as an included build (no
+publish, no `mavenLocal` — a plugin change is recompiled on the next build):
 
 ```kotlin
+// settings.gradle.kts
+pluginManagement {
+    includeBuild("/path/to/Gradle-build-monitoring")   // dev: consume the plugin from source
+}
 plugins {
-    id("dev.buildhound") version "0.1.0-SNAPSHOT"
+    id("dev.buildhound")                               // dev (version supplied by the included build)
+    // id("dev.buildhound") version "0.1.0-SNAPSHOT"   // once published
 }
 
 buildhound {
-    tags.put("team", "mobile")
+    tags.put("team", "mobile")                         // low-cardinality dimensions on every build
+
+    server {
+        url = "http://localhost:8080"
+        // Ingest token — env-var first, never hardcode a real one. The fallback here is the
+        // committed LOCAL-DEV token from deploy/compose.yaml; override in the environment.
+        token = providers.environmentVariable("BUILDHOUND_TOKEN")
+            .orElse("buildhound-local-dev-token")
+    }
+
+    htmlReport { enabled = true }                      // standalone per-build HTML report (on by default)
+
+    // Local (non-CI) builds don't upload unless you opt in. For a local demo, enable and drop the
+    // ~/.buildhound/optin marker requirement; leave the marker required for real local uploads.
+    localBuilds {
+        enabled = true
+        requireOptInFile = false
+    }
 }
 ```
+
+Leaving `server {}` unset (or `url` empty) runs the plugin **offline** — it still writes the HTML
+report but uploads nothing.
+
+### Local development credentials
+
+The Compose stack ships committed **local-development-only** credentials so the harness works out
+of the box. They live in [`deploy/compose.yaml`](deploy/compose.yaml); for anything shared or real,
+mint a high-entropy token (`openssl rand -hex 32`) and pass it through the environment — never in
+code, DSL, logs, or an image layer (see [docs/self-hosting.md](docs/self-hosting.md)).
+
+| What | Value | Source (env var in `deploy/compose.yaml`) |
+|---|---|---|
+| Server URL | `http://localhost:8080` | `server.ports` |
+| Bootstrap project | `pilot` | `BUILDHOUND_BOOTSTRAP_PROJECT` |
+| Ingest token | `buildhound-local-dev-token` | `BUILDHOUND_BOOTSTRAP_TOKEN` |
+| DB user / password | `buildhound` / `buildhound-local-dev` | `POSTGRES_USER` / `POSTGRES_PASSWORD` |
+
+The bootstrap token is `all`-scope. Token scopes and operator-grade provisioning are in
+[docs/self-hosting.md §3](docs/self-hosting.md#3-token-provisioning); to run BuildHound for a team
+that doc also covers the env-var contract, retention, and backup/restore.
+
+### Try it end-to-end
+
+[`samples/nowinandroid`](samples/) is already wired to apply the in-development plugin and send to
+`http://localhost:8080` with the local-dev token — the quickest way to see the full loop:
+
+```bash
+docker compose -f deploy/compose.yaml up --build        # 1. start the server (repo root)
+cd samples/nowinandroid && ./gradlew :core:common:assemble   # 2. run any build in the sample
+# 3. open http://localhost:8080/ (paste the local-dev token) to see the build;
+#    the HTML report is under samples/nowinandroid/build/buildhound/
+```
+
+Prerequisites and the full dev loop (including the Android SDK setup the sample needs) are in
+**[samples/README.md](samples/README.md)**.
 
 ## Status
 
