@@ -94,6 +94,11 @@ internal object PayloadAssembler {
         extensions: Map<String, JsonElement> = emptyMap(),
         avoidedMs: Long? = null,
         dependencyEdges: Map<String, List<String>>? = null,
+        // Detected build-tool versions (plan 044); independent of [environment], each null when
+        // the plugin was absent or its version was unresolvable.
+        agp: String? = null,
+        kgp: String? = null,
+        ksp: String? = null,
     ): BuildPayload {
         // Mirror the benchmark keys into tags (spec's tag contract), but user tags win on clash.
         val mergedTags = if (benchmark == null) {
@@ -132,7 +137,9 @@ internal object PayloadAssembler {
                     aiAgent = it.aiAgent,
                 )
             },
-            toolchain = environment?.let { ToolchainInfo(gradle = it.gradleVersion, jdk = it.jdkVersion) },
+            // AGP/KGP/KSP (plan 044) join Gradle/JDK here; emitted whenever any dimension is known,
+            // so a build with detected tool versions but no environment snapshot still reports them.
+            toolchain = toolchainInfo(environment, agp, kgp, ksp),
             vcs = vcsInfo(vcs, ci),
             ci = ciInfo(ci),
             // Source/commit/PR links from the redacted remote + CI PR number (plan 027); github/gitlab only.
@@ -194,6 +201,18 @@ internal object PayloadAssembler {
         if (list.size <= MAX_ARTIFACTS) list else list.sortedByDescending { it.sizeBytes }.take(MAX_ARTIFACTS)
 
     /** Git wins; CI context fills the gaps (detached HEAD on CI has no branch name). */
+    /**
+     * Toolchain snapshot (spec §3.2, plan 044): Gradle/JDK come from the environment probe, AGP/KGP/
+     * KSP from plugin detection. Null only when every dimension is unknown, so the block is absent on
+     * a build with neither an environment snapshot nor a detected tool version.
+     */
+    private fun toolchainInfo(environment: CollectedEnvironment?, agp: String?, kgp: String?, ksp: String?): ToolchainInfo? {
+        val gradle = environment?.gradleVersion
+        val jdk = environment?.jdkVersion
+        if (gradle == null && jdk == null && agp == null && kgp == null && ksp == null) return null
+        return ToolchainInfo(gradle = gradle, jdk = jdk, agp = agp, kgp = kgp, ksp = ksp)
+    }
+
     fun vcsInfo(vcs: CollectedVcs?, ci: CollectedCi?): VcsInfo? {
         val branch = vcs?.branch ?: ci?.branch
         val sha = vcs?.sha ?: ci?.commitSha

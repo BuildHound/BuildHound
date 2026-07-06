@@ -62,6 +62,13 @@ abstract class TaskEventCollector : BuildService<TaskEventCollector.Params>, Ope
 
         /** Start-marker context (plan 033); absent → no marker (build disabled). Optional. */
         val markerContext: Property<MarkerContext>
+
+        /**
+         * Detected AGP/KGP/KSP versions (plan 044), captured at configuration time by
+         * `taskGraph.whenReady` and replayed verbatim on a config-cache hit — the same discipline as
+         * [taskMetadata]. Absent under isolated projects (the cross-project walk is gated off there).
+         */
+        val toolchain: Property<DetectedToolchain>
     }
 
     private val tasks = ConcurrentLinkedQueue<TaskExecution>()
@@ -129,6 +136,13 @@ abstract class TaskEventCollector : BuildService<TaskEventCollector.Params>, Ope
      * than cached like [metadata]. Empty under isolated projects or when test collection is off.
      */
     fun snapshotLocations(): Map<String, TestResultLocations> = parameters.testResultLocations.getOrElse(emptyMap())
+
+    /**
+     * Detected toolchain versions captured at configuration time (plan 044). Like
+     * [snapshotLocations] it is read straight from the parameter, so it survives a config-cache hit
+     * where the `whenReady` callback that filled it never runs. Empty under isolated projects.
+     */
+    fun snapshotToolchain(): DetectedToolchain = parameters.toolchain.getOrElse(DetectedToolchain())
 
     private fun org.gradle.tooling.events.OperationResult.toOutcome(): TaskOutcome = when (this) {
         is TaskSuccessResult -> when {
