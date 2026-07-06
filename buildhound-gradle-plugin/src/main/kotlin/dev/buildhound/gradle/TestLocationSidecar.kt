@@ -13,8 +13,9 @@ import kotlinx.serialization.json.put
  * file mirroring [ArtifactRecordIo]. It exists because the plan-016/024 "mailbox" (config-time holder →
  * [TaskEventCollector] service param → finalizer) breaks in a **composite** build: included-build task
  * events instantiate the collector — freezing its parameters empty — before the root build's
- * `taskGraph.whenReady` fills the holder. The finalizer reads locations from this file instead, falling
- * back to the (still-wired) service param on the classpath path.
+ * `taskGraph.whenReady` fills the holder. The finalizer therefore **prefers** this file, falling back
+ * to the (still-wired) service param only when it is empty/absent — the classpath path, where the
+ * mailbox works.
  *
  * The file lives under **`.gradle/buildhound/`** (alongside `identity.salt`), not `build/`, so it
  * survives `clean` and its lifecycle tracks the configuration-cache entry: a CC hit skips
