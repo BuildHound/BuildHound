@@ -52,6 +52,17 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:ServiceReference
         val collector: Property<TaskEventCollector>
 
+        /**
+         * Detected AGP/KGP/KSP versions (plan 044). A finalizer parameter — not a [collector] service
+         * parameter — because the value is only known after `whenReady` runs, and in a composite build
+         * an included build's task can instantiate the collector service (freezing its parameters)
+         * during the root's configuration, before `whenReady`. The finalizer's parameters are resolved
+         * after configuration, so the mailbox is populated by then; the value is replayed on a CC hit.
+         */
+        @get:Input
+        @get:Optional
+        val toolchain: Property<DetectedToolchain>
+
         @get:Input
         @get:Optional
         val fingerprints: Property<CollectedFingerprints>
@@ -157,8 +168,8 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
             val collector = parameters.collector.get()
             val tasks = collector.snapshot()
-            // AGP/KGP/KSP versions captured at config time (plan 044); replayed on a CC hit.
-            val toolchain = collector.snapshotToolchain()
+            // AGP/KGP/KSP versions detected at config time (plan 044); replayed on a CC hit.
+            val toolchain = parameters.toolchain.getOrElse(DetectedToolchain())
             // Lost-build reconciliation (plan 033): before this build's own payload, delete this
             // build's marker (it finalized → not interrupted) and synthesize+route an INTERRUPTED
             // build for any *other* stale marker in `started/`. Best-effort; never fails the build.

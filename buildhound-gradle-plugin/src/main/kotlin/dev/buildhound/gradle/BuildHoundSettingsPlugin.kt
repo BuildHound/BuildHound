@@ -83,7 +83,6 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         ) { spec ->
             spec.parameters.taskMetadata.set(settings.providers.provider { taskMetadataHolder.get() })
             spec.parameters.testResultLocations.set(settings.providers.provider { testLocationsHolder.get() })
-            spec.parameters.toolchain.set(settings.providers.provider { toolchainHolder.get() })
             // Start-marker context (plan 033): only CC-stable fields (no ci/vcs value source — a
             // service param bakes and replays stale on a hit). Null when telemetry is off → no marker.
             // Mode is resolved with no CI context (an AUTO build's marker is LOCAL); the connector
@@ -253,6 +252,11 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.mode.set(extension.mode)
             spec.parameters.tags.set(extension.tags)
             spec.parameters.collector.set(collector)
+            // AGP/KGP/KSP versions (plan 044): a finalizer parameter (not a collector service param) so
+            // the provider resolves after configuration — after `whenReady` fills the mailbox — even in
+            // a composite build where an included build's task instantiates the collector early. The
+            // resolved value is baked into the CC entry and replayed on a hit.
+            spec.parameters.toolchain.set(settings.providers.provider { toolchainHolder.get() })
             spec.parameters.fingerprints.set(fingerprints)
             spec.parameters.buildFailed.set(flowProviders.buildWorkResult.map { it.failure.isPresent })
             spec.parameters.environment.set(environment)
