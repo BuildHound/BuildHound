@@ -33,6 +33,35 @@ class ApplicationTest {
         }
     """.trimIndent()
 
+    // A failed build carrying plan-044 failure detail + the opt-in internal-adapters warning block,
+    // so a round-trip test can prove both survive ingest → store → GET (the wire the dashboard/report
+    // render from, plan 045). \n / \t stay literal here — JSON unescapes them into the stacktrace.
+    private fun failurePayloadJson(buildId: String = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") = """
+        {
+          "schemaVersion": 1,
+          "buildId": "$buildId",
+          "startedAt": 1751450000000,
+          "finishedAt": 1751450005000,
+          "outcome": "FAILED",
+          "requestedTasks": ["build"],
+          "mode": "ci",
+          "failure": {
+            "exceptionClass": "org.gradle.api.GradleException",
+            "message": "Execution failed for task ':app:compileKotlin'",
+            "stackTrace": "org.gradle.api.GradleException: boom\n\tat org.example.Widget.build(Widget.java:42)"
+          },
+          "extensions": {
+            "internalAdapters": {
+              "schemaVersion": 1,
+              "gradleVersion": "9.6.1",
+              "deprecations": ["The Foo API has been deprecated."],
+              "logWarnings": ["warning: bar() in Baz has been deprecated"],
+              "droppedWarnings": 3
+            }
+          }
+        }
+    """.trimIndent()
+
     private fun gzip(text: String): ByteArray {
         val out = ByteArrayOutputStream()
         GZIPOutputStream(out).use { it.write(text.encodeToByteArray()) }
@@ -101,6 +130,39 @@ class ApplicationTest {
         assertEquals(HttpStatusCode.Accepted, second.status)
         assertTrue(second.bodyAsText().contains("duplicate"))
         assertEquals(1, fixture.stores.builds.count(fixture.project.id))
+    }
+
+    @Test
+    fun `build detail response carries failure detail and opaque warning extensions`() = testApplication {
+        appWith(fixture())
+        val buildId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+        val ingest = client.post("/v1/builds") {
+            header("Authorization", "Bearer test-token")
+            contentType(ContentType.Application.Json)
+            setBody(failurePayloadJson(buildId))
+        }
+        assertEquals(HttpStatusCode.Accepted, ingest.status)
+
+        val detail = client.get("/v1/builds/$buildId") {
+            header("Authorization", "Bearer test-token")
+        }
+        assertEquals(HttpStatusCode.OK, detail.status)
+
+        // The bytes the dashboard/report fetch (plan 045) must still carry what plan 044 collected:
+        // if the detail response were ever swapped for a projection DTO, these would vanish. This is
+        // the one link the JS smoke harness cannot cover — it stubs fetch with canned bodies.
+        val body = detail.bodyAsText()
+        assertTrue(body.contains("org.gradle.api.GradleException"), body)
+        assertTrue(body.contains("Execution failed for task ':app:compileKotlin'"), body)
+        assertTrue(body.contains("org.example.Widget.build(Widget.java:42)"), body)
+        assertTrue(body.contains("The Foo API has been deprecated."), body)
+        assertTrue(body.contains("bar() in Baz has been deprecated"), body)
+
+        // And it decodes back into typed failure + the opaque internal-adapters extension intact.
+        val decoded = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), body)
+        assertEquals("org.gradle.api.GradleException", decoded.failure?.exceptionClass)
+        assertTrue(decoded.extensions.containsKey("internalAdapters"), "internalAdapters extension dropped")
     }
 
     @Test

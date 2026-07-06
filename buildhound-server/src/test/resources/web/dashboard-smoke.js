@@ -99,6 +99,27 @@ const responses = {
     "/v1/builds/b2": { buildId: "b2", startedAt: 1, finishedAt: 2, outcome: "FAILED", mode: "LOCAL" },
     // Lost build (plan 033): a never-finalized INTERRUPTED build — empty tasks, synthetic zero duration.
     "/v1/builds/int-1": { buildId: "int-1", startedAt: 1751450000000, finishedAt: 1751450000000, outcome: "INTERRUPTED", mode: "LOCAL", tasks: [] },
+    // Failed build with failure detail + opt-in warnings (plan 044/045): exercises the Failure section
+    // (exception class, message, scrubbed stacktrace) and the Warnings section (deprecations, log
+    // warnings, dropped count) that the detail view renders from the full payload.
+    "/v1/builds/f1": {
+        buildId: "f1", projectKey: "pilot", startedAt: 1751450000000, finishedAt: 1751450005000,
+        outcome: "FAILED", mode: "CI",
+        tasks: [{ path: ":app:compileKotlin", module: ":app", outcome: "FAILED", durationMs: 300 }],
+        failure: {
+            exceptionClass: "org.gradle.api.GradleException",
+            message: "Execution failed for task ':app:compileKotlin'",
+            stackTrace: "org.gradle.api.GradleException: Execution failed for task ':app:compileKotlin'\n\tat org.example.Widget.build(Widget.java:42)",
+        },
+        extensions: {
+            internalAdapters: {
+                schemaVersion: 1, gradleVersion: "9.6.1",
+                deprecations: ["The Foo API has been deprecated. This will fail with an error in Gradle 10."],
+                logWarnings: ["warning: [deprecation] bar() in Baz has been deprecated"],
+                droppedWarnings: 3,
+            },
+        },
+    },
     "/v1/trends?days=30": [
         { day: "2026-06-30", builds: 3, failures: 1, avgDurationMs: 60000, avgHitRate: 0.5 },
         { day: "2026-07-01", builds: 2, failures: 0, avgDurationMs: null, avgHitRate: null },
@@ -342,6 +363,27 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "CI timeline not available")) throw new Error("ci-run degraded notice missing on a build with no run");
     // No process data on b2 → the panel is absent (renders only with data).
     if (hasText(byId["app"], "Process snapshot")) throw new Error("process panel must be absent without process data");
+    // b2 is FAILED but carries no failure object (a config-phase failure — plan-044 extraction is
+    // execution-phase) and no warnings block → both new sections must be absent, and not throw.
+    if (findAll(byId["app"], n => (n.className || "").indexOf("failure-summary") >= 0).length !== 0) throw new Error("failure section must be absent when the payload has no failure object");
+    if (hasText(byId["app"], "Warnings")) throw new Error("warnings section must be absent without an internal-adapters block");
+
+    // Failure + warnings (plan 044/045): a failed build with a failure object and the opt-in
+    // internal-adapters block renders the Failure section (class + message + scrubbed stacktrace) and
+    // the Warnings section (labelled deprecation + log-warning lists and the dropped-count note).
+    context.location.hash = "#/build/f1"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/builds/f1")) throw new Error("failure detail view did not fetch");
+    if (findAll(byId["app"], n => (n.className || "").indexOf("failure-summary") >= 0).length === 0) throw new Error("failure section missing on a build with failure detail");
+    if (!hasText(byId["app"], "org.gradle.api.GradleException")) throw new Error("failure exception class missing");
+    if (!hasText(byId["app"], "Execution failed for task ':app:compileKotlin'")) throw new Error("failure message missing");
+    if (findAll(byId["app"], n => (n.className || "").indexOf("failure-trace") >= 0).length === 0) throw new Error("failure stacktrace <pre> missing");
+    if (!hasText(byId["app"], "org.example.Widget.build(Widget.java:42)")) throw new Error("failure stacktrace body missing");
+    if (!hasText(byId["app"], "Warnings")) throw new Error("warnings section header missing");
+    if (!hasText(byId["app"], "Deprecations (1)")) throw new Error("deprecations count label missing");
+    if (!hasText(byId["app"], "The Foo API has been deprecated")) throw new Error("deprecation entry missing");
+    if (!hasText(byId["app"], "Log warnings (1)")) throw new Error("log-warnings count label missing");
+    if (!hasText(byId["app"], "bar() in Baz has been deprecated")) throw new Error("log-warning entry missing");
+    if (!hasText(byId["app"], "3 more warning(s) dropped past the cap")) throw new Error("dropped-warnings note missing");
 
     // Lost build (plan 033): an INTERRUPTED, empty-task build renders the honest amber "did not
     // finish" note (not an all-zero ledger) and stops there, never throwing.
