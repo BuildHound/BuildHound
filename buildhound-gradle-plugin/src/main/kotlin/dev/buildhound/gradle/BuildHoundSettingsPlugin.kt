@@ -64,7 +64,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // Sibling mailbox for the Test-task JUnit XML locations (plan 024), filled by the same
         // `whenReady` callback and replayed from the CC entry on a hit (discovery spike §4a).
         val testLocationsHolder = AtomicReference<Map<String, TestResultLocations>>(emptyMap())
-        // Sibling mailbox for the detected AGP/KGP/KSP versions (plan 044), filled by the same
+        // Sibling mailbox for the detected AGP/KGP/KSP versions (plan 046), filled by the same
         // `whenReady` callback and replayed from the CC entry on a hit.
         val toolchainHolder = AtomicReference(DetectedToolchain())
         // Internal test seam (mirrors the other `buildhound.internal.*` failpoints): when any of
@@ -256,7 +256,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.mode.set(extension.mode)
             spec.parameters.tags.set(extension.tags)
             spec.parameters.collector.set(collector)
-            // AGP/KGP/KSP versions (plan 044): a finalizer parameter (not a collector service param) so
+            // AGP/KGP/KSP versions (plan 046): a finalizer parameter (not a collector service param) so
             // the provider resolves after configuration — after `whenReady` fills the mailbox — even in
             // a composite build where an included build's task instantiates the collector early. The
             // resolved value is baked into the CC entry and replayed on a hit.

@@ -5,7 +5,7 @@ import org.gradle.api.Project
 import org.gradle.api.logging.Logging
 
 /**
- * The build-tool versions BuildHound reports as toolchain dimensions (spec §3.2, plan 044):
+ * The build-tool versions BuildHound reports as toolchain dimensions (spec §3.2, plan 046):
  * Android Gradle Plugin, Kotlin Gradle Plugin, and KSP. Every field is nullable — a build that
  * applies none of them, or a probe that cannot resolve a version, reports `null`, which the server
  * renders as an honest "not collected yet" rather than a wrong number. Serializable because it
@@ -24,7 +24,7 @@ data class DetectedToolchain(
 }
 
 /**
- * Detects the AGP/KGP/KSP versions of a build by inspecting applied plugins (plan 044).
+ * Detects the AGP/KGP/KSP versions of a build by inspecting applied plugins (plan 046).
  *
  * Called at configuration time from the settings plugin's `taskGraph.whenReady` callback (the same
  * non-isolated hook that builds the task dictionary), never from an isolated `beforeProject` action —

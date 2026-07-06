@@ -12,7 +12,7 @@ import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.io.TempDir
 
 /**
- * Toolchain-dimension collection (plan 044). Driving a real AGP/KGP/KSP build in TestKit is heavy
+ * Toolchain-dimension collection (plan 046). Driving a real AGP/KGP/KSP build in TestKit is heavy
  * and version-coupled (the same reason [KotlinReportFunctionalTest] seeds a fake KGP report rather
  * than compiling Kotlin), so these tests use the `buildhound.internal.toolchain.*` seam to inject
  * versions and assert the whole configuration-time → service → payload channel — including its
@@ -88,7 +88,7 @@ class ToolchainFunctionalTest {
 
     @Test
     fun `detected toolchain survives a composite build on the cc store run and a hit`() {
-        // Regression guard for the channel choice (plan 044 §3): a plugin-providing `includeBuild`
+        // Regression guard for the channel choice (plan 046 §3): a plugin-providing `includeBuild`
         // whose compile runs during the *root's* configuration — instantiating the collector service
         // before whenReady, the exact timing that froze the old TaskEventCollector service-parameter
         // channel and left the store run's toolchain empty. Seeded via the seam so no real AGP/KGP/KSP

@@ -32,7 +32,7 @@ class GoldenPayloadTest {
         assertEquals(ConfigurationCacheState.HIT, payload.environment?.configurationCache)
         assertEquals("azure-devops", payload.ci?.provider)
         assertEquals(0.5, payload.derived?.cacheableHitRate)
-        // Toolchain dimensions (plan 044): Gradle/JDK plus the AGP/KGP/KSP versions the collector now
+        // Toolchain dimensions (plan 046): Gradle/JDK plus the AGP/KGP/KSP versions the collector now
         // populates. The v1 golden already carries all five, pinning their wire contract.
         assertEquals("8.14.3", payload.toolchain?.gradle)
         assertEquals("21.0.10", payload.toolchain?.jdk)
