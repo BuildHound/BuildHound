@@ -191,8 +191,9 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 null
             }
 
-            // Test results (plan 024): parse each executed Test task's JUnit XML. Locations were
-            // captured at config time and ride the collector service (replayed on a CC hit).
+            // Test results (plan 024): parse each executed Test task's JUnit XML. Locations are
+            // captured at config time and delivered here via the sidecar file (plan 044), with the
+            // collector service param as the classpath-path fallback (see below).
             val tests = if (parameters.testsCollect.getOrElse(true)) {
                 // Prefer the durable sidecar (plan 044): the service param is frozen empty in a
                 // composite build (included-build task events instantiate the collector before
