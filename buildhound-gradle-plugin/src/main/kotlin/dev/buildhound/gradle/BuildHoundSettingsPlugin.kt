@@ -121,12 +121,21 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
                 // config time (spike §4a) — the XML itself is read in the finalizer. Public Test API
                 // only; the decision to treat a task as a Test task is the type-free introspection.
                 if (collectTests.getOrElse(true)) {
-                    testLocationsHolder.set(
-                        graph.allTasks
-                            .filter { TestTaskIntrospection.isTestTask(it.javaClass) }
-                            .mapNotNull { task -> testLocationOf(task) }
-                            .toMap(),
-                    )
+                    val locations = graph.allTasks
+                        .filter { TestTaskIntrospection.isTestTask(it.javaClass) }
+                        .mapNotNull { task -> testLocationOf(task) }
+                        .toMap()
+                    testLocationsHolder.set(locations)
+                    // Durable channel (plan 044): in a composite build the collector service is
+                    // instantiated by included-build task events *before* this callback runs, freezing
+                    // its params empty — so the finalizer reads these locations from the sidecar file
+                    // instead. Under .gradle (like the salt) so it survives `clean` and tracks the CC
+                    // entry. The holder/param above stays as the classpath-path fallback. The write
+                    // respects the master switch (spec §3.4) — a disabled build must touch nothing on
+                    // disk, parity with the salt/start-marker.
+                    if (extension.enabled.get() && extension.mode.get() != TelemetryMode.DISABLED) {
+                        TestLocationSidecar.write(settings.rootDir, locations)
+                    }
                 }
             }.onFailure {
                 logger.warn("[buildhound] task metadata capture failed (build unaffected): {}", it.message)
