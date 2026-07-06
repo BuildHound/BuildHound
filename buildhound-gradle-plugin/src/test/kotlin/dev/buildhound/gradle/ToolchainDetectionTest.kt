@@ -7,7 +7,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Unit coverage for the version-extraction mechanics of [ToolchainDetection] (plan 044). The
+ * Unit coverage for the version-extraction mechanics of [ToolchainDetection] (plan 046). The
  * per-project probes themselves need a live Gradle project graph with real AGP/KGP/KSP applied, so
  * they are exercised end-to-end by the TestKit suite (via the internal seam) and against the
  * nowinandroid sample; here we pin the pure reflective helper the KGP probe relies on.

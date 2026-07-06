@@ -94,7 +94,7 @@ internal object PayloadAssembler {
         extensions: Map<String, JsonElement> = emptyMap(),
         avoidedMs: Long? = null,
         dependencyEdges: Map<String, List<String>>? = null,
-        // Detected build-tool versions (plan 044); independent of [environment], each null when
+        // Detected build-tool versions (plan 046); independent of [environment], each null when
         // the plugin was absent or its version was unresolvable.
         agp: String? = null,
         kgp: String? = null,
@@ -137,7 +137,7 @@ internal object PayloadAssembler {
                     aiAgent = it.aiAgent,
                 )
             },
-            // AGP/KGP/KSP (plan 044) join Gradle/JDK here; emitted whenever any dimension is known,
+            // AGP/KGP/KSP (plan 046) join Gradle/JDK here; emitted whenever any dimension is known,
             // so a build with detected tool versions but no environment snapshot still reports them.
             toolchain = toolchainInfo(environment, agp, kgp, ksp),
             vcs = vcsInfo(vcs, ci),
@@ -201,7 +201,7 @@ internal object PayloadAssembler {
         if (list.size <= MAX_ARTIFACTS) list else list.sortedByDescending { it.sizeBytes }.take(MAX_ARTIFACTS)
 
     /**
-     * Toolchain snapshot (spec §3.2, plan 044): Gradle/JDK come from the environment probe, AGP/KGP/
+     * Toolchain snapshot (spec §3.2, plan 046): Gradle/JDK come from the environment probe, AGP/KGP/
      * KSP from plugin detection. Null only when every dimension is unknown, so the block is absent on
      * a build with neither an environment snapshot nor a detected tool version.
      */

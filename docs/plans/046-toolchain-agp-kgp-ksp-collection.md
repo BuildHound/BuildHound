@@ -1,4 +1,4 @@
-# Plan 044 — collect AGP / Kotlin Gradle Plugin / KSP toolchain versions
+# Plan 046 — collect AGP / Kotlin Gradle Plugin / KSP toolchain versions
 
 **Status: planned** · 2026-07-06
 
