@@ -15,6 +15,7 @@
         h1 { margin: 0 0 .25rem; font-size: 1.4rem; }
         #meta { color: #888; margin: 0; font-size: .9rem; }
         .placeholder { color: #888; font-style: italic; }
+        .muted { color: #888; font-size: .85rem; }
         .chips { display: flex; flex-wrap: wrap; gap: .5rem; margin: 1rem 0; padding: 0; list-style: none; }
         .chips li { border: 1px solid #8884; border-radius: 1rem; padding: .25rem .75rem; font-size: .85rem; }
         .chips b { font-weight: 600; }
@@ -136,7 +137,9 @@
 
         // Build failure (plan 044): exception class + scrubbed message, and the scrubbed stacktrace
         // (fuller here than the wire payload). Hidden entirely on success. All strings via textContent,
-        // and the trace lands in a <pre> as text — never markup — so an injected </script> is inert.
+        // and the trace lands in a <pre> as text — never markup — so an injected closing-script tag
+        // is inert. (This comment must not contain a literal closing-script sequence: inside an inline
+        // script element the HTML parser would end it there — pinned by ReportAssetsTest.)
         if (d.failure) {
             const f = d.failure;
             const header = f.exceptionClass || "Build failed";
@@ -218,14 +221,14 @@
             const warningsBody = document.getElementById("warnings-body");
             const warnList = (label, items) => {
                 if (!items.length) return;
-                warningsBody.append(el("p", label + " (" + items.length + ")", "placeholder"));
+                warningsBody.append(el("p", label + " (" + items.length + ")", "muted"));
                 const list = el("ul", null, "warnings");
                 for (const warning of items) list.append(el("li", warning));
                 warningsBody.append(list);
             };
             warnList("Deprecations", deprecations);
             warnList("Log warnings", logWarnings);
-            if (droppedWarnings) warningsBody.append(el("p", droppedWarnings + " more warning(s) dropped past the cap", "placeholder"));
+            if (droppedWarnings) warningsBody.append(el("p", droppedWarnings + (droppedWarnings === 1 ? " more warning" : " more warnings") + " dropped past the cap", "muted"));
             document.getElementById("warnings").hidden = false;
         }
 

@@ -383,7 +383,10 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "The Foo API has been deprecated")) throw new Error("deprecation entry missing");
     if (!hasText(byId["app"], "Log warnings (1)")) throw new Error("log-warnings count label missing");
     if (!hasText(byId["app"], "bar() in Baz has been deprecated")) throw new Error("log-warning entry missing");
-    if (!hasText(byId["app"], "3 more warning(s) dropped past the cap")) throw new Error("dropped-warnings note missing");
+    if (!hasText(byId["app"], "3 more warnings dropped past the cap")) throw new Error("dropped-warnings note missing");
+    // Structure, not just text: warnings must render as <ul class="warnings"> lists, so a regression that
+    // dumped every warning into one paragraph (losing the list/count pairing) is caught, not passed.
+    if (findAll(byId["app"], n => n.tag === "ul" && (n.className || "").indexOf("warnings") >= 0).length === 0) throw new Error("warnings <ul> structure missing");
 
     // Lost build (plan 033): an INTERRUPTED, empty-task build renders the honest amber "did not
     // finish" note (not an all-zero ledger) and stops there, never throwing.

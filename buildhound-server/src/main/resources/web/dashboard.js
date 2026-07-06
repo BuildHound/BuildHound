@@ -623,7 +623,7 @@
         };
         warnList("Deprecations", deprecations);
         warnList("Log warnings", logWarnings);
-        if (droppedWarnings) fragment.append(el("p", droppedWarnings + " more warning(s) dropped past the cap", "muted"));
+        if (droppedWarnings) fragment.append(el("p", droppedWarnings + (droppedWarnings === 1 ? " more warning" : " more warnings") + " dropped past the cap", "muted"));
         return fragment;
     }
 
