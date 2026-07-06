@@ -32,6 +32,8 @@
         #failure-summary { font-weight: 600; }
         #failure pre { background: #8881; border: 1px solid #8883; border-radius: .25rem; padding: .75rem; overflow: auto; max-height: 32rem; font-size: .8rem; white-space: pre-wrap; word-break: break-word; }
         #timeline svg { width: 100%; height: auto; }
+        #warnings ul.warnings { margin: .25rem 0 .75rem; }
+        #warnings ul.warnings li { font-size: .85rem; word-break: break-word; }
     </style>
 </head>
 <body>
@@ -66,6 +68,10 @@
             <thead><tr><th>Class</th><th>Test</th><th>Outcome</th><th class="num">Duration</th><th>Message</th></tr></thead>
             <tbody></tbody>
         </table>
+    </section>
+    <section id="warnings" hidden>
+        <h2>Warnings</h2>
+        <div id="warnings-body"></div>
     </section>
     <section id="processes" hidden>
         <h2>Process snapshot</h2>
@@ -199,6 +205,28 @@
             }
             if (failures.length) failuresTable.hidden = false;
             document.getElementById("tests").hidden = false;
+        }
+
+        // Build warnings (plan 044/045): opt-in deprecation + logger.warn capture from the
+        // extensions.internalAdapters block; hidden unless the opt-in module captured something.
+        // Structurally identical to the dashboard's warningsPanel — every string via textContent.
+        const internalAdapters = d.extensions && d.extensions.internalAdapters;
+        const deprecations = (internalAdapters && internalAdapters.deprecations) || [];
+        const logWarnings = (internalAdapters && internalAdapters.logWarnings) || [];
+        const droppedWarnings = (internalAdapters && internalAdapters.droppedWarnings) || 0;
+        if (deprecations.length || logWarnings.length || droppedWarnings) {
+            const warningsBody = document.getElementById("warnings-body");
+            const warnList = (label, items) => {
+                if (!items.length) return;
+                warningsBody.append(el("p", label + " (" + items.length + ")", "placeholder"));
+                const list = el("ul", null, "warnings");
+                for (const warning of items) list.append(el("li", warning));
+                warningsBody.append(list);
+            };
+            warnList("Deprecations", deprecations);
+            warnList("Log warnings", logWarnings);
+            if (droppedWarnings) warningsBody.append(el("p", droppedWarnings + " more warning(s) dropped past the cap", "placeholder"));
+            document.getElementById("warnings").hidden = false;
         }
 
         // Process snapshot (plan 029): daemon/Kotlin/worker JVM heap-used-vs-configured, GC, RSS.

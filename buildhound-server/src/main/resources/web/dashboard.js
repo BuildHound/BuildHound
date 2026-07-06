@@ -528,6 +528,18 @@
             return;
         }
 
+        // Build failure (plan 044/045): exception class + scrubbed message and the scrubbed stacktrace
+        // (the 8 KiB wire copy — the HTML artifact keeps a fuller one). Gated on the failure object's
+        // presence, not outcome === "FAILED": a config-phase failure is FAILED with no failure detail
+        // (plan-044 extraction is execution-phase). All strings via el()/textContent — never innerHTML.
+        if (build.failure) {
+            const failure = build.failure;
+            const header = failure.exceptionClass || "Build failed";
+            app.append(el("h3", "Failure"));
+            app.append(el("p", failure.message ? header + ": " + failure.message : header, "failure-summary"));
+            if (failure.stackTrace) app.append(el("pre", failure.stackTrace, "failure-trace"));
+        }
+
         // Work-avoidance ledger replaces the v0 outcome-count chips: every category with
         // explicit zeros, share-of-all-tasks percentages, summed task time.
         app.append(el("h3", "Work avoidance"));
@@ -574,6 +586,13 @@
         // Test results, when any test task's JUnit XML was collected for this build.
         if (Array.isArray(build.tests) && build.tests.length) app.append(testsPanel(build.tests));
 
+        // Build warnings (plan 044/045): opt-in deprecation + logger.warn capture, carried in the
+        // independently-versioned extensions.internalAdapters block. Absent for every build without
+        // the opt-in internal-adapters module, so the whole section is hidden unless something was
+        // captured. All strings reach the DOM via el()/textContent — never innerHTML.
+        const warnings = warningsPanel(build.extensions && build.extensions.internalAdapters);
+        if (warnings) app.append(warnings);
+
         // CI span tree (plan 028): the connector-enriched pipeline timeline, queue time, and Gradle
         // share. Best-effort and honest — a 404 (no run) or a non-OK status renders an amber notice
         // rather than a hidden section (UX honesty rule); a fetch error just omits it.
@@ -582,6 +601,30 @@
             if (seq !== renderSeq) return;
             app.append(ciRunSection(ci));
         } catch (e) { /* keep the rest of the detail page */ }
+    }
+
+    // Build-warnings panel (plan 044/045): the deprecations + logger.warn lists from the opt-in
+    // internal-adapters block, or null when nothing was captured (no module, toggles off, or a
+    // clean build). A flat fragment mirrors the detail page's other sections; every warning string
+    // reaches the DOM via el()/textContent, so an injected markup string lands as inert text.
+    function warningsPanel(internalAdapters) {
+        const deprecations = (internalAdapters && internalAdapters.deprecations) || [];
+        const logWarnings = (internalAdapters && internalAdapters.logWarnings) || [];
+        const droppedWarnings = (internalAdapters && internalAdapters.droppedWarnings) || 0;
+        if (!deprecations.length && !logWarnings.length && !droppedWarnings) return null;
+        const fragment = document.createDocumentFragment();
+        fragment.append(el("h3", "Warnings"));
+        const warnList = (label, items) => {
+            if (!items.length) return;
+            fragment.append(el("p", label + " (" + items.length + ")", "muted"));
+            const list = el("ul", null, "warnings");
+            for (const warning of items) list.append(el("li", warning));
+            fragment.append(list);
+        };
+        warnList("Deprecations", deprecations);
+        warnList("Log warnings", logWarnings);
+        if (droppedWarnings) fragment.append(el("p", droppedWarnings + " more warning(s) dropped past the cap", "muted"));
+        return fragment;
     }
 
     // Like api() but returns null on 404 instead of throwing — for optional sub-resources.
