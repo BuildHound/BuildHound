@@ -63,7 +63,7 @@ reflection** over the applied-plugin objects — no compile-time AGP/KGP/KSP typ
 
 | Dim | Gate (string `hasPlugin`) | Version source |
 |---|---|---|
-| `agp` | `com.android.application` / `.library` / `.kotlin.multiplatform.library` / `.dynamic-feature` / `.test` | `extensions.findByName("androidComponents")` → reflect `pluginVersion` → `major.minor.micro(-previewTypePreview)`; fallback `com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION` via AGP's classloader (older AGP / other extension names) |
+| `agp` | `com.android.application` / `.library` / `.kotlin.multiplatform.library` / `.dynamic-feature` / `.test` | `extensions.findByName("androidComponents")` → reflect `pluginVersion.version` (AGP's own canonical string, formats releases and previews as AGP prints them); fallback `com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION` via AGP's classloader (older AGP / other extension names) |
 | `kgp` | `org.jetbrains.kotlin.jvm` / `.android` / `.multiplatform` | reflect applied `org.jetbrains.kotlin…` plugin's no-arg `getPluginVersion()` (`KotlinBasePlugin.pluginVersion`) |
 | `ksp` | `com.google.devtools.ksp` | reflect `getPluginArtifact().version`; fallback jar manifest `Implementation-Version` |
 
@@ -97,15 +97,17 @@ rather than compiling Kotlin). Absent in every real build.
   an undetected toolchain leaves them null without dropping `gradle/jdk`.
 - **TestKit (`ToolchainFunctionalTest`, CC on):** seam-injected versions reach the payload **and
   survive config-cache reuse**; only seeded dimensions populate; a build applying none of the tools
-  reports all-null and still succeeds (never-fail). The full functionalTest suite passing confirms the
-  `whenReady`/finalizer-param wiring adds no CC problem.
+  reports all-null and still succeeds (never-fail); and a **composite build** (a plugin-providing
+  `includeBuild` whose compile runs during the root's configuration — the freeze condition) carries the
+  toolchain on both the store run and a hit, guarding the finalizer-param channel choice. The full
+  functionalTest suite passing confirms the `whenReady`/finalizer-param wiring adds no CC problem.
 - **Golden:** the v1 golden already carries a populated `toolchain` (agp/kgp/ksp); `GoldenPayloadTest`
   is strengthened to assert those five fields (no golden file edited/added — the wire contract was
   already pinned).
 - **Real extraction** (AGP `findByName`+reflect, KGP reflection, KSP `getPluginArtifact`) is validated
   against the `samples/nowinandroid` harness (§6) — real AGP/KGP/KSP builds are heavy and version-
   coupled, so this is a manual harness run, not a TestKit case. The composite-build store-run channel
-  fix is proven there (CC miss and hit both carry the triple).
+  fix is proven both there (CC miss and hit both carry the triple) and by the composite TestKit case.
 
 ## 5. Risks
 

@@ -9,7 +9,7 @@ import org.gradle.api.logging.Logging
  * Android Gradle Plugin, Kotlin Gradle Plugin, and KSP. Every field is nullable — a build that
  * applies none of them, or a probe that cannot resolve a version, reports `null`, which the server
  * renders as an honest "not collected yet" rather than a wrong number. Serializable because it
- * rides a [TaskEventCollector] build-service parameter (replayed verbatim on a config-cache hit).
+ * rides the Flow finalizer's `toolchain` parameter (replayed verbatim on a config-cache hit).
  */
 data class DetectedToolchain(
     val agp: String? = null,
@@ -86,32 +86,19 @@ internal object ToolchainDetection {
     }
 
     /**
-     * AGP version. Primary: the public Variant API `AndroidComponentsExtension.pluginVersion` (present
-     * since AGP 7.3). AGP registers that extension under a *parameterized* public type, which
-     * `extensions.findByType(rawClass)` does NOT reliably match — so we look it up by its stable name
-     * `androidComponents` and read `pluginVersion` reflectively (also keeps this file free of any
-     * compile-time AGP type). Fallback for older AGP (7.0–7.2, no `pluginVersion`, or a components
-     * extension registered under another name): the `com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION`
-     * constant, loaded through AGP's own classloader.
+     * AGP version. Primary: the `androidComponents` extension's `pluginVersion.version` — AGP's own
+     * canonical version string (`AndroidComponentsExtension.pluginVersion`, present since AGP 7.3, whose
+     * `AndroidPluginVersion.getVersion()` formats releases and previews exactly as AGP prints them). We
+     * look the extension up by its stable name because `findByType` with a raw generic Class does NOT
+     * match AGP's parameterized extension registration (verified against a real AGP project); reading
+     * `getVersion()` reflectively also keeps this file free of any compile-time AGP type. Fallback for
+     * older AGP (7.0–7.2, no `pluginVersion`, or a components extension registered under another name):
+     * the `com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION` constant, loaded through AGP's classloader.
      */
     private fun agpVersion(project: Project): String? {
-        formatAgpVersion(project.extensions.findByName("androidComponents"))?.let { return it }
+        val pluginVersion = project.extensions.findByName("androidComponents")?.let { invokeNoArg(it, "getPluginVersion") }
+        if (pluginVersion != null) noArgStringGetter(pluginVersion, "getVersion")?.let { return it }
         return agpVersionFromConstant(project)
-    }
-
-    /** Format an `AndroidPluginVersion` (read reflectively) as `major.minor.micro(-previewTypePreview)`. */
-    private fun formatAgpVersion(androidComponents: Any?): String? {
-        val version = androidComponents?.let { invokeNoArg(it, "getPluginVersion") } ?: return null
-        val major = intGetter(version, "getMajor") ?: return null
-        val minor = intGetter(version, "getMinor") ?: return null
-        val micro = intGetter(version, "getMicro") ?: return null
-        return buildString {
-            append(major).append('.').append(minor).append('.').append(micro)
-            // previewType/preview are set together on alpha/beta/rc builds; released versions omit them.
-            val previewType = noArgStringGetter(version, "getPreviewType")
-            val preview = intGetter(version, "getPreview")
-            if (previewType != null && preview != null) append('-').append(previewType).append(preview)
-        }
     }
 
     private fun agpVersionFromConstant(project: Project): String? {
@@ -151,8 +138,6 @@ internal object ToolchainDetection {
 
     /** Invoke a no-arg getter returning a String (null if absent or not a String). Pure — unit-tested. */
     fun noArgStringGetter(target: Any, name: String): String? = invokeNoArg(target, name) as? String
-
-    private fun intGetter(target: Any, name: String): Int? = invokeNoArg(target, name) as? Int
 
     private fun <T> guarded(what: String, block: () -> T?): T? =
         runCatching(block).onFailure {

@@ -87,6 +87,58 @@ class ToolchainFunctionalTest {
     }
 
     @Test
+    fun `detected toolchain survives a composite build on the cc store run and a hit`() {
+        // Regression guard for the channel choice (plan 044 §3): a plugin-providing `includeBuild`
+        // whose compile runs during the *root's* configuration — instantiating the collector service
+        // before whenReady, the exact timing that froze the old TaskEventCollector service-parameter
+        // channel and left the store run's toolchain empty. Seeded via the seam so no real AGP/KGP/KSP
+        // build is needed; the finalizer-parameter channel must carry the versions on BOTH the store
+        // run and the cc hit.
+        File(projectDir, "child/settings.gradle.kts").apply { parentFile.mkdirs() }
+            .writeText("""rootProject.name = "child"""")
+        File(projectDir, "child/build.gradle.kts").writeText(
+            """
+            plugins { `java-gradle-plugin` }
+            gradlePlugin { plugins { create("dummy") { id = "child.dummy"; implementationClass = "child.DummyPlugin" } } }
+            """.trimIndent(),
+        )
+        File(projectDir, "child/src/main/java/child/DummyPlugin.java").apply { parentFile.mkdirs() }.writeText(
+            """
+            package child;
+            import org.gradle.api.Plugin;
+            import org.gradle.api.Project;
+            public class DummyPlugin implements Plugin<Project> { public void apply(Project project) {} }
+            """.trimIndent(),
+        )
+        File(projectDir, "settings.gradle.kts").writeText(
+            """
+            pluginManagement { includeBuild("child") }
+            plugins { id("dev.buildhound") }
+            rootProject.name = "composite-fixture"
+            """.trimIndent(),
+        )
+        File(projectDir, "build.gradle.kts").writeText(
+            """
+            plugins { id("child.dummy") }
+            tasks.register("hello") { doLast { println("hello") } }
+            """.trimIndent(),
+        )
+        File(projectDir, "gradle.properties").writeText(
+            "buildhound.internal.toolchain.agp=8.9.0\n" +
+                "buildhound.internal.toolchain.kgp=2.2.20\n" +
+                "buildhound.internal.toolchain.ksp=2.2.20-2.0.2\n",
+        )
+
+        val store = runner("hello").build()
+        assertEquals(TaskOutcome.SUCCESS, store.task(":hello")?.outcome)
+        assertEquals("8.9.0", readPayload().toolchain?.agp, "store run must carry the toolchain: ${store.output}")
+
+        val hit = runner("hello").build()
+        assertTrue(hit.output.contains("Reusing configuration cache"), hit.output)
+        assertEquals("8.9.0", readPayload().toolchain?.agp)
+    }
+
+    @Test
     fun `a build applying none of the tools reports null AGP KGP KSP and still succeeds`() {
         setUpProject()
 

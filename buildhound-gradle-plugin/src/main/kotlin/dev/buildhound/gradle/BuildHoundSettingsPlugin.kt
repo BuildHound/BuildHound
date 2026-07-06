@@ -120,14 +120,45 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         val collectTests = extension.tests.collect
         settings.gradle.taskGraph.whenReady { graph ->
             DaemonState.configurationCompleted()
+            val isolatedProjects = buildFeatures.isolatedProjects.active.getOrElse(false)
             runCatching {
                 check(!failTaskGraphSnapshot) { "task-graph snapshot failpoint" }
-                val isolatedProjects = buildFeatures.isolatedProjects.active.getOrElse(false)
-                // Toolchain versions (plan 044): the seam wins for tests; otherwise walk every
-                // configured project (not just those with a task in this invocation, so a narrow
-                // request like `:core:common:assemble` still sees AGP) — but only when NOT under
-                // isolated projects, where a cross-project walk is illegal and the dimensions
-                // degrade to null exactly like the task dictionary below.
+                if (isolatedProjects) {
+                    logger.info("[buildhound] isolated projects active; task metadata dictionary left empty")
+                } else {
+                    taskMetadataHolder.set(
+                        graph.allTasks.associate { task -> task.path to TaskClassIntrospection.introspect(task.javaClass) },
+                    )
+                    // Test-result locations (plan 024): capture each Test task's JUnit XML dir now, at
+                    // config time (spike §4a) — the XML itself is read in the finalizer. Public Test API
+                    // only; the decision to treat a task as a Test task is the type-free introspection.
+                    if (collectTests.getOrElse(true)) {
+                        val locations = graph.allTasks
+                            .filter { TestTaskIntrospection.isTestTask(it.javaClass) }
+                            .mapNotNull { task -> testLocationOf(task) }
+                            .toMap()
+                        testLocationsHolder.set(locations)
+                        // Durable channel (plan 044): in a composite build the collector service is
+                        // instantiated by included-build task events *before* this callback runs, freezing
+                        // its params empty — so the finalizer reads these locations from the sidecar file
+                        // instead. Under .gradle (like the salt) so it survives `clean` and tracks the CC
+                        // entry. The holder/param above stays as the classpath-path fallback. The write
+                        // respects the master switch (spec §3.4) — a disabled build must touch nothing on
+                        // disk, parity with the salt/start-marker.
+                        if (extension.enabled.get() && extension.mode.get() != TelemetryMode.DISABLED) {
+                            TestLocationSidecar.write(settings.rootDir, locations)
+                        }
+                    }
+                }
+            }.onFailure {
+                logger.warn("[buildhound] task metadata capture failed (build unaffected): {}", it.message)
+            }
+            // Toolchain versions (plan 046): its own guard, after the higher-stakes task/test capture,
+            // so a detection failure can never block them. The seam wins for tests; otherwise walk every
+            // configured project (not just those with a task in this invocation, so a narrow request like
+            // `:core:common:assemble` still sees AGP) — skipped under isolated projects, where a
+            // cross-project walk is illegal and the dimensions degrade to null like the task dictionary.
+            runCatching {
                 toolchainHolder.set(
                     when {
                         !toolchainSeam.isEmpty() -> toolchainSeam
@@ -135,35 +166,8 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
                         else -> ToolchainDetection.detect(settings.gradle.rootProject.allprojects)
                     },
                 )
-                if (isolatedProjects) {
-                    logger.info("[buildhound] isolated projects active; task metadata dictionary left empty")
-                    return@runCatching
-                }
-                taskMetadataHolder.set(
-                    graph.allTasks.associate { task -> task.path to TaskClassIntrospection.introspect(task.javaClass) },
-                )
-                // Test-result locations (plan 024): capture each Test task's JUnit XML dir now, at
-                // config time (spike §4a) — the XML itself is read in the finalizer. Public Test API
-                // only; the decision to treat a task as a Test task is the type-free introspection.
-                if (collectTests.getOrElse(true)) {
-                    val locations = graph.allTasks
-                        .filter { TestTaskIntrospection.isTestTask(it.javaClass) }
-                        .mapNotNull { task -> testLocationOf(task) }
-                        .toMap()
-                    testLocationsHolder.set(locations)
-                    // Durable channel (plan 044): in a composite build the collector service is
-                    // instantiated by included-build task events *before* this callback runs, freezing
-                    // its params empty — so the finalizer reads these locations from the sidecar file
-                    // instead. Under .gradle (like the salt) so it survives `clean` and tracks the CC
-                    // entry. The holder/param above stays as the classpath-path fallback. The write
-                    // respects the master switch (spec §3.4) — a disabled build must touch nothing on
-                    // disk, parity with the salt/start-marker.
-                    if (extension.enabled.get() && extension.mode.get() != TelemetryMode.DISABLED) {
-                        TestLocationSidecar.write(settings.rootDir, locations)
-                    }
-                }
             }.onFailure {
-                logger.warn("[buildhound] task metadata capture failed (build unaffected): {}", it.message)
+                logger.warn("[buildhound] toolchain detection failed (build unaffected): {}", it.message)
             }
         }
 

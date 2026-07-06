@@ -39,6 +39,15 @@ class ToolchainDetectionTest {
     }
 
     @Test
+    fun `invokeNoArg returns the raw getter result or null`() {
+        // The AGP (pluginVersion-getVersion) and KSP (getPluginArtifact-getVersion) chains lean on this
+        // generic helper, then narrow the result themselves.
+        assertEquals("2.4.0", ToolchainDetection.invokeNoArg(FakeKotlinPlugin(), "getPluginVersion"))
+        assertEquals(7, ToolchainDetection.invokeNoArg(FakeKotlinPlugin(), "getPreview"))
+        assertNull(ToolchainDetection.invokeNoArg(NoVersionPlugin(), "getPluginVersion"))
+    }
+
+    @Test
     fun `DetectedToolchain is empty only when every dimension is null`() {
         assertTrue(DetectedToolchain().isEmpty())
         assertFalse(DetectedToolchain(agp = "8.9.0").isEmpty())

@@ -200,7 +200,6 @@ internal object PayloadAssembler {
     private fun capArtifacts(list: List<ArtifactSize>): List<ArtifactSize> =
         if (list.size <= MAX_ARTIFACTS) list else list.sortedByDescending { it.sizeBytes }.take(MAX_ARTIFACTS)
 
-    /** Git wins; CI context fills the gaps (detached HEAD on CI has no branch name). */
     /**
      * Toolchain snapshot (spec §3.2, plan 044): Gradle/JDK come from the environment probe, AGP/KGP/
      * KSP from plugin detection. Null only when every dimension is unknown, so the block is absent on
@@ -213,6 +212,7 @@ internal object PayloadAssembler {
         return ToolchainInfo(gradle = gradle, jdk = jdk, agp = agp, kgp = kgp, ksp = ksp)
     }
 
+    /** Git wins; CI context fills the gaps (detached HEAD on CI has no branch name). */
     fun vcsInfo(vcs: CollectedVcs?, ci: CollectedCi?): VcsInfo? {
         val branch = vcs?.branch ?: ci?.branch
         val sha = vcs?.sha ?: ci?.commitSha
