@@ -115,6 +115,9 @@
         }
         if (d.toolchain && d.toolchain.gradle) chip("gradle", d.toolchain.gradle);
         if (d.toolchain && d.toolchain.jdk) chip("jdk", d.toolchain.jdk);
+        if (d.toolchain && d.toolchain.agp) chip("agp", d.toolchain.agp);
+        if (d.toolchain && d.toolchain.kgp) chip("kgp", d.toolchain.kgp);
+        if (d.toolchain && d.toolchain.ksp) chip("ksp", d.toolchain.ksp);
         chips.hidden = false;
 
         // Timeline is best-effort: a renderer defect must degrade to a hidden section,
