@@ -11,6 +11,7 @@ import dev.buildhound.commons.payload.CiInfo
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
 import dev.buildhound.commons.payload.EnvironmentInfo
+import dev.buildhound.commons.payload.FailureInfo
 import dev.buildhound.commons.payload.FingerprintInfo
 import dev.buildhound.commons.payload.KotlinInfo
 import dev.buildhound.commons.payload.PayloadCapper
@@ -73,6 +74,7 @@ internal object PayloadAssembler {
         projectKey: String?,
         mode: BuildMode,
         buildFailed: Boolean,
+        failure: CollectedFailure? = null,
         requestedTasks: List<String>,
         tasks: List<TaskExecution>,
         environment: CollectedEnvironment?,
@@ -118,6 +120,17 @@ internal object PayloadAssembler {
             startedAt = startedAt,
             finishedAt = finishedAt,
             outcome = if (buildFailed) BuildOutcome.FAILED else BuildOutcome.SUCCESS,
+            // Failure detail (plan 044): the raw message/stacktrace ride here; the scrubber (below)
+            // relativizes/redacts paths + secrets and truncates before this ships. Present only on a
+            // failed build; `messageHash` is over the raw message (computed at extraction).
+            failure = failure?.let {
+                FailureInfo(
+                    exceptionClass = it.exceptionClass,
+                    messageHash = it.messageHash,
+                    message = it.message,
+                    stackTrace = it.stackTrace,
+                )
+            },
             requestedTasks = requestedTasks,
             mode = mode,
             environment = environment?.let {

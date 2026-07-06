@@ -28,6 +28,9 @@
         .SKIPPED, .NO_SOURCE { background: #e5e7eb; color: #374151; }
         .FAILED { background: #fecaca; color: #7f1d1d; }
         .ok { color: #15803d; } .fail { color: #b91c1c; }
+        #failure h2 { color: #b91c1c; }
+        #failure-summary { font-weight: 600; }
+        #failure pre { background: #8881; border: 1px solid #8883; border-radius: .25rem; padding: .75rem; overflow: auto; max-height: 32rem; font-size: .8rem; white-space: pre-wrap; word-break: break-word; }
         #timeline svg { width: 100%; height: auto; }
     </style>
 </head>
@@ -38,6 +41,11 @@
 </header>
 <main id="app">
     <ul id="summary" class="chips" hidden></ul>
+    <section id="failure" hidden>
+        <h2>Failure</h2>
+        <p id="failure-summary"></p>
+        <pre id="failure-stacktrace" hidden></pre>
+    </section>
     <section id="timeline" hidden>
         <h2>Timeline</h2>
         <p id="timeline-meta" class="placeholder"></p>
@@ -119,6 +127,18 @@
         if (d.toolchain && d.toolchain.kgp) chip("kgp", d.toolchain.kgp);
         if (d.toolchain && d.toolchain.ksp) chip("ksp", d.toolchain.ksp);
         chips.hidden = false;
+
+        // Build failure (plan 044): exception class + scrubbed message, and the scrubbed stacktrace
+        // (fuller here than the wire payload). Hidden entirely on success. All strings via textContent,
+        // and the trace lands in a <pre> as text — never markup — so an injected </script> is inert.
+        if (d.failure) {
+            const f = d.failure;
+            const header = f.exceptionClass || "Build failed";
+            document.getElementById("failure-summary").textContent = f.message ? header + ": " + f.message : header;
+            const stack = document.getElementById("failure-stacktrace");
+            if (f.stackTrace) { stack.textContent = f.stackTrace; stack.hidden = false; }
+            document.getElementById("failure").hidden = false;
+        }
 
         // Timeline is best-effort: a renderer defect must degrade to a hidden section,
         // never a blank report (client-side analogue of the plugin's never-fail rule).

@@ -241,11 +241,22 @@ enum class BuildMode {
     @SerialName("benchmark") BENCHMARK,
 }
 
+/**
+ * Build-failure detail (spec §3.7/§4). `messageHash` is a SHA-256 of the raw message (computed
+ * pre-scrub, so it stays a stable cross-build/flaky key), retained alongside the plaintext for
+ * back-compat and correlation. `message` and `stackTrace` are collected only when a build fails;
+ * both are **scrubbed** (absolute paths relativized/redacted, secret-shaped values stripped) and
+ * **truncated** by [PayloadScrubber] before they ship — the highest PII-leak surface in the payload,
+ * so over-redaction is deliberate. `taskPath` is reserved for per-task attribution (build-level
+ * capture leaves it null in v1).
+ */
 @Serializable
 data class FailureInfo(
     val taskPath: String? = null,
     val exceptionClass: String? = null,
     val messageHash: String? = null,
+    val message: String? = null,
+    val stackTrace: String? = null,
 )
 
 @Serializable

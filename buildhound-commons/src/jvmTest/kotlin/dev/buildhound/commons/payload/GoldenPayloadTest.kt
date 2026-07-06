@@ -288,6 +288,26 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `schema v1 failure-detail golden file deserializes with populated failure`() {
+        val payload =
+            BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-failure-detail.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        assertEquals(BuildOutcome.FAILED, payload.outcome)
+        val failure = payload.failure
+        assertTrue(failure != null, "failure must be populated on a FAILED build")
+        assertEquals("org.gradle.api.tasks.TaskExecutionException", failure.exceptionClass)
+        assertEquals("Execution failed for task ':app:compileDebugKotlin'.", failure.message)
+        // messageHash is the SHA-256 of the raw message — pin the golden to the live formula so a
+        // future edit (or a copy-paste placeholder) can't silently drift, as with cacheableHitRate.
+        assertEquals(sha256(failure.message!!), failure.messageHash)
+        val stack = failure.stackTrace ?: ""
+        assertTrue(stack.contains("Caused by"), "the cause chain is preserved")
+        assertTrue(!stack.contains("/Users/"), "no absolute path leaks in the shipped trace")
+        assertNull(failure.taskPath, "v1 build-level capture leaves taskPath null")
+    }
+
+    @Test
     fun `StartMarker round-trips losslessly`() {
         val marker = StartMarker(
             buildId = "7c2a1b90-4d5e-4f6a-8b7c-1d2e3f4a5b6c",
@@ -317,6 +337,7 @@ class GoldenPayloadTest {
             "build-payload-v2ext.json",
             "build-payload-v1-internal-adapters.json",
             "build-payload-v1-sharding.json",
+            "build-payload-v1-failure-detail.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

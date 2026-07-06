@@ -9,6 +9,7 @@ import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.ExtensionContributionContext
 import dev.buildhound.commons.payload.FingerprintInfo
+import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.report.ReportAssets
 import java.io.File
@@ -69,6 +70,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
         @get:Input
         val buildFailed: Property<Boolean>
+
+        /** Build-failure detail (plan 044); absent on a successful build. */
+        @get:Input
+        @get:Optional
+        val failure: Property<CollectedFailure>
 
         @get:Input
         val environment: Property<CollectedEnvironment>
@@ -275,6 +281,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 projectKey = parameters.projectKey.orNull,
                 mode = mode,
                 buildFailed = parameters.buildFailed.get(),
+                failure = parameters.failure.orNull,
                 requestedTasks = parameters.requestedTasks.getOrElse(emptyList()),
                 tasks = tasks,
                 environment = parameters.environment.orNull,
@@ -315,8 +322,10 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             if (parameters.htmlReportEnabled.getOrElse(true)) {
                 // Wire-format JSON (not the pretty file) — the artifact doubles as an
                 // offline payload copy (spec §3.8); render() escapes for the HTML context.
-                // The payload is already scrubbed at assembly (§3.7, plan 007).
-                val html = ReportAssets.render(BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload))
+                // The payload is already scrubbed at assembly (§3.7, plan 007). The local artifact
+                // may carry a fuller (still-scrubbed) failure stacktrace than the wire payload (plan 044).
+                val reportPayload = reportPayload(payload, parameters.failure.orNull, scrubRoots(parameters.rootDir.orNull))
+                val html = ReportAssets.render(BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), reportPayload))
                 val htmlFile = File(payloadFile.parentFile, "buildhound-report.html")
                 htmlFile.writeText(html)
                 logger.lifecycle("[buildhound] report written: {}", htmlFile)
@@ -462,6 +471,20 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             ?: File(System.getProperty("user.home"), ".buildhound/optin")
         marker.exists()
     }.getOrDefault(false)
+
+    /**
+     * The payload rendered into the local HTML artifact (plan 044): identical to the wire payload,
+     * except the failure stacktrace is a fuller, still-scrubbed copy. The written/uploaded JSON keeps
+     * the ~8 KiB cap the scrubber applied; the local, zero-network artifact can show more frames for
+     * debugging. Scrub stays non-negotiable even locally — the raw trace is re-scrubbed here so no
+     * absolute path or secret ever reaches the file. Returns [payload] unchanged when there is no
+     * failure trace to expand.
+     */
+    private fun reportPayload(payload: BuildPayload, failure: CollectedFailure?, roots: List<String>): BuildPayload {
+        val rawTrace = failure?.stackTrace ?: return payload
+        val existing = payload.failure ?: return payload
+        return payload.copy(failure = existing.copy(stackTrace = PayloadScrubber.scrubText(rawTrace, roots)))
+    }
 
     /** Plain and canonical forms: reason text may carry either on symlinked checkouts. */
     private fun scrubRoots(rootDir: String?): List<String> {

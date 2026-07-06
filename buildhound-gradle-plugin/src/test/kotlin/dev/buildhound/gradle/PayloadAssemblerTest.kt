@@ -73,6 +73,33 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `failure detail is populated on a failed build`() {
+        val payload = assemble(
+            tasks = listOf(task(":app:compileKotlin", 0, 10, TaskOutcome.FAILED)),
+            buildFailed = true,
+            failure = CollectedFailure(
+                exceptionClass = "org.gradle.api.tasks.TaskExecutionException",
+                message = "Execution failed for task ':app:compileKotlin'.",
+                messageHash = "abc123",
+                stackTrace = "org.gradle.api.tasks.TaskExecutionException: boom\n\tat Foo.kt:1",
+            ),
+        )
+        assertEquals(BuildOutcome.FAILED, payload.outcome)
+        val failure = payload.failure!!
+        assertEquals("org.gradle.api.tasks.TaskExecutionException", failure.exceptionClass)
+        assertEquals("abc123", failure.messageHash)
+        assertEquals("Execution failed for task ':app:compileKotlin'.", failure.message)
+        assertTrue(failure.stackTrace!!.contains("boom"))
+    }
+
+    @Test
+    fun `a successful build carries no failure detail`() {
+        val payload = assemble(tasks = listOf(task(":app:compileKotlin", 0, 10, TaskOutcome.EXECUTED)))
+        assertEquals(BuildOutcome.SUCCESS, payload.outcome)
+        assertNull(payload.failure)
+    }
+
+    @Test
     fun `ci context fills vcs gaps but never dirty`() {
         assertNull(PayloadAssembler.vcsInfo(null, null))
 
@@ -448,6 +475,7 @@ class PayloadAssemblerTest {
     private fun assemble(
         tasks: List<TaskExecution>,
         buildFailed: Boolean = false,
+        failure: CollectedFailure? = null,
         nowMs: Long = 0,
         configurationMs: Long? = null,
         tags: Map<String, String> = mapOf("team" to "mobile"),
@@ -474,6 +502,7 @@ class PayloadAssemblerTest {
         projectKey = "fixture",
         mode = BuildMode.CI,
         buildFailed = buildFailed,
+        failure = failure,
         requestedTasks = listOf("build"),
         tasks = tasks,
         environment = environment,

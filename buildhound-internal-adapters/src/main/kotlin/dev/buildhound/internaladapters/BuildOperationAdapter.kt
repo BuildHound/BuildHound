@@ -44,7 +44,23 @@ class BuildOperationAdapter(private val rootDir: java.io.File) : BuildOperationL
         }
     }
 
-    override fun progress(operationIdentifier: OperationIdentifier, event: OperationProgressEvent) {}
+    /**
+     * Deprecation-warning catcher (plan 044), opt-in via `internalAdapters.collectDeprecations`. Gradle
+     * emits each deprecation as build-operation *progress* whose details implement
+     * `DeprecatedUsageProgressDetails`; we read the summary (+ advice) reflectively — a version rename
+     * degrades to no capture, never a throw — and never touch the detail's stack trace (it carries
+     * absolute paths). Deduped + bounded in the accumulator; scrubbed by the collector.
+     */
+    override fun progress(operationIdentifier: OperationIdentifier, event: OperationProgressEvent) {
+        if (!state.collectDeprecations()) return
+        runCatching {
+            val details = event.details ?: return
+            if (!isType(details, DEPRECATION_DETAILS_TYPE)) return
+            val summary = callString(details, "getSummary") ?: return
+            val advice = callString(details, "getAdvice")
+            state.accumulator().addDeprecation(if (advice != null) "$summary $advice" else summary)
+        }
+    }
 
     override fun finished(descriptor: BuildOperationDescriptor, event: OperationFinishEvent) {
         runCatching {
@@ -105,4 +121,11 @@ class BuildOperationAdapter(private val rootDir: java.io.File) : BuildOperationL
 
     private fun callLong(obj: Any, method: String): Long? =
         runCatching { (obj.javaClass.getMethod(method).invoke(obj) as? Number)?.toLong() }.getOrNull()
+
+    private companion object {
+        // Verified against Gradle 9.6.1: the deprecation progress detail impl
+        // (DefaultDeprecatedUsageProgressDetails) implements this interface. Matched by name via
+        // reflection so a package rename on another version degrades to no capture, never a crash.
+        const val DEPRECATION_DETAILS_TYPE = "org.gradle.internal.featurelifecycle.DeprecatedUsageProgressDetails"
+    }
 }
