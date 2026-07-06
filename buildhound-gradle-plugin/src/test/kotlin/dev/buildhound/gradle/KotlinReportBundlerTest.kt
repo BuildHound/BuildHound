@@ -55,6 +55,39 @@ class KotlinReportBundlerTest {
     }
 
     @Test
+    fun resolves_a_relative_directory_against_the_root_project() {
+        val now = System.currentTimeMillis()
+        val reports = File(dir, "build/kotlin-build-reports").apply { mkdirs() }
+        File(reports, "r.json").apply { writeText(validReport); setLastModified(now) }
+
+        // A relative report dir (as KGP is configured in the sample) must resolve against rootDir,
+        // not the working directory — so passing rootDir=dir finds dir/build/kotlin-build-reports.
+        val info = KotlinReportBundler.bundle("build/kotlin-build-reports", now - 1000, dir.absolutePath)
+        assertEquals(":compileKotlin", info!!.perTask.single().taskPath)
+    }
+
+    @Test
+    fun a_missing_directory_returns_null_without_warning() {
+        val warnings = mutableListOf<String>()
+        val result = KotlinReportBundler.bundle(
+            File(dir, "never-created").absolutePath, System.currentTimeMillis(), null,
+        ) { warnings += it }
+
+        assertNull(result)
+        assertTrue(warnings.isEmpty(), "a missing report dir is the no-report case, not a warning: $warnings")
+    }
+
+    @Test
+    fun a_file_at_the_report_path_warns_once() {
+        val warnings = mutableListOf<String>()
+        val file = File(dir, "notadir.json").apply { writeText("x") }
+
+        KotlinReportBundler.bundle(file.absolutePath, System.currentTimeMillis() - 1000, null) { warnings += it }
+
+        assertEquals(1, warnings.count { it.contains("is not a directory") }, warnings.toString())
+    }
+
+    @Test
     fun ranks_by_duration_and_truncates_beyond_the_task_cap() {
         val now = System.currentTimeMillis()
         val records = (1..250).joinToString(",") {

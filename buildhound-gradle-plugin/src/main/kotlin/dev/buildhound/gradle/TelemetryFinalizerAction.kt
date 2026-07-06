@@ -199,7 +199,14 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 warn = { logger.warn(it) },
             )
             val kotlin = if (bundleKotlin) {
-                KotlinReportBundler.bundle(parameters.kotlinJsonDirectory.orNull, startedAtMs, { logger.warn(it) })
+                // rootDir so a relative kotlin.build.report.json.directory resolves like KGP does
+                // (against the root project), not against the daemon's working directory.
+                KotlinReportBundler.bundle(
+                    parameters.kotlinJsonDirectory.orNull,
+                    startedAtMs,
+                    parameters.rootDir.orNull,
+                    { logger.warn(it) },
+                )
             } else {
                 null
             }

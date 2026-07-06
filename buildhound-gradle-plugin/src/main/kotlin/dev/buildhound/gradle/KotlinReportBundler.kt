@@ -25,12 +25,16 @@ internal object KotlinReportBundler {
     private const val WINDOW_MARGIN_MS = 60_000L
     private const val MAX_TASKS = 200
 
-    fun bundle(jsonDirectory: String?, startedAtMs: Long, warn: (String) -> Unit = {}): KotlinInfo? {
+    fun bundle(jsonDirectory: String?, startedAtMs: Long, rootDir: String? = null, warn: (String) -> Unit = {}): KotlinInfo? {
         if (jsonDirectory.isNullOrBlank()) return null
         return runCatching {
-            val dir = File(jsonDirectory)
+            val dir = resolveReportDir(jsonDirectory, rootDir)
+            // A missing directory is the normal "no Kotlin report this build" case (e.g. a `help` run,
+            // or an up-to-date build where nothing recompiled) — absent, not misconfigured, so stay
+            // silent. Only a path that exists but is a *file* is a real misconfiguration worth a warn.
+            if (!dir.exists()) return null
             if (!dir.isDirectory) {
-                warn("[buildhound] kotlin report directory is not a directory; skipping: ${dir.name}")
+                warn("[buildhound] kotlin report path is not a directory (a file exists there); skipping: ${dir.name}")
                 return null
             }
             val candidates = dir.listFiles { file -> file.isFile && file.name.endsWith(".json") }
@@ -66,6 +70,18 @@ internal object KotlinReportBundler {
             warn("[buildhound] kotlin report bundling failed (build unaffected): ${it::class.java.simpleName}")
             null
         }
+    }
+
+    /**
+     * KGP resolves a *relative* `kotlin.build.report.json.directory` against the root project directory
+     * and writes the report there. We must resolve it the same way: `File(relativePath)` alone would be
+     * relative to the daemon's working directory, which can differ from the root (a reused daemon, or a
+     * build launched from elsewhere), making us miss a report KGP actually wrote. Absolute paths are
+     * used verbatim; a null [rootDir] falls back to the old working-dir behaviour.
+     */
+    private fun resolveReportDir(jsonDirectory: String, rootDir: String?): File {
+        val configured = File(jsonDirectory)
+        return if (configured.isAbsolute || rootDir == null) configured else File(rootDir, jsonDirectory)
     }
 
     /**
