@@ -5,6 +5,7 @@ import dev.buildhound.commons.payload.BuildPayload
 import javax.sql.DataSource
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.BeforeAll
@@ -74,6 +75,55 @@ class PostgresStoresIntegrationTest {
         tokens.ensureProjectWithToken("pilot", sha256Hex("ingest-only"), TokenScope.INGEST)
         assertEquals(TokenScope.INGEST, tokens.resolve(sha256Hex("ingest-only"))?.scope)
         assertEquals(TokenScope.ALL, tokens.resolve(sha256Hex("secret-1"))?.scope)
+    }
+
+    @Test
+    fun `failure detail and opaque warning extensions survive the jsonb round-trip`() {
+        val project = tokens.ensureProjectWithToken("failure-project", sha256Hex("fp"))
+        val stored = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            """
+            {
+              "schemaVersion": 1,
+              "buildId": "f-1",
+              "startedAt": 1751450000000,
+              "finishedAt": 1751450005000,
+              "outcome": "FAILED",
+              "mode": "ci",
+              "failure": {
+                "exceptionClass": "org.gradle.api.GradleException",
+                "message": "Execution failed for task ':app:compileKotlin'",
+                "stackTrace": "org.gradle.api.GradleException: boom\n\tat org.example.Widget.build(Widget.java:42)"
+              },
+              "extensions": {
+                "internalAdapters": {
+                  "schemaVersion": 1,
+                  "gradleVersion": "9.6.1",
+                  "deprecations": ["The Foo API has been deprecated."],
+                  "logWarnings": ["warning: bar() in Baz has been deprecated"],
+                  "droppedWarnings": 3
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+        assertTrue(builds.save(project.id, stored), "first save inserts")
+
+        // The dashboard/report render these fields off findById, so they must survive the REAL jsonb
+        // encode-on-save / decode-on-read — not just the in-memory by-reference path ApplicationTest
+        // covers (plan 045; the two stores use one BuildHoundJson, but "same config" ≠ "tested").
+        val readBack = builds.findById(project.id, "f-1")
+        assertEquals("org.gradle.api.GradleException", readBack?.failure?.exceptionClass)
+        assertEquals(
+            "org.gradle.api.GradleException: boom\n\tat org.example.Widget.build(Widget.java:42)",
+            readBack?.failure?.stackTrace,
+            "the multi-line stacktrace must survive the jsonb round-trip intact",
+        )
+        val internalAdapters = readBack?.extensions?.get("internalAdapters")
+        assertNotNull(internalAdapters, "internalAdapters extension dropped in the jsonb round-trip")
+        val extensionJson = internalAdapters.toString()
+        assertTrue(extensionJson.contains("The Foo API has been deprecated."), extensionJson)
+        assertTrue(extensionJson.contains("bar() in Baz has been deprecated"), extensionJson)
     }
 
     @Test

@@ -1,6 +1,7 @@
 package dev.buildhound.report
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -68,5 +69,17 @@ class ReportAssetsTest {
 
         assertFalse(rendered.contains("</script><script>"), "payload must not escape the script element")
         assertTrue(rendered.contains("\\u003c/script>\\u003cscript>alert(1)//"))
+    }
+
+    @Test
+    fun `inline scripts contain no stray closing-script tag`() {
+        // A literal `</script>` anywhere inside an inline <script> — even in a JS comment or string —
+        // ends the element in the HTML parser (it is not JS-aware), truncating the render logic. Pin
+        // that every <script> has exactly its own matching </script>, no stray closer in a body.
+        val template = ReportAssets.template()
+
+        val openers = template.split("<script>").size - 1
+        val closers = template.split("</script>").size - 1
+        assertEquals(openers, closers, "an inline <script> body contains a stray </script> (breaks render in a browser)")
     }
 }

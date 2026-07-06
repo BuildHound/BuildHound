@@ -61,12 +61,23 @@ node smoke harness effectively covers the report too (§4).
   section (a deprecation, a log warning, the dropped-count note) all render. Assert the
   existing minimal `FAILED` build (`b2`, no `failure`/`extensions`) renders **neither** and
   does not throw (the presence-gate + config-phase-failure case).
-- **Server round-trip (`DashboardRoutesTest` or `PostgresStoresIntegrationTest`):** ingest a
-  payload carrying `failure` + `extensions.internalAdapters`, `GET /v1/builds/{id}`, assert
-  both survive the wire. The smoke harness stubs `fetch`, so it proves "if the server sends
-  it, we render it" — this test proves the server *sends* it, and guards both surfaces if
-  anyone later swaps the detail response for a projection DTO.
-- **Report:** the existing `ReportAssetsTest` zero-network / escaping / placeholder contracts
+- **Server round-trip (`ApplicationTest`, in-memory):** ingest a payload carrying `failure` +
+  `extensions.internalAdapters`, `GET /v1/builds/{id}`, assert both survive the wire. The smoke
+  harness stubs `fetch`, so it proves "if the server sends it, we render it" — this test proves the
+  server *sends* it, and guards both surfaces if anyone later swaps the detail response for a
+  projection DTO.
+- **Server jsonb round-trip (`PostgresStoresIntegrationTest`, Testcontainers):** `save`→`findById` of
+  the same shape asserts `failure` + the opaque `internalAdapters` extension survive the *real*
+  Postgres jsonb encode/decode (the in-memory path is by-reference, so "same `BuildHoundJson`" ≠
+  "tested").
+- **Report render smoke (`report-smoke.js` + `ReportScriptTest`, real DOM render — new):** runs the
+  report's `render()` IIFE against a DOM stub and asserts the Failure + Warnings sections populate.
+  `ReportAssetsTest` only checked string-splice invariants, so `render()` shipped untested — and this
+  harness immediately caught a **pre-existing latent bug from plan 044**: a literal `</script>` in an
+  inline-script comment, which a browser's HTML parser reads as the script's end tag, truncating the
+  render (the failure card never rendered in a browser). Fixed by rewording the comment; a new
+  `ReportAssetsTest` case pins `<script>`/`</script>` count-parity so no stray closer recurs.
+- **Report contracts:** the existing `ReportAssetsTest` zero-network / escaping / placeholder checks
   stay green (the added markup is static template + the `el()` render path).
 - No new Kotlin *logic* tests — no server logic changed.
 

@@ -162,6 +162,12 @@ class ApplicationTest {
         // And it decodes back into typed failure + the opaque internal-adapters extension intact.
         val decoded = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), body)
         assertEquals("org.gradle.api.GradleException", decoded.failure?.exceptionClass)
+        // Pin the multi-line structure the fixture comment claims — the `\n`/`\t` must survive intact,
+        // not collapse to one line, so the rendered <pre> keeps real stack frames.
+        assertEquals(
+            "org.gradle.api.GradleException: boom\n\tat org.example.Widget.build(Widget.java:42)",
+            decoded.failure?.stackTrace,
+        )
         assertTrue(decoded.extensions.containsKey("internalAdapters"), "internalAdapters extension dropped")
     }
 
