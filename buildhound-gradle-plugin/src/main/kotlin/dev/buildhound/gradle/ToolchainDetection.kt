@@ -1,7 +1,5 @@
 package dev.buildhound.gradle
 
-import com.android.build.api.AndroidPluginVersion
-import com.android.build.api.variant.AndroidComponentsExtension
 import java.io.Serializable
 import org.gradle.api.Project
 import org.gradle.api.logging.Logging
@@ -34,12 +32,11 @@ data class DetectedToolchain(
  * task dictionary, and never runs on a config-cache hit (the detected value is replayed from the
  * service parameter instead).
  *
- * **Never-fail + no-eager-AGP-linking contract** (mirrors [AndroidArtifactCollector]): BuildHound is
- * a *settings* plugin, so AGP is `compileOnly` and absent from a non-Android build's classpath. AGP
- * types are referenced *only* inside [agpVersion], which the loop enters *only* after a string-based
- * `hasPlugin` check confirms AGP is applied — so the JVM never verifies/links an AGP type on a build
- * that lacks AGP. Every per-project probe is individually guarded; a probe that throws (including a
- * `NoClassDefFoundError` from an unexpected classpath) degrades that one dimension to `null`.
+ * **Never-fail contract.** Every probe is *pure reflection* over the applied-plugin objects — no
+ * compile-time AGP/KGP/KSP type is referenced anywhere here (AGP is only `compileOnly`, absent from a
+ * non-Android build), so nothing can `NoClassDefFoundError` at link time. The string `hasPlugin` gate
+ * merely avoids probing projects that don't apply the tool. Each per-project probe is individually
+ * guarded; a probe that throws degrades that one dimension to `null`, never the build.
  */
 internal object ToolchainDetection {
 
@@ -47,6 +44,20 @@ internal object ToolchainDetection {
         "org.jetbrains.kotlin.jvm",
         "org.jetbrains.kotlin.android",
         "org.jetbrains.kotlin.multiplatform",
+    )
+
+    /**
+     * Every AGP application-id whose plugin registers an `androidComponents` extension — the classic
+     * app/library/test/dynamic-feature plus the newer KMP-library plugin
+     * (`com.android.kotlin.multiplatform.library`). A pure KMP-library module applies none of
+     * app/library, so it must be gated in explicitly or its AGP version is missed.
+     */
+    private val ANDROID_PLUGIN_IDS = listOf(
+        "com.android.application",
+        "com.android.library",
+        "com.android.kotlin.multiplatform.library",
+        "com.android.dynamic-feature",
+        "com.android.test",
     )
 
     /**
@@ -60,7 +71,7 @@ internal object ToolchainDetection {
         var ksp: String? = null
         for (project in projects) {
             val plugins = project.pluginManager
-            if (agp == null && (plugins.hasPlugin("com.android.application") || plugins.hasPlugin("com.android.library"))) {
+            if (agp == null && ANDROID_PLUGIN_IDS.any { plugins.hasPlugin(it) }) {
                 agp = guarded("agp") { agpVersion(project) }
             }
             if (kgp == null && KOTLIN_PLUGIN_IDS.any { plugins.hasPlugin(it) }) {
@@ -75,24 +86,44 @@ internal object ToolchainDetection {
     }
 
     /**
-     * AGP version via the public Variant API ([AndroidComponentsExtension.getPluginVersion], present
-     * since AGP 7.3). This is the ONLY method that references an AGP type; the caller enters it only
-     * when an Android plugin is applied, so the type is on the classpath by the time it is verified.
+     * AGP version. Primary: the public Variant API `AndroidComponentsExtension.pluginVersion` (present
+     * since AGP 7.3). AGP registers that extension under a *parameterized* public type, which
+     * `extensions.findByType(rawClass)` does NOT reliably match — so we look it up by its stable name
+     * `androidComponents` and read `pluginVersion` reflectively (also keeps this file free of any
+     * compile-time AGP type). Fallback for older AGP (7.0–7.2, no `pluginVersion`, or a components
+     * extension registered under another name): the `com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION`
+     * constant, loaded through AGP's own classloader.
      */
-    private fun agpVersion(project: Project): String? =
-        project.extensions.findByType(AndroidComponentsExtension::class.java)?.pluginVersion?.let(::formatAgpVersion)
+    private fun agpVersion(project: Project): String? {
+        formatAgpVersion(project.extensions.findByName("androidComponents"))?.let { return it }
+        return agpVersionFromConstant(project)
+    }
 
-    private fun formatAgpVersion(version: AndroidPluginVersion): String = buildString {
-        append(version.major).append('.').append(version.minor).append('.').append(version.micro)
-        // previewType/preview are set together on alpha/beta/rc builds; released versions omit them.
-        version.previewType?.let { append('-').append(it).append(version.preview) }
+    /** Format an `AndroidPluginVersion` (read reflectively) as `major.minor.micro(-previewTypePreview)`. */
+    private fun formatAgpVersion(androidComponents: Any?): String? {
+        val version = androidComponents?.let { invokeNoArg(it, "getPluginVersion") } ?: return null
+        val major = intGetter(version, "getMajor") ?: return null
+        val minor = intGetter(version, "getMinor") ?: return null
+        val micro = intGetter(version, "getMicro") ?: return null
+        return buildString {
+            append(major).append('.').append(minor).append('.').append(micro)
+            // previewType/preview are set together on alpha/beta/rc builds; released versions omit them.
+            val previewType = noArgStringGetter(version, "getPreviewType")
+            val preview = intGetter(version, "getPreview")
+            if (previewType != null && preview != null) append('-').append(previewType).append(preview)
+        }
+    }
+
+    private fun agpVersionFromConstant(project: Project): String? {
+        val androidPlugin = ANDROID_PLUGIN_IDS.firstNotNullOfOrNull { project.plugins.findPlugin(it) } ?: return null
+        val versionClass = androidPlugin.javaClass.classLoader?.loadClass("com.android.Version") ?: return null
+        return versionClass.getField("ANDROID_GRADLE_PLUGIN_VERSION").get(null) as? String
     }
 
     /**
-     * KGP version via reflection on the applied Kotlin plugin. KGP is not a BuildHound dependency
-     * (the plugin must apply to non-Kotlin builds), so we never link a KGP type: we find the applied
-     * plugin whose class is Kotlin's and call its no-arg `getPluginVersion()` (the
-     * `KotlinBasePlugin.pluginVersion` property, stable since Kotlin 1.7) reflectively.
+     * KGP version via reflection on the applied Kotlin plugin: find the applied plugin whose class is
+     * Kotlin's and call its no-arg `getPluginVersion()` (the `KotlinBasePlugin.pluginVersion` property,
+     * stable since Kotlin 1.7).
      */
     private fun kgpVersion(project: Project): String? =
         project.plugins.firstNotNullOfOrNull { plugin ->
@@ -101,25 +132,34 @@ internal object ToolchainDetection {
         }
 
     /**
-     * KSP version — best-effort. KSP exposes no public version API, so we read the KSP plugin jar's
-     * `Implementation-Version` manifest attribute (via the package). It legitimately returns `null`
-     * on KSP builds whose jar omits that attribute; the dimension then stays honestly "not collected".
+     * KSP version. Primary: `KspGradleSubplugin.getPluginArtifact().version` — the Kotlin
+     * `SubpluginArtifact` carries the KSP version and needs no dependency resolution (config-cache
+     * safe). Fallback: the KSP jar's `Implementation-Version` manifest attribute (often absent → null,
+     * an honest "not collected").
      */
-    private fun kspVersion(project: Project): String? =
-        project.plugins
-            .firstOrNull { it.javaClass.name.startsWith("com.google.devtools.ksp") }
-            ?.javaClass?.getPackage()?.implementationVersion
+    private fun kspVersion(project: Project): String? {
+        val plugin = project.plugins.firstOrNull { it.javaClass.name.startsWith("com.google.devtools.ksp") } ?: return null
+        invokeNoArg(plugin, "getPluginArtifact")?.let { artifact ->
+            noArgStringGetter(artifact, "getVersion")?.let { return it }
+        }
+        return plugin.javaClass.getPackage()?.implementationVersion
+    }
 
-    /** Invoke a no-arg getter returning a String, if the target declares one. Pure — unit-tested. */
-    fun noArgStringGetter(target: Any, name: String): String? =
-        runCatching { target.javaClass.getMethod(name).invoke(target) as? String }.getOrNull()
+    /** Invoke a no-arg getter on [target], returning its result or null on any failure. Pure — unit-tested. */
+    fun invokeNoArg(target: Any, name: String): Any? =
+        runCatching { target.javaClass.getMethod(name).invoke(target) }.getOrNull()
+
+    /** Invoke a no-arg getter returning a String (null if absent or not a String). Pure — unit-tested. */
+    fun noArgStringGetter(target: Any, name: String): String? = invokeNoArg(target, name) as? String
+
+    private fun intGetter(target: Any, name: String): Int? = invokeNoArg(target, name) as? Int
 
     private fun <T> guarded(what: String, block: () -> T?): T? =
         runCatching(block).onFailure {
             // Class name only — a version string is not identity, but stay consistent with the
             // environment probes and never let a probe's message reach a log. The logger is fetched
             // here (not a field) so the object's static init stays free of the Gradle API, keeping
-            // [noArgStringGetter] unit-testable in the Gradle-free test source set.
+            // the reflection helpers unit-testable in the Gradle-free test source set.
             Logging.getLogger(ToolchainDetection::class.java)
                 .info("[buildhound] toolchain probe '{}' unavailable: {}", what, it::class.java.simpleName)
         }.getOrNull()

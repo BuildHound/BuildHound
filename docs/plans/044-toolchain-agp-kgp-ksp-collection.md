@@ -21,7 +21,7 @@ end-to-end validation target — a real multi-module build that applies AGP, KGP
 1. A `ToolchainDetection` object in `buildhound-gradle-plugin` that detects AGP, KGP, and KSP
    versions from the applied plugins, called from the settings plugin's `taskGraph.whenReady`
    callback (see §3 for why not `beforeProject`).
-2. Flow of the detected versions through a `TaskEventCollector` service parameter to the Flow
+2. Flow of the detected versions through a **finalizer (Flow-action) parameter** to the Flow
    finalizer, collapsed to one `(agp, kgp, ksp)` triple, and mapped into `ToolchainInfo` in
    `PayloadAssembler`.
 3. Golden coverage for a payload with populated `agp`/`kgp`/`ksp` (the v1 golden already carries
@@ -35,42 +35,52 @@ one triple per build).
 ## 3. Design
 
 > **Divergence from the pre-implementation plan** (updated during implementation, per the CLAUDE.md
-> workflow). The original draft proposed a `beforeProject` + `withPlugin` reaction that records into a
-> BuildService, AGP via `com.android.Version`, KGP via `getKotlinPluginVersion()`. Two facts changed
-> it: (1) `gradle.lifecycle.beforeProject` runs its action **isolated** (it may capture only
-> serializable state — that is why `AndroidArtifactCollector` is a top-level function capturing one
-> `File`), so it cannot fill a settings-scope mailbox; the non-isolated `taskGraph.whenReady` callback
-> — which already builds the task dictionary — is the correct hook. (2) `AndroidComponentsExtension`
-> exposes `pluginVersion` (`com.android.build.api.AndroidPluginVersion`) directly in the Variant API
-> we already link `compileOnly`, a cleaner source than the `com.android.Version` constant. The shape
-> below is what shipped.
+> workflow; every point below was forced by an empirical result — several confirmed by building the
+> `samples/nowinandroid` harness). The original draft proposed a `beforeProject` + `withPlugin`
+> reaction recording into a BuildService, AGP via `com.android.Version`, KGP via
+> `getKotlinPluginVersion()`. What shipped:
+> 1. **Hook:** `gradle.lifecycle.beforeProject` runs its action **isolated** (may capture only
+>    serializable state — why `AndroidArtifactCollector` is a top-level function holding one `File`),
+>    so it cannot fill a settings-scope mailbox. The non-isolated `taskGraph.whenReady` callback — which
+>    already builds the task dictionary — is the correct hook.
+> 2. **AGP source:** `extensions.findByType(AndroidComponentsExtension::class.java)` with a raw generic
+>    `Class` does **not** match AGP's parameterized extension registration (verified: returns null on a
+>    real AGP project). Look the extension up by its stable name `androidComponents` and read
+>    `pluginVersion` reflectively instead — which also frees the file of any compile-time AGP type.
+> 3. **KSP source:** the jar manifest `Implementation-Version` is **null** for the KSP plugin (verified).
+>    `KspGradleSubplugin.getPluginArtifact().version` carries it with no dependency resolution.
+> 4. **Channel:** a `TaskEventCollector` **service** parameter is frozen when the service is first
+>    instantiated — and in a composite build (nowinandroid uses `includeBuild`) an included build's task
+>    completes during the root's *configuration*, instantiating the collector **before** `whenReady`
+>    runs, so the store run recorded an empty toolchain. Moved to a **finalizer** (Flow-action)
+>    parameter, whose providers resolve after configuration.
 
 **Detection — `ToolchainDetection.detect(projects)`** (new file). Called from `whenReady` over
 `settings.gradle.rootProject.allprojects` (every configured project, so a narrow request like
 `:core:common:assemble` still sees AGP — not just projects with a realized task). Returns the first
-non-null version per dimension; each probe individually `runCatching`-guarded.
+non-null version per dimension; each probe individually `runCatching`-guarded. All probes are **pure
+reflection** over the applied-plugin objects — no compile-time AGP/KGP/KSP type is referenced.
 
-| Dim | Gate (string `hasPlugin`, no type link) | Version source |
+| Dim | Gate (string `hasPlugin`) | Version source |
 |---|---|---|
-| `agp` | `com.android.application` / `com.android.library` | `AndroidComponentsExtension.pluginVersion` formatted `major.minor.micro(-previewTypePreview)` |
-| `kgp` | `org.jetbrains.kotlin.jvm` / `.android` / `.multiplatform` | reflection: applied `org.jetbrains.kotlin…` plugin's no-arg `getPluginVersion()` (`KotlinBasePlugin.pluginVersion`) |
-| `ksp` | `com.google.devtools.ksp` | best-effort: KSP plugin jar's `Implementation-Version` (package impl version); stays null if the jar omits it |
+| `agp` | `com.android.application` / `.library` / `.kotlin.multiplatform.library` / `.dynamic-feature` / `.test` | `extensions.findByName("androidComponents")` → reflect `pluginVersion` → `major.minor.micro(-previewTypePreview)`; fallback `com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION` via AGP's classloader (older AGP / other extension names) |
+| `kgp` | `org.jetbrains.kotlin.jvm` / `.android` / `.multiplatform` | reflect applied `org.jetbrains.kotlin…` plugin's no-arg `getPluginVersion()` (`KotlinBasePlugin.pluginVersion`) |
+| `ksp` | `com.google.devtools.ksp` | reflect `getPluginArtifact().version`; fallback jar manifest `Implementation-Version` |
 
-**Never-fail, no-eager-AGP-linking contract** (mirrors `AndroidArtifactCollector`): AGP types appear
-*only* inside the private `agpVersion` method, which the loop enters *only* after the string
-`hasPlugin` gate confirms AGP is applied — so the JVM never verifies/links an AGP type on a build
-without AGP. KGP/KSP probes link no plugin type (pure reflection). The detection object's static
-initializer is kept Gradle-free (the logger is fetched inside `guarded`, not a field) so the pure
-`noArgStringGetter` helper is unit-testable in the Gradle-free test source set.
+The **KMP-library** plugin (`com.android.kotlin.multiplatform.library`) is in the AGP gate because its
+`KotlinMultiplatformAndroidComponentsExtension` also registers as `androidComponents` but applies none
+of app/library. **Never-fail:** every probe is guarded → one dimension degrades to null; nothing links
+an AGP type, so a non-Android build cannot `NoClassDefFoundError`. The detection object's static
+initializer is kept Gradle-free (the logger is fetched inside `guarded`, not a field) so the reflection
+helpers are unit-testable in the Gradle-free test source set.
 
-**Data flow / CC-safety.** `whenReady` fills an `AtomicReference<DetectedToolchain>` mailbox; a
-provider over it is set as a new `TaskEventCollector.Params.toolchain` service parameter — the exact
-mailbox→provider→service-param pattern that carries `taskMetadata`/`testResultLocations`, so the
-detected value is **replayed verbatim on a config-cache hit** (the `whenReady` callback need not
-re-run). Detection is gated off under **isolated projects** (the cross-project walk is illegal there),
-degrading to null exactly like the task dictionary. The finalizer reads `collector.snapshotToolchain()`
-and passes `agp`/`kgp`/`ksp` to `PayloadAssembler.assemble`, which now emits `ToolchainInfo` whenever
-*any* dimension (incl. Gradle/JDK) is known — no longer gated on the environment snapshot.
+**Data flow / CC-safety.** `whenReady` fills an `AtomicReference<DetectedToolchain>` mailbox (gated off
+under **isolated projects**, where the cross-project walk is illegal — degrading to null like the task
+dictionary); a provider over it is set as the **finalizer's** `toolchain` parameter, resolved after
+configuration and **replayed verbatim on a config-cache hit**. The finalizer reads
+`parameters.toolchain` and passes `agp`/`kgp`/`ksp` to `PayloadAssembler.assemble`, which emits
+`ToolchainInfo` whenever *any* dimension (incl. Gradle/JDK) is known — no longer gated on the
+environment snapshot.
 
 **Test seam.** `buildhound.internal.toolchain.{agp,kgp,ksp}` gradle properties, when set, are reported
 verbatim instead of walking the graph (mirrors the repo's other `buildhound.internal.*` failpoints).
@@ -88,19 +98,22 @@ rather than compiling Kotlin). Absent in every real build.
 - **TestKit (`ToolchainFunctionalTest`, CC on):** seam-injected versions reach the payload **and
   survive config-cache reuse**; only seeded dimensions populate; a build applying none of the tools
   reports all-null and still succeeds (never-fail). The full functionalTest suite passing confirms the
-  `whenReady`/service-param wiring adds no CC problem.
+  `whenReady`/finalizer-param wiring adds no CC problem.
 - **Golden:** the v1 golden already carries a populated `toolchain` (agp/kgp/ksp); `GoldenPayloadTest`
   is strengthened to assert those five fields (no golden file edited/added — the wire contract was
   already pinned).
-- **Real extraction** (AGP `pluginVersion`, KGP reflection, KSP manifest) is validated against the
-  `samples/nowinandroid` harness (§6) — it needs the Android SDK, so it is not a TestKit case.
+- **Real extraction** (AGP `findByName`+reflect, KGP reflection, KSP `getPluginArtifact`) is validated
+  against the `samples/nowinandroid` harness (§6) — real AGP/KGP/KSP builds are heavy and version-
+  coupled, so this is a manual harness run, not a TestKit case. The composite-build store-run channel
+  fix is proven there (CC miss and hit both carry the triple).
 
 ## 5. Risks
 
 - **CC hazards:** detection runs at configuration time in `whenReady` and extracts only Strings into
   the mailbox — no `Project`/config state is captured into serialized state and no file IO happens at
-  config time. The value rides a service parameter (replayed on a hit). Covered by the CC-on
-  functionalTest (store + reuse) and the full suite passing.
+  config time. The value rides a **finalizer parameter** (resolved after configuration, replayed on a
+  hit — the earlier service-parameter wiring was frozen too early in composite builds, see §3). Covered
+  by the CC-on functionalTest (store + reuse), the full suite passing, and the sample on CC miss + hit.
 - **Classpath fragility:** AGP uses the public, stable `AndroidComponentsExtension.pluginVersion`
   Variant API; KGP a stable `getPluginVersion()` reflected off the applied plugin. KSP is the weak
   link — no public version API, so we read a jar manifest attribute that may be absent → `ksp` can
@@ -114,15 +127,14 @@ rather than compiling Kotlin). Absent in every real build.
 
 ## 6. Exit criteria
 
-- Building `samples/nowinandroid` against the local stack produces a payload with real `agp`,
-  `kgp`, and `ksp` versions (verified in the HTML report `build/buildhound/` and the dashboard
-  toolchain-adoption section, which now shows distributions instead of "not collected yet").
-  **Pending** a machine with the Android SDK — not runnable in the implementation sandbox
-  (`ANDROID_HOME` unset); the KSP-manifest probe in particular is only confirmed here.
+- Building `samples/nowinandroid` produces a payload with real `agp`, `kgp`, `ksp` versions. ✓
+  **Verified:** `./gradlew help` on the sample yields `toolchain = {gradle 9.4.0, jdk 21.0.2, agp 9.0.0,
+  kgp 2.3.0, ksp 2.3.4}` — matching the sample's version catalog — on **both** the CC store run and the
+  CC hit. (`getPluginArtifact` gave a real KSP version, so KSP is not null here.)
 - A non-Kotlin/non-Android build emits null for all three and does not fail. ✓ (functionalTest)
 - functionalTest passes with configuration-cache on; golden assertions strengthened; no golden file
   edited or added. ✓
 - Both §3 reviews pass: `kotlin-gradle-reviewer` (code & architecture) + the mandatory §3.2
-  security & privacy review, findings addressed.
+  security & privacy review (**passed — no material findings**), findings addressed.
 - `docs/plans/implemented/032-*.md` §6 follow-up marked done (in this PR or a sweep); plan 032's
   server view keeps working unchanged.
