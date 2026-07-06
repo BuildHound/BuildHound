@@ -133,3 +133,8 @@ provisioning are documented in [`docs/self-hosting.md` §3](../docs/self-hosting
   the build (not just `--dry-run`), and that `BUILDHOUND_TOKEN` (if set) matches the server's token.
 - **Connection refused on upload** — the plugin never fails the build on a bad server; it logs a
   warning and still writes the HTML report. Start the server, then re-run the build.
+- **`0 test(s)` in the summary** — either the test tasks were `UP-TO-DATE`/`FROM-CACHE` (BuildHound
+  only ingests tests that actually ran this build), or you ran a task that executes no tests. Force
+  a real run with `--rerun-tasks`, and use the task that matches the module kind: `test` for
+  JVM/Kotlin modules (e.g. `:core:common:test`), `testDemoDebugUnitTest` for the flavored Android
+  modules, `connectedDemoDebugAndroidTest` for instrumented tests (needs an emulator/device).

@@ -48,8 +48,10 @@ usage) but is false for a composite build. CC/parallel are ruled out — the los
 - Finalizer prefers the file; falls back to `collector.snapshotLocations()` only if the file is
   absent/unreadable (belt-and-suspenders; the classpath path keeps working unchanged).
 - Docs same PR: architecture §2 rule 12 amended (test locations now via the durable file, not
-  the frozen param), a decision-log row, and the `samples/README.md` troubleshooting note
-  dropped once green.
+  the frozen param) + a decision-log row. `samples/README.md` gains a `0 test(s)` troubleshooting
+  bullet (the reporter's original confusion — `--rerun-tasks` + the JVM-vs-Android test-task
+  names). *(Divergence: the plan first said "remove a troubleshooting note"; no such note existed
+  — the bug was undiscovered — so a helpful one is added instead.)*
 
 **Out:**
 - The task `type`/`cacheable` **dictionary** (plan 016) has the *same* root cause but is consumed
@@ -118,5 +120,6 @@ usage) but is false for a composite build. CC/parallel are ruled out — the los
   and a second back-to-back run is `cc=HIT` and still `>0 test(s)`.
 - Full `./gradlew build` green (unit + functional), CC still reused where asserted.
 - Architecture §2 rule 12 + decision log updated; follow-up plan 045 (task-`type` dictionary in
-  composite) filed; `samples/README.md` troubleshooting note removed. Code & architecture review
-  (kotlin-gradle-reviewer) and the §3.2 security/privacy review both clean or findings resolved.
+  composite) filed; `samples/README.md` `0 test(s)` troubleshooting bullet added. Code &
+  architecture review (kotlin-gradle-reviewer) and the §3.2 security/privacy review both clean or
+  findings resolved.
