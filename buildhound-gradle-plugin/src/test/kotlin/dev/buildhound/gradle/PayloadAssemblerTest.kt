@@ -168,6 +168,32 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `detected AGP KGP KSP versions join gradle and jdk in the toolchain block`() {
+        val payload = assemble(
+            tasks = listOf(task(":a", 0, 1_000, TaskOutcome.EXECUTED)),
+            agp = "8.9.0",
+            kgp = "2.2.20",
+            ksp = "2.2.20-2.0.2",
+        )
+
+        assertEquals("8.14.3", payload.toolchain?.gradle)
+        assertEquals("21.0.10", payload.toolchain?.jdk)
+        assertEquals("8.9.0", payload.toolchain?.agp)
+        assertEquals("2.2.20", payload.toolchain?.kgp)
+        assertEquals("2.2.20-2.0.2", payload.toolchain?.ksp)
+    }
+
+    @Test
+    fun `an undetected toolchain leaves AGP KGP KSP null without dropping gradle and jdk`() {
+        val payload = assemble(tasks = listOf(task(":a", 0, 1_000, TaskOutcome.EXECUTED)))
+
+        assertEquals("8.14.3", payload.toolchain?.gradle)
+        assertNull(payload.toolchain?.agp)
+        assertNull(payload.toolchain?.kgp)
+        assertNull(payload.toolchain?.ksp)
+    }
+
+    @Test
     fun `assemble caps an oversized tag value and records the summary`() {
         val payload = assemble(
             tasks = listOf(task(":a", 0, 1_000, TaskOutcome.EXECUTED)),
@@ -440,6 +466,9 @@ class PayloadAssemblerTest {
         vcs: CollectedVcs = CollectedVcs(branch = "main", sha = "c".repeat(40), dirty = false),
         ci: CollectedCi? = this.ci,
         extensions: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap(),
+        agp: String? = null,
+        kgp: String? = null,
+        ksp: String? = null,
     ) = PayloadAssembler.assemble(
         buildId = "test-build",
         projectKey = "fixture",
@@ -464,6 +493,9 @@ class PayloadAssemblerTest {
         benchmark = benchmark,
         artifacts = artifacts,
         extensions = extensions,
+        agp = agp,
+        kgp = kgp,
+        ksp = ksp,
     )
 
     private fun task(

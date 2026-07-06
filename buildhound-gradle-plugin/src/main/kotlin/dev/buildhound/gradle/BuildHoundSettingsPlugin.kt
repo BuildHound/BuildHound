@@ -64,6 +64,18 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // Sibling mailbox for the Test-task JUnit XML locations (plan 024), filled by the same
         // `whenReady` callback and replayed from the CC entry on a hit (discovery spike §4a).
         val testLocationsHolder = AtomicReference<Map<String, TestResultLocations>>(emptyMap())
+        // Sibling mailbox for the detected AGP/KGP/KSP versions (plan 044), filled by the same
+        // `whenReady` callback and replayed from the CC entry on a hit.
+        val toolchainHolder = AtomicReference(DetectedToolchain())
+        // Internal test seam (mirrors the other `buildhound.internal.*` failpoints): when any of
+        // these is set, its value is reported verbatim instead of walking the project graph — lets
+        // the TestKit suite exercise the whenReady→service→payload channel (and its CC replay)
+        // without a heavy, version-coupled real AGP/KGP/KSP build. Absent in every real build.
+        val toolchainSeam = DetectedToolchain(
+            agp = settings.providers.gradleProperty("buildhound.internal.toolchain.agp").orNull,
+            kgp = settings.providers.gradleProperty("buildhound.internal.toolchain.kgp").orNull,
+            ksp = settings.providers.gradleProperty("buildhound.internal.toolchain.ksp").orNull,
+        )
 
         val collector = settings.gradle.sharedServices.registerIfAbsent(
             TaskEventCollector.SERVICE_NAME,
@@ -71,6 +83,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         ) { spec ->
             spec.parameters.taskMetadata.set(settings.providers.provider { taskMetadataHolder.get() })
             spec.parameters.testResultLocations.set(settings.providers.provider { testLocationsHolder.get() })
+            spec.parameters.toolchain.set(settings.providers.provider { toolchainHolder.get() })
             // Start-marker context (plan 033): only CC-stable fields (no ci/vcs value source — a
             // service param bakes and replays stale on a hit). Null when telemetry is off → no marker.
             // Mode is resolved with no CI context (an AUTO build's marker is LOCAL); the connector
@@ -110,7 +123,20 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             DaemonState.configurationCompleted()
             runCatching {
                 check(!failTaskGraphSnapshot) { "task-graph snapshot failpoint" }
-                if (buildFeatures.isolatedProjects.active.getOrElse(false)) {
+                val isolatedProjects = buildFeatures.isolatedProjects.active.getOrElse(false)
+                // Toolchain versions (plan 044): the seam wins for tests; otherwise walk every
+                // configured project (not just those with a task in this invocation, so a narrow
+                // request like `:core:common:assemble` still sees AGP) — but only when NOT under
+                // isolated projects, where a cross-project walk is illegal and the dimensions
+                // degrade to null exactly like the task dictionary below.
+                toolchainHolder.set(
+                    when {
+                        !toolchainSeam.isEmpty() -> toolchainSeam
+                        isolatedProjects -> DetectedToolchain()
+                        else -> ToolchainDetection.detect(settings.gradle.rootProject.allprojects)
+                    },
+                )
+                if (isolatedProjects) {
                     logger.info("[buildhound] isolated projects active; task metadata dictionary left empty")
                     return@runCatching
                 }

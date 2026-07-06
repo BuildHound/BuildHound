@@ -157,6 +157,8 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
             val collector = parameters.collector.get()
             val tasks = collector.snapshot()
+            // AGP/KGP/KSP versions captured at config time (plan 044); replayed on a CC hit.
+            val toolchain = collector.snapshotToolchain()
             // Lost-build reconciliation (plan 033): before this build's own payload, delete this
             // build's marker (it finalized → not interrupted) and synthesize+route an INTERRUPTED
             // build for any *other* stale marker in `started/`. Best-effort; never fails the build.
@@ -275,6 +277,9 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 extensions = extensions,
                 avoidedMs = avoidedMs,
                 dependencyEdges = dependencyEdges,
+                agp = toolchain.agp,
+                kgp = toolchain.kgp,
+                ksp = toolchain.ksp,
             )
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so
