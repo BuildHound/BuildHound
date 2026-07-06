@@ -41,6 +41,15 @@ data class InternalAdaptersPayload(
     val dependencyEdges: Map<String, List<String>> = emptyMap(),
     /** Task rows dropped past [Caps.MAX_TASKS]. */
     val droppedTasks: Int = 0,
+    /**
+     * Captured build warnings (plan 044), opt-in per catcher (off by default). `deprecations` are Gradle
+     * deprecation-usage summaries; `logWarnings` are `WARN`-level log lines (`logger.warn`, and some
+     * compiler output). Each is a deduped, scrubbed, capped list; `droppedWarnings` counts distinct
+     * warnings shed past the cap. Empty when the matching toggle is off.
+     */
+    val deprecations: List<String> = emptyList(),
+    val logWarnings: List<String> = emptyList(),
+    val droppedWarnings: Int = 0,
 ) {
     companion object {
         const val SCHEMA_VERSION: Int = 1
@@ -87,6 +96,10 @@ object Caps {
     const val MAX_PROPERTY_HASHES: Int = 200
     const val MAX_TASKS: Int = 2000
     const val MAX_FILES_PER_TASK: Int = 500
+
+    /** Per-stream distinct-warning cap and per-message char cap (plan 044, plan 019 spirit). */
+    const val MAX_WARNINGS: Int = 200
+    const val MAX_WARNING_CHARS: Int = 1000
 
     fun <V> capMap(map: Map<String, V>, max: Int): Pair<Map<String, V>, Int> =
         if (map.size <= max) map to 0

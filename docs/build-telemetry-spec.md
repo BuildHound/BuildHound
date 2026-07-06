@@ -135,6 +135,10 @@ End-of-build (Finalizer): enumerate JVMs via `jps -l` matching main classes (`Gr
 
 Identity fields: `userId = "u_" + hex12(hmacSha256(projectSalt, "user:" + username + "@" + hostname))`, `hostnameHash = "h_" + hex12(hmacSha256(projectSalt, "host:" + hostname))` — first 12 hex chars, domain-separated inputs; enumeration resistance rests on salt secrecy, not digest length, so truncation is safe. Salt generated per project on the server, fetched once and cached (interim until tenancy lands: generated locally into `.gradle/buildhound/identity.salt`, see plan 003). `pseudonymize=false` sends plaintext (team choice); `strict` sends nothing. Payloads never include absolute paths outside the project, env dumps, or tokens; a scrubber strips values matching secret-like patterns from execution reasons/failure text.
 
+*Failure detail (plan 044):* a failed build ships `failure.message` and `failure.stackTrace` — both routed through the scrubber (in-project paths relativized, out-of-project paths and secret-shaped values redacted) then truncated (message ≤512, stacktrace ≤8 KiB); `failure.messageHash` is a SHA-256 over the **raw** message (a stable cross-build key, computed pre-scrub). The uploaded/written payload carries the truncated trace; the local, zero-network HTML artifact may render a fuller (still scrubbed) copy. This deliberately expands past the earlier hash-only `FailureInfo` (see the architecture decision log).
+
+*Build warnings (plan 044):* two catchers in the opt-in `buildhound-internal-adapters` module, each an explicit, independent toggle **off by default** — `collectDeprecations` (Gradle deprecation summaries via build-op progress) and `collectLogWarnings` (`WARN`-level log lines via `LoggingOutputInternal`). Both require internal Gradle APIs (barred from core by architecture §2 rule 4), hence the opt-in module; enabling either catcher logs a `warn` that it reads internal APIs with no compatibility guarantee, so a Gradle upgrade may silently stop capture (the build is never affected). Captured warnings are deduped, scrubbed (each message through the same scrubber), length- and count-capped, and ride `extensions.internalAdapters`. They cover the two named channels, **not** every compiler diagnostic — Gradle exposes no single "all warnings" stream.
+
 Governance for the plan-027 source fields: `vcs.remoteUrl` is redacted for **every** scheme (userInfo stripped) and **fails closed** — when the value can't be confidently parsed (whitespace, or an ambiguous userInfo such as a raw `/` inside the password) it is dropped rather than emitted, so a credential never ships; the top-level `links` are host-gated (github/gitlab only) and always `https://`; `environment.aiAgent` is positive-only attribution (only a confirmed agent is named — a miss is silent). The `extensions` channel (plan 039) is opaque addon-owned JSON that core does **not** deep-scrub — each addon owns its own §3.7 bar; core only size-caps it (`caps.droppedExtensions`).
 
 ### 3.8 Standalone HTML artifact (locked: no CDN)
@@ -160,7 +164,8 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
   "schemaVersion": 1,
   "buildId": "uuid", "projectKey": "from-token",
   "startedAt": 0, "finishedAt": 0, "outcome": "SUCCESS|FAILED|INTERRUPTED",
-  "failure": { "taskPath": "...", "exceptionClass": "...", "messageHash": "..." },
+  "failure": { "taskPath": "...", "exceptionClass": "...", "messageHash": "...",
+               "message": "scrubbed+truncated", "stackTrace": "scrubbed+truncated" },
   "requestedTasks": ["assembleDebug"], "mode": "ci|local|benchmark",
   "environment": { "os": "...", "arch": "...", "cores": 0, "ramMb": 0,
                    "hostnameHash": "...", "userId": "...", "daemonReused": true,

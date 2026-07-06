@@ -263,6 +263,14 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.toolchain.set(settings.providers.provider { toolchainHolder.get() })
             spec.parameters.fingerprints.set(fingerprints)
             spec.parameters.buildFailed.set(flowProviders.buildWorkResult.map { it.failure.isPresent })
+            // Failure detail (plan 044): extract class/message/stacktrace from the failing Throwable
+            // inside the provider map — runs at finalization (execution time), so it stays CC-safe and
+            // the output is a plain serializable holder. Absent (no value) on a successful build.
+            spec.parameters.failure.set(
+                flowProviders.buildWorkResult.map { result ->
+                    result.failure.map(FailureExtractor::extract).orElse(null)
+                },
+            )
             spec.parameters.environment.set(environment)
             spec.parameters.vcs.set(vcs)
             spec.parameters.ci.set(ci)

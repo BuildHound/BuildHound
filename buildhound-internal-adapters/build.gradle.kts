@@ -46,6 +46,9 @@ val functionalTest: SourceSet = sourceSets.create("functionalTest")
 
 dependencies {
     "functionalTestImplementation"(projects.buildhoundCommons)
+    // The core plugin, so the warning-capture functional test can apply BOTH plugins in one build
+    // (capture only happens with core present). Test-only — production still depends on commons alone.
+    "functionalTestImplementation"(projects.buildhoundGradlePlugin)
     "functionalTestImplementation"(libs.kotlinx.serialization.json)
     "functionalTestImplementation"(libs.kotlin.test.junit5)
     "functionalTestImplementation"(libs.junit.jupiter)

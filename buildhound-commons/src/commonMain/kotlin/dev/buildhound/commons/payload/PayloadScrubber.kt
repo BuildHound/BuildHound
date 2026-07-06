@@ -6,19 +6,23 @@ package dev.buildhound.commons.payload
  * `nonCacheableReason` (the `@DisableCachingByDefault(because = …)` text, free text from
  * plugin authors, plan 016), the Kotlin report's `nonIncrementalReasons`, `taskPath`, and
  * `compilerTimesMs` phase keys (all sourced from the untrusted KGP report file, plan 023),
- * test-case failure `message` text (from JUnit XML, plan 024), and fingerprint key names
- * (plan 022); failure text MUST route through [scrubText] when its collector lands — structured
- * fields like `vcs.sha`, class/method names, and counts are declared data and are not touched.
+ * test-case failure `message` text (from JUnit XML, plan 024), fingerprint key names
+ * (plan 022), and the build-`failure` `message` + `stackTrace` (plan 044) — structured
+ * fields like `vcs.sha`, class/method names, `failure.exceptionClass`/`messageHash`, and counts
+ * are declared data and are not touched.
  * KMP-pure so the server can run it as a defensive second pass; note the fixed-length
  * lookbehinds are fine on JVM/Native, but a future js() target needs Safari 16.4+.
  *
  * Bias: over-redaction of free text is acceptable; under-redaction is not.
  *
- * Known accepted limitations (plan 007): tails of out-of-project paths containing
- * spaces can leak fragments ("<path> Doe/other"); sub-32-char high-entropy tokens
- * without a recognizable key or AKIA/JWT shape survive; space-separated flag secrets
- * (`--token abc`) survive — revisit before failure-text collection. Because roots
- * relativize before the blob rule, a keyless sub-32-char token written immediately
+ * Known accepted limitations: tails of out-of-project paths containing spaces can leak
+ * fragments ("<path> Doe/other"); sub-32-char high-entropy tokens without a recognizable key
+ * or AKIA/JWT shape survive. Both were ruled acceptable-and-documented residuals for failure
+ * text + warnings by the plan-044 §3.2 review — a stacktrace's paths render space-free
+ * (`at pkg.Class.method(File.kt:NN)`), and lowering the 32-char blob floor would redact
+ * legitimate identifiers (git SHAs, build hashes, camelCase task names). Space-separated
+ * **keyword** flag secrets (`--token abc`) ARE now redacted ([flagSecret], plan 044). Because
+ * roots relativize before the blob rule, a keyless sub-32-char token written immediately
  * under the project root (`<root>/shorttoken1`) survives as its relative name — it is
  * an in-project path, which the payload carries by design.
  */
@@ -82,7 +86,29 @@ object PayloadScrubber {
                     seedRef = b.seedRef?.let { scrubText(it, projectRoots) },
                 )
             },
+            // Build-failure message + stacktrace: routinely embed absolute paths (every stack frame
+            // carries one) and can carry secret-shaped values from the failing command — the highest
+            // PII surface in the payload, so scrub every character. `exceptionClass` is a declared
+            // type name and `messageHash` is a digest of the raw text — neither is touched.
+            failure = payload.failure?.scrubFailure(projectRoots),
         )
+
+    /**
+     * Scrubs the failure `message` and `stackTrace`, then truncates each — scrub-then-truncate so a
+     * secret straddling the char cap is redacted whole before slicing (the plan-019 rule, as for test
+     * messages). `messageHash` is computed upstream over the raw text, so the correlation key is
+     * unaffected. The stacktrace cap is generous (~8 KiB) so the trace stays diagnostic; the local
+     * HTML artifact may render a fuller (still-scrubbed) copy — see the finalizer.
+     */
+    private fun FailureInfo.scrubFailure(projectRoots: List<String>): FailureInfo {
+        if (message == null && stackTrace == null) return this
+        val scrubbedMessage = message?.let { scrubText(it, projectRoots).take(MAX_FAILURE_MESSAGE_CHARS) }
+        val scrubbedStack = stackTrace?.let { scrubText(it, projectRoots).take(MAX_FAILURE_STACKTRACE_CHARS) }
+        return copy(message = scrubbedMessage, stackTrace = scrubbedStack)
+    }
+
+    private const val MAX_FAILURE_MESSAGE_CHARS = 512
+    private const val MAX_FAILURE_STACKTRACE_CHARS = 8192
 
     /**
      * Scrubs the failure message, then truncates to [MAX_TEST_MESSAGE_CHARS] — in that order so a
@@ -119,6 +145,7 @@ object PayloadScrubber {
         result = jwt.replace(result, "<redacted>")
         result = bearerToken.replace(result, "<redacted>")
         result = secretPair.replace(result) { match -> "${match.groupValues[1]}=<redacted>" }
+        result = flagSecret.replace(result) { match -> "${match.groupValues[1]} <redacted>" }
         result = awsAccessKey.replace(result, "<redacted>")
         // Longest root first, and only at a path boundary — a root must not be eaten
         // out of the middle of a longer path (/tmp/proj inside /private/tmp/proj).
@@ -164,6 +191,16 @@ object PayloadScrubber {
     private val secretPair = Regex(
         """(?i)([\w-]*(?:token|secret|password|passwd|pwd|api[_-]?key|credential|authorization|bearer)[\w-]*|[\w-]+_pat|(?<![\w-])pat)\s*[=:]\s*(?:["'][^"']*["']|[^\s"']+)""",
     )
+
+    /**
+     * Space-separated CLI flag secrets (`--token abc`, `--password x`) — the `=`/`:` form is
+     * [secretPair]'s; this catches the whitespace form a failed CLI invocation echoed into an exception
+     * message routinely carries (plan 044 review). Keyword flags only (no bare `-p`) to keep false
+     * positives near-zero; the flag name is kept, the value redacted. `\b` after the keyword means a
+     * value-less flag like `--password-file path` (no following space+value) is left alone.
+     */
+    private val flagSecret =
+        Regex("""(?i)(--?(?:token|password|passwd|pwd|api[-_]?key|secret|credential|access[-_]?key)\b)\s+(\S+)""")
 
     /** `Bearer <token>` without a key=value shape. */
     private val bearerToken = Regex("""(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+""")

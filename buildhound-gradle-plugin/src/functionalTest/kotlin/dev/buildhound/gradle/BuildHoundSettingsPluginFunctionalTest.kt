@@ -88,6 +88,36 @@ class BuildHoundSettingsPluginFunctionalTest {
     }
 
     @Test
+    fun `a failed build records the scrubbed failure message and stacktrace`() {
+        setUpProject()
+        // A task that throws with an out-of-project absolute path AND a secret in the message, so the
+        // scrubber has something concrete to strip from the captured (deeper-cause) stacktrace.
+        File(projectDir, "build.gradle.kts").writeText(
+            """
+            tasks.register("boom") {
+                doLast { throw GradleException("boom at /home/secret/agent/creds.txt token=abc123XYZ456") }
+            }
+            """.trimIndent(),
+        )
+
+        val result = runner("boom").buildAndFail()
+        assertEquals(TaskOutcome.FAILED, result.task(":boom")?.outcome)
+
+        val payload = readPayload()
+        assertEquals(BuildOutcome.FAILED, payload.outcome)
+        val failure = payload.failure
+        assertNotNull(failure, "failure detail must be captured on a failed build")
+        assertNotNull(failure.exceptionClass, "exceptionClass captured")
+        assertNotNull(failure.messageHash, "messageHash captured")
+        val stack = failure.stackTrace
+        assertNotNull(stack, "stacktrace must be captured")
+        assertTrue(stack.contains("boom"), "the thrown cause is in the trace: $stack")
+        // Scrubbed even though the build owner is local: no out-of-project path, no secret survives.
+        assertFalse(stack.contains("/home/secret/agent"), "out-of-project path leaked in stacktrace: $stack")
+        assertFalse(stack.contains("abc123XYZ456"), "secret leaked in stacktrace: $stack")
+    }
+
+    @Test
     fun `payload keeps flowing on configuration cache reuse`() {
         setUpProject()
 

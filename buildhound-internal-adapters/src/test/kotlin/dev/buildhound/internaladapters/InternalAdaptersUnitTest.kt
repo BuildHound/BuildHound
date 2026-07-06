@@ -7,6 +7,7 @@ import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -132,6 +133,63 @@ class InternalAdaptersUnitTest {
         // No stale graph from a prior invocation — edges empty ⇒ core computes null criticalPath.
         assertTrue(payload.dependencyEdges.isEmpty(), "a CC-hit build must not emit another invocation's edges")
         assertTrue(payload.tasks.isNotEmpty(), "task capture still works on a CC hit (listener is daemon-scoped)")
+    }
+
+    @Test
+    fun `the collector scrubs and emits captured warnings`() {
+        InternalAdaptersState.resetForTest()
+        val root = "/home/ci/agent/work/project"
+        InternalAdaptersState.accumulator().addDeprecation("The foo API is deprecated at $root/src/Build.kt token=abc123XYZ456")
+        InternalAdaptersState.accumulator().addLogWarning("something odd at /home/secret/creds.txt")
+        InternalAdaptersState.configure(perFile = false, gradle = "9.6.1", root = root, edges = emptyMap())
+
+        val ctx = ExtensionContributionContext(projectKey = "p", mode = BuildMode.CI, tasks = emptyList())
+        val json = InternalAdaptersCollector().contribute(ctx) ?: error("expected a contribution")
+        val payload = BuildHoundJson.payload.decodeFromJsonElement(InternalAdaptersPayload.serializer(), json)
+
+        val dep = payload.deprecations.single()
+        assertTrue(dep.contains("src/Build.kt"), "in-project path relativized: $dep")
+        assertFalse(dep.contains("/home/ci/agent"), "absolute root stripped: $dep")
+        assertFalse(dep.contains("abc123XYZ456"), "secret-shaped token redacted: $dep")
+        assertFalse(payload.logWarnings.single().contains("/home/secret"), "out-of-project path redacted")
+
+        // takeAccumulator cleared the warnings for the next build.
+        assertTrue(InternalAdaptersState.accumulator().deprecations.isEmpty())
+        assertTrue(InternalAdaptersState.accumulator().logWarnings.isEmpty())
+    }
+
+    @Test
+    fun `warning toggles are daemon-static and survive a CC-hit build (no re-configure)`() {
+        InternalAdaptersState.resetForTest()
+        // Store build: whenReady runs, configure() sets the toggles.
+        InternalAdaptersState.configure(
+            perFile = false, gradle = "9.6.1", root = "/proj", edges = emptyMap(),
+            collectDeprecations = true, collectLogWarnings = true,
+        )
+        // Build boundary: the collector reads-and-clears the accumulator each build.
+        InternalAdaptersState.takeAccumulator()
+        // CC-hit build: whenReady does NOT run (no configure()) — the daemon-static toggles persist,
+        // so the listeners stay gated ON and capture continues (the perFileHashes precedent).
+        assertTrue(InternalAdaptersState.collectDeprecations(), "deprecation toggle persists across the build boundary")
+        assertTrue(InternalAdaptersState.collectLogWarnings(), "log-warning toggle persists across the build boundary")
+        InternalAdaptersState.accumulator().addLogWarning("captured on the CC-hit build")
+        val ctx = ExtensionContributionContext(projectKey = "p", mode = BuildMode.CI, tasks = emptyList())
+        val json = InternalAdaptersCollector().contribute(ctx) ?: error("expected a contribution")
+        val payload = BuildHoundJson.payload.decodeFromJsonElement(InternalAdaptersPayload.serializer(), json)
+        assertEquals(listOf("captured on the CC-hit build"), payload.logWarnings)
+    }
+
+    @Test
+    fun `the accumulator dedups warnings and bounds each stream, counting overflow`() {
+        val acc = Accumulator()
+        acc.addDeprecation("same")
+        acc.addDeprecation("same") // dedup: not a new distinct warning, not an overflow
+        assertEquals(1, acc.deprecations.size)
+        assertEquals(0, acc.droppedWarnings.get())
+        // Fill the log-warning stream past its cap with distinct messages.
+        for (i in 1..Caps.MAX_WARNINGS + 5) acc.addLogWarning("w$i")
+        assertEquals(Caps.MAX_WARNINGS, acc.logWarnings.size)
+        assertEquals(5, acc.droppedWarnings.get(), "distinct warnings past the cap are dropped and counted")
     }
 
     @Test

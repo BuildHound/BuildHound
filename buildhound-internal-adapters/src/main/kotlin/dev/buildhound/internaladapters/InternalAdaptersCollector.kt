@@ -25,7 +25,7 @@ class InternalAdaptersCollector : BuildHoundExtensionContributor {
         // null criticalPath rather than another invocation's stale graph).
         val acc = InternalAdaptersState.takeAccumulator()
         val edges = acc.edges
-        if (acc.byPath.isEmpty() && edges.isEmpty()) return null
+        if (acc.byPath.isEmpty() && edges.isEmpty() && acc.deprecations.isEmpty() && acc.logWarnings.isEmpty()) return null
 
         val salt = InternalAdaptersState.salt()
         val root = InternalAdaptersState.projectRoot()
@@ -60,12 +60,21 @@ class InternalAdaptersCollector : BuildHoundExtensionContributor {
         // dropped wholesale by the plan-039 byte budget on a huge monorepo (review nit).
         val (cappedEdges, _) = Caps.capMap(edges, Caps.MAX_TASKS)
 
+        // Warnings (plan 044): free text from deprecations / logger.warn — scrub each (paths + secrets)
+        // and cap its length, exactly as the caching-disabled reason above. Already deduped + count-capped
+        // in the accumulator. Sorted for deterministic output (the sets are unordered).
+        val deprecations = acc.deprecations.map { PayloadScrubber.scrubText(it, root).take(Caps.MAX_WARNING_CHARS) }.sorted()
+        val logWarnings = acc.logWarnings.map { PayloadScrubber.scrubText(it, root).take(Caps.MAX_WARNING_CHARS) }.sorted()
+
         val payload = InternalAdaptersPayload(
             gradleVersion = InternalAdaptersState.gradleVersion(),
             tasks = details,
             avoidedMs = avoidedMs,
             dependencyEdges = cappedEdges,
             droppedTasks = droppedTasks,
+            deprecations = deprecations,
+            logWarnings = logWarnings,
+            droppedWarnings = acc.droppedWarnings.get(),
         )
         return BuildHoundJson.payload.encodeToJsonElement(InternalAdaptersPayload.serializer(), payload)
     }

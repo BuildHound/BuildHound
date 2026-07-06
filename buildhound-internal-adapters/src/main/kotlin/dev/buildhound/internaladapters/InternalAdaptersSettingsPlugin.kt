@@ -4,6 +4,7 @@ import org.gradle.api.Plugin
 import org.gradle.api.initialization.Settings
 import org.gradle.api.internal.GradleInternal
 import org.gradle.api.logging.Logging
+import org.gradle.internal.logging.LoggingOutputInternal
 import org.gradle.internal.operations.BuildOperationListenerManager
 import org.gradle.util.GradleVersion
 
@@ -24,6 +25,9 @@ class InternalAdaptersSettingsPlugin : Plugin<Settings> {
         runCatching {
             val ext = settings.extensions.create("internalAdapters", InternalAdaptersExtension::class.java)
             ext.perFileHashes.convention(false)
+            // Warning catchers (plan 044): explicit, independent, off by default.
+            ext.collectDeprecations.convention(false)
+            ext.collectLogWarnings.convention(false)
 
             // Composite: only the root build observes (same guard as core — build ops from included
             // builds already reach the root daemon's listener).
@@ -87,7 +91,47 @@ class InternalAdaptersSettingsPlugin : Plugin<Settings> {
                     gradle = GradleVersion.current().version,
                     root = settings.rootProject.projectDir.path,
                     edges = edges,
+                    // Read here (config time), not at apply(): the DSL block runs after apply() returns.
+                    collectDeprecations = ext.collectDeprecations.get(),
+                    collectLogWarnings = ext.collectLogWarnings.get(),
                 )
+                // Surface the internal-API risk when a catcher is turned on: these read internal Gradle
+                // APIs (build-operation progress details, LoggingOutputInternal) that carry no
+                // compatibility guarantee, so a Gradle upgrade can silently stop capture. It never fails
+                // the build (every path is reflection-guarded), but the user should know the signal can
+                // vanish. Config-time only, so it does not repeat on a CC hit. Guarded because this
+                // callback runs outside apply()'s runCatching — an uncaught throw here would fail the
+                // build (§2 rule 3).
+                runCatching {
+                    val enabled = buildList {
+                        if (ext.collectDeprecations.get()) add("collectDeprecations")
+                        if (ext.collectLogWarnings.get()) add("collectLogWarnings")
+                    }
+                    if (enabled.isNotEmpty()) {
+                        logger.warn(
+                            "[buildhound-internal-adapters] warning capture enabled ({}) — this reads internal Gradle " +
+                                "APIs with no compatibility guarantee; a Gradle upgrade may silently stop capture " +
+                                "(the build is never affected).",
+                            enabled.joinToString(", "),
+                        )
+                    }
+                }.onFailure {
+                    logger.warn("[buildhound-internal-adapters] internal-API warning notice failed (build unaffected): {}", it.message)
+                }
+                // The deprecation catcher rides the already-registered build-op listener (gated by the
+                // toggle inside progress()). The WARN-log catcher needs its own listener — register it
+                // once per daemon, only when enabled, so a module used solely for cache data pays nothing.
+                // Daemon-scoped, so it persists across CC hits (where whenReady does not run) — capture is
+                // still gated per build by the toggle. Register-then-confirm mirrors the build-op listener.
+                if (ext.collectLogWarnings.get() && InternalAdaptersState.claimLogListenerRegistration()) {
+                    runCatching {
+                        val gradle = settings.gradle as GradleInternal
+                        gradle.services.get(LoggingOutputInternal::class.java).addOutputEventListener(WarningLogListener())
+                    }.onFailure {
+                        InternalAdaptersState.releaseLogListenerRegistration()
+                        logger.warn("[buildhound-internal-adapters] WARN-log listener registration failed (no log-warning capture this daemon): {}", it.message)
+                    }
+                }
             }
         }.onFailure {
             logger.warn("[buildhound-internal-adapters] setup failed (build unaffected): {}", it.message)

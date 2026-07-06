@@ -38,6 +38,47 @@ class PayloadScrubberTest {
     }
 
     @Test
+    fun failure_message_and_stacktrace_are_scrubbed_and_truncated() {
+        val secretMessage = "Execution failed: token=abc123XYZ456def in $root/src/Main.kt"
+        val stack = "java.lang.IllegalStateException: boom at $root/src/Main.kt:10\n" +
+            "\tat $root/build/tmp/other.kt\n" +
+            "password: hunter2secret\n" +
+            "x".repeat(20_000) // pushes the trace past the 8 KiB stacktrace cap
+        val payload = BuildPayload(
+            buildId = "b", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.FAILED,
+            failure = FailureInfo(
+                exceptionClass = "java.lang.IllegalStateException",
+                messageHash = "deadbeef",
+                message = secretMessage,
+                stackTrace = stack,
+            ),
+        )
+        val scrubbed = PayloadScrubber.scrub(payload, root).failure!!
+        // Declared data — exceptionClass + messageHash pass through untouched.
+        assertEquals("java.lang.IllegalStateException", scrubbed.exceptionClass)
+        assertEquals("deadbeef", scrubbed.messageHash)
+        // message: in-project path relativized, secret-shaped token redacted, within the 512 cap.
+        assertTrue(scrubbed.message!!.contains("src/Main.kt"), scrubbed.message)
+        assertFalse(scrubbed.message.contains("/home/ci/agent"), scrubbed.message)
+        assertFalse(scrubbed.message.contains("abc123XYZ456def"), scrubbed.message)
+        assertTrue(scrubbed.message.length <= 512, "message capped: ${scrubbed.message.length}")
+        // stacktrace: secret gone, out-of-project + in-project absolute paths stripped, truncated to 8 KiB.
+        assertFalse(scrubbed.stackTrace!!.contains("hunter2secret"), "secret in stacktrace redacted")
+        assertFalse(scrubbed.stackTrace.contains("/home/ci/agent"), "absolute path in stacktrace stripped")
+        assertTrue(scrubbed.stackTrace.length <= 8192, "stacktrace truncated to cap: ${scrubbed.stackTrace.length}")
+    }
+
+    @Test
+    fun space_separated_flag_secrets_are_redacted() {
+        // The `=`/`:` form is covered elsewhere; this is the whitespace CLI form failure text carries.
+        // Short, low-entropy values that the 32-char blob rule can't catch are the point.
+        assertEquals("git clone failed: --token <redacted>", PayloadScrubber.scrubText("git clone failed: --token ghp_short12", root))
+        assertEquals("--password <redacted>", PayloadScrubber.scrubText("--password hunter2", root))
+        // A value-less flag (no following space+value) is left intact — it is not a secret.
+        assertEquals("--password-file config.txt", PayloadScrubber.scrubText("--password-file config.txt", root))
+    }
+
+    @Test
     fun long_dotfree_roots_still_relativize_instead_of_being_eaten_as_blobs() {
         // macOS temp shape: /private/var/folders/<xx>/<~30-char hash>/T/junitNNN/... —
         // a digit-bearing, dot-free run >= 32 chars. The blob regex used to eat the

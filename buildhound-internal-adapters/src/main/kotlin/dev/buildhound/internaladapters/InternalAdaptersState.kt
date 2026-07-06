@@ -2,6 +2,7 @@ package dev.buildhound.internaladapters
 
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -21,17 +22,30 @@ import java.util.concurrent.atomic.AtomicReference
 object InternalAdaptersState {
 
     private val registered = AtomicBoolean(false)
+    private val logListenerRegistered = AtomicBoolean(false)
     private val accumulator = AtomicReference(Accumulator())
     private val perFileHashes = AtomicBoolean(false)
+    private val collectDeprecations = AtomicBoolean(false)
+    private val collectLogWarnings = AtomicBoolean(false)
     private val gradleVersion = AtomicReference("unknown")
     private val salt = AtomicReference<ByteArray?>(null)
     private val projectRoot = AtomicReference<String?>(null)
 
-    /** True exactly once per daemon — the caller then registers the listener. */
+    /** True exactly once per daemon — the caller then registers the build-operation listener. */
     fun claimRegistration(): Boolean = registered.compareAndSet(false, true)
 
     /** Undo a claim whose `addListener` failed, so a later build in the daemon can retry (review finding). */
     fun releaseRegistration() = registered.set(false)
+
+    /** True exactly once per daemon — the caller then registers the WARN-level logging listener (plan 044). */
+    fun claimLogListenerRegistration(): Boolean = logListenerRegistered.compareAndSet(false, true)
+
+    fun releaseLogListenerRegistration() = logListenerRegistered.set(false)
+
+    /** Warning-catcher toggles (plan 044), set via [configure] at config time — see its KDoc for why. */
+    fun collectDeprecations(): Boolean = collectDeprecations.get()
+
+    fun collectLogWarnings(): Boolean = collectLogWarnings.get()
 
     /**
      * Config-time facts. `perFile`/`gradle`/`projectRoot` are stable per daemon, so they persist
@@ -40,8 +54,20 @@ object InternalAdaptersState {
      * `whenReady` walk does not run, so the accumulator's edges stay empty and `criticalPathMs`
      * degrades to null — never a stale graph from a different task invocation (review finding).
      */
-    fun configure(perFile: Boolean, gradle: String, root: String?, edges: Map<String, List<String>>) {
+    fun configure(
+        perFile: Boolean,
+        gradle: String,
+        root: String?,
+        edges: Map<String, List<String>>,
+        collectDeprecations: Boolean = false,
+        collectLogWarnings: Boolean = false,
+    ) {
         perFileHashes.set(perFile)
+        // Warning toggles are read here (config time) not at apply(): the `internalAdapters {}` DSL
+        // block runs after apply() returns, so the user's value isn't set at apply. Daemon-static, so
+        // they persist across CC hits (the DSL value doesn't change between builds) — like perFileHashes.
+        this.collectDeprecations.set(collectDeprecations)
+        this.collectLogWarnings.set(collectLogWarnings)
         gradleVersion.set(gradle)
         if (root != null) projectRoot.set(root)
         accumulator.get().edges = edges
@@ -68,8 +94,11 @@ object InternalAdaptersState {
     /** Test-only: full reset of the daemon-static state. */
     fun resetForTest() {
         registered.set(false)
+        logListenerRegistered.set(false)
         accumulator.set(Accumulator())
         perFileHashes.set(false)
+        collectDeprecations.set(false)
+        collectLogWarnings.set(false)
         gradleVersion.set("unknown")
         salt.set(null)
         projectRoot.set(null)
@@ -88,6 +117,32 @@ class Accumulator {
 
     /** This build's dependency graph (set by the config-time `whenReady` walk); empty on a CC hit. */
     @Volatile var edges: Map<String, List<String>> = emptyMap()
+
+    /**
+     * Captured warnings (plan 044), each a **deduped set** — the same deprecation fires once per call
+     * site, and a repeated `logger.warn` is one signal, so uniqueness collapses the flood and bounds
+     * memory on its own. Separate namespaces so a deprecation surfacing in both streams stays visible.
+     * Both are populated only when the matching toggle is on. Scrubbed downstream by the collector.
+     */
+    val deprecations: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    val logWarnings: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** Distinct warnings seen past the per-stream cap (plan 019 "truncate + count"). */
+    val droppedWarnings: AtomicInteger = AtomicInteger(0)
+
+    fun addDeprecation(message: String) = addBounded(deprecations, message)
+
+    fun addLogWarning(message: String) = addBounded(logWarnings, message)
+
+    // A **soft** cap: contains/size/add are not one atomic step, so concurrent build-op threads may
+    // overshoot MAX_WARNINGS by a few or double-count a drop near the boundary. Deliberate — the set is
+    // idempotent, the overshoot is small and bounded, and a warning count is diagnostic, not a hard
+    // invariant; a lock on every WARN event would cost more than it is worth.
+    private fun addBounded(target: MutableSet<String>, message: String) {
+        if (target.contains(message)) return // dedup: a repeat is not a new distinct warning
+        if (target.size >= Caps.MAX_WARNINGS) { droppedWarnings.incrementAndGet(); return }
+        target.add(message)
+    }
 
     fun forPath(path: String): TaskAccum = byPath.computeIfAbsent(path) { TaskAccum() }
 
