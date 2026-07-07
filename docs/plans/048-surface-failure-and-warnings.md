@@ -1,8 +1,8 @@
-# 045 — Surface failure detail + warnings on the read surfaces
+# 048 — Surface failure detail + warnings on the read surfaces
 
 ## 1. Source
 
-Follow-up to plan 044, which *collected* build-failure detail (`failure.message` +
+Follow-up to plan 047, which *collected* build-failure detail (`failure.message` +
 `failure.stackTrace`) and opt-in warnings (`extensions.internalAdapters.{deprecations,
 logWarnings, droppedWarnings}`) into the payload but rendered almost none of it: the HTML
 report gained only a Failure card, and the server dashboard surfaces neither. This plan
@@ -73,7 +73,7 @@ node smoke harness effectively covers the report too (§4).
 - **Report render smoke (`report-smoke.js` + `ReportScriptTest`, real DOM render — new):** runs the
   report's `render()` IIFE against a DOM stub and asserts the Failure + Warnings sections populate.
   `ReportAssetsTest` only checked string-splice invariants, so `render()` shipped untested — and this
-  harness immediately caught a **pre-existing latent bug from plan 044**: a literal `</script>` in an
+  harness immediately caught a **pre-existing latent bug from plan 047**: a literal `</script>` in an
   inline-script comment, which a browser's HTML parser reads as the script's end tag, truncating the
   render (the failure card never rendered in a browser). Fixed by rewording the comment; a new
   `ReportAssetsTest` case pins `<script>`/`</script>` count-parity so no stray closer recurs.

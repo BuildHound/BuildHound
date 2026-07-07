@@ -1,4 +1,4 @@
-# 044 — Build-failure detail + opt-in warning capture
+# 047 — Build-failure detail + opt-in warning capture
 
 ## 1. Source
 
