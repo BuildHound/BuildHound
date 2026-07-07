@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.condition.DisabledOnOs
 import org.junit.jupiter.api.condition.OS
 import org.junit.jupiter.api.io.TempDir
@@ -63,5 +64,49 @@ class GitExecTest {
         val result = GitExec.run(dir, 30_000, listOf("status"), executable = exe)
         val success = assertIs<BoundedExec.Result.Success>(result)
         assertEquals(GitExec.MAX_CAPTURED_BYTES, success.stdout.length)
+    }
+
+    // --- Repository discovery scope (plan 050): real git, so a fake cannot fake `.git` discovery. ---
+
+    @Test
+    fun `discovers the enclosing repo from a subdirectory by default`() {
+        assumeTrue(gitAvailable(), "git not on PATH")
+        initRepo(dir)
+        val nested = File(dir, "a/b").apply { mkdirs() }
+
+        val result = GitExec.run(nested, 10_000, listOf("rev-parse", "--abbrev-ref", "HEAD"))
+
+        val success = assertIs<BoundedExec.Result.Success>(result)
+        assertEquals("main", success.stdout.trim(), "a nested dir must resolve the enclosing repo's branch")
+    }
+
+    @Test
+    fun `searchParents false confines discovery to the working directory`() {
+        assumeTrue(gitAvailable(), "git not on PATH")
+        initRepo(dir)
+        val nested = File(dir, "a/b").apply { mkdirs() }
+
+        // Ceiling at nested's parent stops git before it can reach the repo at `dir`.
+        val result = GitExec.run(nested, 10_000, listOf("rev-parse", "--abbrev-ref", "HEAD"), searchParents = false)
+
+        assertIs<BoundedExec.Result.NonZeroExit>(result)
+    }
+
+    private fun gitAvailable(): Boolean =
+        runCatching { ProcessBuilder("git", "--version").start().waitFor() == 0 }.getOrDefault(false)
+
+    /** git init + one commit at [root], initial branch `main` (git >= 2.28, as the functional tests assume). */
+    private fun initRepo(root: File) {
+        fun git(vararg a: String) {
+            val p = ProcessBuilder(listOf("git") + a).directory(root).redirectErrorStream(true).start()
+            p.inputStream.readBytes()
+            check(p.waitFor() == 0) { "git ${a.joinToString(" ")} failed" }
+        }
+        git("init", "--initial-branch=main")
+        git("config", "user.email", "t@example.com")
+        git("config", "user.name", "T")
+        File(root, "f.txt").writeText("x")
+        git("add", ".")
+        git("commit", "-m", "init")
     }
 }

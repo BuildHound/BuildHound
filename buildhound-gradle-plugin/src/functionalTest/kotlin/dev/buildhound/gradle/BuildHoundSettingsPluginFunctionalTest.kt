@@ -61,8 +61,10 @@ class BuildHoundSettingsPluginFunctionalTest {
     private fun summaryLine(output: String): String =
         output.lineSequence().single { it.startsWith("[buildhound] build ") }
 
-    private fun readPayload(): BuildPayload {
-        val file = File(projectDir, "build/buildhound/build-payload.json")
+    private fun readPayload(): BuildPayload = readPayloadFrom(projectDir)
+
+    private fun readPayloadFrom(root: File): BuildPayload {
+        val file = File(root, "build/buildhound/build-payload.json")
         assertTrue(file.isFile, "expected payload at $file")
         return BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), file.readText())
     }
@@ -220,7 +222,9 @@ class BuildHoundSettingsPluginFunctionalTest {
     fun `non git projects degrade to a null vcs block`() {
         setUpProject()
 
-        runner("hello").build()
+        // searchParents=false confines the probe to projectDir, so this stays hermetic even when
+        // @TempDir happens to sit inside an enclosing repo (plan 050 dropped the default ceiling).
+        runner("hello", "-Pbuildhound.vcs.searchParents=false").build()
 
         val payload = readPayload()
         if (payload.ci == null) {
@@ -228,6 +232,59 @@ class BuildHoundSettingsPluginFunctionalTest {
         } else {
             assertNull(payload.vcs?.dirty, "dirty must never come from CI context")
         }
+    }
+
+    @Test
+    fun `nested gradle root discovers the enclosing repository`() {
+        // Repo root at projectDir; the Gradle build lives one level down in nested/. git resolves
+        // repo context from any subdir, so vcs must populate by default (plan 050). The enclosing
+        // repo's branch wins over any CI context, so the positive assertion is CI-independent.
+        val nested = File(projectDir, "nested").apply { mkdirs() }
+        writeFixtureInto(nested)
+        File(projectDir, ".gitignore").writeText("nested/.gradle/\nnested/build/\n")
+        exec("git", "init", "--initial-branch=main")
+        exec("git", "config", "user.email", "test@example.com")
+        exec("git", "config", "user.name", "Test")
+        exec("git", "add", ".")
+        exec("git", "commit", "-m", "init")
+
+        nestedRunner(nested, "hello").build()
+        assertEquals(
+            "main",
+            readPayloadFrom(nested).vcs?.branch,
+            "a nested Gradle root must resolve the enclosing repo's branch",
+        )
+
+        // Opt out: the same layout with searchParents=false confines discovery to the Gradle root.
+        nestedRunner(nested, "hello", "-Pbuildhound.vcs.searchParents=false").build()
+        val confined = readPayloadFrom(nested)
+        if (confined.ci == null) {
+            assertNull(confined.vcs, "searchParents=false must confine discovery to the Gradle root: ${confined.vcs}")
+        } else {
+            // On CI the daemon inherits CI env, so ci?.branch fills vcs.branch — but dirty comes only
+            // from a *discovered* repo's `git status`, so a confined probe must leave it null.
+            assertNull(confined.vcs?.dirty, "confined probe must not read the enclosing repo's status")
+        }
+    }
+
+    private fun nestedRunner(dir: File, vararg arguments: String): GradleRunner =
+        GradleRunner.create()
+            .withProjectDir(dir)
+            .withPluginClasspath()
+            .withArguments(*arguments, testkitCcFlag())
+
+    private fun writeFixtureInto(dir: File) {
+        File(dir, "settings.gradle.kts").writeText(
+            """
+            plugins { id("dev.buildhound") }
+            rootProject.name = "buildhound-nested-fixture"
+            """.trimIndent(),
+        )
+        File(dir, "build.gradle.kts").writeText(
+            """
+            tasks.register("hello") { doLast { println("hello from nested fixture") } }
+            """.trimIndent(),
+        )
     }
 
     /**
