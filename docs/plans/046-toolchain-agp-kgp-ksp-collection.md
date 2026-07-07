@@ -82,6 +82,14 @@ configuration and **replayed verbatim on a config-cache hit**. The finalizer rea
 `ToolchainInfo` whenever *any* dimension (incl. Gradle/JDK) is known — no longer gated on the
 environment snapshot.
 
+**Flow-action param vs the plan-044 sidecar.** This is the same composite-build hazard `TestLocationSidecar`
+(plan 044) addresses, but delivered via a Flow-action parameter rather than a durable file. A Flow-action
+param is not instantiated by task events (only the collector *service* is), so it resolves after
+configuration and sidesteps the freeze with no config-time file IO — the idiomatic Flow-API mechanism,
+uniform with the finalizer's other params. `architecture.md` rule 12 is refined to key the choice on
+delivery path: Flow-action param preferred when the finalizer is the sole reader; sidecar only for data
+already stuck on the frozen service param (test locations). See the decision-log row (2026-07-07).
+
 **Test seam.** `buildhound.internal.toolchain.{agp,kgp,ksp}` gradle properties, when set, are reported
 verbatim instead of walking the graph (mirrors the repo's other `buildhound.internal.*` failpoints).
 This lets the TestKit suite exercise the whole channel + its CC replay without a heavy, version-coupled
@@ -99,8 +107,10 @@ rather than compiling Kotlin). Absent in every real build.
   survive config-cache reuse**; only seeded dimensions populate; a build applying none of the tools
   reports all-null and still succeeds (never-fail); and a **composite build** (a plugin-providing
   `includeBuild` whose compile runs during the root's configuration — the freeze condition) carries the
-  toolchain on both the store run and a hit, guarding the finalizer-param channel choice. The full
-  functionalTest suite passing confirms the `whenReady`/finalizer-param wiring adds no CC problem.
+  toolchain on the store run, a hit, **and with `--no-configuration-cache`** (parity with main's
+  `TestLocationSidecar` coverage — the freeze is CC-independent), guarding the finalizer-param channel
+  choice. The full functionalTest suite passing confirms the `whenReady`/finalizer-param wiring adds no
+  CC problem.
 - **Golden:** the v1 golden already carries a populated `toolchain` (agp/kgp/ksp); `GoldenPayloadTest`
   is strengthened to assert those five fields (no golden file edited/added — the wire contract was
   already pinned).
