@@ -67,6 +67,9 @@ Git resolves repo context from any subfolder; the plugin should not diverge from
   report from that directory, matches every other dev tool, and is what the requester wants;
   `searchParents=false` restores fail-closed. Remote-URL redaction (all-scheme, fail-closed,
   plan 027) is unchanged, so no credential regression.
+- **Attribution (not a leak):** with discovery on, `vcs.dirty` and `links` describe the *discovered*
+  enclosing repository, not the Gradle root, when they differ. `git status` output is still reduced
+  to the `dirty` boolean and discarded (spec §3.7); only the attribution target shifts.
 - **Reversal of a review decision:** documented in the decision log so the "why" survives.
 - No CC / schema / hang-safety regression — the timeout and env locks are untouched.
 

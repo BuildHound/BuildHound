@@ -20,14 +20,30 @@ internal object GitExec {
     /** @see BoundedExec.MAX_CAPTURED_BYTES */
     const val MAX_CAPTURED_BYTES = BoundedExec.MAX_CAPTURED_BYTES
 
-    /** [executable] is a seam for the fake-binary tests; production always runs `git`. */
-    fun run(workDir: File, timeoutMillis: Long, args: List<String>, executable: String = "git"): BoundedExec.Result {
+    /**
+     * [searchParents] (plan 050) controls repository discovery scope. Default `true` lets git walk
+     * up from [workDir] to the enclosing `.git` (stopping at a repo boundary or the filesystem
+     * root — git's own behavior), so a Gradle root nested inside its repository (included/composite
+     * build, monorepo subroot) resolves the repository it actually lives in. `false` restores the
+     * pre-050 fail-closed ceiling — `GIT_CEILING_DIRECTORIES=<workDir parent>` confines discovery to
+     * [workDir] so an enclosing repository is never attributed to the build.
+     *
+     * [executable] is a seam for the fake-binary tests; production always runs `git`.
+     */
+    fun run(
+        workDir: File,
+        timeoutMillis: Long,
+        args: List<String>,
+        searchParents: Boolean = true,
+        executable: String = "git",
+    ): BoundedExec.Result {
         val env = buildMap {
             put("GIT_TERMINAL_PROMPT", "0")
             // Never take optional .git/index locks from a telemetry read.
             put("GIT_OPTIONAL_LOCKS", "0")
-            // Never discover an enclosing, unrelated repository above the project.
-            workDir.parentFile?.let { put("GIT_CEILING_DIRECTORIES", it.absolutePath) }
+            if (!searchParents) {
+                workDir.parentFile?.let { put("GIT_CEILING_DIRECTORIES", it.absolutePath) }
+            }
         }
         return BoundedExec.run(listOf(executable) + args, timeoutMillis, workDir, env)
     }

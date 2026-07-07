@@ -188,6 +188,14 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
                 settings.providers.gradleProperty("buildhound.vcs.timeout.ms")
                     .map { raw -> raw.toLongOrNull()?.takeIf { it > 0 } ?: GitExec.DEFAULT_TIMEOUT_MS },
             )
+            // Discover the enclosing repo from a nested Gradle root (plan 050). Only an explicit
+            // "false" confines the probes to rootDir (pre-050, fail-closed); absent or an
+            // unrecognized value keeps the default-on discovery via the ValueSource's getOrElse(true),
+            // so a typo never silently disables it (fail toward the default, not toward confined).
+            spec.parameters.searchParents.set(
+                settings.providers.gradleProperty("buildhound.vcs.searchParents")
+                    .map { !it.trim().equals("false", ignoreCase = true) },
+            )
         }
 
         val ci = settings.providers.of(CiValueSource::class.java) { spec ->
