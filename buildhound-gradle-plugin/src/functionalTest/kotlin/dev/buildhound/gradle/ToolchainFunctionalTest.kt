@@ -30,6 +30,54 @@ class ToolchainFunctionalTest {
             .withPluginClasspath()
             .withArguments(*arguments, "--configuration-cache")
 
+    private fun runnerNoCc(vararg arguments: String): GradleRunner =
+        GradleRunner.create()
+            .withProjectDir(projectDir)
+            .withPluginClasspath()
+            .withArguments(*arguments, "--no-configuration-cache")
+
+    /**
+     * A plugin-providing `includeBuild` whose compile runs during the *root's* configuration —
+     * instantiating the collector service before whenReady, the exact timing that froze the old
+     * service-parameter channel. Seeded via the seam so no real AGP/KGP/KSP build is needed.
+     */
+    private fun setUpCompositeFixture() {
+        File(projectDir, "child/settings.gradle.kts").apply { parentFile.mkdirs() }
+            .writeText("""rootProject.name = "child"""")
+        File(projectDir, "child/build.gradle.kts").writeText(
+            """
+            plugins { `java-gradle-plugin` }
+            gradlePlugin { plugins { create("dummy") { id = "child.dummy"; implementationClass = "child.DummyPlugin" } } }
+            """.trimIndent(),
+        )
+        File(projectDir, "child/src/main/java/child/DummyPlugin.java").apply { parentFile.mkdirs() }.writeText(
+            """
+            package child;
+            import org.gradle.api.Plugin;
+            import org.gradle.api.Project;
+            public class DummyPlugin implements Plugin<Project> { public void apply(Project project) {} }
+            """.trimIndent(),
+        )
+        File(projectDir, "settings.gradle.kts").writeText(
+            """
+            pluginManagement { includeBuild("child") }
+            plugins { id("dev.buildhound") }
+            rootProject.name = "composite-fixture"
+            """.trimIndent(),
+        )
+        File(projectDir, "build.gradle.kts").writeText(
+            """
+            plugins { id("child.dummy") }
+            tasks.register("hello") { doLast { println("hello") } }
+            """.trimIndent(),
+        )
+        File(projectDir, "gradle.properties").writeText(
+            "buildhound.internal.toolchain.agp=8.9.0\n" +
+                "buildhound.internal.toolchain.kgp=2.2.20\n" +
+                "buildhound.internal.toolchain.ksp=2.2.20-2.0.2\n",
+        )
+    }
+
     private fun readPayload(): BuildPayload {
         val file = File(projectDir, "build/buildhound/build-payload.json")
         assertTrue(file.isFile, "expected payload at $file")
@@ -88,46 +136,11 @@ class ToolchainFunctionalTest {
 
     @Test
     fun `detected toolchain survives a composite build on the cc store run and a hit`() {
-        // Regression guard for the channel choice (plan 046 §3): a plugin-providing `includeBuild`
-        // whose compile runs during the *root's* configuration — instantiating the collector service
-        // before whenReady, the exact timing that froze the old TaskEventCollector service-parameter
-        // channel and left the store run's toolchain empty. Seeded via the seam so no real AGP/KGP/KSP
-        // build is needed; the finalizer-parameter channel must carry the versions on BOTH the store
-        // run and the cc hit.
-        File(projectDir, "child/settings.gradle.kts").apply { parentFile.mkdirs() }
-            .writeText("""rootProject.name = "child"""")
-        File(projectDir, "child/build.gradle.kts").writeText(
-            """
-            plugins { `java-gradle-plugin` }
-            gradlePlugin { plugins { create("dummy") { id = "child.dummy"; implementationClass = "child.DummyPlugin" } } }
-            """.trimIndent(),
-        )
-        File(projectDir, "child/src/main/java/child/DummyPlugin.java").apply { parentFile.mkdirs() }.writeText(
-            """
-            package child;
-            import org.gradle.api.Plugin;
-            import org.gradle.api.Project;
-            public class DummyPlugin implements Plugin<Project> { public void apply(Project project) {} }
-            """.trimIndent(),
-        )
-        File(projectDir, "settings.gradle.kts").writeText(
-            """
-            pluginManagement { includeBuild("child") }
-            plugins { id("dev.buildhound") }
-            rootProject.name = "composite-fixture"
-            """.trimIndent(),
-        )
-        File(projectDir, "build.gradle.kts").writeText(
-            """
-            plugins { id("child.dummy") }
-            tasks.register("hello") { doLast { println("hello") } }
-            """.trimIndent(),
-        )
-        File(projectDir, "gradle.properties").writeText(
-            "buildhound.internal.toolchain.agp=8.9.0\n" +
-                "buildhound.internal.toolchain.kgp=2.2.20\n" +
-                "buildhound.internal.toolchain.ksp=2.2.20-2.0.2\n",
-        )
+        // Regression guard for the channel choice (plan 046 §3): the finalizer Flow-action parameter
+        // resolves after configuration, so it carries the versions even when an included build's task
+        // instantiates the collector service before whenReady (the timing that froze the old service
+        // param). Must hold on BOTH the store run and the cc hit.
+        setUpCompositeFixture()
 
         val store = runner("hello").build()
         assertEquals(TaskOutcome.SUCCESS, store.task(":hello")?.outcome)
@@ -136,6 +149,19 @@ class ToolchainFunctionalTest {
         val hit = runner("hello").build()
         assertTrue(hit.output.contains("Reusing configuration cache"), hit.output)
         assertEquals("8.9.0", readPayload().toolchain?.agp)
+    }
+
+    @Test
+    fun `detected toolchain survives a composite build with configuration cache off`() {
+        // Parity with main's TestLocationSidecar coverage: the composite freeze is independent of the
+        // configuration cache (it is service-instantiation timing), so the finalizer-param channel must
+        // also carry the toolchain with CC disabled — no store/replay involved.
+        setUpCompositeFixture()
+
+        val result = runnerNoCc("hello").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        assertEquals("8.9.0", readPayload().toolchain?.agp, "cc-off composite must carry the toolchain: ${result.output}")
     }
 
     @Test
