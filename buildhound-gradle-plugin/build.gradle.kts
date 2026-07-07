@@ -123,4 +123,18 @@ tasks.withType<Test>().configureEach {
     // cannot RUN on JDK 26 — consumers run on 21+, so tests execute on the real
     // consumer floor while compilation stays on the 26 toolchain (plan 011).
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) })
+    // Root for the per-test "fresh daemon" TestKit dirs (plan 049). Kept under the module
+    // build/ dir — never inside a test's @TempDir — so a lingering daemon's open file handles
+    // can't break @TempDir deletion on macOS/Windows; `clean` reclaims the daemons.
+    //
+    // The path is absolute on purpose: TestKit's daemon starter rejects a relative testkit dir
+    // (IdentityFileResolver -> UnsupportedOperationException). That absolute path lands in this
+    // cacheable Test task's @Input fingerprint, making functionalTest non-relocatable across
+    // machines — accepted (plan 049, §3.1 review): a suite that spawns real Gradle daemons and
+    // reads the live environment is inherently machine-specific and must never be served from
+    // another machine's build cache anyway.
+    systemProperty(
+        "buildhound.testkit.root",
+        layout.buildDirectory.dir("functionalTest-testkit").get().asFile.absolutePath,
+    )
 }

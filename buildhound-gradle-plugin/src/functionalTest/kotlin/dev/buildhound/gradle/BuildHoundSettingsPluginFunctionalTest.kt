@@ -277,9 +277,7 @@ class BuildHoundSettingsPluginFunctionalTest {
 
         val cleanedEnv = System.getenv().filterKeys { it != "GITHUB_ACTIONS" && it != "TF_BUILD" }
         runner("hello")
-            // Fresh daemon: an inherited-env daemon from earlier tests would not see
-            // the injected variables (daemon selection ignores env differences).
-            .withTestKitDir(File(projectDir, "testkit"))
+            .freshDaemon()
             .withEnvironment(
                 cleanedEnv + mapOf(
                     "BUILDHOUND_CI" to "true",
@@ -319,8 +317,7 @@ class BuildHoundSettingsPluginFunctionalTest {
         setUpProject()
 
         runner("hello")
-            // Fresh daemon, same reason as the generic-detection test above.
-            .withTestKitDir(File(projectDir, "testkit"))
+            .freshDaemon()
             .withEnvironment(ciNeutralEnv() + mapOf("CI" to "true"))
             .build()
 
@@ -335,7 +332,7 @@ class BuildHoundSettingsPluginFunctionalTest {
         setUpProject()
 
         runner("hello")
-            .withTestKitDir(File(projectDir, "testkit"))
+            .freshDaemon()
             .withEnvironment(ciNeutralEnv() + mapOf("CI" to "false"))
             .build()
 
