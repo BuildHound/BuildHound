@@ -52,6 +52,15 @@ class KotlinReportFunctionalTest {
         }
     }
 
+    /**
+     * Absolute path with forward separators, safe to interpolate into gradle.properties. Gradle
+     * parses that file with java.util.Properties, which treats '\' as an escape char — a raw Windows
+     * absolutePath like `D:\a\...\reports` is mangled (`\r` even becomes a CR), so the plugin looks
+     * in the wrong place and finds no report. Forward slashes round-trip and File(...) accepts them
+     * on every OS. Do not revert this to absolutePath.
+     */
+    private fun File.propertiesPath(): String = absoluteFile.invariantSeparatorsPath
+
     /** A minimal but shape-accurate KGP json report with a single Kotlin compilation record. */
     private fun seedReport(dir: File, name: String = "report.json", ageMs: Long = 0): File {
         dir.mkdirs()
@@ -84,7 +93,7 @@ class KotlinReportFunctionalTest {
         val reportDir = File(projectDir, "reports")
         setUpProject(
             gradleProperties = "kotlin.build.report.output=JSON\n" +
-                "kotlin.build.report.json.directory=${reportDir.absolutePath}\n",
+                "kotlin.build.report.json.directory=${reportDir.propertiesPath()}\n",
         )
         seedReport(reportDir)
 
@@ -132,7 +141,7 @@ class KotlinReportFunctionalTest {
         notADir.parentFile.mkdirs()
         notADir.writeText("i am a file")
         setUpProject(
-            gradleProperties = "kotlin.build.report.json.directory=${notADir.absolutePath}\n",
+            gradleProperties = "kotlin.build.report.json.directory=${notADir.propertiesPath()}\n",
         )
 
         val result = runner("hello").build()
@@ -150,7 +159,7 @@ class KotlinReportFunctionalTest {
     fun `a stale report from a previous build is not bundled`() {
         val reportDir = File(projectDir, "reports")
         setUpProject(
-            gradleProperties = "kotlin.build.report.json.directory=${reportDir.absolutePath}\n",
+            gradleProperties = "kotlin.build.report.json.directory=${reportDir.propertiesPath()}\n",
         )
         seedReport(reportDir, ageMs = 5 * 60_000) // 5 min old — outside the 60 s window
 
@@ -164,7 +173,7 @@ class KotlinReportFunctionalTest {
         val reportDir = File(projectDir, "reports")
         setUpProject(
             dsl = "kotlinReports { bundle = false }",
-            gradleProperties = "kotlin.build.report.json.directory=${reportDir.absolutePath}\n",
+            gradleProperties = "kotlin.build.report.json.directory=${reportDir.propertiesPath()}\n",
         )
         seedReport(reportDir)
 
