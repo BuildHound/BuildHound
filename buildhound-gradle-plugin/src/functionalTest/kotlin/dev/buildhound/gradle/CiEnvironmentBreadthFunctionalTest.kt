@@ -48,8 +48,6 @@ class CiEnvironmentBreadthFunctionalTest {
     private fun neutralEnv(): Map<String, String> =
         System.getenv().filterKeys { it !in markers && !it.startsWith("BUILDHOUND_") }
 
-    private fun GradleRunner.freshDaemon(): GradleRunner = withTestKitDir(File(projectDir, "testkit"))
-
     @Test
     fun `a GitLab environment is detected as the gitlab provider in ci mode`() {
         setUpProject()

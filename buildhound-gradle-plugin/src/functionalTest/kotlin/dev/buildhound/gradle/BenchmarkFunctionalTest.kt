@@ -22,8 +22,6 @@ class BenchmarkFunctionalTest {
     private fun runner(vararg arguments: String): GradleRunner =
         GradleRunner.create().withProjectDir(projectDir).withPluginClasspath().withArguments(*arguments, "--configuration-cache")
 
-    private fun GradleRunner.freshDaemon(): GradleRunner = withTestKitDir(File(projectDir, "testkit"))
-
     // withEnvironment replaces the whole env; keep everything except BUILDHOUND_* so the injected
     // benchmark vars alone steer activation (PATH/JAVA_HOME etc. are preserved).
     private fun neutralEnv(): Map<String, String> = System.getenv().filterKeys { !it.startsWith("BUILDHOUND_") }
