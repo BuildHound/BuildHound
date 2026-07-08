@@ -6,6 +6,7 @@ import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -31,10 +32,54 @@ class ProjectEvalRecordIoTest {
     }
 
     @Test
-    fun `fileNameFor sanitizes project paths, colliding safely`() {
+    fun `fileNameFor keeps typical project paths readable`() {
         assertEquals("app.jsonl", ProjectEvalRecordIo.fileNameFor(":app"))
         assertEquals("core-common.jsonl", ProjectEvalRecordIo.fileNameFor(":core:common"))
-        assertEquals("root.jsonl", ProjectEvalRecordIo.fileNameFor(":"))
+        assertEquals("_root_.jsonl", ProjectEvalRecordIo.fileNameFor(":"))
+    }
+
+    @Test
+    fun `fileNameFor never maps two distinct project paths to the same file`() {
+        // Written against the 052-review-fix encoding: with the original `':' -> '-'` substitution,
+        // :a:b and a top-level project literally named :a-b both produced "a-b.jsonl" (silent
+        // last-write-wins) and every pair below would have failed this test.
+        assertNotEquals(ProjectEvalRecordIo.fileNameFor(":a:b"), ProjectEvalRecordIo.fileNameFor(":a-b"))
+        // Hyphens adjacent to separators — the reason '-' is hex-escaped instead of doubled
+        // ('- -> --' would leave :a-:b and :a:-b colliding on "a---b").
+        assertNotEquals(ProjectEvalRecordIo.fileNameFor(":a-:b"), ProjectEvalRecordIo.fileNameFor(":a:-b"))
+        // The root project vs a subproject literally named "root".
+        assertNotEquals(ProjectEvalRecordIo.fileNameFor(":"), ProjectEvalRecordIo.fileNameFor(":root"))
+        // The escape delimiter itself vs a name that spells out an escape sequence.
+        assertNotEquals(ProjectEvalRecordIo.fileNameFor(":a-b"), ProjectEvalRecordIo.fileNameFor(":a_2d_b"))
+    }
+
+    @Test
+    fun `fileNameFor whitelists every name to filesystem-safe chars, still without collisions`() {
+        // The sink must not depend on Gradle's project-name invariant (§3.2 review): whatever the
+        // path contains, the emitted name stays within [A-Za-z0-9._-] + the .jsonl suffix.
+        val exotic = listOf(":a b", ":a?b", ":a!b", ":emojié", ":back\\slash")
+        for (path in exotic) {
+            val stem = ProjectEvalRecordIo.fileNameFor(path).removeSuffix(".jsonl")
+            assertTrue(
+                stem.isNotEmpty() && stem.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it in "._-" },
+                "expected a whitelisted stem for $path, got: $stem",
+            )
+        }
+        // The whitelist transformation must stay injective too — collapsed characters must not merge.
+        assertEquals(exotic.size, exotic.map { ProjectEvalRecordIo.fileNameFor(it) }.toSet().size)
+    }
+
+    @Test
+    fun `colliding project paths both survive write then readAndClear as distinct entries`() {
+        // The genuine collision pair from the 052 review: with the old encoding both writes landed
+        // in "a-b.jsonl" and only the last one survived — this test failed against that code.
+        ProjectEvalRecordIo.write(dir, ":a:b", 100)
+        ProjectEvalRecordIo.write(dir, ":a-b", 200)
+
+        assertEquals(
+            setOf(ProjectEvaluation(":a:b", 100), ProjectEvaluation(":a-b", 200)),
+            ProjectEvalRecordIo.readAndClear(dir).toSet(),
+        )
     }
 
     @Test

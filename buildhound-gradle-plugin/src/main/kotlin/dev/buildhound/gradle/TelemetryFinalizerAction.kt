@@ -170,6 +170,22 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // Consume the heuristic mark first, unconditionally: a stale mark would make
             // the next build in this daemon misreport its CC state.
             val execution = DaemonState.executionRan()
+            // Drain (read-then-clear) the per-project config-timings sidecar next, also
+            // unconditionally — before the enabled/mode short-circuits and regardless of CC state
+            // (052 review fix). The beforeProject/afterProject writer is gated only by the
+            // apply-time master switch, so a DSL-disabled (enabled=false / mode=DISABLED) build
+            // still writes timing files; if this finalizer skipped the clear, a LATER enabled build
+            // would read them and misattribute the previous build's timings to itself. Clearing and
+            // *reporting* are separate decisions: whether the drained records enter the payload is
+            // decided below (null on a CC hit; moot on the early returns). Own guard — not the
+            // outer one — so a corrupt/locked dir degrades to "no block" without aborting the rest
+            // of finalization or writing a failure marker for a disabled build.
+            val drainedEvaluations = runCatching {
+                parameters.rootDir.orNull?.let { readProjectEvaluations(File(it)) }
+            }.getOrElse {
+                logger.info("[buildhound] config-timings sidecar drain failed (build unaffected): {}", it.message)
+                null
+            }
             // Master switch (spec §3.4): nothing is probed, assembled, or logged when off —
             // the value-source providers are never queried, so no salt is created either.
             if (!parameters.enabled.getOrElse(true)) return@runCatching
@@ -195,16 +211,14 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // duration, or null when unmeasurable (plan 016).
             val configurationMs = if (ccState == ConfigurationCacheState.HIT) 0L else execution.configurationMs
             // Per-project configuration-time attribution (plan 052): beforeProject/afterProject write
-            // directly at configuration time, so on a CC hit configuration never ran this build and the
-            // sidecar holds only a prior build's entries — mirror the configurationMs HIT branch above
-            // and report null rather than misattributing stale data to this build. Read-then-clear runs
-            // only on a non-HIT completed build, so a narrower next invocation never inherits a wider
-            // build's leftover per-project files (the plan's stale-file-correctness risk).
-            val projectEvaluations = if (ccState == ConfigurationCacheState.HIT) {
-                null
-            } else {
-                parameters.rootDir.orNull?.let { readProjectEvaluations(File(it)) }
-            }
+            // directly at configuration time, so on a CC hit configuration never ran this build and
+            // whatever the unconditional drain above collected can only be a prior build's leftovers —
+            // mirror the configurationMs HIT branch above and report null rather than misattributing
+            // stale data to this build. On a non-HIT build the drained records are this build's own
+            // afterProject writes: every finalizer pass — enabled or not, HIT or not — clears the dir,
+            // so a narrower next invocation never inherits a wider build's leftover per-project files
+            // (the plan's stale-file-correctness risk).
+            val projectEvaluations = if (ccState == ConfigurationCacheState.HIT) null else drainedEvaluations
             // Build-level input fingerprints (plan 022). Per-task capture is deferred (see the
             // plan §8 divergence); the schema's `tasks` map stays reserved for it.
             val fingerprints = FingerprintInfo(build = parameters.fingerprints.orNull?.build.orEmpty())
@@ -529,10 +543,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
     /**
      * Reads (then clears) the `beforeProject`/`afterProject` sidecar under
-     * `<root>/.gradle/buildhound/config-timings` (plan 052). Listing/reading is left to
-     * [ProjectEvalRecordIo.readAndClear] — a genuinely corrupt/locked directory propagates to this
-     * finalizer's outer `runCatching` (→ warn + marker), never a failed build; malformed per-project
-     * files are skipped defensively inside [ProjectEvalRecordIo].
+     * `<root>/.gradle/buildhound/config-timings` (plan 052). Called unconditionally at the top of
+     * [execute] — the drain must run even on a DSL-disabled or CC-hit build (052 review fix), so the
+     * call site guards it with its own `runCatching` (a corrupt/locked directory degrades to no
+     * block, never an aborted finalization or a failure marker for a disabled build); malformed
+     * per-project files are skipped defensively inside [ProjectEvalRecordIo].
      */
     private fun readProjectEvaluations(root: File): List<ProjectEvaluation> =
         ProjectEvalRecordIo.readAndClear(File(root, ".gradle/buildhound/config-timings"))

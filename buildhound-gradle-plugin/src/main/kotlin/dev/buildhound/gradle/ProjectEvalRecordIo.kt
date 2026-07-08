@@ -47,10 +47,45 @@ internal object ProjectEvalRecordIo {
         }.getOrNull()
     }
 
-    /** Collision-free per project path; `:` separators become `-`, the root project maps to `root`. */
+    /**
+     * Deterministic, collision-free file name for a canonical Gradle project [path] (052 review fix).
+     *
+     * Per-character prefix-free code over the `:`-trimmed path (the root project `:` maps to the
+     * reserved stem `_root_`):
+     *  - `[A-Za-z0-9.]` pass through unchanged;
+     *  - `:` (the project-path separator) becomes `-`;
+     *  - any other character — including `-` and `_` themselves — becomes `_<hex>_` (lowercase hex
+     *    of the UTF-16 code unit).
+     *
+     * Why not the old plain `':' -> '-'`: it collided `:a:b` with a project literally named `:a-b`
+     * (silent last-write-wins; under isolated projects two racing writers could even tear the shared
+     * file and lose both entries). Why not doubling (`- -> --` before `: -> -`): hyphen *runs* stay
+     * ambiguous — `:a-:b` and `:a:-b` would both encode to `a---b`. The code here is prefix-free
+     * (only the separator codeword starts with `-`; an `_…_` escape is delimited by `_`, which is
+     * never a hex digit and is never emitted bare; pass-through chars start no other codeword), so
+     * concatenation is uniquely decodable and the encoding is injective: two distinct canonical
+     * paths can never produce the same filename — no hash disambiguator needed. The output alphabet
+     * is whitelisted to `[A-Za-z0-9._-]`, so the filesystem sink no longer depends on Gradle's own
+     * project-name rules for safety. `_root_` is unreachable by the encoding (a bare `_` would have
+     * to open a hex escape, and `root` is not hex), so the root file can never collide with a
+     * subproject literally named `root` (the old encoding's second collision).
+     *
+     * Typical paths stay readable: `:app` -> `app.jsonl`, `:core:common` -> `core-common.jsonl`;
+     * a hyphenated project name pays the escape: `:x-y` -> `x_2d_y.jsonl`.
+     */
     fun fileNameFor(path: String): String {
-        val sanitized = path.trim(':').ifEmpty { "root" }.replace(':', '-')
-        return "$sanitized.jsonl"
+        val relative = path.trim(':')
+        if (relative.isEmpty()) return "_root_.jsonl"
+        val encoded = buildString(relative.length) {
+            for (ch in relative) {
+                when {
+                    ch == ':' -> append('-')
+                    ch in 'a'..'z' || ch in 'A'..'Z' || ch in '0'..'9' || ch == '.' -> append(ch)
+                    else -> append('_').append(ch.code.toString(16)).append('_')
+                }
+            }
+        }
+        return "$encoded.jsonl"
     }
 
     /**
@@ -66,10 +101,13 @@ internal object ProjectEvalRecordIo {
 
     /**
      * Read every per-project file in [dir] back, then delete each one (plan 052's read-then-clear
-     * contract): a narrower next invocation must never inherit a wider build's leftover per-project
-     * entries for projects it did not itself (re)configure. Listing/reading is intentionally left
-     * unguarded here — like [readArtifacts] — so a genuinely corrupt/locked directory propagates to the
-     * caller's own guard (the finalizer's outer `runCatching`); only per-file parsing is defensive.
+     * contract): a later invocation must never inherit this build's leftover per-project entries for
+     * projects it did not itself (re)configure. The finalizer calls this unconditionally — even on a
+     * DSL-disabled or CC-hit build (052 review fix) — because the `beforeProject`/`afterProject`
+     * writer is gated only by the apply-time master switch and cannot be stopped by a DSL-only
+     * disable. Listing/reading is intentionally left unguarded here — like [readArtifacts] — so a
+     * genuinely corrupt/locked directory propagates to the caller's own guard (the finalizer's
+     * dedicated drain `runCatching`); only per-file parsing is defensive.
      * Missing [dir] (nothing ever captured, or the master switch was off) returns an empty list.
      */
     fun readAndClear(dir: File): List<ProjectEvaluation> {
