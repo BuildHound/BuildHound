@@ -10,6 +10,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.io.TempDir
 
@@ -115,5 +116,61 @@ class JvmArtifactSizeFunctionalTest {
         val reuse = runner("jar", ipFlag).build()
         assertEquals(TaskOutcome.UP_TO_DATE, reuse.task(":jar")?.outcome)
         assertNull(readPayload().artifacts)
+    }
+
+    @Disabled(
+        "Skipped in CI (not a known bug, unlike the AGP 9.x case in ArtifactSizeFunctionalTest): a real " +
+            "org.springframework.boot build needs the Boot Gradle plugin + spring-boot-starter-web resolved " +
+            "from the plugin portal/Maven Central, which the sandboxed functionalTest environment cannot " +
+            "reach, and adds real dependency-resolution time the classloader-free java-library fixture above " +
+            "doesn't need. The archive-measurement mechanism itself (produced-output-outcome + File.exists() " +
+            "gate, including the two-row JAR+BOOT_JAR case) is already covered by the pure-function " +
+            "ReadJvmArtifactsTest and PayloadAssemblerTest — this test only re-validates the real Boot plugin's " +
+            "task wiring end to end. Manual validation target: samples/springboot-legacy (see samples/README.md).",
+    )
+    @Test
+    fun `a spring boot app build records both a plain jar and a bootJar size`() {
+        File(projectDir, "settings.gradle.kts").writeText(
+            """
+            pluginManagement {
+                repositories { gradlePluginPortal(); mavenCentral() }
+            }
+            plugins { id("dev.buildhound") }
+            rootProject.name = "springboot-artifact-fixture"
+            """.trimIndent(),
+        )
+        // Mirrors samples/springboot-legacy's Boot plugin version — a default Boot module (no
+        // `tasks.named("jar") { enabled = false }` opt-out) builds BOTH `jar` (plain classifier) and
+        // `bootJar`, so this asserts the two-row case the outcome+exists gate is built to handle.
+        File(projectDir, "build.gradle.kts").writeText(
+            """
+            plugins {
+                java
+                id("org.springframework.boot") version "3.5.16"
+                id("io.spring.dependency-management") version "1.1.7"
+            }
+            repositories { mavenCentral() }
+            dependencies { implementation("org.springframework.boot:spring-boot-starter") }
+            """.trimIndent(),
+        )
+        File(projectDir, "src/main/java/com/example").apply { mkdirs() }
+        File(projectDir, "src/main/java/com/example/DemoApplication.java").writeText(
+            """
+            package com.example;
+            import org.springframework.boot.SpringApplication;
+            import org.springframework.boot.autoconfigure.SpringBootApplication;
+            @SpringBootApplication
+            public class DemoApplication {
+                public static void main(String[] args) { SpringApplication.run(DemoApplication.class, args); }
+            }
+            """.trimIndent(),
+        )
+
+        runner("assemble").build()
+        val jvm = readPayload().artifacts?.jvm.orEmpty()
+        val jar = jvm.singleOrNull { it.kind == JvmArtifactKind.JAR } ?: error("expected a plain JAR row: $jvm")
+        val bootJar = jvm.singleOrNull { it.kind == JvmArtifactKind.BOOT_JAR } ?: error("expected a BOOT_JAR row: $jvm")
+        assertTrue(jar.sizeBytes > 0, "plain jar size must be non-zero: $jar")
+        assertTrue(bootJar.sizeBytes > 0, "bootJar size must be non-zero: $bootJar")
     }
 }
