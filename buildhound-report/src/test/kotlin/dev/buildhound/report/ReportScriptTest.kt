@@ -11,14 +11,15 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 /**
  * Runs the report template's render() IIFE in a real JS engine against a DOM stub (plan 045),
  * closing the gap that ReportAssetsTest only checks string-splice invariants and never executes
- * render(). The report's Failure/Warnings blocks are a hand-copy of the dashboard's (covered by
+ * render(). The report's Failure/Warnings/Tests blocks are a hand-copy of the dashboard's (covered by
  * DashboardScriptTest); this pins the copy so the two surfaces can't silently drift. Skips when
  * node is not on the PATH; CI runners have it, so a render regression can't reach main unchecked.
  */
 class ReportScriptTest {
 
-    // A failed build with plan-044 failure detail + the opt-in internal-adapters warning block, so
-    // both render paths are exercised. Minimal otherwise (empty tasks) so no other section throws.
+    // A failed build with plan-044 failure detail + the opt-in internal-adapters warning block, plus
+    // an empty `tests` block with a plan-053 `testTelemetry` note, so all three render paths are
+    // exercised in one fixture (minimal otherwise so no other section throws).
     private val failurePayload = """
         {
           "schemaVersion": 1,
@@ -41,7 +42,9 @@ class ReportScriptTest {
               "logWarnings": ["warning: [deprecation] bar() in Baz has been deprecated"],
               "droppedWarnings": 3
             }
-          }
+          },
+          "tests": [],
+          "testTelemetry": { "xmlDisabledTasks": [":app:test"] }
         }
     """.trimIndent()
 

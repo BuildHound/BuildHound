@@ -113,6 +113,8 @@ class GoldenPayloadTest {
         assertNull(payload.environment?.isolatedProjects)
         // Additive guarantee (plan 066): a payload without a `wrapper` block defaults to null.
         assertNull(payload.wrapper)
+        // Additive guarantee (plan 053): a payload without a `testTelemetry` block defaults to null.
+        assertNull(payload.testTelemetry)
     }
 
     @Test
@@ -291,6 +293,19 @@ class GoldenPayloadTest {
         for (detail in task.failedOrRetried) {
             assertEquals(sha256(detail.message!!), detail.messageHash, "messageHash must hash its message")
         }
+    }
+
+    @Test
+    fun `schema v1 test-telemetry golden file deserializes with the disabled task path and no phantom result`() {
+        val payload = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            golden("build-payload-v1-test-telemetry.json"),
+        )
+
+        assertEquals(1, payload.schemaVersion, "the degraded-state block is additive — the envelope stays schema v1")
+        assertTrue(payload.tests.isEmpty(), "the flag-authoritative collector never parses a disabled task's xml")
+        val telemetry = payload.testTelemetry ?: error("expected a testTelemetry block")
+        assertEquals(listOf(":app:testDebugUnitTest"), telemetry.xmlDisabledTasks)
     }
 
     private fun sha256(text: String): String =
@@ -492,6 +507,7 @@ class GoldenPayloadTest {
             "build-payload-v1-project-evaluations.json",
             "build-payload-v1-build-structure.json",
             "build-payload-v1-wrapper.json",
+            "build-payload-v1-test-telemetry.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

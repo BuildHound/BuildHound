@@ -59,6 +59,7 @@ const responses = {
     "/v1/builds?limit=50&offset=0": [
         { buildId: "b1", startedAt: 1751450000000, durationMs: 65000, outcome: "SUCCESS", mode: "CI", branch: "main", hitRate: 0.5 },
         { buildId: "b2", startedAt: 1751450100000, durationMs: 900, outcome: "FAILED", mode: "LOCAL", branch: null },
+        { buildId: "t1", startedAt: 1751450200000, durationMs: 12000, outcome: "SUCCESS", mode: "CI", branch: "main" },
     ],
     "/v1/builds?branch=none&limit=50&offset=0": [],
     "/v1/builds/b1": {
@@ -121,6 +122,16 @@ const responses = {
                 droppedWarnings: 3,
             },
         },
+    },
+    // Honest degraded test telemetry (plan 053, research F3): an executed Test task ran with
+    // `reports.junitXml.required = false` — `tests` is empty, but `testTelemetry` names the task, so
+    // the detail page and the #/tests page must show the note rather than "no test results".
+    "/v1/builds/t1": {
+        buildId: "t1", projectKey: "pilot", startedAt: 1751450200000, finishedAt: 1751450212000,
+        outcome: "SUCCESS", mode: "CI",
+        tasks: [{ path: ":app:testDebugUnitTest", module: ":app", outcome: "EXECUTED", durationMs: 12000 }],
+        tests: [],
+        testTelemetry: { xmlDisabledTasks: [":app:testDebugUnitTest"] },
     },
     "/v1/trends?days=30": [
         { day: "2026-06-30", builds: 3, failures: 1, avgDurationMs: 60000, avgHitRate: 0.5 },
@@ -322,7 +333,7 @@ const responses = {
 };
 // X-Total-Count values by path; a path absent here → header missing (tolerance case).
 const totals = {
-    "/v1/builds?limit=50&offset=0": 2,
+    "/v1/builds?limit=50&offset=0": 3,
     "/v1/builds?branch=none&limit=50&offset=0": 0,
 };
 
@@ -391,7 +402,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     // The Builds page is reachable via its own hash and shows the filter-aware count.
     context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/builds?limit=50&offset=0")) throw new Error("builds view did not fetch");
-    if (!hasText(byId["app"], "2 builds")) throw new Error("builds count-summary sentence missing");
+    if (!hasText(byId["app"], "3 builds")) throw new Error("builds count-summary sentence missing");
 
     // Detail view: timeline svg (present), work-avoidance ledger with the unknown-cacheability
     // bucket and explicit-zero rows.
@@ -449,6 +460,18 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     // execution-phase) and no warnings block → both new sections must be absent, and not throw.
     if (findAll(byId["app"], n => (n.className || "").indexOf("failure-summary") >= 0).length !== 0) throw new Error("failure section must be absent when the payload has no failure object");
     if (hasText(byId["app"], "Warnings")) throw new Error("warnings section must be absent without an internal-adapters block");
+    if (hasText(byId["app"], "Test telemetry unavailable")) throw new Error("degraded-test note must be absent without a testTelemetry block");
+
+    // Honest degraded test telemetry (plan 053, research F3): t1 has an empty `tests` array but a
+    // populated `testTelemetry` — the Tests section must still render, with the note naming the
+    // disabled task, and no empty "Slowest classes"/"Failures & retries" tables pretending there is
+    // real data.
+    context.location.hash = "#/build/t1"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/builds/t1")) throw new Error("degraded-test detail view did not fetch");
+    if (!hasText(byId["app"], "Test telemetry unavailable")) throw new Error("detail view degraded note missing");
+    if (!hasText(byId["app"], ":app:testDebugUnitTest")) throw new Error("detail view degraded note missing the task path");
+    if (hasText(byId["app"], "Slowest classes")) throw new Error("degraded build must not render an empty slowest-classes table");
+    if (hasText(byId["app"], "Failures & retries")) throw new Error("degraded build must not render an empty failures table");
 
     // Failure + warnings (plan 044/045): a failed build with a failure object and the opt-in
     // internal-adapters block renders the Failure section (class + message + scrubbed stacktrace) and
@@ -482,6 +505,16 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "Test results")) throw new Error("tests page header missing");
     if (countTag(byId["app"], "select") < 1) throw new Error("tests page build picker missing");
     if (!hasText(byId["app"], "totalsWithDiscount()")) throw new Error("tests page did not render the default build's failures");
+
+    // Selecting the JUnit-XML-disabled build (t1) on the Tests page renders the same honest note
+    // (plan 053) as the detail page — the shared testsPanel() must not silently blank the picker path.
+    const testsSelect = findTag(byId["app"], "select")[0];
+    testsSelect.value = "t1";
+    testsSelect.listeners.change[0]();
+    await tick(); await tick();
+    if (!hasText(byId["app"], "Test telemetry unavailable")) throw new Error("tests page degraded note missing");
+    if (!hasText(byId["app"], ":app:testDebugUnitTest")) throw new Error("tests page degraded note missing the task path");
+    if (hasText(byId["app"], "Slowest classes")) throw new Error("tests page must not render an empty slowest-classes table for a degraded build");
 
     context.location.hash = "#/trends"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/trends?days=30")) throw new Error("trends view did not fetch");

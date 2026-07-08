@@ -139,6 +139,15 @@ over an override, which wins over the built-in default (plan 027).
 > warm-daemon edge, deferred to plan 075) where a later all-off build in a daemon that already opted in
 > can still capture until the next CC miss.
 
+> **Disabling JUnit XML reports (`reports.junitXml.required = false`).** Gradle's own performance
+> guide suggests turning this off "if you use a Build Scan" — but BuildHound's test collection (the
+> `tests { collect }` row above) parses that XML, so following that advice silently blanks all test
+> telemetry with zero signal. BuildHound detects the flag and reports an honest "test telemetry
+> unavailable — JUnit XML disabled on `<taskPath>`" note instead of a false-empty result, but the
+> underlying per-class/per-case data is genuinely gone for that task. If you want the same perf win,
+> disable **`htmlReport { enabled = false }`** instead and leave `junitXml.required` at its default
+> (`true`) — that skips the report BuildHound doesn't need without losing test telemetry.
+
 ### Local development credentials
 
 The Compose stack ships committed **local-development-only** credentials so the harness works out

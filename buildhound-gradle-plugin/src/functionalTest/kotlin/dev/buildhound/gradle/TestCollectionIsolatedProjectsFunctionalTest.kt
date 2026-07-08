@@ -57,5 +57,9 @@ class TestCollectionIsolatedProjectsFunctionalTest {
             result.output.lineSequence().none { it.contains("[buildhound]") && it.contains("failed") },
             "no BuildHound failure warn under IP: ${result.output}",
         )
+        // The plan-053 degraded-state signal rides the same whenReady-gated location walk: with the
+        // map empty, no task can ever be recorded as xml-disabled, so the block stays absent — the
+        // signal is unavailable under IP, consistent with test telemetry already being absent there.
+        assertTrue(readPayload().testTelemetry == null, "no xml-disabled note can be produced when the location walk is IP-gated")
     }
 }

@@ -4,6 +4,7 @@ import dev.buildhound.commons.payload.BuildHoundJson
 import java.io.File
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
@@ -57,6 +58,10 @@ internal object TestLocationSidecar {
             put("taskPath", taskPath)
             put("junitXmlDir", loc.junitXmlDir)
             if (loc.module != null) put("module", loc.module)
+            // Omitted when true (the common case): parseLine below defaults an absent field to
+            // true, so a pre-053 sidecar line (written before this field existed) decodes the same
+            // way as one that explicitly carries `true` — no migration needed either direction.
+            if (!loc.junitXmlRequired) put("junitXmlRequired", false)
         }
         return BuildHoundJson.payload.encodeToString(JsonObject.serializer(), obj)
     }
@@ -68,9 +73,14 @@ internal object TestLocationSidecar {
             val obj = BuildHoundJson.payload.parseToJsonElement(trimmed) as? JsonObject ?: return null
             val taskPath = obj.str("taskPath") ?: return null
             val dir = obj.str("junitXmlDir") ?: return null
-            taskPath to TestResultLocations(junitXmlDir = dir, module = obj.str("module"))
+            taskPath to TestResultLocations(
+                junitXmlDir = dir,
+                module = obj.str("module"),
+                junitXmlRequired = obj.bool("junitXmlRequired") ?: true,
+            )
         }.getOrNull()
     }
 
     private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
+    private fun JsonObject.bool(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull
 }

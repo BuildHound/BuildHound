@@ -4,7 +4,6 @@ import dev.buildhound.commons.payload.TaskOutcome
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.io.TempDir
 
@@ -29,10 +28,12 @@ class TestResultCollectorTest {
     @Test
     fun `parses the xml of an executed test task`() {
         writeXml(dir, "TEST-com.example.FooTest.xml", passAndFail)
-        val result = TestResultCollector.collect(
+        val collection = TestResultCollector.collect(
             locations = mapOf(":app:test" to TestResultLocations(dir.absolutePath, ":app")),
             taskOutcomes = mapOf(":app:test" to TaskOutcome.FAILED),
-        ).single()
+        )
+        assertTrue(collection.xmlDisabledTasks.isEmpty())
+        val result = collection.results.single()
 
         assertEquals(":app:test", result.taskPath)
         assertEquals(":app", result.module)
@@ -47,33 +48,34 @@ class TestResultCollectorTest {
         writeXml(dir, "TEST-com.example.FooTest.xml", passAndFail)
         val locations = mapOf(":app:test" to TestResultLocations(dir.absolutePath, ":app"))
         assertTrue(
-            TestResultCollector.collect(locations, mapOf(":app:test" to TaskOutcome.FROM_CACHE)).isEmpty(),
+            TestResultCollector.collect(locations, mapOf(":app:test" to TaskOutcome.FROM_CACHE)).results.isEmpty(),
             "FROM_CACHE leaves prior-build xml on disk that must not be re-attributed",
         )
-        assertTrue(TestResultCollector.collect(locations, mapOf(":app:test" to TaskOutcome.UP_TO_DATE)).isEmpty())
+        assertTrue(TestResultCollector.collect(locations, mapOf(":app:test" to TaskOutcome.UP_TO_DATE)).results.isEmpty())
     }
 
     @Test
     fun `a missing or empty results directory yields no task entry`() {
         val missing = mapOf(":app:test" to TestResultLocations(File(dir, "nope").absolutePath, ":app"))
-        assertTrue(TestResultCollector.collect(missing, mapOf(":app:test" to TaskOutcome.EXECUTED)).isEmpty())
+        assertTrue(TestResultCollector.collect(missing, mapOf(":app:test" to TaskOutcome.EXECUTED)).results.isEmpty())
 
         File(dir, "empty").mkdirs()
         val empty = mapOf(":app:test" to TestResultLocations(File(dir, "empty").absolutePath, ":app"))
-        assertTrue(TestResultCollector.collect(empty, mapOf(":app:test" to TaskOutcome.EXECUTED)).isEmpty())
+        assertTrue(TestResultCollector.collect(empty, mapOf(":app:test" to TaskOutcome.EXECUTED)).results.isEmpty())
     }
 
     @Test
     fun `the failure-injection seam produces empty results and one warn, never throws`() {
         writeXml(dir, "TEST-com.example.FooTest.xml", passAndFail)
         val warnings = ArrayList<String>()
-        val result = TestResultCollector.collect(
+        val collection = TestResultCollector.collect(
             locations = mapOf(":app:test" to TestResultLocations(dir.absolutePath, ":app")),
             taskOutcomes = mapOf(":app:test" to TaskOutcome.FAILED),
             warn = { warnings += it },
             failInjection = true,
         )
-        assertTrue(result.isEmpty())
+        assertTrue(collection.results.isEmpty())
+        assertTrue(collection.xmlDisabledTasks.isEmpty())
         assertEquals(1, warnings.size, warnings.toString())
     }
 
@@ -87,7 +89,7 @@ class TestResultCollectorTest {
         val result = TestResultCollector.collect(
             locations = mapOf(":app:test" to TestResultLocations(dir.absolutePath, ":app")),
             taskOutcomes = mapOf(":app:test" to TaskOutcome.EXECUTED),
-        ).single()
+        ).results.single()
 
         assertEquals(2000, result.classes.size, "kept the slowest 2000")
         assertEquals(1, result.truncatedClasses)
@@ -109,7 +111,7 @@ class TestResultCollectorTest {
         val result = TestResultCollector.collect(
             locations = mapOf(":app:test" to TestResultLocations(dir.absolutePath, ":app")),
             taskOutcomes = mapOf(":app:test" to TaskOutcome.EXECUTED),
-        ).single()
+        ).results.single()
 
         val cls = result.classes.single()
         assertEquals("com.example.FooTest", cls.className)
@@ -119,6 +121,75 @@ class TestResultCollectorTest {
 
     @Test
     fun `no locations means no work`() {
-        assertTrue(TestResultCollector.collect(emptyMap(), mapOf(":app:test" to TaskOutcome.EXECUTED)).isEmpty())
+        val collection = TestResultCollector.collect(emptyMap(), mapOf(":app:test" to TaskOutcome.EXECUTED))
+        assertTrue(collection.results.isEmpty())
+        assertTrue(collection.xmlDisabledTasks.isEmpty())
+    }
+
+    // --- plan 053: flag-authoritative degraded state ---
+
+    @Test
+    fun `an executed task with junitXmlRequired false is recorded as disabled and never parsed, even with stale xml on disk`() {
+        // Stale XML from a prior required=true run still sits on disk; the flag must override it —
+        // no phantom result may appear alongside the disabled note for the same task.
+        writeXml(dir, "TEST-com.example.FooTest.xml", passAndFail)
+        val collection = TestResultCollector.collect(
+            locations = mapOf(":app:test" to TestResultLocations(dir.absolutePath, ":app", junitXmlRequired = false)),
+            taskOutcomes = mapOf(":app:test" to TaskOutcome.EXECUTED),
+        )
+
+        assertTrue(collection.results.isEmpty(), "the flag short-circuits before any listFiles/parse")
+        assertEquals(listOf(":app:test"), collection.xmlDisabledTasks)
+    }
+
+    @Test
+    fun `junitXmlRequired true still parses as before`() {
+        writeXml(dir, "TEST-com.example.FooTest.xml", passAndFail)
+        val collection = TestResultCollector.collect(
+            locations = mapOf(":app:test" to TestResultLocations(dir.absolutePath, ":app", junitXmlRequired = true)),
+            taskOutcomes = mapOf(":app:test" to TaskOutcome.EXECUTED),
+        )
+
+        assertTrue(collection.xmlDisabledTasks.isEmpty())
+        assertEquals(1, collection.results.single().classes.single().passed)
+    }
+
+    @Test
+    fun `an up-to-date or from-cache task with junitXmlRequired false produces neither a result nor a note`() {
+        val locations = mapOf(":app:test" to TestResultLocations(dir.absolutePath, ":app", junitXmlRequired = false))
+        val upToDate = TestResultCollector.collect(locations, mapOf(":app:test" to TaskOutcome.UP_TO_DATE))
+        assertTrue(upToDate.results.isEmpty())
+        assertTrue(upToDate.xmlDisabledTasks.isEmpty(), "only a this-build EXECUTED/FAILED task can produce the note")
+
+        val fromCache = TestResultCollector.collect(locations, mapOf(":app:test" to TaskOutcome.FROM_CACHE))
+        assertTrue(fromCache.results.isEmpty())
+        assertTrue(fromCache.xmlDisabledTasks.isEmpty())
+    }
+
+    @Test
+    fun `xmlDisabledTasks is sorted for determinism regardless of location map order`() {
+        val locations = linkedMapOf(
+            ":z:test" to TestResultLocations(File(dir, "z").absolutePath, ":z", junitXmlRequired = false),
+            ":a:test" to TestResultLocations(File(dir, "a").absolutePath, ":a", junitXmlRequired = false),
+        )
+        val collection = TestResultCollector.collect(
+            locations,
+            mapOf(":z:test" to TaskOutcome.EXECUTED, ":a:test" to TaskOutcome.EXECUTED),
+        )
+        assertEquals(listOf(":a:test", ":z:test"), collection.xmlDisabledTasks)
+    }
+
+    @Test
+    fun `the failure-injection seam leaves xmlDisabledTasks empty too`() {
+        val warnings = ArrayList<String>()
+        val collection = TestResultCollector.collect(
+            locations = mapOf(":app:test" to TestResultLocations(dir.absolutePath, ":app", junitXmlRequired = false)),
+            taskOutcomes = mapOf(":app:test" to TaskOutcome.EXECUTED),
+            warn = { warnings += it },
+            failInjection = true,
+        )
+        assertTrue(collection.results.isEmpty())
+        assertTrue(collection.xmlDisabledTasks.isEmpty())
+        assertEquals(1, warnings.size, warnings.toString())
     }
 }

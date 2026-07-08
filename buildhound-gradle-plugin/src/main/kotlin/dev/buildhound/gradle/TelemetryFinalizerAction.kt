@@ -13,6 +13,7 @@ import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.commons.payload.ProjectEvaluation
 import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.commons.payload.TaskExecution
+import dev.buildhound.commons.payload.TestTelemetryInfo
 import dev.buildhound.report.ReportAssets
 import java.io.File
 import java.util.ServiceLoader
@@ -300,8 +301,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
             // Test results (plan 024): parse each executed Test task's JUnit XML. Locations are
             // captured at config time and delivered here via the sidecar file (plan 044), with the
-            // collector service param as the classpath-path fallback (see below).
-            val tests = if (parameters.testsCollect.getOrElse(true)) {
+            // collector service param as the classpath-path fallback (see below). The widened
+            // TestCollectionResult (plan 053, research F3) also carries the flag-authoritative
+            // degraded state for tasks whose JUnit XML was disabled — mutually exclusive per task
+            // with an entry in `results`, only reachable inside this same testsCollect guard so
+            // `collect = false` never produces a note.
+            val testCollection = if (parameters.testsCollect.getOrElse(true)) {
                 // Prefer the durable sidecar (plan 044): the service param is frozen empty in a
                 // composite build (included-build task events instantiate the collector before
                 // whenReady). Fall back to the param on the classpath path / if the file is absent.
@@ -316,8 +321,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                     failInjection = parameters.failTestCollection.getOrElse(false),
                 )
             } else {
-                emptyList()
+                TestResultCollector.TestCollectionResult(emptyList(), emptyList())
             }
+            val tests = testCollection.results
+            val testTelemetry = TestTelemetryInfo(testCollection.xmlDisabledTasks)
+                .takeIf { it.xmlDisabledTasks.isNotEmpty() }
 
             // Android artifact sizes (plan 031): read the JSON-line files the AGP size tasks wrote.
             // A genuine read failure (corrupt/locked dir) propagates to the finalizer's outer
@@ -378,6 +386,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 fingerprints = fingerprints,
                 kotlin = kotlin,
                 tests = tests,
+                testTelemetry = testTelemetry,
                 processes = parameters.processes.getOrElse(emptyList()),
                 benchmark = benchmark,
                 artifacts = artifacts,

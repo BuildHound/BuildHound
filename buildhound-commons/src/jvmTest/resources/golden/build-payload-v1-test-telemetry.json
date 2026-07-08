@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "buildId": "b3e8a1c2-9f4d-4a6b-8c1e-2d3f4a5b6c7d",
+  "projectKey": "pilot-android",
+  "startedAt": 1751900000000,
+  "finishedAt": 1751900012000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["test"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:testDebugUnitTest",
+      "module": ":app",
+      "startMs": 1751900001000,
+      "durationMs": 11000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "tests": [],
+  "testTelemetry": {
+    "xmlDisabledTasks": [":app:testDebugUnitTest"]
+  }
+}
