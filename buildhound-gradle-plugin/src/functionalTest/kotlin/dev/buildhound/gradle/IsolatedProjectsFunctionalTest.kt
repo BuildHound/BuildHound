@@ -94,4 +94,27 @@ class IsolatedProjectsFunctionalTest {
         assertTrue(replayed.tasks.any { it.path == ":a:work" }, "telemetry must survive IP reuse")
         assertTrue(replayed.tasks.any { it.path == ":b:work" })
     }
+
+    /**
+     * Invocation-switch & performance-flag posture (plan 051, exit criteria): `StartParameter` +
+     * settings-level `gradle.properties` are settings-scope reads (a strength here, per the plan's
+     * Risks — unlike the `whenReady` task dictionary, which degrades under IP), so the block must be
+     * fully populated, never null/degraded, under isolated projects.
+     */
+    @Test
+    fun `invocation block is present and non-throwing under isolated projects`() {
+        setUpMultiProject()
+        File(projectDir, "gradle.properties").writeText("org.gradle.caching=true\n")
+
+        val result = runner(":a:work", ":b:work", ipFlag).build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":a:work")?.outcome, "IP build must succeed")
+        assertFalse(
+            result.output.lineSequence().any { it.startsWith("[buildhound]") && it.contains("failed") },
+            "no BuildHound warn/failure under isolated projects:\n${result.output}",
+        )
+        val invocation = readPayload().environment?.invocation
+            ?: error("environment.invocation must be populated under isolated projects (settings-scope reads only)")
+        assertTrue(invocation.properties.any { it.key == "org.gradle.caching" }, "the allowlist must be populated under IP")
+    }
 }
