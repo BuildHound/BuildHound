@@ -252,6 +252,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 WHERE project_id = ? AND outcome = 'SUCCESS' AND branch = ?
                   AND mode = ? AND pipeline_name IS NOT DISTINCT FROM ? AND requested_tasks_sig = ?
                   AND build_id <> ?
+                  AND (payload->'environment'->'invocation'->>'rerunTasks') IS DISTINCT FROM 'true'
+                  AND (payload->'environment'->'invocation'->>'refreshDependencies') IS DISTINCT FROM 'true'
                 ORDER BY started_at DESC LIMIT ?
                 """.trimIndent(),
             ).use { statement ->

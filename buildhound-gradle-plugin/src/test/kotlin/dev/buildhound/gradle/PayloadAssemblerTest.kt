@@ -410,6 +410,42 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `invocation posture maps onto environment invocation`() {
+        val invocation = CollectedInvocation(
+            buildCacheEnabled = true,
+            offline = false,
+            rerunTasks = true,
+            refreshDependencies = false,
+            configureOnDemand = false,
+            maxWorkerCount = 8,
+            parallel = true,
+            fileEncoding = "UTF-8",
+            locale = "en-US",
+            properties = listOf(
+                CollectedPropertyPosture("org.gradle.caching", "true", dev.buildhound.commons.payload.PropertyOrigin.GRADLE_USER_HOME),
+            ),
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), invocation = invocation)
+
+        val info = payload.environment?.invocation ?: error("expected environment.invocation")
+        assertEquals(true, info.buildCacheEnabled)
+        assertEquals(true, info.rerunTasks)
+        assertEquals(8, info.maxWorkerCount)
+        assertEquals("UTF-8", info.fileEncoding)
+        assertEquals("en-US", info.locale)
+        val posture = info.properties.single()
+        assertEquals("org.gradle.caching", posture.key)
+        assertEquals("true", posture.value)
+        assertEquals(dev.buildhound.commons.payload.PropertyOrigin.GRADLE_USER_HOME, posture.origin)
+    }
+
+    @Test
+    fun `no invocation source leaves environment invocation null`() {
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)))
+        assertNull(payload.environment?.invocation)
+    }
+
+    @Test
     fun `links compose from the redacted remote, sha, and the ci pr number`() {
         val vcs = CollectedVcs(branch = "feature", sha = "a".repeat(40), remoteUrl = "https://github.com/org/repo.git")
         val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), vcs = vcs)
@@ -491,6 +527,7 @@ class PayloadAssemblerTest {
             hostnameHash = "h_0123456789ab", userId = "u_0123456789ab",
             gradleVersion = "8.14.3", jdkVersion = "21.0.10",
         ),
+        invocation: CollectedInvocation? = null,
         vcs: CollectedVcs = CollectedVcs(branch = "main", sha = "c".repeat(40), dirty = false),
         ci: CollectedCi? = this.ci,
         extensions: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap(),
@@ -506,6 +543,7 @@ class PayloadAssemblerTest {
         requestedTasks = listOf("build"),
         tasks = tasks,
         environment = environment,
+        invocation = invocation,
         vcs = vcs,
         ci = ci,
         configurationCache = ConfigurationCacheState.HIT,

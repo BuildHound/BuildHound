@@ -100,6 +100,7 @@ class GoldenPayloadTest {
         assertNull(payload.links)
         assertNull(payload.environment?.ide)
         assertNull(payload.environment?.aiAgent)
+        assertNull(payload.environment?.invocation)
         assertNull(payload.vcs?.remoteUrl)
         // Additive guarantee (plan 039): a payload without an `extensions` block defaults to empty,
         // and the v1 golden — authored before the field existed — still deserializes.
@@ -178,6 +179,34 @@ class GoldenPayloadTest {
     private fun sha256(text: String): String =
         java.security.MessageDigest.getInstance("SHA-256").digest(text.encodeToByteArray())
             .joinToString("") { b -> ((b.toInt() and 0xff) + 0x100).toString(16).substring(1) }
+
+    @Test
+    fun `schema v1 invocation golden file deserializes with populated scalars and property provenance`() {
+        val payload =
+            BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-invocation.json"))
+
+        assertEquals(1, payload.schemaVersion)
+        val invocation = payload.environment?.invocation ?: error("expected an environment.invocation block")
+        assertEquals(true, invocation.buildCacheEnabled)
+        assertEquals(false, invocation.offline)
+        assertEquals(false, invocation.rerunTasks)
+        assertEquals(false, invocation.refreshDependencies)
+        assertEquals(false, invocation.configureOnDemand)
+        assertEquals(8, invocation.maxWorkerCount)
+        assertEquals(true, invocation.parallel)
+        // Plaintext fileEncoding/locale ride alongside the salted FingerprintInfo hashes (never
+        // replacing them) so absolute-value rules ("Cp1252 fleet -> set UTF-8") can fire.
+        assertEquals("UTF-8", invocation.fileEncoding)
+        assertEquals("en-US", invocation.locale)
+
+        val caching = invocation.properties.first { it.key == "org.gradle.caching" }
+        assertEquals("true", caching.value)
+        assertEquals(PropertyOrigin.GRADLE_USER_HOME, caching.origin, "GUH silently wins over the project file")
+        val parallelProp = invocation.properties.first { it.key == "org.gradle.parallel" }
+        assertEquals(PropertyOrigin.PROJECT, parallelProp.origin)
+        val nonTransitive = invocation.properties.first { it.key == "android.nonTransitiveRClass" }
+        assertEquals(PropertyOrigin.OVERRIDE, nonTransitive.origin)
+    }
 
     @Test
     fun `schema v1 ci-env golden file deserializes with populated ide, agent, remote, and links`() {
@@ -330,6 +359,7 @@ class GoldenPayloadTest {
             "build-payload-v1-kotlin.json",
             "build-payload-v1-tests.json",
             "build-payload-v1-ci-env.json",
+            "build-payload-v1-invocation.json",
             "build-payload-v1-processes.json",
             "build-payload-v1-benchmark.json",
             "build-payload-v1-artifacts.json",

@@ -290,6 +290,25 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.maxWorkers.set(settings.startParameter.maxWorkerCount)
         }
 
+        // Invocation-switch & performance-flag posture (plan 051). The seven StartParameter scalars
+        // are baked config-time params (same narrowing as the fingerprints parallel/maxWorkers above);
+        // only the two gradle.properties *locations* are captured here — reading them is deferred to
+        // the ValueSource's obtain() (execution time), so the allowlist block re-freshens on a CC hit.
+        val invocation = settings.providers.of(InvocationValueSource::class.java) { spec ->
+            spec.parameters.enabled.set(extension.enabled)
+            spec.parameters.buildCacheEnabled.set(settings.startParameter.isBuildCacheEnabled)
+            spec.parameters.offline.set(settings.startParameter.isOffline)
+            spec.parameters.rerunTasks.set(settings.startParameter.isRerunTasks)
+            spec.parameters.refreshDependencies.set(settings.startParameter.isRefreshDependencies)
+            spec.parameters.configureOnDemand.set(settings.startParameter.isConfigureOnDemand)
+            spec.parameters.maxWorkerCount.set(settings.startParameter.maxWorkerCount)
+            spec.parameters.parallel.set(settings.startParameter.isParallelProjectExecutionEnabled)
+            spec.parameters.projectPropertiesPath.set(File(settings.rootDir, "gradle.properties").absolutePath)
+            spec.parameters.gradleUserHomePropertiesPath.set(
+                File(settings.startParameter.gradleUserHomeDir, "gradle.properties").absolutePath,
+            )
+        }
+
         // Flow API is the CC-safe "build finished" hook (spec §3.2). The finalizer
         // assembles the payload and writes it next to the build outputs; the HTML
         // artifact and upload chunks build on it. It must never fail the build.
@@ -314,6 +333,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
                 },
             )
             spec.parameters.environment.set(environment)
+            spec.parameters.invocation.set(invocation)
             spec.parameters.vcs.set(vcs)
             spec.parameters.ci.set(ci)
             spec.parameters.benchmark.set(benchmark)
