@@ -59,7 +59,12 @@ object TagCohortCalculator {
                     failures = dayRows.count { it.outcome == "FAILED" },
                     avgDurationMs = if (durations.isEmpty()) 0 else Math.round(durations.average()),
                     maxDurationMs = durations.maxOrNull() ?: 0,
-                    avgHitRate = hitRates.takeIf { it.isNotEmpty() }?.average(),
+                    // sorted() before average() makes the float fold order-independent (the
+                    // BottleneckCalculator.avgHitRate discipline): both stores hold the same
+                    // multiset of hit rates but feed raw rows in different orders (no ORDER BY on
+                    // the Postgres side), so an unsorted sum could differ in the last bit and break
+                    // the byte-for-byte parity a TrendPoint equality check relies on.
+                    avgHitRate = hitRates.takeIf { it.isNotEmpty() }?.sorted()?.average(),
                     interrupted = dayRows.count { it.outcome == "INTERRUPTED" },
                 )
             }
