@@ -2,6 +2,7 @@ package dev.buildhound.server
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -94,5 +95,44 @@ class BottleneckCalculatorTest {
             period = 7,
         )
         assertEquals(null, rollup.topPlugins.single().module)
+    }
+
+    @Test
+    fun `topPluginsAvailable is true once at least one current task carries a type`() {
+        val rollup = BottleneckCalculator.compute(
+            currentTasks = listOf(task("org.jetbrains.kotlin.gradle.tasks.KotlinCompile", 1000)),
+            priorTasks = emptyList(),
+            currentBuilds = listOf(build()),
+            priorBuilds = emptyList(),
+            period = 7,
+        )
+        assertTrue(rollup.topPluginsAvailable)
+    }
+
+    @Test
+    fun `topPluginsAvailable is false when every current task has a null type — isolated-projects degradation`() {
+        // Under isolated projects (research risk register) every task type is null, so topPlugins folds
+        // entirely into "(unattributed)" — a non-empty list that must not be mistaken for real data.
+        val rollup = BottleneckCalculator.compute(
+            currentTasks = listOf(task(null, 1000), task(null, 2000)),
+            priorTasks = emptyList(),
+            currentBuilds = listOf(build()),
+            priorBuilds = emptyList(),
+            period = 7,
+        )
+        assertFalse(rollup.topPluginsAvailable)
+        assertEquals(listOf("(unattributed)"), rollup.topPlugins.map { it.key }, "still folds — the UI, not the calculator, must gate on the flag")
+    }
+
+    @Test
+    fun `topPluginsAvailable is false on an empty current window`() {
+        val rollup = BottleneckCalculator.compute(
+            currentTasks = emptyList(),
+            priorTasks = listOf(task("org.jetbrains.kotlin.gradle.tasks.KotlinCompile", 1000)),
+            currentBuilds = emptyList(),
+            priorBuilds = listOf(build()),
+            period = 7,
+        )
+        assertFalse(rollup.topPluginsAvailable)
     }
 }

@@ -1085,6 +1085,7 @@
         const durationHolder = el("div");
         let mode = "name"; // "name" | "type" | "plugin"
         let pluginCost = null;
+        let pluginSeq = 0; // guards two "By plugin" clicks racing past the same in-flight fetch (renderSeq idiom)
         const renderDuration = async () => {
             durationHolder.textContent = "";
             if (mode === "type" && !duration.byTypeAvailable) {
@@ -1095,12 +1096,14 @@
                 return;
             }
             if (mode === "plugin") {
+                const seq = ++pluginSeq;
                 if (!pluginCost) pluginCost = await api("/v1/rollups/plugin-cost?days=30");
                 // The fetch above is the only await in this function; if the user clicked a different
-                // toggle button while it was in flight, mode has since changed and that later click's
-                // own (synchronous) render already ran — resuming here must not append a second,
-                // stale table on top of it.
-                if (mode !== "plugin") return;
+                // toggle button while it was in flight, mode has since changed; if the user clicked
+                // "By plugin" again, a newer call now owns pluginSeq — either way that later click's
+                // own render already ran and resuming here must not append a second, stale table on
+                // top of it.
+                if (mode !== "plugin" || seq !== pluginSeq) return;
                 if (!pluginCost.available) {
                     durationHolder.append(emptyState({
                         title: "Task types not populated yet",
@@ -1376,10 +1379,16 @@
                 [keyCell(r), el("td", ms(r.currentMs), "num"), el("td", r.count, "num")]));
         }
 
-        // Top plugins by time (plan 058, research F8 Layer 1): omitted entirely when empty, rather
-        // than rendering an empty card — mirrors the verdict chips' null-omits-the-card convention.
-        if (b.topPlugins && b.topPlugins.length) {
-            app.append(el("h3", "Top plugins by time"));
+        // Top plugins by time (plan 058, research F8 Layer 1): mirrors the cache-miss hotspots
+        // convention below — topPluginsAvailable is false only when no task in the window carries a
+        // type at all (isolated-projects degradation, plan 016), in which case topPlugins would
+        // otherwise be a non-empty "(unattributed)" fold rendered as if it were real data.
+        app.append(el("h3", "Top plugins by time"));
+        if (!b.topPluginsAvailable) {
+            app.append(el("p", "Task types not collected yet — deploy the plan-016 plugin to surface plugin cost attribution.", "notice-warn"));
+        } else if (!b.topPlugins.length) {
+            app.append(el("p", "No task work in this window.", "muted"));
+        } else {
             app.append(rankedTable(["Plugin", "Total time", "Runs"], b.topPlugins, r =>
                 [el("td", r.key), el("td", ms(r.currentMs), "num"), el("td", r.count, "num")]));
         }

@@ -234,6 +234,31 @@ class BottleneckRoutesTest {
         assertTrue(bottlenecks().topPlugins.isEmpty(), "a benchmark-only fleet has no plugin-cost bottleneck")
     }
 
+    @Test
+    fun `top plugins reports available when at least one current task carries a type`() = testApplication {
+        val fx = fx(); appWith(fx)
+        seed(fx)
+        assertTrue(bottlenecks().topPluginsAvailable)
+    }
+
+    @Test
+    fun `top plugins degrades honestly when no current task carries a type — isolated-projects`() = testApplication {
+        val fx = fx(); appWith(fx)
+        // A single current build whose only task has no `type` — mirrors the cache-miss degrade test:
+        // topPlugins would otherwise fold everything into a non-empty "(unattributed)" bucket that the
+        // dashboard could render as if it were real plugin-cost data.
+        fx.stores.builds.save(
+            fx.project.id,
+            TestPayloads.build(
+                buildId = "nt-1", durationMs = 2000, startedAt = current,
+                tasks = listOf(TestPayloads.task(":app:x", TaskOutcome.EXECUTED, 900, type = null)),
+            ),
+        )
+        val r = bottlenecks()
+        assertFalse(r.topPluginsAvailable, "no task carries a type → unavailable, not an '(unattributed)' consensus")
+        assertEquals(listOf("(unattributed)"), r.topPlugins.map { it.key }, "the calculator still folds — the route/UI is what must gate on the flag")
+    }
+
     // ---- toolchain ----
 
     private suspend fun ApplicationTestBuilder.toolchain(query: String = "", token: String = "read-token"): ToolchainRollup =
