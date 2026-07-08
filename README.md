@@ -29,7 +29,9 @@ fully standalone HTML report artifact. Apache-2.0. Home: [buildhound.dev](https:
 
 Then wire up the two halves — the **ingest server** (the webservice) and the **plugin** — and
 watch a build's telemetry land. The fastest path is the ready-made
-[`samples/nowinandroid`](samples/) harness (see [end-to-end below](#try-it-end-to-end)).
+[`samples/nowinandroid`](samples/) harness (see [end-to-end below](#try-it-end-to-end)); two more
+sample builds under [`samples/`](samples/) cover different shapes (a big, deliberately
+mis-configured Spring Boot build and an older-AGP Android build).
 
 ### 1. Run the ingest server (webservice)
 
@@ -125,7 +127,16 @@ cd samples/nowinandroid && ./gradlew :core:common:assemble   # 2. run any build 
 ```
 
 Prerequisites and the full dev loop (including the Android SDK setup the sample needs) are in
-**[samples/README.md](samples/README.md)**.
+**[samples/README.md](samples/README.md)**. Two more harnesses live alongside it, wired the same way
+and sending to the same local server/token:
+
+- [`samples/springboot-legacy`](samples/springboot-legacy/) — a 50-module Spring Boot build with a
+  **deliberately sub-optimal** Gradle config (config cache / build cache / parallelism all off,
+  cross-project config, per-project repos). Its telemetry looks "bad" on purpose. No Android SDK needed:
+  `cd samples/springboot-legacy && ./gradlew build`.
+- [`samples/android-legacy-agp`](samples/android-legacy-agp/) — a ~10-module Android build on an
+  **older AGP (8.5.2)** / Gradle 8.14.5 (the bottom of the plugin's supported window):
+  `cd samples/android-legacy-agp && ./gradlew :app:assembleDebug` (needs the Android SDK).
 
 ## Status
 
