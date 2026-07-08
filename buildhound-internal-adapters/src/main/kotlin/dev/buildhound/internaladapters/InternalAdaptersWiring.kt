@@ -17,13 +17,19 @@ import org.gradle.util.GradleVersion
  * [TaskExecutionGraph]) plus plain booleans; the internal Gradle APIs (build-operation listener
  * manager, `LoggingOutputInternal`) are touched **only** inside the private `register…` helpers, which
  * run **only** when the matching toggle is on. With every toggle off those helpers are never invoked,
- * so their internal-API classes are never linked — applying the core plugin touches no internal API.
+ * so their internal-API classes are never linked — **on a daemon where no build has enabled a toggle,
+ * applying the core plugin touches no internal API.**
  *
  * Called from core's `taskGraph.whenReady` (execution-time facts, CC-safe); on a CC hit `whenReady`
  * does not run, so — exactly as before — capture rides the daemon-static listener registered on the
- * first miss. Everything is `runCatching`-guarded: setup can only degrade to no capture, never fail
- * the build (spec §3.1). The core plugin already made the composite-build root-only decision before
- * calling this, so no parent-build guard is repeated here.
+ * first miss. **Known limitation (plan 052):** because the toggle-resetting [InternalAdaptersState.configure]
+ * also runs only in `whenReady`, a CC-hit build does not re-establish its own toggle intent — so once
+ * some build in a warm daemon has opted in, a later all-off build that reuses a *pre-toggle* CC entry can
+ * still capture (via the lingering daemon-static listener) until the next CC miss. The captured data is
+ * still scrubbed; the gap is a consent-model edge, tracked for an execution-time-rehydration fix.
+ * Everything is `runCatching`-guarded: setup can only degrade to no capture, never fail the build
+ * (spec §3.1). The core plugin already made the composite-build root-only decision before calling this,
+ * so no parent-build guard is repeated here.
  */
 object InternalAdaptersWiring {
 

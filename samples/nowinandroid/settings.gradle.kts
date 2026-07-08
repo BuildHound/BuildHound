@@ -110,8 +110,9 @@ buildhound {
     }
 
     // Internal-adapters capture (plans 038/044/051). Reads INTERNAL Gradle APIs, so every toggle is
-    // OFF BY DEFAULT and dormant — no internal API is touched until you flip one, and flipping one is
-    // the per-feature consent. Enabling a toggle logs a one-time "reads internal Gradle APIs" notice.
+    // OFF BY DEFAULT and dormant — on a daemon where no build has enabled a toggle, no internal API is
+    // touched. Flipping one is the per-feature consent and logs a one-time "reads internal Gradle APIs"
+    // notice. (One known CC-hit warm-daemon edge is deferred to plan 052 — see docs/architecture.md §7.)
     internalAdapters {
         collectCacheOrigins = false // per-task cache origin/keys + critical-path / avoided-time
         collectDeprecations = false // Gradle deprecation warnings (summary + advice)
