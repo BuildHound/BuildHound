@@ -108,6 +108,26 @@ class InvocationFunctionalTest {
     }
 
     @Test
+    fun `-D and -P attribute OVERRIDE for their own key family, end to end`() {
+        // The plan-051 review fix: org.gradle.* keys are Gradle properties overridden via -D,
+        // android.* keys are AGP-read project properties overridden via -P — a uniform "-D wins"
+        // rule would make the -P override invisible. Both real TestKit invocations here.
+        setUpSimpleProject()
+
+        val result = runner("hello", "-Dorg.gradle.caching=false", "-Pandroid.nonTransitiveRClass=true").build()
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome, result.output)
+
+        val invocation = readPayload().environment?.invocation ?: error("expected environment.invocation")
+        val caching = invocation.properties.first { it.key == "org.gradle.caching" }
+        assertEquals("false", caching.value)
+        assertEquals(PropertyOrigin.OVERRIDE, caching.origin, "-D is the org.gradle.* override channel")
+
+        val nonTransitive = invocation.properties.first { it.key == "android.nonTransitiveRClass" }
+        assertEquals("true", nonTransitive.value)
+        assertEquals(PropertyOrigin.OVERRIDE, nonTransitive.origin, "-P is the android.* override channel, not -D")
+    }
+
+    @Test
     fun `a config-cache hit keeps the block present and re-freshes the allowlist`() {
         setUpSimpleProject()
         File(projectDir, "gradle.properties").writeText("org.gradle.caching=true\n")
