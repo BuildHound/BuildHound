@@ -45,6 +45,15 @@ data class BuildPayload(
     /** APK/AAB/AAR sizes for an Android build (plan 031, spec §4); null on non-Android builds. */
     val artifacts: ArtifactSizes? = null,
     /**
+     * Per-project configuration (evaluation) time, ranked slowest-first (plan 052, research F2).
+     * Populated by the settings plugin's `beforeProject`/`afterProject` collector on a CC-miss/DISABLED
+     * build (including under isolated projects — the public `GradleLifecycle` hooks are IP-safe); null
+     * on a configuration-cache **hit** (configuration did not run this build, so there is nothing to
+     * report) and when nothing was captured. Not a decomposition of `derived.configurationMs` — see
+     * [ProjectEvaluation].
+     */
+    val projectEvaluations: List<ProjectEvaluation>? = null,
+    /**
      * Addon-contributed payload sections (plan 039), keyed by addon id (e.g. `"testQuarantine"`).
      * The value is addon-owned JSON carrying its own `schemaVersion`, so core stays decoupled from
      * addon types and needs no schema bump when an addon evolves. Empty on a build with no addon
@@ -81,6 +90,24 @@ data class ArtifactSize(
  */
 @Serializable
 data class ArtifactSizes(val android: List<ArtifactSize> = emptyList())
+
+/**
+ * One project's configuration (evaluation) time (plan 052, research F2), timed by the settings
+ * plugin's `gradle.lifecycle.beforeProject`/`afterProject` hooks around script evaluation + plugin
+ * application + `afterEvaluate` for that project. [path] is the Gradle project path (`:app`,
+ * `:core:common`) — project-internal, not PII (same bar as [ArtifactSize.module]/`TaskExecution.module`).
+ *
+ * **Not a decomposition of `derived.configurationMs`** (narrowing 1): settings/init evaluation,
+ * buildSrc/included builds, task-graph population, and configuration-cache store time fall outside
+ * these two hooks, and under parallel/isolated-projects configuration the per-project windows overlap
+ * wall-clock — so the list will not sum to `configurationMs`. Treat it as "project evaluation time
+ * (top-N)", a distinct signal for finding the guilty module, not a full breakdown.
+ */
+@Serializable
+data class ProjectEvaluation(
+    val path: String,
+    val evaluationMs: Long,
+)
 
 /**
  * Benchmark-run context (plan 030, spec §7): set when a gradle-profiler pipeline drives the pilot's
@@ -223,6 +250,8 @@ data class CapsSummary(
     val droppedArtifacts: Int = 0,
     /** Addon `extensions` entries dropped past the extensions byte budget (plan 039), largest-first. */
     val droppedExtensions: Int = 0,
+    /** `projectEvaluations` entries dropped past the per-payload cap (plan 052), fastest-first. */
+    val droppedProjectEvaluations: Int = 0,
 )
 
 /**

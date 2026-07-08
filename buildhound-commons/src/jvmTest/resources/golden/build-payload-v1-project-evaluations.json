@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "buildId": "d4e5f6a7-b8c9-4d0e-9f1a-2b3c4d5e6f7a",
+  "projectKey": "pilot-monorepo",
+  "startedAt": 1751600000000,
+  "finishedAt": 1751600012000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["build"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileDebugKotlin",
+      "module": ":app",
+      "startMs": 1751600004500,
+      "durationMs": 2500,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "projectEvaluations": [
+    { "path": ":app", "evaluationMs": 4200 },
+    { "path": ":core:network", "evaluationMs": 1800 },
+    { "path": ":core:common", "evaluationMs": 300 }
+  ]
+}

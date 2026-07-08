@@ -18,10 +18,11 @@ class PayloadCapperTest {
         benchmark: BenchmarkInfo? = null,
         artifacts: ArtifactSizes? = null,
         extensions: Map<String, JsonElement> = emptyMap(),
+        projectEvaluations: List<ProjectEvaluation>? = null,
     ) = BuildPayload(
         buildId = "b", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
         tags = tags, values = values, tasks = tasks, caps = caps, benchmark = benchmark, artifacts = artifacts,
-        extensions = extensions,
+        extensions = extensions, projectEvaluations = projectEvaluations,
     )
 
     @Test
@@ -85,6 +86,27 @@ class PayloadCapperTest {
         val input = payload(
             artifacts = ArtifactSizes(android = listOf(ArtifactSize("release", ":app", ArtifactType.APK, 8000))),
         )
+        assertSame(input, PayloadCapper.cap(input))
+    }
+
+    @Test
+    fun over_cap_project_evaluations_are_dropped_fastest_first_and_counted() {
+        // 5 evaluations, cap 3 → keep the 3 slowest, drop 2, recorded in the caps summary.
+        val evaluations = (1..5).map { ProjectEvaluation(path = ":m$it", evaluationMs = it.toLong()) }
+        val capped = PayloadCapper.cap(
+            payload(projectEvaluations = evaluations),
+            PayloadCaps(maxProjectEvaluations = 3),
+        )
+        val kept = capped.projectEvaluations ?: error("projectEvaluations must survive")
+        assertEquals(3, kept.size)
+        assertEquals(5L, kept.maxOf { it.evaluationMs })
+        assertEquals(3L, kept.minOf { it.evaluationMs }) // 5,4,3 kept
+        assertEquals(2, capped.caps?.droppedProjectEvaluations)
+    }
+
+    @Test
+    fun project_evaluations_under_the_cap_leave_the_payload_compliant() {
+        val input = payload(projectEvaluations = listOf(ProjectEvaluation(path = ":app", evaluationMs = 100)))
         assertSame(input, PayloadCapper.cap(input))
     }
 

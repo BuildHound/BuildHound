@@ -17,6 +17,8 @@ data class PayloadCaps(
     val maxReasonChars: Int = 500,
     val maxTasks: Int = 20_000,
     val maxArtifacts: Int = 200,
+    /** Top-N slowest-first `projectEvaluations` retained per payload (plan 052); a monorepo can exceed this. */
+    val maxProjectEvaluations: Int = 500,
     /** Total byte budget for all addon `extensions` entries (plan 039); largest dropped first. */
     val maxExtensionsBytes: Int = 256 * 1024,
     val maxPayloadBytes: Int = 20 * 1024 * 1024,
@@ -104,6 +106,20 @@ object PayloadCapper {
             }
         }
 
+        // Per-project configuration-time attribution (plan 052): the plugin already sorts slowest-first
+        // and caps at assembly, but a hostile/foreign ingest can POST an unbounded list — keep the N
+        // slowest (they carry the signal, same rationale as artifacts), drop + count the rest.
+        var droppedProjectEvaluations = 0
+        val cappedProjectEvaluations = payload.projectEvaluations?.let { list ->
+            if (list.size <= caps.maxProjectEvaluations) {
+                list
+            } else {
+                val kept = list.sortedByDescending { it.evaluationMs }.take(caps.maxProjectEvaluations)
+                droppedProjectEvaluations = list.size - kept.size
+                kept
+            }
+        }
+
         // Addon extensions (plan 039): opaque, addon-authored JSON that core does not scrub. It must
         // not balloon the payload, so bound the whole map to its own byte budget by dropping the
         // largest entries first (they carry the most abuse potential) until it fits. Runs on both the
@@ -133,7 +149,8 @@ object PayloadCapper {
         // idempotent: the summary block itself must not count toward the budget it records.
         var working = payload.copy(
             tags = tags.map, values = values.map, tasks = tasks,
-            benchmark = cappedBenchmark, artifacts = cappedArtifacts, extensions = cappedExtensions, caps = null,
+            benchmark = cappedBenchmark, artifacts = cappedArtifacts, extensions = cappedExtensions,
+            projectEvaluations = cappedProjectEvaluations, caps = null,
         )
 
         // Byte budget (spec §3.9 stages), only walked when the payload is actually oversized.
@@ -170,6 +187,7 @@ object PayloadCapper {
             droppedTaskOutcomes = droppedOutcomes,
             droppedArtifacts = droppedArtifacts,
             droppedExtensions = droppedExtensions,
+            droppedProjectEvaluations = droppedProjectEvaluations,
         )
 
         // Nothing countable to record and nothing was previously recorded → the input is compliant,
@@ -218,7 +236,8 @@ object PayloadCapper {
     private fun CapsSummary.isEmpty(): Boolean =
         droppedTags == 0 && droppedValues == 0 && truncatedValues == 0 &&
             droppedExecutionReasons == 0 && truncatedExecutionReasons == 0 && truncatedNonCacheableReasons == 0 &&
-            droppedTasks == 0 && droppedTaskOutcomes.isEmpty() && droppedArtifacts == 0 && droppedExtensions == 0
+            droppedTasks == 0 && droppedTaskOutcomes.isEmpty() && droppedArtifacts == 0 && droppedExtensions == 0 &&
+            droppedProjectEvaluations == 0
 
     private fun merge(existing: CapsSummary?, fresh: CapsSummary): CapsSummary {
         if (existing == null) return fresh
@@ -235,6 +254,7 @@ object PayloadCapper {
             droppedTaskOutcomes = outcomes,
             droppedArtifacts = existing.droppedArtifacts + fresh.droppedArtifacts,
             droppedExtensions = existing.droppedExtensions + fresh.droppedExtensions,
+            droppedProjectEvaluations = existing.droppedProjectEvaluations + fresh.droppedProjectEvaluations,
         )
     }
 }

@@ -249,6 +249,12 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // measuring tasks run at execution time; the Flow finalizer reads their output at build end.
         if (masterEnabled) {
             installAndroidArtifactCollector(settings.gradle, File(settings.rootDir, "build/buildhound/artifacts"))
+            // Per-project configuration-time attribution (plan 052): a per-project reaction wired the
+            // same way — beforeProject/afterProject are themselves the isolated-projects-safe hooks,
+            // deliberately NOT further gated on isolated projects (there is no cross-project state here
+            // to degrade). Under `.gradle` (not `build/`) so a same-invocation `clean` can't wipe it (the
+            // plan-044 rationale, same as the identity salt / test-location sidecar).
+            installProjectEvaluationCollector(settings.gradle, File(settings.rootDir, ".gradle/buildhound/config-timings"))
         }
 
         // End-of-build JVM process probe (plan 029). enabled is master AND the block toggle; the exec
@@ -400,3 +406,35 @@ private fun installAndroidArtifactCollector(gradle: org.gradle.api.invocation.Gr
             .onFailure { project.logger.info("[buildhound] android artifact collector unavailable: {}", it::class.java.simpleName) }
     }
 }
+
+/**
+ * Registers the per-project configuration-time collector (plan 052, research §F2): `beforeProject`
+ * marks the start via a project-scoped extra property — the only state the two `IsolatedAction`s can
+ * share, since each runs isolated and cannot see a plugin-captured mutable holder (narrowing 2) —
+ * and `afterProject` computes the elapsed time and overwrites this project's sidecar file under
+ * [timingsDir]. Deliberately a top-level function, like [installAndroidArtifactCollector], so both
+ * `IsolatedAction`s capture only [timingsDir] (a serializable `File`) — never the plugin instance.
+ *
+ * Not isolated-projects-gated: `beforeProject`/`afterProject` are themselves the sanctioned
+ * isolated-projects-safe hooks (unlike `taskGraph.allTasks`), and each project's timing is entirely
+ * self-contained — there is no cross-project state here that could need to degrade under IP.
+ */
+@Suppress("UnstableApiUsage")
+private fun installProjectEvaluationCollector(gradle: org.gradle.api.invocation.Gradle, timingsDir: File) {
+    gradle.lifecycle.beforeProject { project ->
+        runCatching { project.extensions.extraProperties.set(PROJECT_EVAL_START_KEY, System.nanoTime()) }
+            .onFailure { project.logger.info("[buildhound] project-evaluation timing start unavailable: {}", it::class.java.simpleName) }
+    }
+    gradle.lifecycle.afterProject { project ->
+        runCatching {
+            val extra = project.extensions.extraProperties
+            if (!extra.has(PROJECT_EVAL_START_KEY)) return@runCatching
+            val startNanos = extra.get(PROJECT_EVAL_START_KEY) as? Long ?: return@runCatching
+            val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000
+            ProjectEvalRecordIo.write(timingsDir, project.path, elapsedMs)
+        }.onFailure { project.logger.info("[buildhound] project-evaluation timing capture unavailable: {}", it::class.java.simpleName) }
+    }
+}
+
+/** Project-scoped `extraProperties` key correlating [installProjectEvaluationCollector]'s two hooks. */
+private const val PROJECT_EVAL_START_KEY = "dev.buildhound.projectEvalStartNanos"

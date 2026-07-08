@@ -10,6 +10,7 @@ import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.ExtensionContributionContext
 import dev.buildhound.commons.payload.FingerprintInfo
 import dev.buildhound.commons.payload.PayloadScrubber
+import dev.buildhound.commons.payload.ProjectEvaluation
 import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.report.ReportAssets
 import java.io.File
@@ -190,6 +191,17 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // measured, so report 0 rather than the (absent) marks. Otherwise the marked
             // duration, or null when unmeasurable (plan 016).
             val configurationMs = if (ccState == ConfigurationCacheState.HIT) 0L else execution.configurationMs
+            // Per-project configuration-time attribution (plan 052): beforeProject/afterProject write
+            // directly at configuration time, so on a CC hit configuration never ran this build and the
+            // sidecar holds only a prior build's entries — mirror the configurationMs HIT branch above
+            // and report null rather than misattributing stale data to this build. Read-then-clear runs
+            // only on a non-HIT completed build, so a narrower next invocation never inherits a wider
+            // build's leftover per-project files (the plan's stale-file-correctness risk).
+            val projectEvaluations = if (ccState == ConfigurationCacheState.HIT) {
+                null
+            } else {
+                parameters.rootDir.orNull?.let { readProjectEvaluations(File(it)) }
+            }
             // Build-level input fingerprints (plan 022). Per-task capture is deferred (see the
             // plan §8 divergence); the schema's `tasks` map stays reserved for it.
             val fingerprints = FingerprintInfo(build = parameters.fingerprints.orNull?.build.orEmpty())
@@ -305,6 +317,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 processes = parameters.processes.getOrElse(emptyList()),
                 benchmark = benchmark,
                 artifacts = artifacts,
+                projectEvaluations = projectEvaluations.orEmpty(),
                 extensions = extensions,
                 avoidedMs = avoidedMs,
                 dependencyEdges = dependencyEdges,
@@ -510,6 +523,16 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             .listFiles { file -> file.name.endsWith(".jsonl") } ?: return emptyList()
         return ArtifactRecordIo.parseAll(files.sortedBy { it.name }.map { it.readText() })
     }
+
+    /**
+     * Reads (then clears) the `beforeProject`/`afterProject` sidecar under
+     * `<root>/.gradle/buildhound/config-timings` (plan 052). Listing/reading is left to
+     * [ProjectEvalRecordIo.readAndClear] — a genuinely corrupt/locked directory propagates to this
+     * finalizer's outer `runCatching` (→ warn + marker), never a failed build; malformed per-project
+     * files are skipped defensively inside [ProjectEvalRecordIo].
+     */
+    private fun readProjectEvaluations(root: File): List<ProjectEvaluation> =
+        ProjectEvalRecordIo.readAndClear(File(root, ".gradle/buildhound/config-timings"))
 
     private fun writePayload(payload: BuildPayload, outputDir: String): File {
         val dir = File(outputDir).apply { mkdirs() }
