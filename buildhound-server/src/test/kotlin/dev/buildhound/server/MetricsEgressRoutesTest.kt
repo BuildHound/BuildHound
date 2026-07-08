@@ -6,6 +6,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import java.sql.SQLException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -118,5 +119,39 @@ class MetricsEgressRoutesTest {
         )
         val body = get(path = "/v1/metrics/prometheus?days=7").bodyAsText()
         assertFalse(body.contains("buildhound_build_duration_p50_seconds"), "a 40-day-old build is outside a 7-day window")
+    }
+
+    @Test
+    fun `days=0 clamps up to the 1-day floor, like the other rollups`() = testApplication {
+        val fx = fx(); appWith(fx)
+        val body = get(path = "/v1/metrics/prometheus?days=0").bodyAsText()
+        assertTrue(body.contains("buildhound_scrape_window_days{project=\"pilot\"} 1"), body)
+    }
+
+    @Test
+    fun `days=9999 clamps down to the 365-day ceiling, like the other rollups`() = testApplication {
+        val fx = fx(); appWith(fx)
+        val body = get(path = "/v1/metrics/prometheus?days=9999").bodyAsText()
+        assertTrue(body.contains("buildhound_scrape_window_days{project=\"pilot\"} 365"), body)
+    }
+
+    @Test
+    fun `a non-numeric days value falls back to the 30-day default, like the other rollups`() = testApplication {
+        val fx = fx(); appWith(fx)
+        val body = get(path = "/v1/metrics/prometheus?days=notanumber").bodyAsText()
+        assertTrue(body.contains("buildhound_scrape_window_days{project=\"pilot\"} 30"), body)
+    }
+
+    @Test
+    fun `a storage outage during the scrape is 503, never a bare 500`() = testApplication {
+        val tokens = InMemoryTokenStore()
+        tokens.ensureProjectWithToken("pilot", sha256Hex("metrics-token"), TokenScope.METRICS)
+        val throwingStore = object : BuildStore by InMemoryBuildStore() {
+            override fun metricsSnapshot(projectId: String, days: Int, nowMs: Long): MetricsSnapshot =
+                throw SQLException("storage down")
+        }
+        application { buildHoundModule(ServerStores(throwingStore, tokens), RateLimits(0, 0, 0)) }
+        val response = client.get("/v1/metrics/prometheus") { header("Authorization", "Bearer metrics-token") }
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
     }
 }

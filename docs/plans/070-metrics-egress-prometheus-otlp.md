@@ -137,6 +137,12 @@ story ("your Grafana dashboards keep working").
   consumer who (reasonably, given the type) tries to rate() it. `# TYPE ... gauge` is emitted for both;
   `deploy/grafana/buildhound-dashboard.json` and its README call this out and chart the raw values
   directly, with no `rate()`/`increase()` anywhere.
+- **Accepted limitation (review finding, no code change): `flakyTestCount`'s omit-when-zero can't tell
+  "0 flakes" apart from "no test data was ever reported" in the window** — `MetricsSnapshotCalculator`
+  omits the field whenever `flaky(...)` returns an empty list, whether that is because every test passed
+  cleanly or because the project never ingested a `tests` block at all; a `hasTestData` signal (e.g. a
+  windowed test-row count alongside the flaky count) is a possible future enhancement if this ambiguity
+  turns out to matter in practice.
 
 ## Exit criteria
 
