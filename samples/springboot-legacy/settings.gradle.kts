@@ -43,7 +43,7 @@ buildhound {
 rootProject.name = "springboot-legacy"
 
 // 50 modules with 2–3 levels of nesting and a real inter-module DAG
-// (apps -> services:<svc>:{api,domain,persistence,web} -> libs:*). Generated (plan 051).
+// (apps -> services:<svc>:{api,domain,persistence,web} -> libs:*). Generated (plan 073).
 // 6 libs + 10 services x 4 submodules + 4 Spring Boot apps.
 include(":libs:common")
 include(":libs:util")
