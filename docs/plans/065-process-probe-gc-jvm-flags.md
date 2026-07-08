@@ -166,4 +166,7 @@ genuinely widen.
   prior-snapshot parameter; no store lookup for "the prior same-pid build" exists yet (this plan
   adds no store method), so the `/diagnosis` call site passes no prior and production cards use the
   always-on lifetime fraction — exactly the plan's "primary input"; the delta channel is ready for
-  a follow-up that wires a prior-build fetch.
+  a follow-up that wires a prior-build fetch. When that follow-up lands, the prior-snapshot store
+  lookup must be scoped by **both** tenant and `hostnameHash` — `pid` is only unique within one
+  host (spec §3.6), so an unscoped lookup could correlate two different tenants' builds on the same
+  CI runner by a coincidentally-reused PID.

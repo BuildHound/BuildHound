@@ -100,12 +100,19 @@ if (!hasText(byId["tests-degraded-note"], ":app</script><script>evil()//:test"))
 
 // Daemon-tuning candidates (plan 065): the pinned Kotlin daemon (1900/2048 ≈ 93 %) fires the
 // advisory card naming kotlin.daemon.jvmargs; the calm G1 Gradle daemon (0.4 % lifetime GC)
-// fires neither the GC-pressure card nor the ParallelGC trial suggestion.
+// fires neither the GC-pressure card nor the ParallelGC trial suggestion (org.gradle.jvmargs
+// never appears — it has no rssMb, so it can't trip compact-headers either).
 const tuning = byId["tuning-candidates"];
 if (!tuning || tuning.hidden) throw new Error("tuning-candidates block stayed hidden with a pinned Kotlin daemon");
 if (!hasText(tuning, "kotlin.daemon.jvmargs")) throw new Error("pinned-Xmx card must name kotlin.daemon.jvmargs");
 if (hasText(tuning, "org.gradle.jvmargs")) throw new Error("no GC-pressure card may fire for the calm Gradle daemon");
-if (hasText(tuning, "ParallelGC")) throw new Error("no ParallelGC trial may fire below the GC threshold");
+
+// A second, high-GC-fraction G1 Kotlin daemon on JDK 24 (plan-065 review fix) trips the
+// previously CI-unverified GC-pressure, ParallelGC-trial, and compact-object-headers cards in
+// one row; each assertion pins the interpolated ROLE_LABELS role label too.
+if (!hasText(tuning, "Investigate high GC time (20 % of Kotlin daemon JVM time)")) throw new Error("GC-pressure candidate missing for the high-GC Kotlin daemon");
+if (!hasText(tuning, "The Kotlin daemon runs G1 with high GC time — a ParallelGC trial")) throw new Error("ParallelGC-trial candidate missing for the high-GC Kotlin daemon");
+if (!hasText(tuning, "The Kotlin daemon uses 3072 MB RSS on JDK 24 without compact object headers")) throw new Error("compact-object-headers candidate missing for the high-GC Kotlin daemon");
 
 // JVM artifacts (plan 072): the bootJar/jar sizes render as a table, largest first. The section must
 // unhide, and its rows (kept in the table's tbody stub) carry the kind + a human-readable size
