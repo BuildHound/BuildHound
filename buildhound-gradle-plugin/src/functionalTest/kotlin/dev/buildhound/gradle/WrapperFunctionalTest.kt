@@ -175,6 +175,27 @@ class WrapperFunctionalTest {
     }
 
     @Test
+    fun `a CUSTOM distributionUrl reports the variant but never guesses at a dist probe`() {
+        setUpSimpleProject()
+        writeWrapperFiles(
+            distributionUrl = "https\\://artifacts.example.internal/mirror/gradle-8.14.zip",
+            pinned = true,
+        )
+
+        val result = runner("hello").build()
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome, result.output)
+
+        val wrapper = readPayload().wrapper ?: error("expected a wrapper block")
+        assertEquals(WrapperDistributionType.CUSTOM, wrapper.distributionVariant)
+        assertEquals(true, wrapper.distributionSha256Pinned)
+        // WrapperParsing.distDirName returns null for CUSTOM (the real unpack directory name
+        // derives from the discarded raw URL, spec §3.7) — obtain() short-circuits the GUH dist
+        // probe entirely rather than guessing at a private mirror's unpack layout, so guhWarmth is
+        // honestly UNKNOWN, exactly like the no-dist-at-all case.
+        assertEquals(GuhWarmth.UNKNOWN, wrapper.guhWarmth)
+    }
+
+    @Test
     fun `no wrapper files at all leaves the whole block uncaptured`() {
         setUpSimpleProject()
 

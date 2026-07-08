@@ -46,8 +46,10 @@ data class CollectedWrapper(
  * Pure parsing/hashing/probing helpers (plan 066), factored out of [WrapperValueSource] so they
  * unit-test directly over temp files/dirs, without needing Gradle's `ValueSource` decoration
  * (mirrors [dev.buildhound.gradle] pure-helper precedents like `VcsParsing`/`GradlePropertyProvenance`).
- * Every function is total: a missing/unreadable file degrades to `null`, never a throw — the
- * `runCatching` guards live in the caller ([WrapperValueSource.obtain]), one per probe.
+ * A missing/unreadable file degrades to `null` in every function here — but that's a best-effort
+ * design intent, not a hard guarantee for [loadProperties] specifically (`Properties.load` can
+ * itself throw on malformed input; see its own KDoc) — the net-safe contract for the whole probe is
+ * the `runCatching` guard in the caller ([WrapperValueSource.obtain]), one per probe.
  */
 internal object WrapperParsing {
 
@@ -58,7 +60,12 @@ internal object WrapperParsing {
         else -> WrapperDistributionType.CUSTOM
     }
 
-    /** Loads `gradle-wrapper.properties`; null when the file is missing (never throws itself). */
+    /**
+     * Loads `gradle-wrapper.properties`; null when the file is missing. Not itself a total
+     * function — `Properties.load` can throw on a malformed `\u` escape in a hand-edited file — the
+     * net-safe guarantee comes from the caller ([WrapperValueSource.obtain]'s `guarded("wrapper-properties")`
+     * wrapper), not from a try/catch in here.
+     */
     fun loadProperties(file: File): Properties? {
         if (!file.isFile) return null
         val props = Properties()
@@ -66,8 +73,14 @@ internal object WrapperParsing {
         return props
     }
 
-    /** `distributionSha256Sum=` present → pinned; null [properties] (unreadable file) → null (unknown). */
-    fun isPinned(properties: Properties?): Boolean? = properties?.let { it.getProperty("distributionSha256Sum") != null }
+    /**
+     * `distributionSha256Sum=` present with a **non-empty** value → pinned; an empty value
+     * (`distributionSha256Sum=`) counts as unpinned, matching the CI-side wrapper-integrity step's
+     * pinning-presence grep (plan 066 infra review, 529c0f0). null [properties] (unreadable file)
+     * → null (unknown).
+     */
+    fun isPinned(properties: Properties?): Boolean? =
+        properties?.let { !it.getProperty("distributionSha256Sum").isNullOrEmpty() }
 
     fun distributionUrl(properties: Properties?): String? = properties?.getProperty("distributionUrl")
 

@@ -120,11 +120,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         val processes: ListProperty<CollectedProcess>
 
         /**
-         * Declared build-structure inventory (plan 069, research F19); optional/absent when
-         * uncaptured (master switch off at apply time, or a guarded walk/probe failure).
+         * Declared build-structure inventory (plan 069, research F19). Always set, like
+         * [environment]/[invocation]: [BuildStructureValueSource.obtain] returns an empty (not
+         * absent) [CollectedBuildStructure] when disabled or uncaptured (master switch off at apply
+         * time, or a guarded walk/probe failure), so this is never actually optional.
          */
         @get:Input
-        @get:Optional
         val buildStructure: Property<CollectedBuildStructure>
 
         /**
@@ -136,11 +137,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         val isolatedProjectsActive: Property<Boolean>
 
         /**
-         * Wrapper & startup-phase telemetry (plan 066, research F16); optional/absent when uncaptured
-         * (master switch off at apply time, or every probe degraded).
+         * Wrapper & startup-phase telemetry (plan 066, research F16). Always set, like
+         * [environment]/[invocation]: [WrapperValueSource.obtain] returns an empty (not absent)
+         * [CollectedWrapper] when disabled or every probe degraded, so this is never actually
+         * optional.
          */
         @get:Input
-        @get:Optional
         val wrapper: Property<CollectedWrapper>
 
         @get:Input

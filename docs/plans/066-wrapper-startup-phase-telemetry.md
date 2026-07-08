@@ -163,7 +163,12 @@ underspecified:
   signal the finding calls for" exit criterion above). Green tests didn't catch it because the unit
   tests fed hand-picked mtimes chosen to satisfy the inequality, and every functional test only ever
   reached `UNKNOWN` (TestKit never populates the GUH dist under an explicit `-g`), so nothing
-  exercised a genuine end-to-end COLD/WARM decision.
+  exercised a genuine end-to-end COLD/WARM decision. `WrapperFunctionalTest` now fabricates a real
+  GUH dist dir to close that gap with two end-to-end cases — but only the `COLD` case actually
+  *discriminates* the fix from the broken formula (the old inequality could never reach `COLD`, so
+  a passing `COLD` assertion is proof the anchor changed); the `WARM` case is regression coverage,
+  not proof of the fix, since the old formula's `else` branch also always resolved to `WARM` for
+  that same fabricated-old-mtime input.
 
   The fix: `classify(distMtimeMs, distPresent, jvmStartMs)` compares the dist's mtime against
   `ManagementFactory.getRuntimeMXBean().startTime` for *this daemon's own JVM* (captured in
