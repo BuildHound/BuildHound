@@ -58,6 +58,13 @@ data class TaskRow(
     val buildWallMs: Long,
     /** Cacheability flag (plan 016); null on pre-016 payloads → cache-miss hotspots degrade (plan 032). */
     val cacheable: Boolean? = null,
+    /**
+     * Raw Gradle `executionReasons` (plan 061, research F11); empty on pre-V12 rows (the column read
+     * back NULL) and on any task the payload never carried reasons for. [RerunCauseRollupCalculator]
+     * is the only consumer today — an empty list here degrades to the `UNCLASSIFIED` bucket, never a
+     * crash or a silently-dropped task.
+     */
+    val executionReasons: List<String> = emptyList(),
 )
 
 /**

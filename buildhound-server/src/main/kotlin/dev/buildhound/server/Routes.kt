@@ -508,6 +508,16 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             call.respondQuery { store.toolchainAdoption(project.id, days, System.currentTimeMillis()) }
         }
 
+        // Rerun-cause taxonomy (plan 061, research F11): per-bucket coverage of executed task-hours
+        // (overlapping — see RerunCauseBucketRow), a build-level cascade rate, and an optional
+        // build-logic-invalidation-storm candidate. Read-scope, tenant-scoped, days clamped like
+        // /trends; benchmark builds excluded (the bottlenecks/toolchain fleet-view convention).
+        get("/rollups/rerun-causes") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.rerunCauses(project.id, days, System.currentTimeMillis()) }
+        }
+
         // Flaky-test detection (plan 036, spec §5): two-signal per-(module, class) records over the
         // window, ranked by flake rate. Read-scope, tenant-scoped, days clamped like /trends.
         get("/flaky") {

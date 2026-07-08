@@ -289,6 +289,15 @@ interface BuildStore {
      */
     fun tagKeys(projectId: String, days: Int, nowMs: Long): List<TagKeySummary>
 
+    /**
+     * Rerun-cause taxonomy over `executionReasons` (plan 061, research F11): per-bucket coverage of
+     * executed task-hours + a build-level cascade rate + an optional build-logic-storm candidate over
+     * the last [days]. Benchmark builds excluded (the `bottlenecks`/`toolchainAdoption` fleet-view
+     * convention) — both stores fetch the same windowed [TaskRow]s and defer to
+     * [RerunCauseRollupCalculator], so in-memory and Postgres agree byte-for-byte.
+     */
+    fun rerunCauses(projectId: String, days: Int, nowMs: Long): RerunCauseRollup
+
     /** Every project id with stored data (retention sweep, plan 042); default empty for a store that has none. */
     fun allProjectIds(): List<String> = emptyList()
 
@@ -631,6 +640,15 @@ class InMemoryBuildStore : BuildStore {
         )
     }
 
+    override fun rerunCauses(projectId: String, days: Int, nowMs: Long): RerunCauseRollup {
+        // Same half-open [cutoff, now) window + benchmark exclusion as bottlenecks/toolchainAdoption
+        // (payloadsBetween), NOT the projectCost/taskDuration/negativeAvoidance convention
+        // (taskRowsInWindow, which does not exclude benchmark) — a rerun-cause signal is about
+        // real-build rework, so repeated same-scenario benchmark reruns must not skew the fleet share.
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+        return RerunCauseRollupCalculator.compute(windowed.flatMap { taskRowsOf(it) })
+    }
+
     override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> {
         val cutoff = nowMs - days.toLong() * 86_400_000
         val rows = builds.entries
@@ -726,6 +744,7 @@ class InMemoryBuildStore : BuildStore {
                 durationMs = task.durationMs,
                 buildWallMs = wall,
                 cacheable = task.cacheable,
+                executionReasons = task.executionReasons,
             )
         }
     }
