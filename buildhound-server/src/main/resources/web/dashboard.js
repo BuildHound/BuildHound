@@ -1272,6 +1272,23 @@
         return box;
     }
 
+    // Warning taxonomy (plan 060): a fixed server enum (ALWAYS_RUN|NON_INCREMENTAL_AP|
+    // DYNAMIC_DEBUG_VALUES) mapped to allowlisted CSS classes — mirrors FLAKY_SIGNAL_CLASS below.
+    // Copy is modeled on the official Build Analyzer / profile-your-build wording, phrased as
+    // candidates ("likely/investigate"), never a confirmed diagnosis.
+    const CATEGORY_LABEL = {
+        ALWAYS_RUN: "Always runs",
+        NON_INCREMENTAL_AP: "Non-incremental annotation processing",
+        DYNAMIC_DEBUG_VALUES: "Dynamic debug values",
+    };
+    const CATEGORY_COPY = {
+        ALWAYS_RUN: "Likely runs on every build (no declared outputs, or upToDateWhen is always false) — investigate whether it can declare outputs or a real up-to-date check.",
+        NON_INCREMENTAL_AP: "Likely a non-incremental annotation processor or Java-compile step (can't name the specific processor) — investigate incremental annotation-processing support.",
+        DYNAMIC_DEBUG_VALUES: "Never gets a cache hit — likely a dynamic debug value (e.g. a timestamp in buildConfigField/resValue) — investigate whether the value needs to change every build.",
+    };
+    const CATEGORY_CLASS = { ALWAYS_RUN: "warn-always-run", NON_INCREMENTAL_AP: "warn-non-incremental-ap", DYNAMIC_DEBUG_VALUES: "warn-dynamic-debug" };
+    const warningCategoryClass = category => CATEGORY_CLASS[category] || "";
+
     function rankedTable(columns, rows, cellsOf) {
         const table = el("table");
         const head = el("tr");
@@ -1297,9 +1314,12 @@
         const seq = ++renderSeq;
         const p = period || 7;
         const b = await api("/v1/rollups/bottlenecks?period=" + p);
-        // Toolchain is best-effort: its failure must not blank the whole landing page.
+        // Toolchain and Warnings are both best-effort: a failure omits the section rather than
+        // blanking the whole landing page (the same artifact-panel pattern).
         let toolchain = null;
         try { toolchain = await api("/v1/rollups/toolchain?days=30"); } catch (e) { /* omit the section */ }
+        let warnings = null;
+        try { warnings = await api("/v1/rollups/warnings?period=" + p); } catch (e) { /* omit the section */ }
         if (seq !== renderSeq) return;
 
         app.textContent = "";
@@ -1380,6 +1400,36 @@
         } else {
             app.append(rankedTable(["Task", "Executed time", "Misses"], b.cacheMissHotspots, r =>
                 [keyCell(r), el("td", ms(r.currentMs), "num"), el("td", r.count, "num")]));
+        }
+
+        // Build-Analyzer-style warning taxonomy (plan 060, research F10): rule-based candidates, each
+        // carrying its own evidence — never a confirmed fix, framed as "likely/investigate" throughout.
+        // Category is a fixed server enum mapped to an allowlisted CSS class (plan 012 discipline),
+        // same convention as the flaky-signal badge above.
+        app.append(el("h2", "Warnings — candidates to investigate"));
+        if (!warnings) {
+            app.append(el("p", "Warnings data unavailable.", "muted"));
+        } else if (!warnings.warnings.length) {
+            app.append(el("p", "No warning candidates in this window.", "muted"));
+        } else {
+            if (!warnings.typeDataAvailable) {
+                app.append(el("p", "Task types not collected — classification is name-only (isolated projects).", "notice-warn"));
+            }
+            app.append(rankedTable(["Category", "Task", "Share", "Time", "Likely cause", "Evidence"], warnings.warnings, w => {
+                const catCell = el("td");
+                catCell.append(el("span", CATEGORY_LABEL[w.category] || w.category, "badge " + warningCategoryClass(w.category)));
+                const evidenceCell = el("td");
+                evidenceCell.append(el("span", w.buildsAffected + "/" + w.buildsObserved + " builds"));
+                if (w.evidenceReason) evidenceCell.append(el("div", w.evidenceReason, "muted"));
+                return [
+                    catCell,
+                    keyCell(w),
+                    el("td", pctFmt(w.share), "num"),
+                    el("td", ms(w.totalMs), "num"),
+                    el("td", CATEGORY_COPY[w.category] || "", "muted"),
+                    evidenceCell,
+                ];
+            }));
         }
 
         app.append(el("h2", "Toolchain adoption — last 30 days"));

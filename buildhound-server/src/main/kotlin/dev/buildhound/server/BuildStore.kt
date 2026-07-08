@@ -307,6 +307,21 @@ interface BuildStore {
      */
     fun rerunCauses(projectId: String, days: Int, nowMs: Long): RerunCauseRollup
 
+    /**
+     * Build-Analyzer-style warning taxonomy (plan 060, research F10): three rule-based candidate
+     * families (ALWAYS_RUN / NON_INCREMENTAL_AP / DYNAMIC_DEBUG_VALUES) over the last [period] days.
+     * Read straight from the payload jsonb (`builds.payload->'tasks'`), never `task_executions` — that
+     * table has no `incremental` column, and even for `executionReasons` (which it does carry, as of
+     * V12) a fresh column is NULL for every build ingested before the column existed, while the jsonb
+     * payload has carried both fields since schema v1. No migration (deliberately dodges the
+     * plan-032-documented unpinned-`V{n}` Flyway race). Benchmark builds excluded (the
+     * `bottlenecks`/`toolchainAdoption`/`rerunCauses` fleet-view convention) — both stores fetch the
+     * same windowed [TaskRow]s (Postgres via its own `jsonb_array_elements` scan, kept separate from
+     * [rerunCauses]'s indexed-table scan so `/rollups/bottlenecks` stays fast) and defer to
+     * [WarningCalculator], so in-memory and Postgres agree byte-for-byte.
+     */
+    fun warnings(projectId: String, period: Int, nowMs: Long): WarningsRollup
+
     /** Every project id with stored data (retention sweep, plan 042); default empty for a store that has none. */
     fun allProjectIds(): List<String> = emptyList()
 
@@ -661,6 +676,14 @@ class InMemoryBuildStore : BuildStore {
         return RerunCauseRollupCalculator.compute(windowed.flatMap { taskRowsOf(it) })
     }
 
+    override fun warnings(projectId: String, period: Int, nowMs: Long): WarningsRollup {
+        // Same half-open [cutoff, now) fleet-view window + benchmark exclusion as bottlenecks/
+        // toolchainAdoption/rerunCauses (payloadsBetween) — a warning candidate is about real-build
+        // behavior, so repeated same-scenario benchmark reruns must not skew the fleet share.
+        val windowed = payloadsBetween(projectId, nowMs - period.toLong() * 86_400_000, nowMs)
+        return WarningCalculator.compute(windowed.flatMap { taskRowsOf(it) }, period)
+    }
+
     override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> {
         val cutoff = nowMs - days.toLong() * 86_400_000
         val rows = builds.entries
@@ -757,6 +780,7 @@ class InMemoryBuildStore : BuildStore {
                 buildWallMs = wall,
                 cacheable = task.cacheable,
                 executionReasons = task.executionReasons,
+                incremental = task.incremental,
             )
         }
     }

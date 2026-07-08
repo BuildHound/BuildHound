@@ -224,6 +224,19 @@ paths:
         "200": { description: Per-bucket coverage of executed task-hours (overlapping), a build-level cascade rate, and an optional build-logic-storm candidate. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/warnings:
+    get:
+      summary: Build-Analyzer-style warning taxonomy rollup (plan 060, research F10).
+      description: >
+        Three rule-based candidate families (ALWAYS_RUN / NON_INCREMENTAL_AP / DYNAMIC_DEBUG_VALUES)
+        read straight from the payload jsonb — no `task_executions` column, no migration. Every row is
+        a ranked candidate with its evidence share, never a confirmed fix.
+      parameters:
+        - { name: period, in: query, schema: { type: integer, default: 7, minimum: 1, maximum: 90 } }
+      responses:
+        "200": { description: Ranked warning candidates for the window. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
   /v1/settings:
     get:
       summary: Read this project's regression settings (plan 025).

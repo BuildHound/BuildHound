@@ -196,3 +196,37 @@ scale — which is why warnings get their **own** route, keeping `/rollups/bottl
   change, no migration; server DTO round-trip pinned. Clean-context code and security/privacy reviews
   completed with findings addressed.
 - `./gradlew build` green.
+
+## Implementation notes (divergences from the design above)
+
+This plan was drafted before plan 061 (rerun-cause taxonomy) landed on this branch. Implementation
+composed with that landed reality rather than the plan's original wording in a few places:
+
+- **No separate `WarningTaskRow`.** The plan's `WarningTaskRow = TaskRow + incremental + executionReasons`
+  assumed `TaskRow` carried neither. Plan 061 already added `executionReasons: List<String>` to the
+  shared `TaskRow` (`Rollups.kt`); this plan adds only the one missing field, `incremental: Boolean =
+  false`, directly to `TaskRow` — matching the established convention (`cacheable`/`executionReasons`
+  were each added the same way) rather than introducing a parallel row type every other rollup would
+  need to ignore.
+- **`WarningCalculator.compute` takes no `builds: List<BuildKpiRow>` parameter.** `BuildKpiRow`
+  (`Bottlenecks.kt`) carries no `buildId`, so it cannot be joined back to a specific build for the
+  per-build clean-rebuild judgment `NON_INCREMENTAL_AP` needs. The clean-build set is instead computed
+  entirely from the calculator's own `TaskRow` input (`cacheable`/`outcome`, the same denominator the
+  2026-07-03 `cacheableHitRate` decision-log entry pins) — self-contained, and avoids threading a
+  `buildId` through a DTO three other rollups already share.
+- **Clean-build "≈0" is implemented as exactly 0.** A build's avoided share (over its own
+  cache-relevant tasks) must be precisely zero to be excluded; a build with no cache-relevant data at
+  all is *not* excluded (can't be judged either way, never silently drops evidence).
+- **Concrete thresholds** (not specified to this precision by the plan): `MIN_BUILDS = 3`;
+  `ALWAYS_RUN`/`NON_INCREMENTAL_AP` fire at share `>= 0.9` ("~100%" per the plan wording, tolerating
+  fleet noise); `DYNAMIC_DEBUG_VALUES` fires only at share `== 1.0` (the plan's "never" is absolute,
+  not "~never"). These are a starting calibration, not re-derived from any external source — a future
+  tuning pass should treat them as adjustable.
+- **AGP FQCN corroboration is a shared-prefix check** (`type.startsWith("com.android.build.")` plus
+  `"Manifest"`/`"BuildConfig"` in the type string), not a pinned exact class name — this repo has no
+  bundled AGP jar to verify an exact internal task-type FQCN against (unlike `RerunCauseClassifier`'s
+  Gradle-jar-verified strings). Flagged in `Warnings.kt`'s KDoc as an honestly-hedged heuristic.
+- **`evidenceReason` uses `matchedReasons.minOrNull()`, not "first matched".** Both stores can feed
+  builds in a different order (in-memory `ConcurrentHashMap` iteration; Postgres's unordered jsonb
+  scan), so a "first seen" pick would be the exact order-dependent-parity bug plan 057 already fixed
+  once (`5582898`, `avgHitRate`) for a different rollup.

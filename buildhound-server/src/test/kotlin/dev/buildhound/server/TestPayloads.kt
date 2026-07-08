@@ -87,6 +87,7 @@ object TestPayloads {
         startMs: Long = 0,
         cacheable: Boolean? = null,
         executionReasons: List<String> = emptyList(),
+        incremental: Boolean = false,
     ): TaskExecution = TaskExecution(
         path = path,
         module = path.substringBeforeLast(':').ifEmpty { ":" },
@@ -96,5 +97,6 @@ object TestPayloads {
         outcome = outcome,
         cacheable = cacheable,
         executionReasons = executionReasons,
+        incremental = incremental,
     )
 }

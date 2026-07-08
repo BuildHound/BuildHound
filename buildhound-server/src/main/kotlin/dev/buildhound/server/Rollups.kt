@@ -130,6 +130,15 @@ data class TaskRow(
      * crash or a silently-dropped task.
      */
     val executionReasons: List<String> = emptyList(),
+    /**
+     * Tooling `TaskExecutionResult.isIncremental` (plan 060, research F10); defaults `false` — the
+     * same default [dev.buildhound.commons.payload.TaskExecution.incremental] itself carries, so a
+     * pre-this-field row (there isn't one; the payload field predates this server-side row addition)
+     * or a `taskRowsInDaysWindow`/`taskRowsBetween` fetch that never sets it (task_executions has no
+     * `incremental` column) degrades to "not incremental" rather than crashing. [WarningCalculator] is
+     * the only consumer today.
+     */
+    val incremental: Boolean = false,
 )
 
 /**
