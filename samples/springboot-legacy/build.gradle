@@ -1,0 +1,73 @@
+// ============================================================================================
+// DELIBERATELY SUB-OPTIMAL root build. This is an anthology of common Gradle anti-patterns, kept
+// here so BuildHound has a build whose telemetry looks "bad" (long configuration phase, no cache,
+// no parallelism). Do NOT use this as a template — see docs/architecture.md for the good defaults.
+// ============================================================================================
+
+buildscript {
+    repositories {
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    dependencies {
+        // Legacy style: plugins pulled onto the buildscript classpath and applied imperatively with
+        // `apply plugin:` in the modules, instead of the modern `plugins {}` DSL + version catalog.
+        classpath 'org.springframework.boot:spring-boot-gradle-plugin:3.5.16'
+        classpath 'io.spring.gradle:dependency-management-plugin:1.1.7'
+    }
+}
+
+// Sub-optimal: configure every module from the root. Cross-project configuration couples all 50
+// modules to the root build, inflates the configuration phase, and is incompatible with the
+// configuration cache and isolated projects.
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'io.spring.dependency-management'
+
+    // Nested modules reuse leaf names (api/domain/persistence/web across 10 services). With a single
+    // shared group + version those collapse to ONE module identity, and Gradle's conflict resolution
+    // then silently drops all-but-one of them from a consumer's classpath (e.g. an app depending on
+    // several :services:*:web modules gets only one). Qualify the group with the parent path so each
+    // module's coordinates stay unique.
+    def segments = project.path.substring(1).split(':')
+    def parentSegments = segments.length > 1 ? segments[0..<segments.length - 1] : []
+    group = (['dev.buildhound.sample'] + parentSegments).join('.')
+    version = '1.0.0'
+
+    // Same repeated-leaf-name hazard at packaging time: every :services:*:web produces a jar named
+    // web-1.0.0.jar, so an app's bootJar hits "duplicate entry BOOT-INF/lib/web-1.0.0.jar". Give each
+    // module a path-qualified archive name so the filenames are unique too (NOT duplicatesStrategy,
+    // which would silently drop one of the jars and its classes at runtime).
+    base {
+        archivesName = project.path.substring(1).replace(':', '-')
+    }
+
+    // Anti-pattern: per-project repositories (settings.gradle.kts keeps repositoriesMode relaxed so
+    // these are allowed). Repeated in every module instead of centralised once in settings.
+    repositories {
+        mavenCentral()
+    }
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(21)
+        }
+    }
+
+    dependencyManagement {
+        imports {
+            mavenBom org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES
+        }
+    }
+
+    // Hardcoded, repeated versions (no version catalog / platform module). Every module gets slf4j
+    // whether it needs it or not — another "apply everything everywhere" smell.
+    dependencies {
+        implementation 'org.slf4j:slf4j-api:2.0.13'
+        testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    }
+
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform()
+    }
+}

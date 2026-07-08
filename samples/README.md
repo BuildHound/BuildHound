@@ -6,6 +6,8 @@ exercise the **plugin** and the **ingest server** end-to-end without publishing 
 | Sample | What it is | Why it's here |
 |---|---|---|
 | [`nowinandroid/`](nowinandroid/) | A checkout of Google's [Now in Android](https://github.com/android/nowinandroid) app — a large, multi-module Android build | A realistic build (many modules, tasks, tests, caching) to see the plugin's telemetry and overhead on something non-trivial |
+| [`springboot-legacy/`](springboot-legacy/) | A synthetic **50-module** Spring Boot build (6 libs + 10 services × 4 submodules + 4 apps) with a **deliberately sub-optimal** Gradle configuration | Exercises the plugin against a big, badly-configured build: configuration cache / build cache / parallelism all **off**, cross-project `subprojects {}` config, per-project repositories, hardcoded versions. The telemetry looks "bad" on purpose (`cc=DISABLED`, `hitRate=0.00`, serial task graph) |
+| [`android-legacy-agp/`](android-legacy-agp/) | A ~10-module Android build (`app → feature:* → core:* → library:*`) pinned to an **older AGP (8.5.2)** on Gradle 8.14.5 | Confirms the plugin applies cleanly on the bottom of its supported window (Gradle 8.14+) and surfaces an older toolchain; the AGP-8.5-on-Gradle-8.14 combination emits the expected "deprecated features / incompatible with Gradle 9" warning |
 
 The sample applies BuildHound as an **included build** — no published artifact, no `mavenLocal`.
 Its [`settings.gradle.kts`](nowinandroid/settings.gradle.kts) does:
@@ -105,6 +107,55 @@ BUILDHOUND_TOKEN=some-other-token ./gradlew :core:common:assemble
 Edit the plugin (`buildhound-gradle-plugin/`) or `buildhound-commons/`, re-run the sample build,
 and the change is compiled and applied automatically — no republish. Watch the server logs and
 dashboard to confirm the payload changed as you expect.
+
+## The other two samples
+
+`springboot-legacy/` and `android-legacy-agp/` use the **identical** BuildHound wiring as
+`nowinandroid` — `includeBuild("../..")` in their `settings.gradle.kts`, the same `buildhound {}`
+block, the same `http://localhost:8080` server and `buildhound-local-dev-token`. So the server setup
+in step 1 above and the credentials below apply unchanged; only the build command differs. Each has
+its own Gradle wrapper (a different Gradle version on purpose — see below).
+
+> **JDK 21+** is required for all three (the plugin's floor). Both samples' `settings.gradle.kts`
+> assert it and fail fast otherwise. If your default JDK cannot provision the plugin's build
+> toolchain (JDK 26 via foojay), set `buildhound.toolchain=21` in your user `gradle.properties` or
+> pass `-Pbuildhound.toolchain=21`.
+
+### `springboot-legacy/` — a big, deliberately mis-configured build
+
+A 50-module Spring Boot build (Gradle 9.6.1, Spring Boot 3.5.16) whose Gradle configuration is an
+anthology of **anti-patterns**, kept here so the plugin has a build whose telemetry looks *bad*:
+configuration cache / build cache / parallelism all off, a cross-project root `subprojects {}` block,
+per-project repositories, and hardcoded, repeated dependency versions (all documented inline, with a
+"do not copy this" warning). No Android SDK is needed.
+
+```bash
+cd samples/springboot-legacy
+./gradlew build            # ~50 modules compile serially; 4 apps produce bootJars
+```
+
+The resulting report/payload show the tell-tale signals: `cc=DISABLED`, `hitRate=0.00`, and a serial
+task graph (low parallel utilisation) — exactly the "what's slow / what's wrong" picture BuildHound
+is meant to surface. **Do not** use this project's Gradle config as a template.
+
+### `android-legacy-agp/` — an older Android toolchain
+
+A ~10-module Android build (`app → feature:* → core:* → library:*`) pinned to **AGP 8.5.2 on Gradle
+8.14.5** — the bottom of the plugin's supported window. The Gradle config here is deliberately
+*good* (parallel + caching + configuration cache on); the only "legacy" signal is the toolchain.
+
+```bash
+cd samples/android-legacy-agp
+./gradlew :app:assembleDebug     # builds the whole DAG + a debug APK
+```
+
+- **Android SDK required** (like `nowinandroid`): point Gradle at an SDK via `ANDROID_HOME` /
+  `ANDROID_SDK_ROOT` or a git-ignored `samples/android-legacy-agp/local.properties` with
+  `sdk.dir=/path/to/Android/sdk`. Without an SDK, AGP cannot even configure.
+- **Expected warning:** AGP 8.5 uses APIs deprecated in Gradle 8.14 ("Deprecated Gradle features were
+  used in this build, making it incompatible with Gradle 9.0"). This is intentional — it is why the
+  sample stays on Gradle 8.14.x (AGP 8.5 does not run on Gradle 9), and it is useful demo fodder for
+  BuildHound's deprecation/warnings surfacing.
 
 ## Local development credentials
 

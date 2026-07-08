@@ -1,0 +1,6 @@
+.gradle/
+build/
+# Machine-specific Android SDK location (see samples/README.md prerequisites).
+local.properties
+*.iml
+.idea/
