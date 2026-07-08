@@ -284,8 +284,11 @@ class PayloadAssemblerTest {
         val processes = listOf(
             CollectedProcess(
                 role = dev.buildhound.commons.payload.ProcessRole.GRADLE_DAEMON,
+                pid = 41214,
                 heapUsedMb = 1462, heapCommittedMb = 2048, heapMaxMb = 4096,
                 configuredXmxMb = 4096, gcTimeMs = 3120, rssMb = 2711, uptimeS = 812,
+                gcCollector = dev.buildhound.commons.payload.GcCollector.G1,
+                compactObjectHeaders = false,
             ),
             CollectedProcess(role = dev.buildhound.commons.payload.ProcessRole.KOTLIN_DAEMON, heapUsedMb = 640),
         )
@@ -295,16 +298,49 @@ class PayloadAssemblerTest {
         assertEquals(1462, daemon.heapUsedMb)
         assertEquals(4096, daemon.configuredXmxMb)
         assertEquals(3120, daemon.gcTimeMs)
+        // Plan 065: pid + the typed-allowlist tuning flags survive assembly + scrubbing unchanged
+        // (discrete int/enum/bool — the scrubber has nothing free-form to touch here).
+        assertEquals(41214, daemon.pid)
+        assertEquals(dev.buildhound.commons.payload.GcCollector.G1, daemon.gcCollector)
+        assertEquals(false, daemon.compactObjectHeaders)
         // A field-sparse process (only a role + used) round-trips with the rest null, not dropped.
         val kotlinDaemon = payload.processes.first { it.role == dev.buildhound.commons.payload.ProcessRole.KOTLIN_DAEMON }
         assertEquals(640, kotlinDaemon.heapUsedMb)
         assertNull(kotlinDaemon.configuredXmxMb)
+        assertNull(kotlinDaemon.pid)
+        assertNull(kotlinDaemon.gcCollector)
+        assertNull(kotlinDaemon.compactObjectHeaders)
+    }
+
+    @Test
+    fun `a pid too large for the wire Int degrades to an honest null, never a wrapped value`() {
+        val payload = assemble(
+            tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)),
+            processes = listOf(
+                CollectedProcess(
+                    role = dev.buildhound.commons.payload.ProcessRole.GRADLE_DAEMON,
+                    pid = Int.MAX_VALUE.toLong() + 1,
+                ),
+            ),
+        )
+        assertNull(payload.processes.single().pid)
     }
 
     @Test
     fun `assemble defaults processes to an empty list`() {
         val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)))
         assertTrue(payload.processes.isEmpty())
+    }
+
+    @Test
+    fun `workersMax rides the environment block and survives scrubbing`() {
+        val payload = assemble(
+            tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)),
+            environment = CollectedEnvironment(os = "Linux", workersMax = 8),
+        )
+        assertEquals(8, payload.environment?.workersMax)
+        // Uncaptured stays an honest null (the default assemble() environment has no workersMax).
+        assertNull(assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED))).environment?.workersMax)
     }
 
     @Test

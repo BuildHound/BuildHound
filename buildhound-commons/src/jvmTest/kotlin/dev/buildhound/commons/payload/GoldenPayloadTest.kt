@@ -115,6 +115,20 @@ class GoldenPayloadTest {
         assertNull(payload.wrapper)
         // Additive guarantee (plan 053): a payload without a `testTelemetry` block defaults to null.
         assertNull(payload.testTelemetry)
+        // Additive guarantee (plan 065): an `environment` without `workersMax` defaults to null.
+        assertNull(payload.environment?.workersMax)
+    }
+
+    @Test
+    fun `pre-065 process rows default pid, collector, and headers to null`() {
+        // The plan-029 processes golden predates the tuning fields — untouched, it must keep
+        // deserializing with the three additions defaulted null (the additive guarantee, plan 065).
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-processes.json"))
+        for (process in payload.processes) {
+            assertNull(process.pid)
+            assertNull(process.gcCollector)
+            assertNull(process.compactObjectHeaders)
+        }
     }
 
     @Test
@@ -408,6 +422,28 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `schema v1 process-tuning golden file deserializes with collector, headers, pid, and workersMax`() {
+        val payload = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            golden("build-payload-v1-process-tuning.json"),
+        )
+
+        assertEquals(1, payload.schemaVersion, "GC/JVM tuning signals are additive — the envelope stays schema v1")
+        // Plaintext workers.max rides at the environment level (the benchmark-slicing dimension,
+        // plan 065); the salted gradle.maxWorkers fingerprint is a separate, unchanged channel.
+        assertEquals(8, payload.environment?.workersMax)
+        val daemon = payload.processes.first { it.role == ProcessRole.GRADLE_DAEMON }
+        assertEquals(41214, daemon.pid)
+        assertEquals(GcCollector.G1, daemon.gcCollector)
+        assertEquals(false, daemon.compactObjectHeaders, "an explicit -XX:-UseCompactObjectHeaders reads as false, not null")
+        val kotlinDaemon = payload.processes.first { it.role == ProcessRole.KOTLIN_DAEMON }
+        assertEquals(GcCollector.G1, kotlinDaemon.gcCollector)
+        assertNull(kotlinDaemon.compactObjectHeaders, "an unprinted flag stays an honest null")
+        // The fixture is a realistic tuning case: pinned Xmx (used ≈ configured) + high lifetime GC.
+        assertTrue(daemon.heapUsedMb!! >= Math.round(daemon.configuredXmxMb!! * 0.9))
+    }
+
+    @Test
     fun `schema v1 benchmark golden file deserializes with a populated benchmark block`() {
         val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-benchmark.json"))
 
@@ -508,6 +544,7 @@ class GoldenPayloadTest {
             "build-payload-v1-build-structure.json",
             "build-payload-v1-wrapper.json",
             "build-payload-v1-test-telemetry.json",
+            "build-payload-v1-process-tuning.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

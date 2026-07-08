@@ -500,6 +500,48 @@
         return cell;
     }
 
+    // Daemon-tuning candidates (plan 065): client-side mirror of the server's DaemonTuningCandidates
+    // primary-input rules (lifetime GC fraction only — the pid-delta refinement needs the prior
+    // build and lives server-side in /diagnosis). Thresholds are pinned in DaemonTuning.kt; every
+    // card is advisory ("investigate/consider"), never auto-applied. All strings are composed from
+    // allowlisted labels + numbers — no payload text is echoed.
+    function tuningCandidates(processes, toolchain) {
+        const HEAP_KNOB = { GRADLE_DAEMON: "org.gradle.jvmargs", KOTLIN_DAEMON: "kotlin.daemon.jvmargs" };
+        const gcFraction = p => (p.gcTimeMs != null && p.uptimeS > 0) ? p.gcTimeMs / (p.uptimeS * 1000) : null;
+        const pct = f => Math.round(f * 100) + " %";
+        const label = p => PROCESS_ROLE_LABELS[p.role] || p.role;
+        const jdkMajor = parseInt(String((toolchain && toolchain.jdk) || "").split(/[.\-_+]/)[0], 10);
+        const cards = [];
+        for (const p of processes.filter(p => gcFraction(p) != null && gcFraction(p) >= 0.15)) {
+            if (HEAP_KNOB[p.role]) {
+                cards.push("Investigate high GC time (" + pct(gcFraction(p)) + " of " + label(p)
+                    + " JVM time) — consider raising the heap via " + HEAP_KNOB[p.role] + ".");
+            }
+            if (p.gcCollector === "G1") {
+                cards.push("Throughput-bound? The " + label(p) + " runs G1 with high GC time — a ParallelGC trial"
+                    + " (-XX:+UseParallelGC) may trade pause time for throughput.");
+            }
+        }
+        for (const p of processes) {
+            if (p.role === "KOTLIN_DAEMON" && p.heapUsedMb != null && p.configuredXmxMb > 0
+                && p.heapUsedMb / p.configuredXmxMb >= 0.9) {
+                cards.push("The Kotlin daemon heap sits at " + pct(p.heapUsedMb / p.configuredXmxMb)
+                    + " of its configured -Xmx (" + p.configuredXmxMb + " MB) — consider raising kotlin.daemon.jvmargs.");
+            }
+            if (jdkMajor >= 24 && p.rssMb >= 2048 && p.compactObjectHeaders !== true) {
+                cards.push("The " + label(p) + " uses " + p.rssMb + " MB RSS on JDK " + jdkMajor
+                    + " without compact object headers — consider enabling -XX:+UseCompactObjectHeaders (~22 % heap, JEP 519).");
+            }
+        }
+        if (!cards.length) return null;
+        const box = document.createDocumentFragment();
+        box.append(el("p", "Tuning candidates (advisory — investigate, nothing is auto-applied):", "muted"));
+        const list = el("ul", null, "warnings");
+        for (const card of cards) list.append(el("li", card));
+        box.append(list);
+        return box;
+    }
+
     async function detailView(buildId) {
         const seq = ++renderSeq;
         const build = await api("/v1/builds/" + encodeURIComponent(buildId));
@@ -562,7 +604,12 @@
 
         // Process snapshot (plan 029): daemon/Kotlin/worker JVM memory. Hidden when the probe
         // collected nothing (disabled or JDK tools absent) — the panel renders only with data.
-        if (Array.isArray(build.processes) && build.processes.length) app.append(processPanel(build.processes));
+        // Daemon-tuning candidate cards (plan 065) render under the table when a rule fires.
+        if (Array.isArray(build.processes) && build.processes.length) {
+            app.append(processPanel(build.processes));
+            const candidates = tuningCandidates(build.processes, build.toolchain);
+            if (candidates) app.append(candidates);
+        }
 
         // Task timeline (plan 017): the same renderer the HTML artifact inlines, served at
         // /timeline.js. Best-effort — a renderer defect or a missing global degrades to no

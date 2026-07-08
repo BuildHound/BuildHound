@@ -1,5 +1,6 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.payload.GcCollector
 import dev.buildhound.commons.payload.ProcessRole
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -22,7 +23,10 @@ class ProcessProbeCollectorTest {
         override fun jpsListing(): BoundedExec.Result { calls.add("jps"); return jpsResult }
         override fun jstatGc(pid: Long): BoundedExec.Result { calls.add("jstatGc($pid)"); return jstatGcFn(pid) }
         override fun jstatCapacity(pid: Long): BoundedExec.Result { calls.add("jstatCapacity($pid)"); return ok(CAP_ROW) }
-        override fun jinfoFlags(pid: Long): BoundedExec.Result { calls.add("jinfoFlags($pid)"); return ok("-XX:MaxHeapSize=4294967296") }
+        override fun jinfoFlags(pid: Long): BoundedExec.Result {
+            calls.add("jinfoFlags($pid)")
+            return ok("-XX:MaxHeapSize=4294967296 -XX:+UseG1GC -XX:-UseCompactObjectHeaders")
+        }
         override fun psRss(pid: Long): BoundedExec.Result { calls.add("psRss($pid)"); return ok("1048576") }
         override fun psEtime(pid: Long): BoundedExec.Result { calls.add("psEtime($pid)"); return ok("01:00") }
     }
@@ -49,12 +53,17 @@ class ProcessProbeCollectorTest {
         val result = ProcessProbeCollector.collect(tools)
 
         assertEquals(2, result.size)
-        // jps + 5 probes per PID.
+        // jps + 5 probes per PID — plan 065's collector/headers/pid ride existing execs, adding none.
         assertEquals(1 + 2 * 5, tools.calls.size)
         val daemon = result.first { it.role == ProcessRole.GRADLE_DAEMON }
         assertEquals(4096, daemon.configuredXmxMb)
         assertNotNull(daemon.heapUsedMb)
         assertEquals(1024, daemon.rssMb) // 1048576 KB → 1024 MB
+        // Plan 065: the jps pid is carried, and the SAME jinfo line yields the typed tuning flags.
+        assertEquals(1L, daemon.pid)
+        assertEquals(GcCollector.G1, daemon.gcCollector)
+        assertEquals(false, daemon.compactObjectHeaders)
+        assertEquals(2L, result.first { it.role == ProcessRole.KOTLIN_DAEMON }.pid)
     }
 
     @Test

@@ -204,4 +204,24 @@ class BuildDiagnoserTest {
         assertTrue(deltas?.durationMs != null, "durationMs delta went null — check the metric name in RegressionEngine.builtInMetrics still matches BuildDiagnoser.deltas' lookup")
         assertTrue(deltas?.cacheableHitRate != null, "cacheableHitRate delta went null — check the metric name in RegressionEngine.builtInMetrics still matches BuildDiagnoser.deltas' lookup")
     }
+
+    // ---- daemon-tuning candidates (plan 065) ----
+
+    @Test
+    fun `tuning candidates ride the diagnosis when the process snapshot warrants them`() {
+        val payload = BuildPayload(
+            buildId = "b1", startedAt = 0, finishedAt = 60_000, outcome = BuildOutcome.SUCCESS,
+            processes = listOf(
+                dev.buildhound.commons.payload.ProcessInfo(
+                    role = dev.buildhound.commons.payload.ProcessRole.GRADLE_DAEMON,
+                    pid = 100, gcTimeMs = 160_000, uptimeS = 800,
+                ),
+            ),
+        )
+        val candidates = BuildDiagnoser.diagnose(payload, verdict = null).tuningCandidates
+        assertEquals(listOf(TuningKind.GC_PRESSURE.name), candidates.map { it.kind })
+        assertTrue("org.gradle.jvmargs" in candidates.single().advisory)
+        // No probe data → an honest empty list, never a fabricated candidate.
+        assertTrue(BuildDiagnoser.diagnose(build(), verdict = null).tuningCandidates.isEmpty())
+    }
 }

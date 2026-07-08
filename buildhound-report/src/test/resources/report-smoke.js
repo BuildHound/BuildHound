@@ -88,4 +88,13 @@ if (!tests || tests.hidden) throw new Error("tests section stayed hidden with a 
 if (!hasText(byId["tests-degraded-note"], "Test telemetry unavailable")) throw new Error("degraded-note text missing");
 if (!hasText(byId["tests-degraded-note"], ":app:test")) throw new Error("degraded-note task path missing");
 
+// Daemon-tuning candidates (plan 065): the pinned Kotlin daemon (1900/2048 ≈ 93 %) fires the
+// advisory card naming kotlin.daemon.jvmargs; the calm G1 Gradle daemon (0.4 % lifetime GC)
+// fires neither the GC-pressure card nor the ParallelGC trial suggestion.
+const tuning = byId["tuning-candidates"];
+if (!tuning || tuning.hidden) throw new Error("tuning-candidates block stayed hidden with a pinned Kotlin daemon");
+if (!hasText(tuning, "kotlin.daemon.jvmargs")) throw new Error("pinned-Xmx card must name kotlin.daemon.jvmargs");
+if (hasText(tuning, "org.gradle.jvmargs")) throw new Error("no GC-pressure card may fire for the calm Gradle daemon");
+if (hasText(tuning, "ParallelGC")) throw new Error("no ParallelGC trial may fire below the GC threshold");
+
 console.log("report smoke OK");

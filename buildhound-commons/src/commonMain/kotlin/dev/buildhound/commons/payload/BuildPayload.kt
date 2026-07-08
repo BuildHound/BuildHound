@@ -490,6 +490,14 @@ data class EnvironmentInfo(
      * starts the series accruing for a future before/after-IP benefit comparison (not built here).
      */
     val isolatedProjects: Boolean? = null,
+    /**
+     * Plaintext `org.gradle.workers.max` posture (plan 065, research F15 narrowing): the same
+     * CC-safe `startParameter.maxWorkerCount` scalar the salted `gradle.maxWorkers` fingerprint
+     * (plan 022) and [InvocationInfo.maxWorkerCount] (plan 051) read — this copy rides at the
+     * environment level as the benchmark-slicing dimension (`benchmarkSeries` filters on
+     * `environment.workersMax`); the hashed fingerprint stays. Null when uncaptured.
+     */
+    val workersMax: Int? = null,
 )
 
 @Serializable
@@ -608,18 +616,35 @@ data class DerivedMetrics(
     val configurationMs: Long? = null,
 )
 
-/** Which JVM a [ProcessInfo] snapshot describes (plan 029); the only correlation key — no PID. */
+/**
+ * Which JVM a [ProcessInfo] snapshot describes (plan 029); the primary correlation key, so multiple
+ * workers collapse to repeated `GRADLE_WORKER` rows. Since plan 065 a [ProcessInfo.pid] rides
+ * alongside as a *within-one-`hostnameHash`* correlation refinement (see its doc).
+ */
 @Serializable
 enum class ProcessRole { GRADLE_DAEMON, KOTLIN_DAEMON, GRADLE_WORKER }
 
 /**
+ * The garbage collector a probed JVM runs (plan 065, research F15), read from the jinfo `-flags`
+ * output via a **typed allowlist** — only the six known `-XX:+Use…GC` selection flags map to a
+ * named value; an enabled collector-selection flag outside that set reads as [UNKNOWN] (honest,
+ * never a guessed name), and no collector flag at all is a null [ProcessInfo.gcCollector].
+ */
+@Serializable
+enum class GcCollector { G1, PARALLEL, ZGC, SERIAL, SHENANDOAH, EPSILON, UNKNOWN }
+
+/**
  * One JVM's end-of-build snapshot (plan 029, spec §3.6). All metrics nullable — a single JDK-tool
- * exec (jstat/jinfo/ps) can fail per field without dropping the process. No PID or command line is
- * carried (host-local noise; jinfo/ps args can embed secrets — spec §3.7): [role] is the only key,
- * so multiple workers collapse to repeated `GRADLE_WORKER` rows.
+ * exec (jstat/jinfo/ps) can fail per field without dropping the process. No command line is carried
+ * (jinfo/ps args can embed secrets — spec §3.7). [pid] ships since plan 065, superseding plan 029's
+ * "no PID" (architecture decision log, 2026-07-08): an ephemeral host-local integer — not
+ * PII/path/secret, so nothing to scrub — used server-side only as a correlation key *within one
+ * `hostnameHash`* (e.g. the GC-time pid-delta refinement), never a rollup group key.
  *
  * `heapMax` is JVM *capacity* (jstat `-gccapacity` NGCMX+OGCMX), distinct from [configuredXmxMb]
  * (the `-Xmx`/`-XX:MaxHeapSize` the JVM was launched with) — "configured vs used" needs both.
+ * [gcCollector]/[compactObjectHeaders] are plan-065 typed-allowlist reads over the same jinfo
+ * `-flags` line [configuredXmxMb] already parses — discrete enum/bool, nothing free-form to scrub.
  */
 @Serializable
 data class ProcessInfo(
@@ -631,4 +656,10 @@ data class ProcessInfo(
     val gcTimeMs: Long? = null,
     val rssMb: Long? = null,
     val uptimeS: Long? = null,
+    /** OS process id (plan 065); null when unobserved or too large for an Int (never in practice). */
+    val pid: Int? = null,
+    /** Selected GC (plan 065); null when jinfo failed or printed no collector-selection flag. */
+    val gcCollector: GcCollector? = null,
+    /** JEP 519 `-XX:[+-]UseCompactObjectHeaders` (plan 065); null when the flag was not printed. */
+    val compactObjectHeaders: Boolean? = null,
 )

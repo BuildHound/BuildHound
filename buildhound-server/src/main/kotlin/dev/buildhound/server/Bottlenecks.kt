@@ -62,7 +62,12 @@ data class BottlenecksRollup(
     val topPluginsAvailable: Boolean,
 )
 
-/** One toolchain version's fleet footprint (plan 032); [distinctUsers] counts hashed ids only. */
+/**
+ * One toolchain version's fleet footprint (plan 032); [distinctUsers] counts hashed ids only.
+ * [durationP50Ms] (plan 065): the p50 build duration over the samples carrying one — the
+ * daemon-JDK fleet comparison ("your JDK 17 daemons are p50 X % slower than your JDK 21 daemons").
+ * Null when no sample in the group carried a duration (a dimension the stores don't feed one).
+ */
 @Serializable
 data class ToolchainVersionRow(
     val version: String,
@@ -70,6 +75,7 @@ data class ToolchainVersionRow(
     val sharePct: Double,
     val distinctUsers: Int,
     val lastSeenMs: Long,
+    val durationP50Ms: Long? = null,
 )
 
 /**
@@ -97,8 +103,18 @@ data class ToolchainRollup(
 /** One build's KPI inputs; both stores fetch these + [TaskRow]s and call [BottleneckCalculator]. */
 data class BuildKpiRow(val outcome: String, val durationMs: Long, val hitRate: Double?)
 
-/** One toolchain observation for a dimension; version is null when the build didn't carry it. */
-data class ToolchainSample(val version: String?, val userId: String?, val startedAt: Long)
+/**
+ * One toolchain observation for a dimension; version is null when the build didn't carry it.
+ * [durationMs] (plan 065) is the build wall-clock, fed by both stores for the **jdk** dimension
+ * only (the daemon-JDK comparison's input); null elsewhere → [ToolchainVersionRow.durationP50Ms]
+ * stays null for those dimensions.
+ */
+data class ToolchainSample(
+    val version: String?,
+    val userId: String?,
+    val startedAt: Long,
+    val durationMs: Long? = null,
+)
 
 /**
  * Pure bottleneck/toolchain math (plan 032), the single source both stores defer to (the plan-026
@@ -236,18 +252,27 @@ object BottleneckCalculator {
 /** Pure toolchain-adoption math (plan 032). Both stores fetch [ToolchainSample]s and call this. */
 object ToolchainCalculator {
 
-    fun dimension(samples: List<ToolchainSample>): ToolchainDimension {
+    /**
+     * One dimension's adoption + p50 duration. [versionKey] maps each observed version onto its
+     * grouping key — identity for every dimension except **jdk**, which since plan 065 groups by
+     * JDK **major** (see [jdkMajor]) so the fleet comparison reads "JDK 17 vs JDK 21", not per
+     * patch release. p50 is nearest-rank over the *sorted* durations (order-invariant, so the two
+     * stores' differing row orders keep byte-for-byte parity — the plan-026 discipline).
+     */
+    fun dimension(samples: List<ToolchainSample>, versionKey: (String) -> String = { it }): ToolchainDimension {
         val present = samples.filter { it.version != null }
         if (present.isEmpty()) return ToolchainDimension(available = false)
         val total = present.size
-        val versions = present.groupBy { it.version!! }
+        val versions = present.groupBy { versionKey(it.version!!) }
             .map { (version, group) ->
+                val durations = group.mapNotNull { it.durationMs }.sorted()
                 ToolchainVersionRow(
                     version = version,
                     builds = group.size,
                     sharePct = roundTo6(group.size.toDouble() / total),
                     distinctUsers = group.mapNotNull { it.userId }.distinct().size,
                     lastSeenMs = group.maxOf { it.startedAt },
+                    durationP50Ms = if (durations.isEmpty()) null else NearestRankPercentile.ofSorted(durations, 0.50),
                 )
             }
             .sortedWith(compareByDescending<ToolchainVersionRow> { it.builds }.thenByDescending(VERSION) { it.version })
@@ -257,6 +282,15 @@ object ToolchainCalculator {
         val behind = if (latest == null) emptyList() else versions.filter { VERSION.compare(it.version, latest) < 0 }
         return ToolchainDimension(available = true, versions = versions, behind = behind)
     }
+
+    /**
+     * The jdk dimension's grouping key (plan 065): the leading numeric segment ("21.0.10" → "21",
+     * "17" → "17"). A version whose leading segment is not numeric groups under itself, unchanged —
+     * honest fallback, never a guessed major.
+     */
+    fun jdkMajor(version: String): String =
+        version.trim().split('.', '-', '_', '+').firstOrNull()?.takeIf { seg -> seg.isNotEmpty() && seg.all { it.isDigit() } }
+            ?: version
 
     /** Best-effort version ordering: compare dotted/dashed segments numerically, non-numeric as strings. */
     private val VERSION = Comparator<String> { a, b ->

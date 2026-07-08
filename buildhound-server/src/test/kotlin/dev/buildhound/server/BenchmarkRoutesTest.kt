@@ -97,6 +97,27 @@ class BenchmarkRoutesTest {
     }
 
     @Test
+    fun `benchmark series slices by workersMax`() = testApplication {
+        val fx = fx(); appWith(fx)
+        listOf(Triple("w8-a", 3_000L, 8), Triple("w8-b", 1_000L, 8), Triple("w4", 2_000L, 4)).forEachIndexed { i, (id, dur, workers) ->
+            fx.stores.builds.save(
+                fx.project.id,
+                TestPayloads.build(
+                    buildId = id, durationMs = dur, startedAt = recent + i * 1000,
+                    mode = BuildMode.BENCHMARK,
+                    benchmark = BenchmarkInfo(scenario = "clean", iteration = i + 1),
+                    workersMax = workers,
+                ),
+            )
+        }
+        val sliced = get("/v1/benchmark/series?workersMax=8").bodyAsText()
+        assertTrue(sliced.contains("w8-a") && sliced.contains("w8-b"), sliced)
+        assertFalse(sliced.contains("\"w4\""), "the workersMax=4 point must be sliced away: $sliced")
+        // A non-integer value is ignored (unfiltered), mirroring the unknown-string-filter behavior.
+        assertTrue(get("/v1/benchmark/series?workersMax=not-a-number").bodyAsText().contains("\"w4\""))
+    }
+
+    @Test
     fun `benchmark series is tenant-scoped`() = testApplication {
         val fx = fx(); appWith(fx)
         seed(fx)

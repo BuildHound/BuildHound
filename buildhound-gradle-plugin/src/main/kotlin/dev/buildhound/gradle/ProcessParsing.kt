@@ -1,5 +1,6 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.payload.GcCollector
 import dev.buildhound.commons.payload.ProcessRole
 
 /**
@@ -85,6 +86,39 @@ internal object ProcessParsing {
         return Math.round(bytes / KB_PER_MB / KB_PER_MB)
     }
 
+    /**
+     * The selected GC from a `jinfo -flags` line (plan 065, research F15) — a **typed allowlist**,
+     * exactly like [configuredXmxMb] above and plan 051's `INVOCATION_PROPERTY_ALLOWLIST`: only the
+     * fixed `-XX:+Use…GC` selection flags in [GC_COLLECTOR_FLAGS] are read; every other token the
+     * jinfo line carries (absolute paths, `-D…` args, the classpath jinfo also prints) is discarded
+     * by construction — the extraction never returns a string, so there is nothing to scrub.
+     *
+     * Checked in fixed allowlist order (a deterministic pick if a pathological line ever carried
+     * two selection flags). An *enabled* `-XX:+Use…GC` flag outside the allowlist maps to
+     * [GcCollector.UNKNOWN] — honest, never a guessed name (known non-collector `…SystemGC` tuning
+     * flags are excluded from that fallback); no collector-selection flag at all is null.
+     *
+     * **Widening this allowlist to a value-carrying or free-form flag is not a one-line change**
+     * (the plan-051 rule): a flag whose value is arbitrary text would need scrubber coverage, which
+     * these discrete enum/bool reads deliberately avoid — that is *why* they are safe (spec §3.7).
+     */
+    fun parseGcCollector(jinfoFlags: String): GcCollector? {
+        for ((pattern, collector) in GC_COLLECTOR_FLAGS) {
+            if (pattern.containsMatchIn(jinfoFlags)) return collector
+        }
+        val unknownEnabled = ENABLED_GC_FLAG.findAll(jinfoFlags)
+            .any { match -> !match.groupValues[1].endsWith("SystemGC") }
+        return if (unknownEnabled) GcCollector.UNKNOWN else null
+    }
+
+    /**
+     * JEP 519 Compact Object Headers from a `jinfo -flags` line (plan 065): `-XX:+…` → true,
+     * `-XX:-…` → false, not printed (pre-JDK-24, or default-off unset) → null. Same typed-allowlist
+     * discipline as [parseGcCollector] — a boolean read, never a string.
+     */
+    fun parseCompactObjectHeaders(jinfoFlags: String): Boolean? =
+        COMPACT_OBJECT_HEADERS.find(jinfoFlags)?.let { it.groupValues[1] == "+" }
+
     /** RSS MB from `ps -o rss=` (KB); null when the output is not a number. */
     fun rssMb(psRss: String): Long? {
         val kb = psRss.trim().toLongOrNull() ?: return null
@@ -118,4 +152,22 @@ internal object ProcessParsing {
 
     private val WHITESPACE = Regex("\\s+")
     private val MAX_HEAP = Regex("-XX:MaxHeapSize=(\\d+)")
+
+    /**
+     * The fixed collector-selection allowlist (plan 065). A constant, not a DSL knob — widening it
+     * is a follow-up plan's call, not a build's (see [parseGcCollector]'s widening warning).
+     */
+    private val GC_COLLECTOR_FLAGS: List<Pair<Regex, GcCollector>> = listOf(
+        "UseG1GC" to GcCollector.G1,
+        "UseParallelGC" to GcCollector.PARALLEL,
+        "UseZGC" to GcCollector.ZGC,
+        "UseSerialGC" to GcCollector.SERIAL,
+        "UseShenandoahGC" to GcCollector.SHENANDOAH,
+        "UseEpsilonGC" to GcCollector.EPSILON,
+    ).map { (flag, collector) -> Regex("-XX:\\+$flag\\b") to collector }
+
+    /** An enabled `Use…GC`-shaped flag — the honest-`UNKNOWN` fallback input for a future collector. */
+    private val ENABLED_GC_FLAG = Regex("-XX:\\+(Use\\w+GC)\\b")
+
+    private val COMPACT_OBJECT_HEADERS = Regex("-XX:([+-])UseCompactObjectHeaders\\b")
 }

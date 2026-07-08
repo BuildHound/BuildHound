@@ -191,4 +191,62 @@ class BottleneckStoresIntegrationTest {
         assertEquals(setOf("8.9", "7.6"), r.gradle.behind.map { it.version }.toSet())
         assertFalse(r.agp.available || r.kgp.available || r.ksp.available, "agp/kgp/ksp not collected yet")
     }
+
+    @Test
+    fun `the jdk dimension groups by major with a p50 duration — the daemon-JDK fleet comparison`() {
+        val project = tokens.ensureProjectWithToken("tc-jdk", sha256Hex("tcj"))
+        val inMemory = InMemoryBuildStore()
+        seedBoth(project, inMemory)
+        val r = postgresStore.toolchainAdoption(project.id, 30, now)
+
+        // Non-benchmark builds carry jdk "21" ×4 (durations 4s/6s/8s/9s → nearest-rank p50 6s) and
+        // jdk "17" ×1 (3s) — the benchmark build's jdk is excluded like the gradle dimension's.
+        val jdk21 = r.jdk.versions.single { it.version == "21" }
+        val jdk17 = r.jdk.versions.single { it.version == "17" }
+        assertEquals(4, jdk21.builds)
+        assertEquals(6000, jdk21.durationP50Ms, "plan-065 p50 per jdk major (Postgres duration_ms hot column)")
+        assertEquals(3000, jdk17.durationP50Ms)
+        assertEquals(listOf("17"), r.jdk.behind.map { it.version }, "behind works on majors")
+        // Only the jdk dimension is fed durations — gradle rows honestly report no p50.
+        assertTrue(r.gradle.versions.all { it.durationP50Ms == null })
+        // And the widened jdk dimension keeps byte-for-byte store parity (the full-rollup parity
+        // test above covers it too; re-asserted here so a jdk-only regression names this feature).
+        assertEquals(inMemory.toolchainAdoption(project.id, 30, now).jdk, r.jdk)
+    }
+
+    @Test
+    fun `benchmarkSeries slices by workersMax in both stores with byte parity`() {
+        val project = tokens.ensureProjectWithToken("bn-workers", sha256Hex("bnw"))
+        val inMemory = InMemoryBuildStore()
+        // Benchmark iterations of one scenario: two at workersMax=8, one at 4, one without any.
+        listOf(
+            Triple("w-1", 3_000L, 8),
+            Triple("w-2", 1_000L, 8),
+            Triple("w-3", 2_000L, 4),
+        ).forEachIndexed { index, (id, duration, workers) ->
+            val payload = TestPayloads.build(
+                buildId = id, durationMs = duration, startedAt = current + index * 1000L,
+                mode = BuildMode.BENCHMARK,
+                benchmark = dev.buildhound.commons.payload.BenchmarkInfo(scenario = "clean", iteration = index + 1),
+                workersMax = workers,
+            )
+            postgresStore.save(project.id, payload)
+            inMemory.save(project.id, payload)
+        }
+        val noWorkers = TestPayloads.build(
+            buildId = "w-none", durationMs = 9_000, startedAt = current + 5000,
+            mode = BuildMode.BENCHMARK,
+            benchmark = dev.buildhound.commons.payload.BenchmarkInfo(scenario = "clean", iteration = 9),
+        )
+        postgresStore.save(project.id, noWorkers)
+        inMemory.save(project.id, noWorkers)
+
+        val pg = postgresStore.benchmarkSeries(project.id, null, null, null, 30, now, workersMax = 8)
+        val mem = inMemory.benchmarkSeries(project.id, null, null, null, 30, now, workersMax = 8)
+        assertEquals(mem, pg, "workersMax-sliced series must keep store parity")
+        // Only w-1/w-2 match: a build without workersMax never matches a filter (honest, no guess).
+        assertEquals(listOf("w-1", "w-2"), pg.single().points.map { it.buildId }.sorted())
+        // Unfiltered keeps all four points.
+        assertEquals(4, postgresStore.benchmarkSeries(project.id, null, null, null, 30, now).single().points.size)
+    }
 }

@@ -549,9 +549,11 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         }
 
         // Benchmark series (plan 030, spec §7): mode=BENCHMARK builds grouped by (scenario, isolation)
-        // with percentiles. Read-scope, tenant-scoped; optional scenario/isolationMode/branch narrowing.
-        // Benchmark builds are excluded from the fleet /trends + /builds views (buildFilterOrNull); this
-        // is the dedicated view for them. Unknown filter values simply return empty groups.
+        // with percentiles. Read-scope, tenant-scoped; optional scenario/isolationMode/branch narrowing
+        // plus workersMax slicing (plan 065 — a non-integer value is ignored, like an unknown string
+        // filter). Benchmark builds are excluded from the fleet /trends + /builds views
+        // (buildFilterOrNull); this is the dedicated view for them. Unknown filter values simply
+        // return empty groups.
         get("/benchmark/series") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val days = call.daysParam()
@@ -564,6 +566,7 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
                     branch = params["branch"],
                     days = days,
                     nowMs = System.currentTimeMillis(),
+                    workersMax = params["workersMax"]?.toIntOrNull(),
                 )
             }
         }

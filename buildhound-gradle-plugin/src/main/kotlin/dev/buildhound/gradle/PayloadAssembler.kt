@@ -175,6 +175,9 @@ internal object PayloadAssembler {
                     invocation = invocationInfo(invocation),
                     // Isolated-projects activation (plan 069); rides alongside configurationCache.
                     isolatedProjects = isolatedProjects,
+                    // Plaintext workers.max (plan 065): the benchmark-slicing dimension; the salted
+                    // gradle.maxWorkers fingerprint (plan 022) stays a separate channel.
+                    workersMax = it.workersMax,
                 )
             },
             // AGP/KGP/KSP (plan 046) join Gradle/JDK here; emitted whenever any dimension is known,
@@ -221,7 +224,8 @@ internal object PayloadAssembler {
             // mtime vs. this daemon's own JVM start time) — no build-timing input needed here.
             wrapper = wrapperInfo(wrapper),
             // End-of-build JVM process snapshot (plan 029); empty when disabled/unobservable. Numeric
-            // + enum only — nothing for the scrubber to touch (no PID, path, or command line).
+            // + typed-allowlist enum/bool only — nothing for the scrubber to touch (no path or
+            // command line; the pid — carried since plan 065 — is an ephemeral host-local integer).
             processes = processes.map {
                 ProcessInfo(
                     role = it.role,
@@ -232,6 +236,11 @@ internal object PayloadAssembler {
                     gcTimeMs = it.gcTimeMs,
                     rssMb = it.rssMb,
                     uptimeS = it.uptimeS,
+                    // Wire pid is Int (plan 065); a pid outside Int range (never observed on any
+                    // supported OS) degrades to an honest null rather than a wrapped value.
+                    pid = it.pid?.takeIf { p -> p in 1..Int.MAX_VALUE.toLong() }?.toInt(),
+                    gcCollector = it.gcCollector,
+                    compactObjectHeaders = it.compactObjectHeaders,
                 )
             },
             // Addon-contributed sections (plan 039), keyed by addon id. Opaque JSON — the scrubber

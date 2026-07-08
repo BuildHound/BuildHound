@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "buildId": "b7e6a1c2-9d3f-4b8a-a5e4-1f2d3c4b5a69",
+  "projectKey": "pilot-android",
+  "startedAt": 1751900000000,
+  "finishedAt": 1751900061000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["assembleDebug"],
+  "mode": "ci",
+  "environment": {
+    "os": "Linux",
+    "arch": "amd64",
+    "cores": 16,
+    "daemonReused": true,
+    "workersMax": 8
+  },
+  "toolchain": {
+    "gradle": "8.14.3",
+    "jdk": "24.0.1"
+  },
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileDebugKotlin",
+      "module": ":app",
+      "startMs": 1751900001000,
+      "durationMs": 9000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "processes": [
+    {
+      "role": "GRADLE_DAEMON",
+      "heapUsedMb": 3800,
+      "heapCommittedMb": 4096,
+      "heapMaxMb": 4096,
+      "configuredXmxMb": 4096,
+      "gcTimeMs": 152000,
+      "rssMb": 4880,
+      "uptimeS": 812,
+      "pid": 41214,
+      "gcCollector": "G1",
+      "compactObjectHeaders": false
+    },
+    {
+      "role": "KOTLIN_DAEMON",
+      "heapUsedMb": 1980,
+      "heapCommittedMb": 2048,
+      "heapMaxMb": 2048,
+      "configuredXmxMb": 2048,
+      "gcTimeMs": 61000,
+      "rssMb": 2410,
+      "uptimeS": 205,
+      "pid": 41377,
+      "gcCollector": "G1"
+    }
+  ]
+}

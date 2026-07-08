@@ -107,12 +107,16 @@ paths:
         "403": { $ref: '#/components/responses/Forbidden' }
   /v1/builds/{buildId}/diagnosis:
     get:
-      summary: Agent-facing synthesis of dominant phase, hit-rate-vs-target, top hotspots, and deltas (plan 071).
+      summary: Agent-facing synthesis of dominant phase, hit-rate-vs-target, top hotspots, deltas (plan 071), and daemon-tuning candidates (plan 065).
       description: >
         Pure serialization over already-collected signals (config-vs-execution split, cache hit rate vs
         the v1 constant target, top EXECUTED-task hotspots, and headline-metric deltas vs the stored
         verdict's comparable baseline) — no new collection. Every analytic field is independently
-        nullable and degrades honestly rather than fabricating a signal.
+        nullable and degrades honestly rather than fabricating a signal. Since plan 065 the response
+        also carries `tuningCandidates` — ranked, advisory daemon-tuning cards (GC pressure, Kotlin
+        pinned -Xmx, ParallelGC-vs-G1 trial suggestion, JEP 519 compact object headers) over the
+        build's process snapshot; empty when the probe collected nothing or no rule fired, and never
+        auto-applied.
       parameters: [{ name: buildId, in: path, required: true, schema: { type: string } }]
       responses:
         "200": { description: The synthesized diagnosis. }
@@ -170,7 +174,17 @@ paths:
         "403": { $ref: '#/components/responses/Forbidden' }
   /v1/benchmark/series:
     get:
-      summary: Benchmark-mode series (plan 030).
+      summary: Benchmark-mode series (plan 030); workersMax slicing since plan 065.
+      parameters:
+        - { name: scenario, in: query, schema: { type: string }, description: Narrow to one scenario. }
+        - { name: isolationMode, in: query, schema: { type: string }, description: Narrow to one isolation mode. }
+        - { name: branch, in: query, schema: { type: string }, description: Narrow to one branch. }
+        - name: workersMax
+          in: query
+          schema: { type: integer }
+          description: >
+            Slice to builds whose plaintext `environment.workersMax` equals this value (plan 065).
+            A build that never carried the field matches no filter; a non-integer value is ignored.
       responses:
         "200": { description: Benchmark series points. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -246,7 +260,13 @@ paths:
         "403": { $ref: '#/components/responses/Forbidden' }
   /v1/rollups/toolchain:
     get:
-      summary: Toolchain adoption rollup (plan 032).
+      summary: Toolchain adoption rollup (plan 032); jdk grouped by major with p50 duration since plan 065.
+      description: >
+        Per-dimension version distribution + hashed distinct users + "who is behind". Since plan 065
+        the `jdk` dimension groups by JDK **major** (leading numeric segment) and each of its rows
+        carries `durationP50Ms` — the daemon-JDK fleet comparison ("your JDK 17 daemons are p50 X %
+        slower than your JDK 21 daemons"). Other dimensions stay per full version with
+        `durationP50Ms` null.
       responses:
         "200": { description: The toolchain rollup. }
         "401": { $ref: '#/components/responses/Unauthorized' }

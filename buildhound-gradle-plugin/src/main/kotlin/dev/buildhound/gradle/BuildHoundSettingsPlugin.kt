@@ -228,6 +228,9 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.enabled.set(extension.enabled)
             spec.parameters.pseudonymize.set(extension.identity.pseudonymize)
             spec.parameters.identitySaltFile.set(saltPath)
+            // Plaintext workers.max (plan 065): the same CC-safe start-parameter scalar the
+            // fingerprints (plan 022) and invocation posture (plan 051) capture below.
+            spec.parameters.workersMax.set(settings.startParameter.maxWorkerCount)
         }
 
         val vcs = settings.providers.of(VcsValueSource::class.java) { spec ->
