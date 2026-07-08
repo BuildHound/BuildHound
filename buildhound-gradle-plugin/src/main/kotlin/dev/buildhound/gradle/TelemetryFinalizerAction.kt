@@ -12,6 +12,7 @@ import dev.buildhound.commons.payload.FingerprintInfo
 import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.commons.payload.ProjectEvaluation
 import dev.buildhound.commons.payload.StartMarker
+import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.report.ReportAssets
 import java.io.File
 import java.util.ServiceLoader
@@ -234,10 +235,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // total lookup — a task with no dictionary entry (isolated projects, capture failure)
             // simply keeps its already-null fields, never a partial join.
             val taskMetadata = parameters.taskMetadata.getOrElse(emptyMap())
-            val tasks = collector.snapshot().map { task ->
-                val meta = taskMetadata[task.path] ?: return@map task
-                task.copy(type = meta.type, cacheable = meta.cacheable, nonCacheableReason = meta.nonCacheableReason)
-            }
+            val tasks = joinTaskMetadata(collector.snapshot(), taskMetadata)
             // AGP/KGP/KSP versions detected at config time (plan 046); replayed on a CC hit.
             val toolchain = parameters.toolchain.getOrElse(DetectedToolchain())
             // Lost-build reconciliation (plan 033): before this build's own payload, delete this
@@ -617,6 +615,18 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         val prettyJson = Json(from = BuildHoundJson.payload) { prettyPrint = true }
     }
 }
+
+/**
+ * Joins the task path → static type/cacheable/nonCacheableReason dictionary (plan 016) onto the
+ * collector's task snapshot (plan 056, closes plan 045): a total lookup — a task with no [dictionary]
+ * entry (isolated projects, a capture failure) simply keeps its already-null fields, never a partial
+ * join.
+ */
+internal fun joinTaskMetadata(tasks: List<TaskExecution>, dictionary: Map<String, TaskMetadata>): List<TaskExecution> =
+    tasks.map { task ->
+        val meta = dictionary[task.path] ?: return@map task
+        task.copy(type = meta.type, cacheable = meta.cacheable, nonCacheableReason = meta.nonCacheableReason)
+    }
 
 /**
  * Reads the two `derived` inputs (`avoidedMs`, `dependencyEdges`) out of the internal-adapters
