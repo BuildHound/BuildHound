@@ -1,5 +1,6 @@
 package dev.buildhound.server
 
+import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
@@ -119,6 +120,28 @@ class RollupStoresIntegrationTest {
         val rollup = postgresStore.pluginCost(project.id, 30, now)
         assertTrue(rollup.available, "every fixture task carries a type")
         assertEquals(listOf(PluginAttribution.UNATTRIBUTED), rollup.plugins.map { it.plugin })
+    }
+
+    @Test
+    fun `plugin cost is the days-window, benchmark-INCLUDED convention — the taskDuration sibling, not bottlenecks' fleet-view exclusion`() {
+        // Named per the plan-058 "Window-inclusion mismatch" risk: unlike topPlugins (which inherits
+        // bottlenecks' benchmark-excluded fleet view), pluginCost deliberately reuses the
+        // taskDuration/projectCost/negativeAvoidance convention, which does NOT exclude benchmark
+        // builds. A regression that swapped pluginCost onto the benchmark-excluded window would still
+        // pass every other test here (none of those fixtures include a benchmark build) — this pins it.
+        val project = tokens.ensureProjectWithToken("plugin-cost-benchmark-project", sha256Hex("pcbp"))
+        val benchmark = TestPayloads.build(
+            buildId = "bench-pc", durationMs = 5_000, startedAt = recent, mode = BuildMode.BENCHMARK,
+            tasks = listOf(TestPayloads.task(":app:compileKotlin", TaskOutcome.EXECUTED, 5000, type = "org.jetbrains.kotlin.gradle.tasks.KotlinCompile")),
+        )
+        postgresStore.save(project.id, benchmark)
+        val inMemory = InMemoryBuildStore()
+        inMemory.save(project.id, benchmark)
+
+        val pg = postgresStore.pluginCost(project.id, 30, now)
+        assertTrue(pg.available)
+        assertEquals(listOf(PluginCostRow("Kotlin Gradle Plugin", 5000, 1, 1.0)), pg.plugins, "the benchmark build's task time must be included, not excluded")
+        assertEquals(inMemory.pluginCost(project.id, 30, now), pg, "in-memory and Postgres must agree on benchmark inclusion")
     }
 
     @Test
