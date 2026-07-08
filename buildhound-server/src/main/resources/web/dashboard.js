@@ -1096,6 +1096,11 @@
             }
             if (mode === "plugin") {
                 if (!pluginCost) pluginCost = await api("/v1/rollups/plugin-cost?days=30");
+                // The fetch above is the only await in this function; if the user clicked a different
+                // toggle button while it was in flight, mode has since changed and that later click's
+                // own (synchronous) render already ran — resuming here must not append a second,
+                // stale table on top of it.
+                if (mode !== "plugin") return;
                 if (!pluginCost.available) {
                     durationHolder.append(emptyState({
                         title: "Task types not populated yet",

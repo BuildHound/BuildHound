@@ -541,6 +541,15 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "Kotlin Gradle Plugin")) throw new Error("by-plugin row missing");
     if (!hasText(byId["app"], "80%")) throw new Error("by-plugin share missing");
 
+    // available:false (isolated-projects / plan-016 degradation) → the honest not-populated notice,
+    // never an empty table. A fresh #/tasks visit is needed since the view caches its fetch per-visit.
+    responses["/v1/rollups/plugin-cost?days=30"] = { available: false, plugins: [] };
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/tasks"; context._onhashchange(); await tick(); await tick();
+    clickButton(byId["app"], "By plugin");
+    await tick(); await tick();
+    if (!hasText(byId["app"], "Plugin attribution needs task types")) throw new Error("by-plugin unavailable notice missing when available is false");
+
     // Benchmark series (plan 030): per-scenario percentile chips + chart, isolation selector, empty state.
     context.location.hash = "#/benchmark"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/benchmark/series?days=90")) throw new Error("benchmark view did not fetch the series");
