@@ -17,15 +17,16 @@ class ToolsTest {
     fun `every tool is a read-only GET under v1 and never touches admin or a mutating verb`() {
         val names = Tools.all.map { it.name }.toSet()
         assertEquals(
-            setOf("list_builds", "get_build", "trends", "project_cost", "task_duration", "negative_avoidance"),
+            setOf("list_builds", "get_build", "diagnose", "trends", "project_cost", "task_duration", "negative_avoidance"),
             names,
-            "the tool surface must stay exactly these six read-only queries",
+            "the tool surface must stay exactly these seven read-only queries",
         )
         val mutating = listOf("set", "put", "post", "delete", "create", "update", "write", "admin", "retention", "ingest")
+        val needsBuildId = setOf("get_build", "diagnose")
         for (tool in Tools.all) {
             assertTrue(mutating.none { tool.name.contains(it, ignoreCase = true) }, "tool ${tool.name} names a mutation")
             // A tool that takes only defaults must produce a /v1 read path, never the admin namespace.
-            val defaultPath = if (tool.name == "get_build") tool.buildPath(buildJsonObject { put("buildId", "x") }) else tool.buildPath(JsonObject(emptyMap()))
+            val defaultPath = if (tool.name in needsBuildId) tool.buildPath(buildJsonObject { put("buildId", "x") }) else tool.buildPath(JsonObject(emptyMap()))
             assertTrue(defaultPath.startsWith("/v1/"), "tool ${tool.name} path must be under /v1")
             assertTrue(!defaultPath.startsWith("/v1/admin"), "tool ${tool.name} must never reach /v1/admin")
         }
@@ -43,6 +44,13 @@ class ToolsTest {
         assertEquals("/v1/builds/abc-123", path("get_build", buildJsonObject { put("buildId", "abc-123") }))
         assertFailsWith<McpToolException> { path("get_build") }
         assertFailsWith<McpToolException> { path("get_build", buildJsonObject { put("buildId", "a/b") }) }
+    }
+
+    @Test
+    fun `diagnose requires a build id and rejects a path-splitting id`() {
+        assertEquals("/v1/builds/abc-123/diagnosis", path("diagnose", buildJsonObject { put("buildId", "abc-123") }))
+        assertFailsWith<McpToolException> { path("diagnose") }
+        assertFailsWith<McpToolException> { path("diagnose", buildJsonObject { put("buildId", "a/b") }) }
     }
 
     @Test
