@@ -19,10 +19,11 @@ class PayloadCapperTest {
         artifacts: ArtifactSizes? = null,
         extensions: Map<String, JsonElement> = emptyMap(),
         projectEvaluations: List<ProjectEvaluation>? = null,
+        testTelemetry: TestTelemetryInfo? = null,
     ) = BuildPayload(
         buildId = "b", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
         tags = tags, values = values, tasks = tasks, caps = caps, benchmark = benchmark, artifacts = artifacts,
-        extensions = extensions, projectEvaluations = projectEvaluations,
+        extensions = extensions, projectEvaluations = projectEvaluations, testTelemetry = testTelemetry,
     )
 
     @Test
@@ -107,6 +108,27 @@ class PayloadCapperTest {
     @Test
     fun project_evaluations_under_the_cap_leave_the_payload_compliant() {
         val input = payload(projectEvaluations = listOf(ProjectEvaluation(path = ":app", evaluationMs = 100)))
+        assertSame(input, PayloadCapper.cap(input))
+    }
+
+    @Test
+    fun over_cap_xml_disabled_tasks_are_dropped_alphabetically_and_counted() {
+        // 5 disabled-task notes, cap 3 → keep the first 3 alphabetically, drop 2, recorded in the
+        // caps summary (a hostile/foreign ingest can legally exceed the plugin's own handful).
+        val tasks = listOf(":e:test", ":a:test", ":d:test", ":b:test", ":c:test")
+        val capped = PayloadCapper.cap(
+            payload(testTelemetry = TestTelemetryInfo(xmlDisabledTasks = tasks)),
+            PayloadCaps(maxXmlDisabledTasks = 3),
+        )
+        val kept = capped.testTelemetry?.xmlDisabledTasks ?: error("testTelemetry must survive")
+        assertEquals(listOf(":a:test", ":b:test", ":c:test"), kept)
+        assertEquals(2, capped.caps?.droppedXmlDisabledTasks)
+        assertEquals("b", capped.buildId) // envelope survives
+    }
+
+    @Test
+    fun xml_disabled_tasks_under_the_cap_leave_the_payload_compliant() {
+        val input = payload(testTelemetry = TestTelemetryInfo(xmlDisabledTasks = listOf(":app:test")))
         assertSame(input, PayloadCapper.cap(input))
     }
 
