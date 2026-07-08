@@ -10,9 +10,10 @@
 #         validateWrapper: "fail"      # off | warn | fail (plan 066)
 #         expectedWrapperJarSha256: "" # optional: pin gradle-wrapper.jar to a known-good hash
 #
-# Runs Gradle with telemetry wired, then optionally polls the per-build regression verdict
-# (plan 025) and warns or fails the pipeline. The token is mapped from a pipeline secret and
-# only ever leaves via an Authorization header — never echoed.
+# Optionally runs a preventive wrapper-integrity check FIRST (plan 066, off by default), then runs
+# Gradle with telemetry wired, then optionally polls the per-build regression verdict (plan 025) and
+# warns or fails the pipeline. The token is mapped from a pipeline secret and only ever leaves via an
+# Authorization header — never echoed.
 
 parameters:
   - name: gradleTasks
@@ -29,11 +30,13 @@ parameters:
       - "off"
       - "warn"
       - "fail"
-  # Preventive wrapper-integrity check (plan 066, research F16), run BEFORE ./gradlew: greps
-  # gradle-wrapper.properties for distributionSha256Sum= (enforces pinning) and, when
-  # expectedWrapperJarSha256 is set, also verifies gradle-wrapper.jar's own hash. Network-free, no
-  # token — this is the "narrowing 2" preventive half; the plugin's own wrapperJarSha256 telemetry
-  # (detective, computed inside the JVM the wrapper already launched) is the other half.
+  # Preventive wrapper-integrity check (plan 066, research F16), run BEFORE ./gradlew. The default
+  # (grep) path is a PINNING-PRESENCE check only — it confirms gradle-wrapper.properties declares a
+  # non-empty distributionSha256Sum=, i.e. that pinning is turned on. It does NOT verify that
+  # gradle-wrapper.jar actually matches that pin, or that gradlew/gradlew.bat are untampered — for
+  # that, also set expectedWrapperJarSha256. Network-free, no token — this is the "narrowing 2"
+  # preventive half; the plugin's own wrapperJarSha256 telemetry (detective, computed inside the JVM
+  # the wrapper already launched) is the other half.
   - name: validateWrapper
     type: string
     default: "off"
@@ -41,7 +44,14 @@ parameters:
       - "off"
       - "warn"
       - "fail"
-  # Optional known-good SHA-256 of gradle-wrapper.jar; empty skips the jar-hash comparison.
+  # Optional known-good SHA-256 of gradle-wrapper.jar; empty skips the jar-hash comparison (case-
+  # insensitive compare). This is the only piece of the check that verifies actual jar bytes, and
+  # it's only as trustworthy as where the value comes from: it MUST be sourced from OUTSIDE the
+  # repo being verified (e.g. a protected variable group), never read from a file in the same
+  # checkout — an attacker who can edit gradle-wrapper.jar in that checkout can just as easily edit
+  # a same-repo "known-good" hash alongside it, defeating the pin. Coverage boundary: this checks
+  # gradle-wrapper.jar's bytes and the properties pinning key only — the gradlew/gradlew.bat
+  # launcher scripts themselves are NOT covered by either check.
   - name: expectedWrapperJarSha256
     type: string
     default: ""
@@ -52,14 +62,20 @@ steps:
           set -eu
           props="gradle/wrapper/gradle-wrapper.properties"
           jar="gradle/wrapper/gradle-wrapper.jar"
+          gradlew="./gradlew"
           issues=0
 
           if [ ! -f "$props" ]; then
-            echo "buildhound: $props not found; skipping wrapper-integrity check"
-          elif grep -q '^distributionSha256Sum=' "$props"; then
+            if [ -f "$gradlew" ]; then
+              echo "buildhound: $props not found but $gradlew exists — this repo uses the Gradle wrapper but its properties file is missing"
+              issues=$((issues + 1))
+            else
+              echo "buildhound: $gradlew not found; this repo does not use the Gradle wrapper — skipping wrapper-integrity check"
+            fi
+          elif grep -q '^distributionSha256Sum=..*' "$props"; then
             echo "buildhound: wrapper distributionSha256Sum is pinned"
           else
-            echo "buildhound: wrapper is NOT pinned (no distributionSha256Sum= in $props)"
+            echo "buildhound: wrapper is NOT pinned (no non-empty distributionSha256Sum= in $props) — this is a pinning-PRESENCE check only, not a jar-integrity check; set expectedWrapperJarSha256 for that"
             issues=$((issues + 1))
           fi
 
@@ -69,12 +85,25 @@ steps:
               echo "buildhound: $jar not found; cannot verify its SHA-256"
               issues=$((issues + 1))
             else
-              actual=$(sha256sum "$jar" | awk '{print $1}')
-              if [ "$actual" = "$expected" ]; then
-                echo "buildhound: gradle-wrapper.jar SHA-256 matches the expected value"
+              if command -v sha256sum >/dev/null 2>&1; then
+                actual=$(sha256sum "$jar" | awk '{print $1}')
+              elif command -v shasum >/dev/null 2>&1; then
+                actual=$(shasum -a 256 "$jar" | awk '{print $1}')
               else
-                echo "buildhound: gradle-wrapper.jar SHA-256 mismatch (expected $expected, got $actual)"
+                actual=""
+              fi
+              if [ -z "$actual" ]; then
+                echo "buildhound: neither sha256sum nor shasum is available on this agent; cannot verify gradle-wrapper.jar SHA-256"
                 issues=$((issues + 1))
+              else
+                actual_lc=$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')
+                expected_lc=$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')
+                if [ "$actual_lc" = "$expected_lc" ]; then
+                  echo "buildhound: gradle-wrapper.jar SHA-256 matches the expected value"
+                else
+                  echo "buildhound: gradle-wrapper.jar SHA-256 mismatch (expected $expected, got $actual)"
+                  issues=$((issues + 1))
+                fi
               fi
             fi
           fi

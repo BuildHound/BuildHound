@@ -51,11 +51,15 @@ jobs:
         run: gradle build
 
       # ci-assets is not a Gradle module, so its shell is checked here (plan 025):
-      # shellcheck the metric CLI + run its stubbed-curl harness (no network).
+      # shellcheck the metric CLI + run its stubbed-curl harness (no network), and
+      # shellcheck + run the wrapper-integrity harness (plan 066) that mirrors the
+      # Azure template's validateWrapper step.
       - name: CI-assets shell checks
         run: |
           shellcheck buildhound-ci-assets/bin/buildhound-metric buildhound-ci-assets/test/metric-cli-test.sh
           sh buildhound-ci-assets/test/metric-cli-test.sh
+          shellcheck buildhound-ci-assets/test/wrapper-integrity-test.sh
+          sh buildhound-ci-assets/test/wrapper-integrity-test.sh
 
   build-floor:
     name: Build & test (Gradle 8.14 floor)

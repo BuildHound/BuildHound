@@ -47,11 +47,30 @@ verdict is BuildHound's rolling-baseline comparison (spec §5, plan 025).
 ## Wrapper-integrity check (plan 066, research F16)
 
 Set `validateWrapper: warn|fail` on the steps template for a **preventive** check that runs
-*before* `./gradlew`: it greps `gradle/wrapper/gradle-wrapper.properties` for
-`distributionSha256Sum=` (an absent key means the wrapper isn't pinned — drift risk) and, when
-`expectedWrapperJarSha256` is also set, compares `sha256sum gradle/wrapper/gradle-wrapper.jar`
-against it. `warn` logs an Azure warning; `fail` fails the pipeline before Gradle ever runs; `off`
-(the default) skips the step entirely. Network-free, no token — this is the preventive half of the
+*before* `./gradlew`. It is actually two independent checks, of different strength:
+
+- **Default (always runs when not `off`): a pinning-***presence*** check, not a jar-integrity
+  check.** It greps `gradle/wrapper/gradle-wrapper.properties` for a non-empty
+  `distributionSha256Sum=` value — an absent or empty key means the wrapper isn't pinned (drift
+  risk). This confirms pinning is *turned on*; it says nothing about whether
+  `gradle-wrapper.jar`'s actual bytes match that pin. A missing `gradle-wrapper.properties` is
+  flagged as an issue when `./gradlew` exists (the repo uses the wrapper but its config is
+  missing); it's a silent no-op only when the repo has no `gradlew` at all.
+- **Opt-in, when `expectedWrapperJarSha256` is also set: a jar-hash check.** Compares
+  `gradle/wrapper/gradle-wrapper.jar`'s SHA-256 (`sha256sum`, falling back to `shasum -a 256` when
+  `sha256sum` isn't on the agent's PATH; case-insensitive) against the given value. This is the
+  only part of the check that verifies actual jar bytes — **the expected hash must be sourced from
+  outside the repo being verified** (e.g. a protected pipeline variable group), never from a file
+  in the same checkout. If it were read from the checkout, an attacker able to modify
+  `gradle-wrapper.jar` could just as easily update a same-repo "known-good" hash alongside it,
+  silently defeating the pin.
+
+**Coverage boundary:** together these two checks cover `gradle-wrapper.jar`'s bytes and the
+`gradle-wrapper.properties` pinning key only. They do **not** cover the `gradlew`/`gradlew.bat`
+launcher scripts themselves.
+
+`warn` logs an Azure warning; `fail` fails the pipeline before Gradle ever runs; `off` (the
+default) skips the step entirely. Network-free, no token — this is the preventive half of the
 finding; the plugin's own `payload.wrapper.wrapperJarSha256` telemetry is the detective half,
 computed *inside* the JVM the wrapper already launched (so it can never catch a wrapper that
 actively subverts the read — a genuine gradle.org checksum cross-check is a separate, deferred
