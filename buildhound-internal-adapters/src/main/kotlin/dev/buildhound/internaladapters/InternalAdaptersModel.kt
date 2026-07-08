@@ -25,6 +25,17 @@ data class InternalTaskDetail(
     val propertyHashes: Map<String, String> = emptyMap(),
     /** Truncation counts (plan 019 caps): properties dropped past [Caps.MAX_PROPERTY_HASHES]. */
     val droppedProperties: Int = 0,
+    /**
+     * Cache-transfer timings (plan 067, research F17 — the specced-then-dropped plan-038 tail): bytes
+     * moved to/from the build cache for this task, and the wall time its load / store build-operations
+     * took. Read reflectively from the `BuildCache{Local,Remote}{Load,Store}` op results — a getter a
+     * Gradle version doesn't expose degrades to null, never throws (spec §3.1). Byte counts + durations
+     * only; no path, no URL. Null when this task moved no bytes (a genuine miss with no store) or the
+     * getter was unavailable — an honest null (plan 005), never a fabricated zero.
+     */
+    val transferBytes: Long? = null,
+    val loadMs: Long? = null,
+    val storeMs: Long? = null,
 )
 
 /**

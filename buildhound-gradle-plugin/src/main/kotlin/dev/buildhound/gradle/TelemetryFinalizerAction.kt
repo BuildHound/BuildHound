@@ -159,6 +159,16 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Input
         val wrapper: Property<CollectedWrapper>
 
+        /**
+         * Committed build-cache config snapshot (plan 067, research F17), delivered on the same
+         * after-configuration Flow-action channel as [toolchain] — resolved after `settingsEvaluated`
+         * fills the mailbox, baked into the CC entry, replayed on a hit (cache config is stable across
+         * builds). Optional/empty when uncaptured (a guarded `settingsEvaluated` read failure).
+         */
+        @get:Input
+        @get:Optional
+        val buildCache: Property<BuildCacheConfigSnapshot>
+
         @get:Input
         val configurationCacheRequested: Property<Boolean>
 
@@ -422,6 +432,9 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 buildStructure = parameters.buildStructure.orNull,
                 isolatedProjects = parameters.isolatedProjectsActive.getOrElse(false),
                 wrapper = parameters.wrapper.orNull,
+                // Committed build-cache config snapshot (plan 067): the assembler maps this plugin-side
+                // DTO into environment.buildCache (null when uncaptured / every field null).
+                buildCache = parameters.buildCache.orNull,
                 projectEvaluations = projectEvaluations.orEmpty(),
                 extensions = extensions,
                 avoidedMs = avoidedMs,

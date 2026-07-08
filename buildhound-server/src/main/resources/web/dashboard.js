@@ -1388,6 +1388,9 @@
         try { toolchain = await api("/v1/rollups/toolchain?days=30"); } catch (e) { /* omit the section */ }
         let warnings = null;
         try { warnings = await api("/v1/rollups/warnings?period=" + p); } catch (e) { /* omit the section */ }
+        // Remote-cache ROI (plan 067, research F17): best-effort like toolchain/warnings above.
+        let cacheRoi = null;
+        try { cacheRoi = await api("/v1/rollups/cache-roi?days=30"); } catch (e) { /* omit the section */ }
         if (seq !== renderSeq) return;
 
         app.textContent = "";
@@ -1474,6 +1477,30 @@
         } else {
             app.append(rankedTable(["Task", "Executed time", "Misses"], b.cacheMissHotspots, r =>
                 [keyCell(r), el("td", ms(r.currentMs), "num"), el("td", r.count, "num")]));
+        }
+
+        // Remote-cache ROI (plan 067, research F17): the config-snapshot summary (always available once
+        // the plan-067 plugin ships) distinguishes "no remote configured" from "configured but cold",
+        // and — with the opt-in internal-adapters origin — the per-mode remote-hit rate. Two-tier: when
+        // remoteHitRateAvailable is false, only the config summary renders (never a synthesized rate).
+        if (cacheRoi) {
+            app.append(el("h3", "Remote-cache ROI (last 30 days)"));
+            if (!cacheRoi.buildsWithConfig) {
+                app.append(el("p", "Build-cache config not collected yet — deploy the plan-067 plugin to see whether a remote cache is even configured.", "notice-warn"));
+            } else {
+                app.append(el("p", "Remote cache configured-and-enabled on " + pctFmt(cacheRoi.remoteConfiguredShare)
+                    + " of " + cacheRoi.buildsWithConfig + " builds carrying the config snapshot.", "summary-sentence"));
+            }
+            if (!cacheRoi.remoteHitRateAvailable) {
+                app.append(el("p", "Remote-hit rate needs the opt-in cache-origin capture — set buildhound { internalAdapters { collectCacheOrigins = true } } (no rate is ever guessed from the local/remote-blind hit rate).", "notice-warn"));
+            } else if (cacheRoi.perMode.length) {
+                app.append(rankedTable(["Mode", "Remote-hit rate", "Local-hit rate", "Task executions"], cacheRoi.perMode, r =>
+                    [el("td", r.mode), el("td", pctFmt(r.remoteHitRate), "num"), el("td", pctFmt(r.localHitRate), "num"), el("td", r.consideredExecutions, "num")]));
+            }
+            // Ranked near-zero-CI-reuse candidate — an investigate-prompt, never a verdict (cold CI is legit).
+            if (cacheRoi.ciReuseCandidate) {
+                app.append(el("p", cacheRoi.ciReuseCandidate.note, "notice-warn"));
+            }
         }
 
         // Build-Analyzer-style warning taxonomy (plan 060, research F10): rule-based candidates, each

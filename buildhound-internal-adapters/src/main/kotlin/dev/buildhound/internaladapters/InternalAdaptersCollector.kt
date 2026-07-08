@@ -46,6 +46,11 @@ class InternalAdaptersCollector : BuildHoundExtensionContributor {
                 // `nonCacheableReason` (review finding).
                 cachingDisabledReason = t.cachingDisabledReason?.let { PayloadScrubber.scrubText(it, root) },
                 cachingDisabledCategory = t.cachingDisabledCategory,
+                // Cache-transfer timings (plan 067): byte counts + op durations only, no path/URL — carried
+                // straight through (the accumulator already summed them across this task's load/store ops).
+                transferBytes = t.transferBytes,
+                loadMs = t.loadMs,
+                storeMs = t.storeMs,
             )
         }
 

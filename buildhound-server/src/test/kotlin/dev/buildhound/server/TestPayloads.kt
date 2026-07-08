@@ -2,6 +2,7 @@ package dev.buildhound.server
 
 import dev.buildhound.commons.payload.ArtifactSizes
 import dev.buildhound.commons.payload.BenchmarkInfo
+import dev.buildhound.commons.payload.BuildCacheConfigInfo
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
@@ -59,6 +60,8 @@ object TestPayloads {
         workersMax: Int? = null,
         /** Salted input fingerprints (plan 022/068 fixtures); null means "uncaptured", not "empty". */
         fingerprints: FingerprintInfo? = null,
+        /** Committed build-cache config snapshot (plan 067 fixtures); null means the pre-067 "uncaptured". */
+        buildCache: BuildCacheConfigInfo? = null,
         /** Opaque addon sections (plan 039/068 fixtures), e.g. `internalAdapters` (plan 038). */
         extensions: Map<String, JsonElement> = emptyMap(),
     ): BuildPayload = BuildPayload(
@@ -72,8 +75,14 @@ object TestPayloads {
         vcs = if (branch != null || sha != null) VcsInfo(branch = branch, sha = sha) else null,
         ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl, attributes = ciAttributes) },
         derived = if (hitRate != null || avoidedMs != null) DerivedMetrics(cacheableHitRate = hitRate, avoidedMs = avoidedMs) else null,
-        environment = if (userId != null || invocation != null || hostnameHash != null || workersMax != null) {
-            EnvironmentInfo(userId = userId, invocation = invocation, hostnameHash = hostnameHash, workersMax = workersMax)
+        environment = if (userId != null || invocation != null || hostnameHash != null || workersMax != null || buildCache != null) {
+            EnvironmentInfo(
+                userId = userId,
+                invocation = invocation,
+                hostnameHash = hostnameHash,
+                workersMax = workersMax,
+                buildCache = buildCache,
+            )
         } else {
             null
         },

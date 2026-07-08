@@ -90,13 +90,29 @@ class BuildOperationAdapter(private val rootDir: java.io.File) : BuildOperationL
                     callLong(result, "getOriginExecutionTime")?.let { t.originExecutionTimeMs = it }
                 }
                 result is BuildCacheLocalLoadBuildOperationType.Result ->
-                    acc.taskPathFor(opId)?.let { if (callBool(result, "isHit") == true) acc.forPath(it).localLoadHit = true }
+                    acc.taskPathFor(opId)?.let { path ->
+                        val t = acc.forPath(path)
+                        if (callBool(result, "isHit") == true) t.localLoadHit = true
+                        recordLoad(t, result, event)
+                    }
                 result is BuildCacheRemoteLoadBuildOperationType.Result ->
-                    acc.taskPathFor(opId)?.let { if (callBool(result, "isHit") == true) acc.forPath(it).remoteLoadHit = true }
+                    acc.taskPathFor(opId)?.let { path ->
+                        val t = acc.forPath(path)
+                        if (callBool(result, "isHit") == true) t.remoteLoadHit = true
+                        recordLoad(t, result, event)
+                    }
                 result is BuildCacheLocalStoreBuildOperationType.Result ->
-                    acc.taskPathFor(opId)?.let { acc.forPath(it).stored = true }
+                    acc.taskPathFor(opId)?.let { path ->
+                        val t = acc.forPath(path)
+                        t.stored = true
+                        recordStore(t, result, event)
+                    }
                 result is BuildCacheRemoteStoreBuildOperationType.Result ->
-                    acc.taskPathFor(opId)?.let { acc.forPath(it).stored = true }
+                    acc.taskPathFor(opId)?.let { path ->
+                        val t = acc.forPath(path)
+                        t.stored = true
+                        recordStore(t, result, event)
+                    }
             }
         }
     }
@@ -109,6 +125,28 @@ class BuildOperationAdapter(private val rootDir: java.io.File) : BuildOperationL
         state.setSalt(fresh)
         return fresh
     }
+
+    /**
+     * Cache-transfer timings (plan 067): a load op's wall time (`event.endTime - event.startTime`) and
+     * the bytes it moved (`getArchiveSize`, read reflectively — absent on some Gradle versions / for a
+     * local load, degrading to a null that leaves [TaskAccum.transferBytes] untouched, never a fabricated
+     * zero). The op duration is recorded whether or not the load hit; the bytes only when the getter
+     * yields a value (a hit).
+     */
+    private fun recordLoad(t: TaskAccum, result: Any, event: OperationFinishEvent) {
+        t.addLoadMs(durationMsOf(event))
+        t.addTransferBytes(callLong(result, "getArchiveSize"))
+    }
+
+    /** Store analogue of [recordLoad]: the store op's wall time + the bytes written to the cache. */
+    private fun recordStore(t: TaskAccum, result: Any, event: OperationFinishEvent) {
+        t.addStoreMs(durationMsOf(event))
+        t.addTransferBytes(callLong(result, "getArchiveSize"))
+    }
+
+    /** Non-negative op wall time in ms, or null when the timestamps are unavailable/inconsistent. */
+    private fun durationMsOf(event: OperationFinishEvent): Long? =
+        runCatching { event.endTime - event.startTime }.getOrNull()?.takeIf { it >= 0 }
 
     // --- Reflection helpers: a missing/renamed getter on some Gradle version returns null, never throws. ---
 
