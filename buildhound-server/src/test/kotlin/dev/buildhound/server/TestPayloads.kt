@@ -41,6 +41,9 @@ object TestPayloads {
         provider: String? = "azure-devops",
         runId: String? = null,
         buildUrl: String? = null,
+        /** CI attributes (plan 027/041 fixtures), e.g. GHA's `runAttempt` — the plan-059 rerun signal. */
+        ciAttributes: Map<String, String> = emptyMap(),
+        projectKey: String? = null,
         userId: String? = null,
         invocation: InvocationInfo? = null,
         benchmark: BenchmarkInfo? = null,
@@ -58,13 +61,14 @@ object TestPayloads {
         extensions: Map<String, JsonElement> = emptyMap(),
     ): BuildPayload = BuildPayload(
         buildId = buildId,
+        projectKey = projectKey,
         startedAt = startedAt,
         finishedAt = startedAt + durationMs,
         outcome = outcome,
         mode = mode,
         requestedTasks = requestedTasks,
         vcs = if (branch != null || sha != null) VcsInfo(branch = branch, sha = sha) else null,
-        ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl) },
+        ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl, attributes = ciAttributes) },
         derived = if (hitRate != null || avoidedMs != null) DerivedMetrics(cacheableHitRate = hitRate, avoidedMs = avoidedMs) else null,
         environment = if (userId != null || invocation != null || hostnameHash != null) {
             EnvironmentInfo(userId = userId, invocation = invocation, hostnameHash = hostnameHash)

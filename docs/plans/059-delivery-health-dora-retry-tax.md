@@ -158,6 +158,25 @@ via `el()`/`textContent`; degrades to honest empty states on no data / enrichmen
   migration by default; if review adds a `(project_id, branch, started_at)` index it claims the next
   free `V{n}` at merge (Flyway race, per plan 032).
 
+## Implementation notes (delta from plan, same-PR record)
+
+- **`DeliveryBuildRow` carries `buildId`** (absent from the sketch above): the plan's own
+  requirements need it — `RetryTaxSummary.rerunBuildIds`, the flaky-`affectedBuildIds` intersection,
+  and the route's `ciSpans.findRun` enrichment are all keyed by build id.
+- **Store→route enrichment handoff rides on `@Transient` DTO fields** (`LeadTimeRow.enrichmentSamples`,
+  `RetryTaxSummary.wastedMsLowerBound`/`rerunSamples`, bounded by calculator caps): the plan said the
+  route enriches "over the bounded window build ids" without saying how the route learns them.
+  Chosen over widening the `BuildStore.deliveryHealth` signature (connector coupling would leak into
+  the parity core) or a second store round-trip. Pinned never to reach the wire.
+- **The Testcontainers coverage lives in its own `DeliveryHealthStoresIntegrationTest`** (not appended
+  to `PostgresStoresIntegrationTest` as the test-strategy bullet said) — the per-feature-file
+  convention every sibling since plan 036 uses (`RerunCauseStoresIntegrationTest`,
+  `TagCohortStoresIntegrationTest`, …). Same assertions as planned, incl. driving the route-level
+  `enrichDeliveryHealth` against a real `PostgresCiSpanStore` for the seeded-`ci_runs` case.
+- `MIN_SAMPLES = 3` (the plan left the value open; matches `RegressionEngine.MIN_BASELINE`'s
+  small-sample floor rather than `BottleneckCalculator`'s 2 — a claimed failure *rate* needs more
+  than two builds).
+
 ## Exit criteria
 
 - `GET /v1/rollups/delivery-health?days=30` returns per-(branch, pipeline) CFR, time-to-green

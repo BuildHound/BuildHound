@@ -14,6 +14,7 @@ import dev.buildhound.server.connector.ConnectorConfig
 import dev.buildhound.server.connector.ConnectorRegistry
 import dev.buildhound.server.connector.EnrichmentQueue
 import dev.buildhound.server.connector.GradleShare
+import dev.buildhound.server.connector.StoredCiRun
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
@@ -608,6 +609,23 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             call.respondQuery { store.cacheMissDiagnostics(project.id, days, System.currentTimeMillis()) }
         }
 
+        // Delivery-health proxies (plan 059, research F9): CFR per (branch, pipeline), time-to-green
+        // (a CI-recovery proxy — never claimed as production MTTR), build-only lead time, and the
+        // retry tax — all over already-ingested build rows (zero new collection; the spec-§1 Git/DORA
+        // non-goal holds). Read-scope, tenant-scoped, days clamped like /trends; benchmark builds
+        // excluded (fleet-view convention). The store call is the parity-tested build-only core; the
+        // best-effort connector (queue/share, pipeline-wall pricing) and flaky-rerun enrichment happen
+        // here — each sub-panel degrades independently (an enrichment error omits that panel, never a
+        // 500), while a storage outage on the core read still 503s through respondQuery.
+        get("/rollups/delivery-health") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery {
+                val core = store.deliveryHealth(project.id, days, System.currentTimeMillis())
+                enrichDeliveryHealth(core, project.id, days, store, ciSpans)
+            }
+        }
+
         // Flaky-test detection (plan 036, spec §5): two-signal per-(module, class) records over the
         // window, ranked by flake rate. Read-scope, tenant-scoped, days clamped like /trends.
         get("/flaky") {
@@ -789,6 +807,107 @@ fun Route.testShardingRoutes(builds: BuildStore, shardPlans: ShardPlanStore, tok
         val shardPlanId = sha256Hex("${project.id}|${req.reference}|${req.total}").substring(0, 12)
         call.respond(ShardPlanResponse(shardPlanId = shardPlanId, index = req.index, classes = classes, assigned = plan.flatten()))
     }
+}
+
+/**
+ * Route-level best-effort enrichment of the plan-059 delivery-health core — deliberately *outside*
+ * the store (the parity core stays build-only; this is the degradation boundary). Three independent
+ * passes, each `runCatching`-guarded so a failure omits only its own sub-panel (never a 500 that
+ * blanks the dashboard): (a) lead-time queue/share medians from `ci_runs` via [CiSpanStore.findRun]
+ * + [GradleShare.percent] over each row's bounded transient samples (the plan-028 builds+`ci_runs`
+ * composition); (b) retry-tax pricing upgraded from Gradle wall-clock to pipeline wall-clock for
+ * connector-enriched rerun builds — only ever upward, so the figure stays an honest lower bound;
+ * (c) `flakyRerunTax` — the plan-036 flaky records whose `affectedBuildIds` intersect the rerun set,
+ * ranked **candidates** (plan-057 discipline), never a confirmed cause. [DeliveryHealthRollup
+ * .connectorDataAvailable] flips true only when a `ci_runs` row was actually found. Every lookup is
+ * a cached, calculator-capped point read, so the fan-out is bounded. Internal (not private) so the
+ * Testcontainers test can drive it against a real
+ * [dev.buildhound.server.connector.PostgresCiSpanStore]-backed store.
+ */
+internal fun enrichDeliveryHealth(
+    core: DeliveryHealthRollup,
+    projectId: String,
+    days: Int,
+    store: BuildStore,
+    ciSpans: CiSpanStore,
+    nowMs: Long = System.currentTimeMillis(),
+): DeliveryHealthRollup {
+    var connectorSeen = false
+    val runCache = mutableMapOf<String, StoredCiRun?>()
+    fun findRun(buildId: String): StoredCiRun? {
+        val stored = runCache.getOrPut(buildId) { runCatching { ciSpans.findRun(projectId, buildId) }.getOrNull() }
+        if (stored != null) connectorSeen = true
+        return stored
+    }
+
+    fun median(values: List<Double>): Double = RegressionEngine.median(values)
+
+    // (a) Lead-time queue/share medians over each row's bounded enrichment samples.
+    val leadTime = runCatching {
+        core.leadTime.map { row ->
+            val queued = mutableListOf<Long>()
+            val shares = mutableListOf<Double>()
+            for (sample in row.enrichmentSamples) {
+                val run = findRun(sample.buildId)?.run ?: continue
+                run.queuedMs?.let { queued.add(it) }
+                GradleShare.percent(sample.durationMs, run)?.let { shares.add(it) }
+            }
+            row.copy(
+                medianQueuedMs = queued.takeIf { it.isNotEmpty() }
+                    ?.let { Math.round(median(it.map { v -> v.toDouble() })) },
+                medianGradleSharePct = shares.takeIf { it.isNotEmpty() }
+                    ?.let { Math.round(median(it) * 1_000_000.0) / 1_000_000.0 },
+            )
+        }
+    }.getOrDefault(core.leadTime)
+
+    // (b) Retry-tax pipeline-wall upgrade: substitute Gradle wall for pipeline wall where a ci_runs
+    // row knows it — only upward (a shorter pipeline span would be clock skew, and the figure must
+    // never shrink below the Gradle-wall lower bound the core already claimed).
+    val effectiveRerunMs = core.retryTax.rerunSamples.associate { it.buildId to it.durationMs }.toMutableMap()
+    val retryTax = runCatching {
+        var wastedMs = core.retryTax.wastedMsLowerBound
+        for (sample in core.retryTax.rerunSamples) {
+            val run = findRun(sample.buildId)?.run ?: continue
+            val pipelineMs = if (run.startedAt != null && run.finishedAt != null) run.finishedAt - run.startedAt else continue
+            if (pipelineMs > sample.durationMs) {
+                effectiveRerunMs[sample.buildId] = pipelineMs
+                wastedMs += pipelineMs - sample.durationMs
+            }
+        }
+        core.retryTax.copy(wastedCiMinutesLowerBound = DeliveryHealthCalculator.minutes(wastedMs), wastedMsLowerBound = wastedMs)
+    }.getOrDefault(core.retryTax)
+
+    // (c) Flaky-rerun candidates: plan-036 records whose affected builds intersect the rerun set.
+    val flakyRerunTax = runCatching {
+        if (core.retryTax.rerunBuildIds.isEmpty()) {
+            emptyList()
+        } else {
+            val rerunIds = core.retryTax.rerunBuildIds.toSet()
+            store.flaky(projectId, days, nowMs).mapNotNull { record ->
+                val hits = record.affectedBuildIds.filter { it in rerunIds }
+                if (hits.isEmpty()) return@mapNotNull null
+                FlakyRerunCandidate(
+                    module = record.module,
+                    className = record.className,
+                    rerunBuildCount = hits.size,
+                    wastedCiMinutesLowerBound = DeliveryHealthCalculator.minutes(hits.sumOf { effectiveRerunMs[it] ?: 0L }),
+                )
+            }.sortedWith(
+                compareByDescending<FlakyRerunCandidate> { it.wastedCiMinutesLowerBound }
+                    .thenByDescending { it.rerunBuildCount }
+                    .thenBy { it.className }
+                    .thenBy { it.module ?: "" },
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    return core.copy(
+        leadTime = leadTime,
+        retryTax = retryTax,
+        connectorDataAvailable = connectorSeen,
+        flakyRerunTax = flakyRerunTax,
+    )
 }
 
 /** Window size in days, defaulting to 30 and clamped to [1, 365] like /trends. */
