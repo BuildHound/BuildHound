@@ -6,6 +6,7 @@ import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.PayloadCapper
 import dev.buildhound.commons.payload.PayloadCaps
+import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.server.connector.CiEvent
 import dev.buildhound.server.connector.CiRunView
 import dev.buildhound.server.connector.CiSpanStore
@@ -96,10 +97,32 @@ fun Route.ingestRoutes(
                 ingestLogger.warn("payload projectKey '{}' differs from token project '{}'", it, project.key)
             }
 
+            // Defensive server-side scrub (plan 076): scrub BEFORE cap, mirroring the plugin's own
+            // scrub-then-cap invariant (PayloadCapper's KDoc: "after the scrubber, so secret
+            // patterns see whole values"). Several PayloadScrubber rules need the whole value to
+            // recognize a secret shape (JWT's three dot-segments, the AWS key's full 20 chars, the
+            // 32-char blob floor) — capping first risks truncating a secret mid-string and handing
+            // the scrubber an unrecognizable fragment that survives unredacted. `emptyList()` roots:
+            // the server has no notion of the client's project root, so every absolute path is
+            // treated as out-of-project and redacted (never relativized) — a compliant, already
+            // client-scrubbed payload is unaffected by construction (idempotent; see
+            // IngestScrubTest). Never fails ingest: an unexpected scrub exception degrades to
+            // storing the capped-but-unscrubbed payload with a warn log, matching the plugin's own
+            // "never fail a build" bias — the scrubber is pure with no I/O, so this path should be
+            // unreachable in practice, but ingest must degrade, never break, if it ever isn't.
+            val scrubbed = runCatching { PayloadScrubber.scrub(payload, emptyList()) }
+                .getOrElse {
+                    ingestLogger.warn(
+                        "payload scrub threw for '{}', storing capped-but-unscrubbed: {}",
+                        project.key, it::class.java.simpleName,
+                    )
+                    payload
+                }
+
             // Defensive clamp (plan 019): a compliant plugin makes this a no-op; a hostile or
             // buggy client is bounded, not rejected — the telemetry survives, and only counts
             // (never keys/values) log. The byte ceilings above stay the outer wall.
-            val capped = PayloadCapper.cap(payload)
+            val capped = PayloadCapper.cap(scrubbed)
             if (capped.caps != payload.caps) {
                 ingestLogger.warn(
                     "clamped over-cap payload from '{}': post-cap totals {} tag(s), {} value(s), {} task(s) dropped",

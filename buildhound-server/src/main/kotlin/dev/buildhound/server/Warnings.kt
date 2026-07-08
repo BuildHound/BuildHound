@@ -24,9 +24,11 @@ enum class WarningCategory { ALWAYS_RUN, NON_INCREMENTAL_AP, DYNAMIC_DEBUG_VALUE
  * milliseconds (summed only over the builds where the rule fired) — the ranking metric across
  * categories. [evidenceReason] is populated only for `ALWAYS_RUN` (a representative matched
  * `executionReasons` string); it is the same `executionReasons` value [RerunCauseRollupCalculator]
- * reads — scrubbed client-side by the plugin before upload (spec §3.7), not re-scrubbed by the
- * server (only `PayloadCapper` caps at ingest). Not a new exposure: `GET /v1/builds/{buildId}`
- * already returns these same stored strings at the same read scope.
+ * reads — scrubbed client-side by the plugin before upload (spec §3.7) and, since plan 076,
+ * scrubbed a second time defensively at server ingest (`Routes.kt`'s
+ * `PayloadCapper.cap(PayloadScrubber.scrub(payload, emptyList()))`) before it is ever stored. Not
+ * a new exposure: `GET /v1/builds/{buildId}` already returns these same stored strings at the
+ * same read scope.
  */
 @Serializable
 data class WarningRow(
@@ -197,9 +199,13 @@ object WarningCalculator {
             totalMs = totalMs,
             // Deterministic representative, NOT "first seen" (byte-for-byte parity discipline: the two
             // stores feed builds in different orders — see the class KDoc). Defense-in-depth scrub
-            // (§3.2 hardening): the plugin already scrubs client-side before upload (spec §3.7) and the
-            // server does not re-scrub stored payloads, but this route echoes the string back out, so
-            // it is run through the same KMP-pure scrubber here as a no-op-for-compliant-clients guard.
+            // (§3.2 hardening, commit 8916dcf): added when the server did not yet re-scrub stored
+            // payloads and this route echoed the string straight back out. Since plan 076 wired a
+            // defensive PayloadScrubber pass into ingest itself, this call is now belt-and-braces (a
+            // true no-op, by the scrubber's idempotency property) for any build ingested after 076
+            // landed — but retroactive scrub of already-stored rows is explicitly out of scope for
+            // that plan, so this guard remains the *sole* protection for evidenceReason on every
+            // pre-076 row. Kept, not removed.
             evidenceReason = matchedReasons.minOrNull()?.let { PayloadScrubber.scrubText(it, emptyList()) },
         )
     }
