@@ -65,10 +65,12 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
 
         DaemonState.configurationRan()
 
-        // Per-apply mailbox for the configuration-time task dictionary. The service reads
-        // it through a lazy provider (below); the `whenReady` callback fills it. Gradle
-        // evaluates the provider when it finalizes the service parameters — after
-        // configuration in every mode — so ordering is always callback-then-read (plan 016).
+        // Per-apply mailbox for the configuration-time task dictionary, filled by the `whenReady`
+        // callback below. Delivered to the finalizer as a Flow-action parameter (plan 056, closes
+        // plan 045) rather than a collector-service parameter: a service parameter is what an
+        // included build's task-finish events freeze empty before `whenReady` runs in a composite
+        // (plan 044); a Flow-action parameter resolves after configuration regardless, the same
+        // channel plan 046 validated for the toolchain mailbox below.
         val taskMetadataHolder = AtomicReference<Map<String, TaskMetadata>>(emptyMap())
         // Sibling mailbox for the Test-task JUnit XML locations (plan 024), filled by the same
         // `whenReady` callback and replayed from the CC entry on a hit (discovery spike §4a).
@@ -90,7 +92,6 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             TaskEventCollector.SERVICE_NAME,
             TaskEventCollector::class.java,
         ) { spec ->
-            spec.parameters.taskMetadata.set(settings.providers.provider { taskMetadataHolder.get() })
             spec.parameters.testResultLocations.set(settings.providers.provider { testLocationsHolder.get() })
             // Start-marker context (plan 033): only CC-stable fields (no ci/vcs value source — a
             // service param bakes and replays stale on a hit). Null when telemetry is off → no marker.
@@ -334,6 +335,11 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             // a composite build where an included build's task instantiates the collector early. The
             // resolved value is baked into the CC entry and replayed on a hit.
             spec.parameters.toolchain.set(settings.providers.provider { toolchainHolder.get() })
+            // Task type/cacheable dictionary (plan 016), same finalizer-parameter channel as
+            // [toolchain] above (plan 056, closes plan 045): the finalizer is the dictionary's sole
+            // reader, so it no longer rides the collector-service param that a composite build's
+            // included-build task events freeze empty before `whenReady` runs (plan 044).
+            spec.parameters.taskMetadata.set(settings.providers.provider { taskMetadataHolder.get() })
             spec.parameters.fingerprints.set(fingerprints)
             spec.parameters.buildFailed.set(flowProviders.buildWorkResult.map { it.failure.isPresent })
             // Failure detail (plan 044): extract class/message/stacktrace from the failing Throwable

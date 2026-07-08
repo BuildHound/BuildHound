@@ -1,5 +1,13 @@
 # 056 — composite `build-logic` task dictionary: raise plan 045, move the join to the finalizer
 
+**Status: implemented** · 2026-07-08 — closes plan 045. `TaskEventCollector.onFinish` no longer
+joins the type/cacheable dictionary (raw `TaskExecution`s only); `TelemetryFinalizerAction.Parameters
+.taskMetadata` (a Flow-action parameter, the plan-046 channel) carries it instead, joined right after
+`collector.snapshot()` in the finalizer. `CompositeBuildTestCollectionFunctionalTest` extended with
+non-null `type`/`cacheable`/`derived.cacheableHitRate` assertions on the store **and** CC-reuse runs;
+confirmed red on `main` (failing at the new assertions) before the fix. See `docs/architecture.md`
+§2 rule 12 and the 2026-07-08 decision-log row.
+
 ## Source
 
 Research finding **F6** (`docs/research/ingest-corpus-analysis.md` §3) — "`build-logic` composite
