@@ -54,6 +54,13 @@ data class BuildPayload(
      */
     val projectEvaluations: List<ProjectEvaluation>? = null,
     /**
+     * Declared project-tree inventory (plan 069, research F19): project/depth/included-build counts
+     * plus the filesystem-derived `buildSrcPresent`/`sourcesInRoot`/`emptyIntermediateCandidates`.
+     * Null when uncaptured (master switch off at apply time, or a guarded walk/probe failure) —
+     * collection-only in v1; the modularization-ROI analysis that consumes it is a later plan.
+     */
+    val buildStructure: BuildStructureInfo? = null,
+    /**
      * Addon-contributed payload sections (plan 039), keyed by addon id (e.g. `"testQuarantine"`).
      * The value is addon-owned JSON carrying its own `schemaVersion`, so core stays decoupled from
      * addon types and needs no schema bump when an addon evolves. Empty on a build with no addon
@@ -107,6 +114,41 @@ data class ArtifactSizes(val android: List<ArtifactSize> = emptyList())
 data class ProjectEvaluation(
     val path: String,
     val evaluationMs: Long,
+)
+
+/**
+ * Declared build-structure inventory (plan 069, research finding F19: modularization/IDE-sync ROI).
+ * Collection-only in v1 — the module-count trend and modularization rules are a later, foregrounded
+ * follow-up that ships once this data has ridden across enough builds (the fingerprints-then-compare
+ * ordering of plan 022 → its comparison endpoint).
+ *
+ * [projectCount]/[maxDepth]/[includedBuildCount] come from a config-time walk of the declared
+ * `ProjectDescriptor` tree (`settingsEvaluated`, settings-level metadata — IP-legal, unlike the
+ * plan-016 task dictionary); [buildSrcPresent]/[sourcesInRoot]/[emptyIntermediateCandidates] are
+ * resolved by execution-time filesystem probes so no config-phase file read becomes a CC fingerprint
+ * input (architecture §2 rule 9). Every field is nullable — a build where the walk/probes never ran
+ * (master switch off, a guarded failure) reports the whole block as `null` (honest nulls, plan 005),
+ * never a half-populated one.
+ */
+@Serializable
+data class BuildStructureInfo(
+    val projectCount: Int? = null,
+    /** Deepest declared project path, in path segments (`:libs:legacy:foo` = 3); root is 0. */
+    val maxDepth: Int? = null,
+    val includedBuildCount: Int? = null,
+    /** `<rootDir>/buildSrc` exists. */
+    val buildSrcPresent: Boolean? = null,
+    /** `<rootDir>/src` exists (a root-level source set alongside declared subprojects). */
+    val sourcesInRoot: Boolean? = null,
+    /**
+     * Gradle paths (`:libs:legacy`, never a filesystem path — spec §3.7) of declared projects that
+     * have children but no build file of their own — the `allprojects{}`-configured-aggregator shape.
+     * A **ranked heuristic candidate list, not a verdict**: this is a *recommended* Gradle pattern too,
+     * so the plugin ships only the structural fact; the modularize/delete judgment is downstream,
+     * longitudinal, and deferred. Sorted for determinism and capped in the collecting `ValueSource`
+     * (no `PayloadCapper` change — there is no free text here to bound).
+     */
+    val emptyIntermediateCandidates: List<String> = emptyList(),
 )
 
 /**
@@ -307,6 +349,12 @@ data class EnvironmentInfo(
     val aiAgent: String? = null,
     /** Invocation-switch & performance-flag posture (plan 051); null when uncaptured. */
     val invocation: InvocationInfo? = null,
+    /**
+     * Isolated-projects feature activation (plan 069, research F19): the plugin has computed
+     * `buildFeatures.isolatedProjects.active` at `whenReady` since plan 021 but never shipped it;
+     * starts the series accruing for a future before/after-IP benefit comparison (not built here).
+     */
+    val isolatedProjects: Boolean? = null,
 )
 
 @Serializable

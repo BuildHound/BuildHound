@@ -389,6 +389,48 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `assemble maps a collected build-structure onto BuildStructureInfo`() {
+        val structure = CollectedBuildStructure(
+            projectCount = 12,
+            maxDepth = 3,
+            includedBuildCount = 1,
+            buildSrcPresent = true,
+            sourcesInRoot = false,
+            emptyIntermediateCandidates = listOf(":libs:legacy"),
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), buildStructure = structure)
+
+        val info = payload.buildStructure ?: error("expected a buildStructure block")
+        assertEquals(12, info.projectCount)
+        assertEquals(3, info.maxDepth)
+        assertEquals(1, info.includedBuildCount)
+        assertEquals(true, info.buildSrcPresent)
+        assertEquals(false, info.sourcesInRoot)
+        assertEquals(listOf(":libs:legacy"), info.emptyIntermediateCandidates)
+    }
+
+    @Test
+    fun `assemble leaves buildStructure null when nothing was captured`() {
+        assertNull(assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED))).buildStructure)
+        // An all-null/empty capture (a guarded failure degraded every dimension) reports the same
+        // as "uncaptured" — never a half-populated block.
+        val degraded = assemble(
+            tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)),
+            buildStructure = CollectedBuildStructure(),
+        )
+        assertNull(degraded.buildStructure)
+    }
+
+    @Test
+    fun `assemble maps isolatedProjects onto the environment block, defaulting to null when uncaptured`() {
+        val active = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), isolatedProjects = true)
+        assertEquals(true, active.environment?.isolatedProjects)
+
+        val uncaptured = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)))
+        assertNull(uncaptured.environment?.isolatedProjects)
+    }
+
+    @Test
     fun `assemble passes test results through and scrubs the failure message`() {
         val tests = listOf(
             dev.buildhound.commons.payload.TestTaskResult(
@@ -554,6 +596,8 @@ class PayloadAssemblerTest {
         benchmark: CollectedBenchmark? = null,
         artifacts: List<dev.buildhound.commons.payload.ArtifactSize> = emptyList(),
         projectEvaluations: List<dev.buildhound.commons.payload.ProjectEvaluation> = emptyList(),
+        buildStructure: CollectedBuildStructure? = null,
+        isolatedProjects: Boolean? = null,
         environment: CollectedEnvironment = CollectedEnvironment(
             os = "Linux", arch = "amd64", cores = 8, ramMb = 16_000,
             hostnameHash = "h_0123456789ab", userId = "u_0123456789ab",
@@ -596,6 +640,8 @@ class PayloadAssemblerTest {
         agp = agp,
         kgp = kgp,
         ksp = ksp,
+        buildStructure = buildStructure,
+        isolatedProjects = isolatedProjects,
     )
 
     private fun task(

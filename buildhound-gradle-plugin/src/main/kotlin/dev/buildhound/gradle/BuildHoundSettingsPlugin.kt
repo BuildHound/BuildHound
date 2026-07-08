@@ -78,6 +78,14 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // Sibling mailbox for the detected AGP/KGP/KSP versions (plan 046), filled by the same
         // `whenReady` callback and replayed from the CC entry on a hit.
         val toolchainHolder = AtomicReference(DetectedToolchain())
+        // Sibling mailbox for the declared build-structure inventory (plan 069, research F19),
+        // filled by `projectsLoaded` — earlier than `whenReady`, since the descriptor tree only
+        // populates after the settings script's include(...) calls run (apply() itself is too
+        // early); NOT `settingsEvaluated` (the plan's original choice) — `Gradle.includedBuilds`
+        // throws there (verified empirically), and is only safe to read from `projectsLoaded` on.
+        // Replayed from the CC entry on a hit via the BuildStructureValueSource parameters below
+        // (same channel as toolchainHolder).
+        val buildStructureHolder = AtomicReference(CapturedBuildStructure())
         // Internal test seam (mirrors the other `buildhound.internal.*` failpoints): when any of
         // these is set, its value is reported verbatim instead of walking the project graph — lets
         // the TestKit suite exercise the whenReady→service→payload channel (and its CC replay)
@@ -125,6 +133,13 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // value but "false" to arm the "dictionary walk throws" failpoint.
         val failTaskGraphSnapshot = settings.providers
             .gradleProperty("buildhound.internal.failTaskGraphSnapshot")
+            .map { it != "false" }
+            .getOrElse(false)
+        // Internal test seam, same shape as failTaskGraphSnapshot above: forces the
+        // projectsLoaded descriptor walk (plan 069) to throw, exercising its never-fail
+        // degrade-to-null path without a heavy real-monorepo fixture.
+        val failBuildStructureSnapshot = settings.providers
+            .gradleProperty("buildhound.internal.failBuildStructureSnapshot")
             .map { it != "false" }
             .getOrElse(false)
         val collectTests = extension.tests.collect
@@ -256,6 +271,21 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             // to degrade). Under `.gradle` (not `build/`) so a same-invocation `clean` can't wipe it (the
             // plan-044 rationale, same as the identity salt / test-location sidecar).
             installProjectEvaluationCollector(settings.gradle, File(settings.rootDir, ".gradle/buildhound/config-timings"))
+            // Build-structure inventory (plan 069, research F19): projectsLoaded is the earliest
+            // configuration-time hook where both the descriptor tree AND includedBuilds are safe to
+            // read (settingsEvaluated throws on Gradle.includedBuilds, verified empirically) — still
+            // before any project's build script evaluates. Gated on the raw master switch, like the
+            // two installers above — not the DSL-overridable extension.enabled — so a later
+            // `buildhound { enabled = true }` cannot re-arm a walk this switch already skipped (the
+            // same accepted limitation those two installers carry).
+            settings.gradle.projectsLoaded {
+                runCatching {
+                    check(!failBuildStructureSnapshot) { "build-structure snapshot failpoint" }
+                    buildStructureHolder.set(BuildStructureWalker.walk(settings))
+                }.onFailure {
+                    logger.warn("[buildhound] build-structure descriptor walk failed (build unaffected): {}", it.message)
+                }
+            }
         }
 
         // End-of-build JVM process probe (plan 029). enabled is master AND the block toggle; the exec
@@ -322,6 +352,22 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.cliProjectProperties.set(settings.startParameter.projectProperties)
         }
 
+        // Build-structure inventory (plan 069, research F19): the projectsLoaded walk above bakes
+        // the descriptor map + counts into these ValueSource parameters at configuration time; obtain()
+        // runs the filesystem .exists() probes at execution time (VcsValueSource/FingerprintValueSource
+        // CC rationale), so nothing here becomes a configuration-cache fingerprint input, and the
+        // probes stay fresh across a CC hit like those two ValueSources' own probes do.
+        val buildStructure = settings.providers.of(BuildStructureValueSource::class.java) { spec ->
+            spec.parameters.enabled.set(extension.enabled)
+            spec.parameters.rootDir.set(settings.rootDir.absolutePath)
+            spec.parameters.projectCount.set(settings.providers.provider { buildStructureHolder.get().projectCount })
+            spec.parameters.maxDepth.set(settings.providers.provider { buildStructureHolder.get().maxDepth })
+            spec.parameters.includedBuildCount.set(
+                settings.providers.provider { buildStructureHolder.get().includedBuildCount },
+            )
+            spec.parameters.descriptors.set(settings.providers.provider { buildStructureHolder.get().descriptors })
+        }
+
         // Flow API is the CC-safe "build finished" hook (spec §3.2). The finalizer
         // assembles the payload and writes it next to the build outputs; the HTML
         // artifact and upload chunks build on it. It must never fail the build.
@@ -356,6 +402,12 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.ci.set(ci)
             spec.parameters.benchmark.set(benchmark)
             spec.parameters.processes.set(processes)
+            spec.parameters.buildStructure.set(buildStructure)
+            // Isolated-projects flag (plan 069, research F19): the plugin already computes this at
+            // whenReady (line ~140 above) but had never shipped it. A plain scalar baked at apply()
+            // time — parallel to configurationCacheRequested below — so it stays accurate whether the
+            // finalizer runs after a CC store or replays a CC hit.
+            spec.parameters.isolatedProjectsActive.set(buildFeatures.isolatedProjects.active.getOrElse(false))
             spec.parameters.configurationCacheRequested.set(buildFeatures.configurationCache.requested.getOrElse(false))
             // Lazy: the settings script sets rootProject.name after apply() runs.
             spec.parameters.projectKey.set(settings.providers.provider { settings.rootProject.name })

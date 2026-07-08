@@ -107,6 +107,29 @@ class GoldenPayloadTest {
         assertTrue(payload.extensions.isEmpty())
         // Additive guarantee (plan 052): a payload without a `projectEvaluations` block defaults to null.
         assertNull(payload.projectEvaluations)
+        // Additive guarantee (plan 069): a payload without a `buildStructure` block, and an
+        // `environment` without `isolatedProjects`, both default to null.
+        assertNull(payload.buildStructure)
+        assertNull(payload.environment?.isolatedProjects)
+    }
+
+    @Test
+    fun `schema v1 build-structure golden file deserializes with a populated inventory and isolatedProjects flag`() {
+        val payload = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            golden("build-payload-v1-build-structure.json"),
+        )
+
+        assertEquals(1, payload.schemaVersion, "build-structure inventory is additive — the envelope stays schema v1")
+        assertEquals(true, payload.environment?.isolatedProjects)
+        val structure = payload.buildStructure ?: error("expected a buildStructure block")
+        assertEquals(42, structure.projectCount)
+        assertEquals(3, structure.maxDepth)
+        assertEquals(1, structure.includedBuildCount)
+        assertEquals(true, structure.buildSrcPresent)
+        assertEquals(false, structure.sourcesInRoot)
+        // A ranked heuristic candidate list, not a verdict — Gradle paths only, never a filesystem path.
+        assertEquals(listOf(":libs", ":libs:legacy"), structure.emptyIntermediateCandidates)
     }
 
     @Test
@@ -416,6 +439,7 @@ class GoldenPayloadTest {
             "build-payload-v1-sharding.json",
             "build-payload-v1-failure-detail.json",
             "build-payload-v1-project-evaluations.json",
+            "build-payload-v1-build-structure.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)
