@@ -157,8 +157,36 @@ gap this plan deliberately leaves open.
 - A compliant (already client-scrubbed) payload is byte-identical after the server's pass —
   pinned by the new idempotency unit test.
 - The micro-benchmark test logs a concrete per-ingest scrub cost on a 20,000-task payload and
-  stays under its loose bound.
+  stays under its loose bound. **Measured:** ~1835-1883ms across three cold-JVM runs on the
+  reference dev machine (`IngestScrubTest.scrub cost on a 20,000-task payload logs under a loose
+  bound`); the assertion bound is `< 5000ms` (widened from this doc's original `< 2000ms`
+  example — the measured number left only ~7% headroom under 2000ms, too tight to avoid flaking
+  on a slower CI runner or a colder JIT; see Divergences).
 - `Warnings.kt`'s response-time `scrubText` guard (`8916dcf`) is left in place, with its KDoc
   updated to note it is now belt-and-braces for post-076 data and the sole protection for
   pre-076 stored rows.
 - `./gradlew build` green; no commons/payload/golden change.
+
+## Divergences (implementation notes)
+
+- **Idempotency test relocated out of `PayloadScrubberTest` (commons).** This plan specified the
+  idempotency unit test as a new case in `buildhound-commons`' `PayloadScrubberTest.kt`. The
+  implementation session ran concurrently with another agent holding uncommitted edits across
+  `buildhound-commons`/`buildhound-gradle-plugin`/`buildhound-ci-assets` and was under a hard
+  constraint not to touch those modules. `PayloadScrubber` is KMP-pure and already a compile
+  dependency of `buildhound-server` (`Warnings.kt` already imports it), so the identical case —
+  scrub with a real root, then scrub the output again with `emptyList()`, assert byte-identical —
+  is implemented instead in `buildhound-server`'s `IngestScrubTest` (`a client-scrubbed payload is
+  byte-identical after the server's empty-root pass`). No scrubber behavior changed; only where
+  the proof lives. Follow-up: port/duplicate this case into `PayloadScrubberTest` once commons is
+  free, per the "one committed plan per feature" discipline this repo otherwise favors having the
+  test live alongside the code it most directly documents.
+- **Scrub-error handling (plan was silent).** The plan's Design section does not say what happens
+  if `PayloadScrubber.scrub` throws unexpectedly at ingest. Implemented as: `runCatching { … }`
+  around the scrub call, falling back to the raw (unscrubbed) payload — which still goes through
+  `PayloadCapper.cap` and storage — with a `warn` log naming the project and exception type. This
+  mirrors the plugin-side "never fail a build" bias (`CLAUDE.md`) applied to the server's own
+  "never fail ingest" equivalent, and is a pure defense-in-depth measure: `PayloadScrubber` is
+  pure functional code with no I/O, so this path is not expected to be reachable in practice.
+- **Micro-benchmark bound widened from the doc's `< 2000ms` example to `< 5000ms`.** See Exit
+  criteria above for the measured number and rationale.
