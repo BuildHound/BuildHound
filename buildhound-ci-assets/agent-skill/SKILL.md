@@ -37,9 +37,10 @@ last. All three describe the **same** underlying signals, so pick whichever is a
 
 ### 1. The standalone HTML report (zero network, always available first)
 
-Every BuildHound build writes a self-contained report to `build/buildhound/buildhound-report.html`
-in the project that ran the build. It makes **zero external requests** — it is a single HTML
-file with the payload inlined as JSON in a `<script>` element:
+By default, every BuildHound build writes a self-contained report to
+`build/buildhound/buildhound-report.html` in the project that ran the build (disable it with
+`buildhound { htmlReport { enabled = false } }`). It makes **zero external requests** — it is a
+single HTML file with the payload inlined as JSON in a `<script>` element:
 
 ```
 const buildhoundData = { ... };
