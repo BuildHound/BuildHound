@@ -190,6 +190,14 @@ const responses = {
     "/v1/rollups/negative-avoidance?days=30": [
         { key: "checkstyle", count: 5, totalExcessMs: 12000, worstExcessMs: 4000 },
     ],
+    // Owning-plugin cost rollup (plan 058): lazily fetched only when "By plugin" is clicked.
+    "/v1/rollups/plugin-cost?days=30": {
+        available: true,
+        plugins: [
+            { plugin: "Kotlin Gradle Plugin", totalMs: 800000, count: 40, sharePct: 0.8 },
+            { plugin: "(unattributed)", totalMs: 200000, count: 10, sharePct: 0.2 },
+        ],
+    },
     // Benchmark series (plan 030): one scenario with two isolation modes, percentile summaries.
     "/v1/benchmark/series?days=90": [
         {
@@ -227,6 +235,12 @@ const responses = {
         cacheDataAvailable: true,
         budgetBreaches: null,
         trendRegressions: null,
+        // Top plugins by time (plan 058): omitted entirely on period=14/30 below to also cover the
+        // additive-field-absent (older-server) rendering path.
+        topPlugins: [
+            { key: "Kotlin Gradle Plugin", currentMs: 5000, count: 8 },
+            { key: "(unattributed)", currentMs: 800, count: 4 },
+        ],
     },
     "/v1/rollups/bottlenecks?period=14": {
         period: 14,
@@ -519,6 +533,14 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     clickButton(byId["app"], "By type");
     if (!hasText(byId["app"], "Task types not populated yet")) throw new Error("by-type empty state missing when byTypeAvailable is false");
 
+    // Owning-plugin grouping (plan 058): lazily fetched only once "By plugin" is clicked.
+    if (fetched.includes("/v1/rollups/plugin-cost?days=30")) throw new Error("plugin-cost must not fetch before the by-plugin button is clicked");
+    clickButton(byId["app"], "By plugin");
+    await tick(); await tick();
+    if (!fetched.includes("/v1/rollups/plugin-cost?days=30")) throw new Error("by-plugin toggle did not fetch plugin-cost");
+    if (!hasText(byId["app"], "Kotlin Gradle Plugin")) throw new Error("by-plugin row missing");
+    if (!hasText(byId["app"], "80%")) throw new Error("by-plugin share missing");
+
     // Benchmark series (plan 030): per-scenario percentile chips + chart, isolation selector, empty state.
     context.location.hash = "#/benchmark"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/benchmark/series?days=90")) throw new Error("benchmark view did not fetch the series");
@@ -547,6 +569,8 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasExact(byId["app"], "new")) throw new Error("new-group flag missing");
     if (!hasExact(byId["app"], "gone")) throw new Error("vanished-group flag missing");
     if (!hasText(byId["app"], "CacheMissType")) throw new Error("cache-miss hotspot row missing");
+    if (!hasText(byId["app"], "Top plugins by time")) throw new Error("top-plugins card header missing");
+    if (!hasText(byId["app"], "Kotlin Gradle Plugin")) throw new Error("top-plugins row missing");
     if (!hasText(byId["app"], "Toolchain adoption")) throw new Error("toolchain section missing");
     if (!hasText(byId["app"], "8.10")) throw new Error("toolchain version row missing");
     if (!hasText(byId["app"], "behind the latest")) throw new Error("toolchain behind list missing");

@@ -58,7 +58,7 @@ class RollupRoutesTest {
     @Test
     fun `each rollup route needs a read token`() = testApplication {
         val fx = fx(); appWith(fx)
-        for (path in listOf("/v1/rollups/project-cost", "/v1/rollups/task-duration", "/v1/rollups/negative-avoidance")) {
+        for (path in listOf("/v1/rollups/project-cost", "/v1/rollups/task-duration", "/v1/rollups/negative-avoidance", "/v1/rollups/plugin-cost")) {
             assertEquals(HttpStatusCode.Unauthorized, client.get(path).status, path)
             assertEquals(HttpStatusCode.Forbidden, get(path, token = "ingest-token").status, "$path with ingest scope")
         }
@@ -110,6 +110,61 @@ class RollupRoutesTest {
     }
 
     @Test
+    fun `plugin cost folds tasks by owning-plugin FQCN prefix, with an honest unattributed bucket`() = testApplication {
+        val fx = fx(); appWith(fx)
+        fx.stores.builds.save(
+            fx.project.id,
+            TestPayloads.build(
+                buildId = "pc-1", startedAt = recent,
+                tasks = listOf(
+                    TestPayloads.task(":app:compileKotlin", TaskOutcome.EXECUTED, 6000, type = "org.jetbrains.kotlin.gradle.tasks.KotlinCompile"),
+                    TestPayloads.task(":app:javac", TaskOutcome.EXECUTED, 2000, type = "org.gradle.api.tasks.compile.JavaCompile"),
+                    TestPayloads.task(":app:custom", TaskOutcome.EXECUTED, 2000, type = "com.example.MyTask"),
+                ),
+            ),
+        )
+        val body = get("/v1/rollups/plugin-cost").bodyAsText()
+        assertTrue(body.contains("\"available\":true"), body)
+        assertTrue(body.contains("\"plugin\":\"Kotlin Gradle Plugin\""), body)
+        assertTrue(body.contains("\"totalMs\":6000"), body)
+        assertTrue(body.contains("\"plugin\":\"Gradle core\""), body)
+        assertTrue(body.contains("\"plugin\":\"(unattributed)\""), "a build-script-defined type must not be silently dropped: $body")
+        assertTrue(body.contains("\"sharePct\":0.6"), "6000 / 10000 total: $body")
+    }
+
+    @Test
+    fun `plugin cost is unavailable when no ingested task carries a type, but still folds an honest row`() = testApplication {
+        val fx = fx(); appWith(fx)
+        fx.stores.builds.save(
+            fx.project.id,
+            TestPayloads.build(
+                buildId = "notype", startedAt = recent,
+                tasks = listOf(TestPayloads.task(":app:x", TaskOutcome.EXECUTED, 100)),
+            ),
+        )
+        val body = get("/v1/rollups/plugin-cost").bodyAsText()
+        assertTrue(body.contains("\"available\":false"), body)
+        assertTrue(body.contains("\"plugin\":\"(unattributed)\""), body)
+    }
+
+    @Test
+    fun `plugin cost is tenant-scoped`() = testApplication {
+        val fx = fx(); appWith(fx)
+        fx.stores.builds.save(
+            fx.project.id,
+            TestPayloads.build(
+                buildId = "pc-2", startedAt = recent,
+                tasks = listOf(TestPayloads.task(":app:compileKotlin", TaskOutcome.EXECUTED, 1000, type = "org.jetbrains.kotlin.gradle.tasks.KotlinCompile")),
+            ),
+        )
+        val other = fx.stores.tokens.ensureProjectWithToken("other", sha256Hex("other-token"), TokenScope.READ)
+        assertTrue(other.id != fx.project.id)
+        val body = get("/v1/rollups/plugin-cost", token = "other-token").bodyAsText()
+        assertTrue(body.contains("\"available\":false"), "a fresh tenant has no plugin-cost data: $body")
+        assertTrue(body.contains("\"plugins\":[]"), body)
+    }
+
+    @Test
     fun `rollups are tenant-scoped — another project's builds never appear`() = testApplication {
         val fx = fx(); appWith(fx)
         seedRollupFixture(fx)
@@ -127,5 +182,7 @@ class RollupRoutesTest {
         // days=0 clamps to 1; days far in the past still returns 200 with a valid body.
         assertEquals(HttpStatusCode.OK, get("/v1/rollups/task-duration?days=0").status)
         assertEquals(HttpStatusCode.OK, get("/v1/rollups/task-duration?days=99999").status)
+        assertEquals(HttpStatusCode.OK, get("/v1/rollups/plugin-cost?days=0").status)
+        assertEquals(HttpStatusCode.OK, get("/v1/rollups/plugin-cost?days=99999").status)
     }
 }

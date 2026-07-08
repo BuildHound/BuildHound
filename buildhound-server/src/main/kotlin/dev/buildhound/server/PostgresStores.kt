@@ -562,6 +562,57 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             }
         }
 
+    /**
+     * Owning-plugin cost rollup (plan 058, research F8 Layer 1): reuses [taskRowsInDaysWindow] — the
+     * same days-window, benchmark-included population [taskDuration]/[projectCost]/[negativeAvoidance]
+     * read directly above (their SQL just aggregates it differently) — and defers to
+     * [RollupCalculator.pluginCost] the way [rerunCauses] defers to its own calculator, since the
+     * FQCN-prefix → plugin mapping has no SQL equivalent.
+     */
+    override fun pluginCost(projectId: String, days: Int, nowMs: Long): PluginCostRollup =
+        dataSource.connection.use { connection ->
+            RollupCalculator.pluginCost(taskRowsInDaysWindow(connection, projectId, days, nowMs))
+        }
+
+    /**
+     * Flat task rows for the **days-window, benchmark-included** convention [taskDuration]/
+     * [projectCost]/[negativeAvoidance] use (`started_at >= cutoff`, no upper bound, no `builds` join
+     * or mode exclusion) — [pluginCost]'s shape (plan 058), as opposed to [taskRowsBetween]'s
+     * period-window, benchmark-**excluded** convention ([bottlenecks]/[rerunCauses]). `buildWallMs`
+     * isn't fetched (no `builds` join here, and [RollupCalculator.pluginCost] never reads it) — set to
+     * 0, a harmless placeholder no consumer reads.
+     */
+    private fun taskRowsInDaysWindow(connection: java.sql.Connection, projectId: String, days: Int, nowMs: Long): List<TaskRow> =
+        connection.prepareStatement(
+            """
+            SELECT build_id, user_id, module, name, type, outcome, duration_ms, cacheable, execution_reasons
+            FROM task_executions WHERE project_id = ? AND started_at >= ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setObject(1, UUID.fromString(projectId))
+            statement.setObject(2, cutoff(days, nowMs))
+            statement.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        add(
+                            TaskRow(
+                                buildId = rows.getString("build_id"),
+                                userId = rows.getString("user_id"),
+                                module = rows.getString("module"),
+                                name = rows.getString("name"),
+                                type = rows.getString("type"),
+                                outcome = rows.getString("outcome"),
+                                durationMs = rows.getLong("duration_ms"),
+                                buildWallMs = 0L,
+                                cacheable = rows.getBoolean("cacheable").takeUnless { rows.wasNull() },
+                                executionReasons = executionReasonsOf(rows),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
     override fun benchmarkSeries(
         projectId: String,
         scenario: String?,
