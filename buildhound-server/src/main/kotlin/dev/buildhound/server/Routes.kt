@@ -771,7 +771,9 @@ private fun ApplicationCall.buildFilterOrNull(): BuildFilter? {
  * Parses `tag.<key>=<value>` params into the [BuildFilter.tags] equality map (plan 057); null when
  * a key/value exceeds the same char caps ingest enforces ([PayloadCaps] — single source of truth,
  * commons untouched) — the route rejects with 400 rather than silently truncating a filter, unlike
- * the ingest-side clamp.
+ * the ingest-side clamp. Also caps the number of distinct `tag.` params at [PayloadCaps.maxTags],
+ * mirroring the same cap ingest's [dev.buildhound.commons.payload.PayloadCapper] enforces on a
+ * payload's tag map — symmetric ceilings on both the write and the read/query path.
  */
 private fun ApplicationCall.buildTagFilterOrNull(): Map<String, String>? {
     val caps = PayloadCaps.DEFAULT
@@ -783,6 +785,7 @@ private fun ApplicationCall.buildTagFilterOrNull(): Map<String, String>? {
         if (key.isEmpty() || key.length > caps.maxKeyChars || value.length > caps.maxValueChars) return null
         tags[key] = value
     }
+    if (tags.size > caps.maxTags) return null
     return tags
 }
 

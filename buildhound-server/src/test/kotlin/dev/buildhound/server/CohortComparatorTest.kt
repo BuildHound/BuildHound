@@ -45,6 +45,22 @@ class CohortComparatorTest {
     }
 
     @Test
+    fun `reference selection ties on sample count break deterministically by value ascending`() {
+        // Both cohorts have exactly 3 (finished) builds -- durationsMs.size is tied -- so the
+        // compareByDescending{ size }.thenBy{ value } tie-break must be what decides the reference,
+        // never arrival order. "a" sorts before "b", so "a" must win regardless of list order.
+        val a = raw("a", listOf(10, 20, 30))
+        val b = raw("b", listOf(100, 200, 300))
+
+        val forward = CohortComparator.compare("k", listOf(a, b))
+        val reversed = CohortComparator.compare("k", listOf(b, a))
+
+        assertEquals("a", forward.delta?.referenceValue, "tied sample counts must break by value ascending, not arrival order")
+        assertEquals("a", reversed.delta?.referenceValue, "the tie-break must be independent of input order")
+        assertEquals(forward, reversed, "the whole comparison result must be identical regardless of input order")
+    }
+
+    @Test
     fun `a cohort under MIN_BASELINE builds is INSUFFICIENT_DATA, never a claimed delta`() {
         val reference = raw("false", listOf(80, 95, 100, 105, 140))
         val tooFew = raw("true", listOf(50, 60)) // 2 < RegressionEngine.MIN_BASELINE (3)

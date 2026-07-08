@@ -1,4 +1,11 @@
 -- GIN index over payload->'tags' (plan 057): accelerates the tag-cohort feature's `@>` equality
--- containment filter (BuildFilter.tags) and the cohort split's `->>` key lookup. Additive only —
--- no column or table change, no backfill; `tags` has been part of the schema since v1.
+-- containment filter (BuildFilter.tags) and the cohort split's key-existence check
+-- (`payload -> 'tags' ? tagKey`, PostgresStores.tagCohortTrends). The default jsonb_ops opclass
+-- only indexes `@>`, `?`, `?&`, `?|` — the `->>` value-extraction operator used for the cohort
+-- value projection is never accelerated by this index and always falls back to a table/heap scan
+-- for that part of the row. Additive only — no column or table change, no backfill; `tags` has
+-- been part of the schema since v1.
+-- Non-CONCURRENT CREATE INDEX takes a brief exclusive write lock on `builds`; accepted for v1
+-- given the small table sizes expected at migration time (Flyway-managed, so this file is not
+-- edited again — see docs/architecture.md decision log for future CONCURRENTLY migration).
 CREATE INDEX builds_tags_gin_idx ON builds USING gin ((payload -> 'tags'));
