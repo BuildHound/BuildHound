@@ -254,6 +254,15 @@ interface BuildStore {
      */
     fun classTimings(projectId: String, days: Int, nowMs: Long): Map<String, List<Long>>
 
+    /**
+     * Per-project metrics snapshot over the last [days] (plan 070): the Prometheus egress endpoint's
+     * source. Both stores fetch the same windowed [BuildKpiRow]s the bottlenecks/trends rollups already
+     * fetch (benchmark builds excluded, same fleet-view convention) plus the windowed `derived.avoidedMs`
+     * values, and defer to [MetricsSnapshotCalculator]; the flaky count reuses [flaky]'s own detector
+     * output rather than re-deriving it.
+     */
+    fun metricsSnapshot(projectId: String, days: Int, nowMs: Long): MetricsSnapshot
+
     /** Every project id with stored data (retention sweep, plan 042); default empty for a store that has none. */
     fun allProjectIds(): List<String> = emptyList()
 
@@ -351,6 +360,7 @@ object TokenScope {
     const val ADDON = "addon"
     const val ADMIN = "admin"
     const val ALL = "all"
+    const val METRICS = "metrics"
 
     fun allowsIngest(scope: String): Boolean = scope == INGEST || scope == ALL
     fun allowsRead(scope: String): Boolean = scope == READ || scope == ALL
@@ -365,6 +375,13 @@ object TokenScope {
     fun allowsAdmin(scope: String): Boolean = scope == ADMIN || scope == ALL
 
     fun allowsAll(scope: String): Boolean = scope == ALL
+
+    /**
+     * Prometheus scrape API (plan 070): a narrow scrape-only token that can mint metrics egress without
+     * also granting `/v1/builds` history — `read`/`all` are supersets (an ops team that already trusts a
+     * `read` token with history can reuse it for scraping too).
+     */
+    fun allowsMetrics(scope: String): Boolean = scope == METRICS || scope == READ || scope == ALL
 }
 
 data class TokenPrincipal(val project: ProjectRef, val scope: String)
@@ -579,6 +596,18 @@ class InMemoryBuildStore : BuildStore {
             )
             .take(FlakyDetector.MAX_OUTCOME_ROWS)
         return FlakyDetector.detect(rows)
+    }
+
+    override fun metricsSnapshot(projectId: String, days: Int, nowMs: Long): MetricsSnapshot {
+        // Same fleet-view window as bottlenecks/trends (benchmark builds excluded) — reuses the
+        // existing payloadsBetween/kpiRowOf helpers so the two stores agree by construction.
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+        return MetricsSnapshotCalculator.compute(
+            windowDays = days,
+            builds = windowed.map { kpiRowOf(it) },
+            flakyRecordCount = flaky(projectId, days, nowMs).size,
+            avoidedMsValues = windowed.mapNotNull { it.derived?.avoidedMs },
+        )
     }
 
     override fun classTimings(projectId: String, days: Int, nowMs: Long): Map<String, List<Long>> {

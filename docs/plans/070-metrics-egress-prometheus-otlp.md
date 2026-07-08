@@ -117,6 +117,27 @@ story ("your Grafana dashboards keep working").
   is read-only-narrow, so a leak exposes only aggregate KPIs for one tenant, never history or ingest.
 - **Infra review:** `deploy/grafana/*` is an infra path → route to `infra-reviewer` in §3 review.
 
+## Divergences from this plan (implementation notes)
+
+- **Percentiles are a local, server-only nearest-rank function, not an extracted/generalized
+  `BenchmarkSeriesCalculator`.** The Design section says to "extract/generalize" the commons
+  `BenchmarkSeriesCalculator` to add p95 ("no new copy"), but the plan's own "Modules touched" line
+  states this slice is server-only and lists no `buildhound-commons` change — the two statements
+  contradict each other. Implementation honors the module-scope line: `MetricsSnapshotCalculator`
+  (`buildhound-server`) carries its own private nearest-rank `percentile()` (p50/p95), matching the
+  existing precedent of `LptBalancer.p90` — a server-local nearest-rank percentile that already lives
+  outside commons for the same reason (a server-only feature has no business depending on/mutating a
+  KMP-shared calculator). No `buildhound-commons` file is touched by this change.
+- **`buildhound_builds` and `buildhound_flaky_tests` are exposed as Prometheus `gauge`, not `counter`.**
+  The Design section's prose calls `buildhound_builds` "the build counter", but both metrics are
+  *windowed* (the plan's own words: "windowed build counts") — non-monotonic values that fall as
+  builds/records age out of the trailing window. A Prometheus `counter` is defined as monotonically
+  increasing over the process lifetime; `rate()`/`increase()` treat any observed drop as a process
+  restart. Typing a windowed value as `counter` would silently corrupt those PromQL functions for any
+  consumer who (reasonably, given the type) tries to rate() it. `# TYPE ... gauge` is emitted for both;
+  `deploy/grafana/buildhound-dashboard.json` and its README call this out and chart the raw values
+  directly, with no `rate()`/`increase()` anywhere.
+
 ## Exit criteria
 
 - `GET /v1/metrics/prometheus` returns `200 text/plain; version=0.0.4` with the caller's per-project

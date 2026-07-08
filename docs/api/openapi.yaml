@@ -7,9 +7,9 @@ info:
     major-version prefix and the API is **additive within a major** — new fields/routes may appear, but
     existing shapes never break (mirroring the payload contract rule). Auth is a Bearer token whose
     scope gates the route: `ingest` (write telemetry), `read` (query history), `addon` (addon namespace),
-    `admin` (retention/admin), or `all`. A missing token is `401`, a wrong scope `403`. Storage outages
-    are `503`, oversized bodies `413`, malformed input `400`/`422`. This document is kept in lockstep
-    with the live route table by `OpenApiContractTest`.
+    `admin` (retention/admin), `metrics` (Prometheus scrape egress, plan 070), or `all`. A missing token
+    is `401`, a wrong scope `403`. Storage outages are `503`, oversized bodies `413`, malformed input
+    `400`/`422`. This document is kept in lockstep with the live route table by `OpenApiContractTest`.
   license:
     name: Apache-2.0
 servers:
@@ -23,8 +23,8 @@ components:
       type: http
       scheme: bearer
       description: >
-        A per-project token. Scopes — `ingest`, `read`, `addon`, `admin`, `all`. The tenant is derived
-        from the token, never the request body, so a token can only ever act on its own project.
+        A per-project token. Scopes — `ingest`, `read`, `addon`, `admin`, `metrics`, `all`. The tenant is
+        derived from the token, never the request body, so a token can only ever act on its own project.
   responses:
     Unauthorized:
       description: Missing or unknown bearer token.
@@ -209,6 +209,22 @@ paths:
         "413": { description: Body too large. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/metrics/prometheus:
+    get:
+      summary: Prometheus text-exposition of this project's KPIs (plan 070, F20). Metrics scope (also read/all).
+      description: >
+        p50/p95 build duration, cache hit rate, success rate, windowed build counts, flaky-unit count,
+        and avoided time for the token's own project only — never a global unauthenticated `/metrics`.
+        A KPI with no underlying samples in the window omits its line rather than emitting a spurious
+        `0`; the response is always valid exposition (still `200`) so a Prometheus target never reads
+        "down". `days` narrows the window like the other rollups (default 30, clamped to [1, 365]).
+      responses:
+        "200":
+          description: Prometheus text exposition (format 0.0.4) of this project's KPIs.
+          content: { text/plain: { schema: { type: string } } }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
   /v1/connectors/azure-devops/hook:
     post:
       summary: Azure DevOps build.complete service hook (plan 028). Ingest scope.
