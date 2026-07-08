@@ -117,4 +117,28 @@ class IsolatedProjectsFunctionalTest {
             ?: error("environment.invocation must be populated under isolated projects (settings-scope reads only)")
         assertTrue(invocation.properties.any { it.key == "org.gradle.caching" }, "the allowlist must be populated under IP")
     }
+
+    /**
+     * Build-structure inventory (plan 069, exit criteria): the `ProjectDescriptor` walk is
+     * settings-level, not `taskGraph`-derived (unlike plan 016's task dictionary), so — like
+     * [invocation block is present and non-throwing under isolated projects] above — it must stay
+     * fully populated under isolated projects, and the (previously never-shipped)
+     * `environment.isolatedProjects` flag must report `true`.
+     */
+    @Test
+    fun `build-structure inventory populates and isolatedProjects reports true under isolated projects`() {
+        setUpMultiProject()
+
+        val result = runner(":a:work", ":b:work", ipFlag).build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":a:work")?.outcome, "IP build must succeed")
+        assertFalse(
+            result.output.lineSequence().any { it.startsWith("[buildhound]") && it.contains("failed") },
+            "no BuildHound warn/failure under isolated projects:\n${result.output}",
+        )
+        val payload = readPayload()
+        val structure = payload.buildStructure ?: error("expected a populated buildStructure block under IP")
+        assertTrue((structure.projectCount ?: 0) > 0, "expected projectCount > 0 under IP: ${structure.projectCount}")
+        assertEquals(true, payload.environment?.isolatedProjects)
+    }
 }

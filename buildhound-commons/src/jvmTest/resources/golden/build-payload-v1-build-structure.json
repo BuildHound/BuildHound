@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "buildId": "e5f6a7b8-c9d0-4e1f-8a2b-3c4d5e6f7a8b",
+  "projectKey": "pilot-monorepo",
+  "startedAt": 1751700000000,
+  "finishedAt": 1751700009000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["build"],
+  "mode": "ci",
+  "environment": {
+    "os": "Linux",
+    "configurationCache": "MISS_STORED",
+    "isolatedProjects": true
+  },
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:assemble",
+      "module": ":app",
+      "startMs": 1751700004000,
+      "durationMs": 5000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "buildStructure": {
+    "projectCount": 42,
+    "maxDepth": 3,
+    "includedBuildCount": 1,
+    "buildSrcPresent": true,
+    "sourcesInRoot": false,
+    "emptyIntermediateCandidates": [":libs", ":libs:legacy"]
+  }
+}

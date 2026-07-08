@@ -7,6 +7,7 @@ import dev.buildhound.commons.payload.BenchmarkInfo
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.BuildStructureInfo
 import dev.buildhound.commons.payload.CiInfo
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
@@ -108,6 +109,11 @@ internal object PayloadAssembler {
         agp: String? = null,
         kgp: String? = null,
         ksp: String? = null,
+        // Declared build-structure inventory (plan 069, research F19); null when the projectsLoaded
+        // walk never ran (master switch off) or a guarded failure degraded it.
+        buildStructure: CollectedBuildStructure? = null,
+        // Isolated-projects activation (plan 069); null only when [environment] itself is absent.
+        isolatedProjects: Boolean? = null,
     ): BuildPayload {
         // Mirror the benchmark keys into tags (spec's tag contract), but user tags win on clash.
         val mergedTags = if (benchmark == null) {
@@ -157,6 +163,8 @@ internal object PayloadAssembler {
                     aiAgent = it.aiAgent,
                     // Invocation-switch & performance-flag posture (plan 051); null when uncaptured.
                     invocation = invocationInfo(invocation),
+                    // Isolated-projects activation (plan 069); rides alongside configurationCache.
+                    isolatedProjects = isolatedProjects,
                 )
             },
             // AGP/KGP/KSP (plan 046) join Gradle/JDK here; emitted whenever any dimension is known,
@@ -194,6 +202,8 @@ internal object PayloadAssembler {
             // top-N cardinality cap (PayloadCapper) keeps the projects that carry the signal. Null when
             // nothing was captured (a CC hit, or a build too fast/degenerate to leave any timing).
             projectEvaluations = projectEvaluations.takeIf { it.isNotEmpty() }?.sortedByDescending { it.evaluationMs },
+            // Declared build-structure inventory (plan 069, research F19); null when uncaptured.
+            buildStructure = buildStructureInfo(buildStructure),
             // End-of-build JVM process snapshot (plan 029); empty when disabled/unobservable. Numeric
             // + enum only — nothing for the scrubber to touch (no PID, path, or command line).
             processes = processes.map {
@@ -255,6 +265,33 @@ internal object PayloadAssembler {
             fileEncoding = invocation.fileEncoding,
             locale = invocation.locale,
             properties = invocation.properties.map { GradlePropertyPosture(it.key, it.value, it.origin) },
+        )
+    }
+
+    /**
+     * Maps the plugin-side [CollectedBuildStructure] DTO onto the wire [BuildStructureInfo] (plan
+     * 069). Null when [structure] itself is null (the walk/probes never ran) or when every field is
+     * null/empty (a guarded failure degraded every dimension) — an all-unknown capture reports the
+     * same as "uncaptured", never a half-populated block.
+     */
+    private fun buildStructureInfo(structure: CollectedBuildStructure?): BuildStructureInfo? {
+        if (structure == null) return null
+        if (structure.projectCount == null &&
+            structure.maxDepth == null &&
+            structure.includedBuildCount == null &&
+            structure.buildSrcPresent == null &&
+            structure.sourcesInRoot == null &&
+            structure.emptyIntermediateCandidates.isEmpty()
+        ) {
+            return null
+        }
+        return BuildStructureInfo(
+            projectCount = structure.projectCount,
+            maxDepth = structure.maxDepth,
+            includedBuildCount = structure.includedBuildCount,
+            buildSrcPresent = structure.buildSrcPresent,
+            sourcesInRoot = structure.sourcesInRoot,
+            emptyIntermediateCandidates = structure.emptyIntermediateCandidates,
         )
     }
 

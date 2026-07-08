@@ -26,8 +26,9 @@ collection-before-analysis ordering as fingerprints (plan [022](implemented/022-
 - The additive `EnvironmentInfo.isolatedProjects` flag. The plugin already computes
   `buildFeatures.isolatedProjects.active` at `whenReady` (`BuildHoundSettingsPlugin.kt:123`) but
   drops it; shipping it now starts the series accruing for the future before/after-IP cut.
-- Config-time descriptor-tree capture (`settingsEvaluated`) + an execution-time
-  `BuildStructureValueSource` for the filesystem probes. New golden `build-payload-v1-build-structure.json`.
+- Config-time descriptor-tree capture (`projectsLoaded` — `settingsEvaluated` originally, revised
+  during implementation, see Design) + an execution-time `BuildStructureValueSource` for the
+  filesystem probes. New golden `build-payload-v1-build-structure.json`.
 
 **Out / deferred to a foregrounded follow-up (next free number)**
 
@@ -48,7 +49,8 @@ collection-before-analysis ordering as fingerprints (plan [022](implemented/022-
 Modules: `buildhound-gradle-plugin` (collection), `buildhound-commons` (schema + golden). No server change.
 
 - **Config-time capture — IP-safe, zero file reads.** In `BuildHoundSettingsPlugin.apply`, register
-  `settings.gradle.settingsEvaluated { }`: the descriptor tree only populates after the settings
+  `settings.gradle.projectsLoaded { }` **(implementation divergence: not `settingsEvaluated` as
+  originally planned — see note below)**: the descriptor tree only populates after the settings
   script's `include(...)` calls run, so `apply()` is too early (F19 narrowing). Walk
   `settings.rootProject` — a `ProjectDescriptor`, **not** a `Project` — into an `AtomicReference`
   mailbox (the `toolchainHolder`/`taskMetadataHolder` pattern, plans
@@ -59,6 +61,17 @@ Modules: `buildhound-gradle-plugin` (collection), `buildhound-commons` (schema +
   under isolated projects, which is exactly what makes the future before/after-IP cut possible.
   `ProjectDescriptor.buildFile` returns a path only; **no `.exists()` here** (a config-phase file read
   becomes a CC fingerprint input). Whole walk in `runCatching` → warn + empty on failure.
+
+  **Divergence from the committed plan:** `settingsEvaluated` was the intended hook, but
+  `Gradle.includedBuilds` throws `"Included builds are not yet available for this build"` when read
+  from inside it (verified empirically against the project's own Gradle distribution — `include(...)`
+  registrations exist by `settingsEvaluated`, but a composite isn't wired up until the next lifecycle
+  step). `projectsLoaded` is that next step: the descriptor tree is unchanged and `includedBuilds` is
+  populated there, it still fires before any project's build script evaluates (still configuration
+  time, still before the task graph), and it was also verified empirically to populate correctly
+  under `-Dorg.gradle.unsafe.isolated-projects=true` — so every claim this plan makes about
+  `settingsEvaluated` (IP-legal, config-time-only, no file reads) holds identically for
+  `projectsLoaded`. Only the hook name changes; the design and risk analysis below are unaffected.
 - **Execution-time probes — `BuildStructureValueSource`.** A new `ValueSource` on the
   `FingerprintValueSource` pattern (plan 022) + the capture-location/read-at-execution split of plan
   [024](implemented/024-test-collection.md): params carry the captured map + counts + `rootDir`
@@ -115,8 +128,10 @@ Modules: `buildhound-gradle-plugin` (collection), `buildhound-commons` (schema +
   aggregators (a *recommended* Gradle pattern), so the field is named "candidates", the plugin ships
   only the structural fact, and the "modularize / delete" judgment is downstream, longitudinal, and
   deferred.
-- **Never-fail.** The `settingsEvaluated` walk and `obtain()` are each `runCatching`-guarded → warn +
-  null block; the master switch gates registration. No path fails the build.
+- **Never-fail.** The `projectsLoaded` walk and `obtain()` are each `runCatching`-guarded → warn +
+  null block; the master switch gates registration. `obtain()` additionally treats `projectCount` as
+  the walk's own success signal — a failed/skipped walk degrades the *whole* block to null rather than
+  shipping `buildSrcPresent`/`sourcesInRoot` alone (found by the forced-failure functional test).
 
 ## Exit criteria
 

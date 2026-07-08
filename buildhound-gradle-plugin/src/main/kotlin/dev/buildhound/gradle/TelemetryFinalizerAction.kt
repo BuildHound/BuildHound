@@ -118,6 +118,22 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Optional
         val processes: ListProperty<CollectedProcess>
 
+        /**
+         * Declared build-structure inventory (plan 069, research F19); optional/absent when
+         * uncaptured (master switch off at apply time, or a guarded walk/probe failure).
+         */
+        @get:Input
+        @get:Optional
+        val buildStructure: Property<CollectedBuildStructure>
+
+        /**
+         * Isolated-projects activation flag (plan 069): the plugin already computes this at
+         * `whenReady` but had never shipped it. A plain scalar baked at apply() time — parallel to
+         * [configurationCacheRequested] — so it stays accurate on both a CC store and a replayed hit.
+         */
+        @get:Input
+        val isolatedProjectsActive: Property<Boolean>
+
         @get:Input
         val configurationCacheRequested: Property<Boolean>
 
@@ -357,6 +373,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 processes = parameters.processes.getOrElse(emptyList()),
                 benchmark = benchmark,
                 artifacts = artifacts,
+                // Declared build-structure inventory + isolated-projects flag (plan 069); the former
+                // is a plugin-side DTO the assembler maps to the wire BuildStructureInfo (null when
+                // unknown), the latter rides in environment.isolatedProjects.
+                buildStructure = parameters.buildStructure.orNull,
+                isolatedProjects = parameters.isolatedProjectsActive.getOrElse(false),
                 projectEvaluations = projectEvaluations.orEmpty(),
                 extensions = extensions,
                 avoidedMs = avoidedMs,
