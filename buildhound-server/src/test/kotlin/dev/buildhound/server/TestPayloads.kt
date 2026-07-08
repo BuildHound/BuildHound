@@ -19,9 +19,11 @@ import dev.buildhound.commons.payload.TestTaskResult
 import dev.buildhound.commons.payload.ToolchainInfo
 import dev.buildhound.commons.payload.VcsInfo
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
 /** Builds schema-v1 [BuildPayload]s for server tests without hand-writing JSON each time. */
 object TestPayloads {
@@ -142,4 +144,21 @@ object TestPayloads {
 
     /** A `fingerprints.build` map (plan 022/068 fixtures) from raw key/hash pairs, no plugin dependency. */
     fun fingerprints(build: Map<String, String>): FingerprintInfo = FingerprintInfo(build = build)
+
+    /**
+     * A minimal `extensions["internalAdapters"]` block carrying only [dependencyEdges] (plan 062
+     * fixtures) — again a shape-subset of the real `InternalAdaptersPayload`, hand-built so tests don't
+     * depend on `buildhound-internal-adapters` (server keeps no dependency on that module, plan 039).
+     */
+    fun internalAdaptersEdges(dependencyEdges: Map<String, List<String>>): Map<String, JsonElement> = mapOf(
+        "internalAdapters" to buildJsonObject {
+            put("schemaVersion", 1)
+            put("gradleVersion", "9.6.1")
+            putJsonObject("dependencyEdges") {
+                dependencyEdges.forEach { (path, deps) ->
+                    putJsonArray(path) { deps.forEach { add(it) } }
+                }
+            }
+        },
+    )
 }

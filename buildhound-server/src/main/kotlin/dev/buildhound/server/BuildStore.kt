@@ -1,6 +1,7 @@
 package dev.buildhound.server
 
 import dev.buildhound.commons.payload.BenchmarkSeriesCalculator
+import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
 import dev.buildhound.commons.payload.TestUnitKey
@@ -11,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -127,6 +129,32 @@ internal fun fingerprintStreamRowOf(payload: BuildPayload): FingerprintStreamRow
 /** True when a payload could feed either cache-miss-diagnostics detector (plan 068's "gated to builds carrying the block"). */
 internal fun carriesCacheMissDiagnosticsBlock(payload: BuildPayload): Boolean =
     payload.extensions.containsKey(INTERNAL_ADAPTERS_EXTENSION_KEY) || payload.fingerprints != null
+
+/**
+ * Server-local minimal view of `extensions["internalAdapters"]` (plan 062) carrying only
+ * [dependencyEdges] — the plan-039 decoupling principle applied to a second reader: the server decodes
+ * this narrow shape through the commons [BuildHoundJson] (`ignoreUnknownKeys`) rather than depending on
+ * the real `InternalAdaptersPayload`, which lives in the Gradle-API `buildhound-internal-adapters`
+ * module and would drag Gradle onto the server classpath (architecture §5 break).
+ */
+@Serializable
+private data class InternalAdaptersView(val dependencyEdges: Map<String, List<String>> = emptyMap())
+
+/**
+ * A build's `extensions["internalAdapters"].dependencyEdges` (plan 038), for [GraphCentrality]/
+ * [GraphExporter] (plan 062). Null for every absent-case the plan names as one honest "no graph"
+ * signal, never a false empty-but-complete graph: the extension key itself is missing (module never
+ * applied), decoding it throws (a shape the server doesn't expect — never fatal, degrade), or its
+ * `dependencyEdges` map is empty (isolated-projects' empty `whenReady` walk, or a `PayloadCapper`
+ * byte-drop of the whole `internalAdapters` blob).
+ */
+internal fun dependencyEdgesOf(payload: BuildPayload): Map<String, List<String>>? {
+    val element = payload.extensions[INTERNAL_ADAPTERS_EXTENSION_KEY] ?: return null
+    return runCatching { BuildHoundJson.payload.decodeFromJsonElement(InternalAdaptersView.serializer(), element) }
+        .getOrNull()
+        ?.dependencyEdges
+        ?.takeIf { it.isNotEmpty() }
+}
 
 /** Query-API filters (plan 010); values are validated at the route, bound in SQL. */
 data class BuildFilter(

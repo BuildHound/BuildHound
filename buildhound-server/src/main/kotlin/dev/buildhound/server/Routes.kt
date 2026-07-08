@@ -436,6 +436,40 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
                 ?: call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
         }
 
+        // Gating-task blockers (always available from the core timeline) + weighted-degree centrality
+        // over the internal-adapters edge list (null when absent — plan 062, research F12). Tenant-scoped
+        // like /diagnosis: a foreign/unknown build reads as 404, never a cross-tenant peek.
+        get("/builds/{buildId}/parallelism") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val buildId = call.parameters.getOrFail("buildId")
+            val result = call.runQuery { store.findById(project.id, buildId) } ?: return@get
+            val payload = result.value ?: return@get call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
+            call.respond(ParallelismAnalyzer.analyze(payload))
+        }
+
+        // Dependency-graph export (plan 062): GEXF (default) or DOT, label-escaped (architecture §6 —
+        // task paths are project-internal but still ride unsanitized into a downstream graph tool).
+        // Bounded by the ≤2000-edge cap plan 038 already enforces at collection time (no re-cap here).
+        // 404 when the build carries no dependency edges (adapters off / isolated-projects / capped) —
+        // the same absent-cases /parallelism's centrality=null covers.
+        get("/builds/{buildId}/graph") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val buildId = call.parameters.getOrFail("buildId")
+            val format = call.request.queryParameters["format"]?.lowercase() ?: "gexf"
+            if (format != "gexf" && format != "dot") {
+                return@get call.respond(HttpStatusCode.BadRequest, ApiError("format must be gexf or dot"))
+            }
+            val result = call.runQuery { store.findById(project.id, buildId) } ?: return@get
+            val payload = result.value ?: return@get call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
+            val edges = dependencyEdgesOf(payload)
+                ?: return@get call.respond(HttpStatusCode.NotFound, ApiError("no dependency edges for this build"))
+            if (format == "gexf") {
+                call.respondText(GraphExporter.gexf(edges, payload.tasks), ContentType.Application.Xml)
+            } else {
+                call.respondText(GraphExporter.dot(edges, payload.tasks), ContentType.parse("text/vnd.graphviz"))
+            }
+        }
+
         get("/trends") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val filter = call.buildFilterOrNull()

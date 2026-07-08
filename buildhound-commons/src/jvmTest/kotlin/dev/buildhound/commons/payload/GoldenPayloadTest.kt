@@ -141,6 +141,33 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `internal-adapters-edges golden populates dependencyEdges and pins criticalPathMs to the live formula`() {
+        val payload = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            golden("build-payload-v1-internal-adapters-edges.json"),
+        )
+
+        assertEquals(1, payload.schemaVersion, "the edge list is additive — the envelope stays schema v1")
+        val internal = payload.extensions.getValue("internalAdapters").jsonObject
+        val edges = internal.getValue("dependencyEdges").jsonObject
+        assertEquals(2, edges.size)
+        assertEquals(
+            listOf(":app:compileDebugKotlin", ":app:testDebugUnitTest"),
+            edges.getValue(":app:assembleDebug").let { it as kotlinx.serialization.json.JsonArray }.map { it.jsonPrimitive.content },
+        )
+
+        // Pin the golden's hand-authored criticalPathMs to what the live formula produces from these
+        // same tasks + edges, so a future golden edit can't silently drift from the calculator (plan 062
+        // reads this exact `dependencyEdges` shape server-side, so it must round-trip and compute
+        // consistently, not just deserialize).
+        val dependencyEdges = edges.entries.associate { (path, deps) ->
+            path to (deps as kotlinx.serialization.json.JsonArray).map { it.jsonPrimitive.content }
+        }
+        assertEquals(28000, payload.derived?.criticalPathMs)
+        assertEquals(payload.derived?.criticalPathMs, DerivedMetricsCalculator.criticalPathMs(payload.tasks, dependencyEdges))
+    }
+
+    @Test
     fun `test-sharding golden populates the testSharding extension block`() {
         val payload =
             BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-sharding.json"))
@@ -385,6 +412,7 @@ class GoldenPayloadTest {
             "build-payload-interrupted-v1.json",
             "build-payload-v2ext.json",
             "build-payload-v1-internal-adapters.json",
+            "build-payload-v1-internal-adapters-edges.json",
             "build-payload-v1-sharding.json",
             "build-payload-v1-failure-detail.json",
             "build-payload-v1-project-evaluations.json",
