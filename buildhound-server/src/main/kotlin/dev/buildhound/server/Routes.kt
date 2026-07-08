@@ -12,12 +12,14 @@ import dev.buildhound.server.connector.ConnectorConfig
 import dev.buildhound.server.connector.ConnectorRegistry
 import dev.buildhound.server.connector.EnrichmentQueue
 import dev.buildhound.server.connector.GradleShare
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.header
 import io.ktor.server.request.receiveChannel
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondText
 import io.ktor.server.util.getOrFail
 import io.ktor.utils.io.readAvailable
 import io.ktor.server.routing.Route
@@ -499,6 +501,33 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
 }
 
 /**
+ * `GET /v1/metrics/prometheus` (plan 070, research F20): Prometheus text-exposition (format 0.0.4) of
+ * one project's KPIs — p50/p95 build duration, cache hit rate, success rate, windowed build counts,
+ * flaky-unit count, avoided time. `metrics`-scoped (also `read`/`all`, mirroring the dedicated
+ * `ADDON`/`ADMIN` scopes: a leaked CI ingest token must not scrape metrics, and a leaked scrape token
+ * must not read history). Serves **only** `principal.project` — there is no global unauthenticated
+ * `/metrics`, which would cross-leak every tenant's KPIs (F20's load-bearing multi-tenancy caveat).
+ * Bypasses the JSON `ContentNegotiation` plugin via `respondText` (the wire format is plain text, not
+ * JSON — same pattern the dashboard's static assets use with `respondBytes`). Always 200 with valid (if
+ * line-omitted, per [PrometheusExposition]'s omit-not-zero rule) exposition on success, so a scrape
+ * target never reads "down"; a storage outage is 503 through the shared [runQuery] classifier, never a
+ * bare 500.
+ */
+fun Route.metricsEgressRoutes(store: BuildStore, tokens: TokenStore) {
+    route("/v1/metrics") {
+        get("/prometheus") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsMetrics) ?: return@get
+            val days = call.daysParam()
+            val snapshot = call.runQuery { store.metricsSnapshot(project.id, days, System.currentTimeMillis()) } ?: return@get
+            call.respondText(
+                PrometheusExposition.render(project.key, snapshot.value),
+                ContentType.parse("text/plain; version=0.0.4; charset=utf-8"),
+            )
+        }
+    }
+}
+
+/**
  * Addon API namespace (plan 039): `/v1/addons/{addonId}/…`, walled off from ingest/read tokens by a
  * dedicated `ADDON` scope. `{addonId}` is validated against [registeredAddons] — a **server-side
  * allowlist**, so it never names a table or route dynamically; an unregistered id is a flat 404
@@ -619,7 +648,7 @@ fun Route.testShardingRoutes(builds: BuildStore, shardPlans: ShardPlanStore, tok
 }
 
 /** Window size in days, defaulting to 30 and clamped to [1, 365] like /trends. */
-private fun ApplicationCall.daysParam(): Int =
+internal fun ApplicationCall.daysParam(): Int =
     (request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)
 
 /**

@@ -1,0 +1,126 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "The Prometheus datasource scraping GET /v1/metrics/prometheus (plan 070).",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__requires": [
+    { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
+    { "type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0" }
+  ],
+  "title": "BuildHound",
+  "uid": "buildhound-metrics",
+  "description": "BuildHound per-project KPIs scraped from GET /v1/metrics/prometheus (plan 070). Grafana -> Prometheus -> BuildHound: this dashboard targets a Prometheus datasource that scrapes the endpoint, not the query API directly. Every panel is scoped to the $project template variable, matching the single project a scrape token can see.",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "tags": ["buildhound", "prometheus"],
+  "time": { "from": "now-7d", "to": "now" },
+  "refresh": "1m",
+  "timezone": "utc",
+  "templating": {
+    "list": [
+      {
+        "name": "project",
+        "type": "textbox",
+        "label": "Project",
+        "description": "The projectKey label value (matches the scrape token's tenant).",
+        "current": { "text": "pilot", "value": "pilot" },
+        "query": "pilot"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Build duration (p50 / p95)",
+      "description": "buildhound_build_duration_p50_seconds / _p95_seconds. Omitted from the scrape (no line, not a graphed 0) when the window has no builds yet.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "buildhound_build_duration_p50_seconds{project=\"$project\"}",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "buildhound_build_duration_p95_seconds{project=\"$project\"}",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Cache hit rate",
+      "description": "buildhound_cache_hit_rate (0..1). No panel value at all until cacheable data exists — never a false 0%.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "buildhound_cache_hit_rate{project=\"$project\"}" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Build success rate",
+      "description": "buildhound_build_success_rate (0..1).",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "buildhound_build_success_rate{project=\"$project\"}" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Builds by outcome",
+      "description": "buildhound_builds{outcome}. Windowed (non-monotonic) count, typed gauge — do not apply rate()/increase() to this metric.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "buildhound_builds{project=\"$project\"}",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Flaky tests",
+      "description": "buildhound_flaky_tests. Windowed, typed gauge (see builds-by-outcome note). Absent (no panel value) rather than 0 until the detector has evidence.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "buildhound_flaky_tests{project=\"$project\"}" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Cache time avoided",
+      "description": "buildhound_avoided_seconds. Only present with plan-038 opt-in origin timings; absent (not 0) otherwise.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "buildhound_avoided_seconds{project=\"$project\"}" }
+      ]
+    }
+  ]
+}

@@ -815,6 +815,42 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             }
         }
 
+    override fun metricsSnapshot(projectId: String, days: Int, nowMs: Long): MetricsSnapshot {
+        // Same windowed BuildKpiRows bottlenecks already fetches (benchmark excluded, half-open
+        // [from, now) — the plan-026/032 parity discipline), plus the windowed derived.avoidedMs values
+        // read from the jsonb payload (no hot column for it, same jsonb-field pattern toolchainAdoption
+        // uses). The flaky count reuses the flaky() detector's own output rather than re-deriving it.
+        val from = cutoff(days, nowMs)
+        val to = atMs(nowMs)
+        val (kpiRows, avoidedValues) = dataSource.connection.use { connection ->
+            kpiRowsBetween(connection, projectId, from, to) to avoidedMsBetween(connection, projectId, from, to)
+        }
+        return MetricsSnapshotCalculator.compute(
+            windowDays = days,
+            builds = kpiRows,
+            flakyRecordCount = flaky(projectId, days, nowMs).size,
+            avoidedMsValues = avoidedValues,
+        )
+    }
+
+    /** Windowed, non-null `derived.avoidedMs` values (plan 070); absent unless plan-038 origin timings ran. */
+    private fun avoidedMsBetween(connection: java.sql.Connection, projectId: String, from: OffsetDateTime, to: OffsetDateTime): List<Long> =
+        connection.prepareStatement(
+            """
+            SELECT (payload->'derived'->>'avoidedMs')::bigint AS avoided_ms
+            FROM builds
+            WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+              AND payload->'derived'->>'avoidedMs' IS NOT NULL
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setObject(1, UUID.fromString(projectId))
+            statement.setObject(2, from)
+            statement.setObject(3, to)
+            statement.executeQuery().use { rows ->
+                buildList { while (rows.next()) add(rows.getLong("avoided_ms")) }
+            }
+        }
+
     override fun classTimings(projectId: String, days: Int, nowMs: Long): Map<String, List<Long>> =
         dataSource.connection.use { connection ->
             // Per-class CI durations from the payload jsonb over the window (plan 040); on-demand only
