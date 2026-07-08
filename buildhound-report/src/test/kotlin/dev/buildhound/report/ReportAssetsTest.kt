@@ -19,9 +19,10 @@ class ReportAssetsTest {
     fun `summary wires a chip for every toolchain dimension`() {
         val template = ReportAssets.template()
 
-        // gradle/jdk plus the AGP/KGP/KSP dimensions (plan 046). Each renders via the chip()/el()
-        // textContent path, so an attacker-controlled plugin version string cannot inject markup.
-        for (dim in listOf("gradle", "jdk", "agp", "kgp", "ksp")) {
+        // gradle/jdk plus the AGP/KGP/KSP dimensions (plan 046) and springBoot (plan 072, research F22).
+        // Each renders via the chip()/el() textContent path, so an attacker-controlled plugin version
+        // string cannot inject markup.
+        for (dim in listOf("gradle", "jdk", "agp", "kgp", "ksp", "springBoot")) {
             assertTrue(template.contains("d.toolchain.$dim"), "toolchain chip for '$dim' must be wired")
         }
     }

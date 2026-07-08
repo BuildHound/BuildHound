@@ -90,7 +90,11 @@ data class ToolchainDimension(
     val behind: List<ToolchainVersionRow> = emptyList(),
 )
 
-/** Adoption across every toolchain dimension (plan 032). Only gradle/jdk carry data today. */
+/**
+ * Adoption across every toolchain dimension (plan 032). Only gradle/jdk carry data today. [springBoot]
+ * (plan 072, research F22) is the server-service analogue of [agp]; additive with an unavailable
+ * default so older clients ignore it and a store that doesn't feed it reports "not collected yet".
+ */
 @Serializable
 data class ToolchainRollup(
     val gradle: ToolchainDimension,
@@ -98,6 +102,7 @@ data class ToolchainRollup(
     val agp: ToolchainDimension,
     val kgp: ToolchainDimension,
     val ksp: ToolchainDimension,
+    val springBoot: ToolchainDimension = ToolchainDimension(available = false),
 )
 
 /** One build's KPI inputs; both stores fetch these + [TaskRow]s and call [BottleneckCalculator]. */

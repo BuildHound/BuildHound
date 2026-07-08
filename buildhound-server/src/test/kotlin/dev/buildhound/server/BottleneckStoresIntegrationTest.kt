@@ -54,7 +54,7 @@ class BottleneckStoresIntegrationTest {
         // Prior window: KotlinCompile @1000 (×2 builds → count 2), VanishedType @500 (only here).
         TestPayloads.build(
             buildId = "b-p1", durationMs = 4000, startedAt = prior, userId = "u_1", hitRate = 0.1,
-            toolchain = ToolchainInfo(gradle = "8.9", jdk = "21"),
+            toolchain = ToolchainInfo(gradle = "8.9", jdk = "21", springBoot = "3.3.2"),
             tasks = listOf(
                 TestPayloads.task(":app:compileKotlin", TaskOutcome.EXECUTED, 1000, type = "KotlinCompile"),
                 TestPayloads.task(":app:vanish", TaskOutcome.EXECUTED, 500, type = "VanishedType"),
@@ -99,7 +99,7 @@ class BottleneckStoresIntegrationTest {
         // 20 days < 30 — so it IS in a 30-day toolchain window; used to check the toolchain window instead).
         TestPayloads.build(
             buildId = "b-old", durationMs = 3000, startedAt = ancient, userId = "u_5",
-            toolchain = ToolchainInfo(gradle = "7.6", jdk = "17"),
+            toolchain = ToolchainInfo(gradle = "7.6", jdk = "17", springBoot = "3.2.0"),
             tasks = listOf(TestPayloads.task(":app:old", TaskOutcome.EXECUTED, 1234, type = "OldOnlyType")),
         ),
     )
@@ -190,6 +190,11 @@ class BottleneckStoresIntegrationTest {
         assertTrue(r.gradle.versions.none { it.version == "9.0" }, "benchmark toolchain is excluded")
         assertEquals(setOf("8.9", "7.6"), r.gradle.behind.map { it.version }.toSet())
         assertFalse(r.agp.available || r.kgp.available || r.ksp.available, "agp/kgp/ksp not collected yet")
+        // Spring Boot (plan 072): b-p1 carries 3.3.2, b-old carries 3.2.0 — both inside the 30-day
+        // toolchain window. Latest observed = 3.3.2 → 3.2.0 behind. Read via the same jsonb path.
+        assertTrue(r.springBoot.available, "springBoot is now collected (plan 072)")
+        assertEquals(setOf("3.3.2", "3.2.0"), r.springBoot.versions.map { it.version }.toSet())
+        assertEquals(setOf("3.2.0"), r.springBoot.behind.map { it.version }.toSet())
     }
 
     @Test

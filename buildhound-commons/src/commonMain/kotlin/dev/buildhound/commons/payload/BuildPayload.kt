@@ -103,12 +103,35 @@ data class ArtifactSize(
     val sizeBytes: Long,
 )
 
+/** The kind of JVM archive whose size was measured (plan 072, F22). */
+@Serializable
+enum class JvmArtifactKind { BOOT_JAR, BOOT_WAR, JAR, WAR }
+
 /**
- * Android artifact sizes (plan 031). A single `android` list mixing APK/AAB/AAR (disambiguated by
- * [ArtifactSize.type]); null on the payload means "not an Android build / nothing produced".
+ * One measured JVM archive (plan 072, research F22 — the server-service analogue of the plan-031
+ * Android APK). Byte size only — no path, no contents (§3.7). [module] is a project-internal Gradle
+ * path (`:app`, `:` for the root), not PII. Measured only for the archive tasks that actually ran
+ * this invocation (finalizer-side outcome + `File.exists()` gate), so applying
+ * `org.springframework.boot` — which disables the plain `jar` task — never yields a stale/absent row.
  */
 @Serializable
-data class ArtifactSizes(val android: List<ArtifactSize> = emptyList())
+data class JvmArtifactSize(
+    val module: String? = null,
+    val kind: JvmArtifactKind,
+    val sizeBytes: Long,
+)
+
+/**
+ * Artifact sizes (plan 031 Android, plan 072 JVM). [android] mixes APK/AAB/AAR (disambiguated by
+ * [ArtifactSize.type]); [jvm] carries `bootJar`/`bootWar`/`jar`/`war` sizes (by [JvmArtifactSize.kind]).
+ * Null on the payload means "nothing produced" (neither an Android nor a JVM-archive build); the block
+ * is emitted whenever *either* list is non-empty.
+ */
+@Serializable
+data class ArtifactSizes(
+    val android: List<ArtifactSize> = emptyList(),
+    val jvm: List<JvmArtifactSize> = emptyList(),
+)
 
 /**
  * One project's configuration (evaluation) time (plan 052, research F2), timed by the settings
@@ -414,7 +437,10 @@ data class CapsSummary(
     val droppedTasks: Int = 0,
     /** Per-outcome counts of the dropped tasks, so the totals stay reconstructable. */
     val droppedTaskOutcomes: Map<String, Int> = emptyMap(),
-    /** Android artifact records dropped past the per-payload cap (plan 031), smallest-first. */
+    /**
+     * Artifact records dropped past the per-payload cap, smallest-first — Android (plan 031) and JVM
+     * archive (plan 072) drops share this single counter, each list capped independently largest-first.
+     */
     val droppedArtifacts: Int = 0,
     /** Addon `extensions` entries dropped past the extensions byte budget (plan 039), largest-first. */
     val droppedExtensions: Int = 0,
@@ -563,6 +589,14 @@ data class ToolchainInfo(
     val agp: String? = null,
     val kgp: String? = null,
     val ksp: String? = null,
+    /**
+     * Spring Boot Gradle plugin version (plan 072, research F22): the server-service analogue of
+     * [agp], detected from the applied `org.springframework.boot` plugin's jar manifest. Honest-null
+     * — the resolved version, or `null` when the plugin is absent or its manifest carries no version
+     * (never a `"unknown"` sentinel, which would sort below every real version under the server's
+     * VERSION comparator and mislabel a present-but-unversioned build as "behind").
+     */
+    val springBoot: String? = null,
 )
 
 @Serializable

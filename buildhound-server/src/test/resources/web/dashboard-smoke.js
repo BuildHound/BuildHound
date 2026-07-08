@@ -294,6 +294,7 @@ const responses = {
         agp: { available: false, versions: [], behind: [] },
         kgp: { available: false, versions: [], behind: [] },
         ksp: { available: false, versions: [], behind: [] },
+        springBoot: { available: false, versions: [], behind: [] },
     },
     // Delivery health (plan 059): connector-enriched happy path — CFR rows (one green, one red),
     // time-to-green incl. a still-red open episode, lead time with queue/share populated, and a
@@ -663,6 +664,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "8.10")) throw new Error("toolchain version row missing");
     if (!hasText(byId["app"], "behind the latest")) throw new Error("toolchain behind list missing");
     if (!hasText(byId["app"], "Not collected yet")) throw new Error("agp/kgp/ksp degraded panel missing");
+    if (!hasText(byId["app"], "Spring Boot")) throw new Error("Spring Boot toolchain panel missing (plan 072)");
     // Verdict card omitted while budget/trend counts are null.
     if (hasText(byId["app"], "budget breaches")) throw new Error("verdict card must be omitted when counts are null");
 

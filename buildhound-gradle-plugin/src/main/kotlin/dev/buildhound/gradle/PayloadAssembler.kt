@@ -18,6 +18,7 @@ import dev.buildhound.commons.payload.FingerprintInfo
 import dev.buildhound.commons.payload.GradlePropertyPosture
 import dev.buildhound.commons.payload.GuhWarmth
 import dev.buildhound.commons.payload.InvocationInfo
+import dev.buildhound.commons.payload.JvmArtifactSize
 import dev.buildhound.commons.payload.KotlinInfo
 import dev.buildhound.commons.payload.PayloadCapper
 import dev.buildhound.commons.payload.PayloadCaps
@@ -105,17 +106,21 @@ internal object PayloadAssembler {
         processes: List<CollectedProcess> = emptyList(),
         benchmark: CollectedBenchmark? = null,
         artifacts: List<ArtifactSize> = emptyList(),
+        // JVM archive sizes (plan 072, research F22); empty on a non-JVM-archive build. Rides beside
+        // [artifacts] in the same ArtifactSizes block, emitted whenever *either* list is non-empty.
+        jvmArtifacts: List<JvmArtifactSize> = emptyList(),
         // Per-project configuration-time attribution (plan 052); empty on a CC hit or when nothing was
         // captured, in which case the payload's block below collapses to null (`takeIf { isNotEmpty() }`).
         projectEvaluations: List<ProjectEvaluation> = emptyList(),
         extensions: Map<String, JsonElement> = emptyMap(),
         avoidedMs: Long? = null,
         dependencyEdges: Map<String, List<String>>? = null,
-        // Detected build-tool versions (plan 046); independent of [environment], each null when
-        // the plugin was absent or its version was unresolvable.
+        // Detected build-tool versions (plan 046, plan 072); independent of [environment], each null
+        // when the plugin was absent or its version was unresolvable.
         agp: String? = null,
         kgp: String? = null,
         ksp: String? = null,
+        springBoot: String? = null,
         // Declared build-structure inventory (plan 069, research F19); null when the projectsLoaded
         // walk never ran (master switch off) or a guarded failure degraded it.
         buildStructure: CollectedBuildStructure? = null,
@@ -180,9 +185,10 @@ internal object PayloadAssembler {
                     workersMax = it.workersMax,
                 )
             },
-            // AGP/KGP/KSP (plan 046) join Gradle/JDK here; emitted whenever any dimension is known,
-            // so a build with detected tool versions but no environment snapshot still reports them.
-            toolchain = toolchainInfo(environment, agp, kgp, ksp),
+            // AGP/KGP/KSP (plan 046) + Spring Boot (plan 072) join Gradle/JDK here; emitted whenever any
+            // dimension is known, so a build with detected tool versions but no environment snapshot
+            // still reports them.
+            toolchain = toolchainInfo(environment, agp, kgp, ksp, springBoot),
             vcs = vcsInfo(vcs, ci),
             ci = ciInfo(ci),
             // Source/commit/PR links from the redacted remote + CI PR number (plan 027); github/gitlab only.
@@ -210,9 +216,10 @@ internal object PayloadAssembler {
             tests = tests,
             // Honest degraded state for JUnit-XML-disabled Test tasks (plan 053); null when uncaptured.
             testTelemetry = testTelemetry,
-            // Android artifact sizes (plan 031); null when not an Android build / nothing produced.
-            // Capped largest-first so a pathological flavor matrix can't blow the payload budget.
-            artifacts = artifacts.takeIf { it.isNotEmpty() }?.let { ArtifactSizes(android = capArtifacts(it)) },
+            // Artifact sizes: Android (plan 031) + JVM archive (plan 072); null when neither an Android
+            // nor a JVM-archive build produced anything. Each list capped largest-first so a pathological
+            // flavor matrix (or module count) can't blow the payload budget.
+            artifacts = artifactSizes(artifacts, jvmArtifacts),
             // Per-project configuration-time attribution (plan 052); ranked slowest-first so the
             // top-N cardinality cap (PayloadCapper) keeps the projects that carry the signal. Null when
             // nothing was captured (a CC hit, or a build too fast/degenerate to leave any timing).
@@ -270,16 +277,35 @@ internal object PayloadAssembler {
     private fun capArtifacts(list: List<ArtifactSize>): List<ArtifactSize> =
         if (list.size <= MAX_ARTIFACTS) list else list.sortedByDescending { it.sizeBytes }.take(MAX_ARTIFACTS)
 
+    /** JVM analogue of [capArtifacts] (plan 072): keep the largest N archives. */
+    private fun capJvmArtifacts(list: List<JvmArtifactSize>): List<JvmArtifactSize> =
+        if (list.size <= MAX_ARTIFACTS) list else list.sortedByDescending { it.sizeBytes }.take(MAX_ARTIFACTS)
+
     /**
-     * Toolchain snapshot (spec §3.2, plan 046): Gradle/JDK come from the environment probe, AGP/KGP/
-     * KSP from plugin detection. Null only when every dimension is unknown, so the block is absent on
-     * a build with neither an environment snapshot nor a detected tool version.
+     * Emits the [ArtifactSizes] block whenever *either* the Android (plan 031) or the JVM (plan 072)
+     * list is non-empty; null when both are empty ("neither an Android nor a JVM-archive build").
      */
-    private fun toolchainInfo(environment: CollectedEnvironment?, agp: String?, kgp: String?, ksp: String?): ToolchainInfo? {
+    private fun artifactSizes(android: List<ArtifactSize>, jvm: List<JvmArtifactSize>): ArtifactSizes? {
+        if (android.isEmpty() && jvm.isEmpty()) return null
+        return ArtifactSizes(android = capArtifacts(android), jvm = capJvmArtifacts(jvm))
+    }
+
+    /**
+     * Toolchain snapshot (spec §3.2, plan 046, plan 072): Gradle/JDK come from the environment probe,
+     * AGP/KGP/KSP/Spring-Boot from plugin detection. Null only when every dimension is unknown, so the
+     * block is absent on a build with neither an environment snapshot nor a detected tool version.
+     */
+    private fun toolchainInfo(
+        environment: CollectedEnvironment?,
+        agp: String?,
+        kgp: String?,
+        ksp: String?,
+        springBoot: String?,
+    ): ToolchainInfo? {
         val gradle = environment?.gradleVersion
         val jdk = environment?.jdkVersion
-        if (gradle == null && jdk == null && agp == null && kgp == null && ksp == null) return null
-        return ToolchainInfo(gradle = gradle, jdk = jdk, agp = agp, kgp = kgp, ksp = ksp)
+        if (gradle == null && jdk == null && agp == null && kgp == null && ksp == null && springBoot == null) return null
+        return ToolchainInfo(gradle = gradle, jdk = jdk, agp = agp, kgp = kgp, ksp = ksp, springBoot = springBoot)
     }
 
     /**

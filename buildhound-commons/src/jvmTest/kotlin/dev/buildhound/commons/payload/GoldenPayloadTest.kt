@@ -117,6 +117,8 @@ class GoldenPayloadTest {
         assertNull(payload.testTelemetry)
         // Additive guarantee (plan 065): an `environment` without `workersMax` defaults to null.
         assertNull(payload.environment?.workersMax)
+        // Additive guarantee (plan 072): a payload without a `toolchain.springBoot` dimension defaults null.
+        assertNull(payload.toolchain?.springBoot)
     }
 
     @Test
@@ -474,6 +476,37 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `schema v1 jvm golden file deserializes with springBoot toolchain and jvm artifact sizes`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-jvm.json"))
+
+        assertEquals(1, payload.schemaVersion, "the springBoot dimension + jvm artifacts are additive — the envelope stays schema v1")
+        // toolchain.springBoot reported like agp/kgp/ksp (plan 072, research F22).
+        assertEquals("3.3.2", payload.toolchain?.springBoot)
+        assertEquals("9.0.0", payload.toolchain?.gradle)
+        val jvm = payload.artifacts?.jvm ?: error("expected an artifacts.jvm list")
+        assertEquals(2, jvm.size)
+        val bootJar = jvm.single { it.kind == JvmArtifactKind.BOOT_JAR }
+        assertEquals(":app", bootJar.module)
+        assertEquals(24117248, bootJar.sizeBytes)
+        // JvmArtifactKind serial names are stable (older readers reject unknown enum values, so all four
+        // kinds are fixed up front — plan 072 Risks).
+        assertEquals(setOf(JvmArtifactKind.BOOT_JAR, JvmArtifactKind.JAR), jvm.map { it.kind }.toSet())
+        // A JVM build carries no Android artifacts.
+        assertTrue(payload.artifacts.android.isEmpty())
+    }
+
+    @Test
+    fun `the pre-072 artifacts golden defaults springBoot null and jvm empty (backward-compat, unedited)`() {
+        // The plan-031 Android golden predates the plan-072 additions — untouched, it must keep
+        // deserializing with the two additions defaulted (additive guarantee).
+        val payload =
+            BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-artifacts.json"))
+
+        assertNull(payload.toolchain?.springBoot, "an unedited pre-072 payload has no springBoot dimension")
+        assertTrue(payload.artifacts?.jvm?.isEmpty() == true, "artifacts.jvm defaults empty on a pre-072 Android payload")
+    }
+
+    @Test
     fun `schema v1 interrupted golden file deserializes as a never-finalized build`() {
         val payload =
             BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-interrupted-v1.json"))
@@ -534,6 +567,7 @@ class GoldenPayloadTest {
             "build-payload-v1-processes.json",
             "build-payload-v1-benchmark.json",
             "build-payload-v1-artifacts.json",
+            "build-payload-v1-jvm.json",
             "build-payload-interrupted-v1.json",
             "build-payload-v2ext.json",
             "build-payload-v1-internal-adapters.json",

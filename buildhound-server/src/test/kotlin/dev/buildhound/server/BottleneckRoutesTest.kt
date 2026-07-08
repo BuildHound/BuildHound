@@ -292,14 +292,39 @@ class BottleneckRoutesTest {
     }
 
     @Test
-    fun `agp, kgp and ksp report unavailable until the plugin collects them`() = testApplication {
+    fun `agp, kgp, ksp and springBoot report unavailable until the plugin collects them`() = testApplication {
         val fx = fx(); appWith(fx)
         seedToolchain(fx)
         val r = toolchain()
-        for (dim in listOf(r.agp, r.kgp, r.ksp)) {
+        // springBoot (plan 072) joins agp/kgp/ksp as honest "not collected yet" when no build carried it.
+        for (dim in listOf(r.agp, r.kgp, r.ksp, r.springBoot)) {
             assertFalse(dim.available, "dimension must be honest about not-collected-yet")
             assertTrue(dim.versions.isEmpty() && dim.behind.isEmpty())
         }
+    }
+
+    @Test
+    fun `springBoot adoption renders a version distribution and behind list once collected`() = testApplication {
+        val fx = fx(); appWith(fx)
+        // 3 builds on Spring Boot 3.3.2 (two users), 1 on 3.2.0 — 3.2.0 is behind.
+        listOf("3.3.2" to "u_1", "3.3.2" to "u_2", "3.3.2" to "u_1", "3.2.0" to "u_3").forEachIndexed { i, (v, u) ->
+            fx.stores.builds.save(
+                fx.project.id,
+                TestPayloads.build(
+                    buildId = "sb-$i", durationMs = 1000, startedAt = current + i, userId = u,
+                    toolchain = ToolchainInfo(gradle = "9.0", jdk = "21", springBoot = v),
+                ),
+            )
+        }
+        val r = toolchain()
+        assertTrue(r.springBoot.available, "springBoot dimension is available once a build carries it")
+        val v332 = r.springBoot.versions.single { it.version == "3.3.2" }
+        assertEquals(3, v332.builds)
+        assertEquals(2, v332.distinctUsers) // u_1, u_2 — distinct over hashes
+        assertEquals(0.75, v332.sharePct)
+        assertEquals(listOf("3.2.0"), r.springBoot.behind.map { it.version }, "the older version is behind the 3.3.2 majority")
+        // No duration is fed for springBoot (jdk-only), so its rows carry no p50 — like agp/kgp/ksp.
+        assertTrue(r.springBoot.versions.all { it.durationP50Ms == null })
     }
 
     @Test

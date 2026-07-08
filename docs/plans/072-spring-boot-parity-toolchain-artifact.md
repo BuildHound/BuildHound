@@ -92,9 +92,17 @@ tenant-scoped `GET …/rollups/toolchain`, `Routes.kt:485`, returns the rollup a
 bounds `artifacts.jvm` (defense-in-depth: a direct `POST /v1/builds` bypasses the plugin cap), reusing
 `CapsSummary.droppedArtifacts` (doc broadened to android+jvm).
 
-**Report.** `ReportAssets`/`report-template.html` gains a current-build JVM-artifacts table
-(module/kind/size) reading `payload.artifacts.jvm`, hidden when empty — same embedded, escaped,
-zero-network blob as the plan-031 Android table.
+**Report.** `report-template.html` gains a current-build JVM-artifacts table (module/kind/size) reading
+`payload.artifacts.jvm`, hidden when empty — same embedded, escaped, zero-network blob as the plan-031
+Android table — plus a `springBoot` toolchain chip beside `agp`/`kgp`/`ksp` (`ReportAssetsTest` already
+pins "a chip for every toolchain dimension").
+
+**Dashboard (the "toolchain adoption" render surface — Scope "extended to render them").** The
+`toolchainPanel` list in `dashboard.js` gains a `["Spring Boot", toolchain.springBoot]` entry so the new
+rollup dimension actually renders (guarded `if (!dim || !dim.available)` so a missing dimension can't
+throw); the `dashboard-smoke.js` toolchain fixture gains a `springBoot` dimension. This is the
+adoption-render surface only — **no** dashboard JVM-artifact-*size* panel (that hot projection + panel is
+the explicitly deferred slice under Scope "Out").
 
 ## Test strategy
 

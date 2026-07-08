@@ -53,5 +53,14 @@ class ToolchainDetectionTest {
         assertFalse(DetectedToolchain(agp = "8.9.0").isEmpty())
         assertFalse(DetectedToolchain(kgp = "2.4.0").isEmpty())
         assertFalse(DetectedToolchain(ksp = "2.4.0-1.0.0").isEmpty())
+        // plan 072: springBoot folds into isEmpty() so the internal seam recognizes a springBoot-only set.
+        assertFalse(DetectedToolchain(springBoot = "3.3.2").isEmpty())
     }
+
+    // Note (plan 072 test-strategy divergence): `springBootVersion` reads
+    // `plugin.javaClass.getPackage().implementationVersion` — a jar-manifest read with no pure reflective
+    // seam to inject (unlike the KGP `getPluginVersion` helper above), so a "version present vs
+    // honest-null" unit case can't be written without a real manifested jar. It follows the exact same
+    // untested-manifest-fallback precedent as KSP's `getPackage().implementationVersion` branch; presence
+    // + the whenReady→finalizer channel are covered end-to-end by ToolchainFunctionalTest's springBoot seam.
 }

@@ -1,5 +1,6 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.payload.JvmArtifactKind
 import dev.buildhound.internaladapters.InternalAdaptersWiring
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
@@ -11,6 +12,7 @@ import org.gradle.api.flow.FlowProviders
 import org.gradle.api.flow.FlowScope
 import org.gradle.api.initialization.Settings
 import org.gradle.api.logging.Logging
+import org.gradle.api.tasks.bundling.AbstractArchiveTask
 import org.gradle.api.tasks.testing.Test
 import org.gradle.build.event.BuildEventsListenerRegistry
 
@@ -75,9 +77,14 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // Sibling mailbox for the Test-task JUnit XML locations (plan 024), filled by the same
         // `whenReady` callback and replayed from the CC entry on a hit (discovery spike §4a).
         val testLocationsHolder = AtomicReference<Map<String, TestResultLocations>>(emptyMap())
-        // Sibling mailbox for the detected AGP/KGP/KSP versions (plan 046), filled by the same
-        // `whenReady` callback and replayed from the CC entry on a hit.
+        // Sibling mailbox for the detected AGP/KGP/KSP/Spring-Boot versions (plan 046, plan 072),
+        // filled by the same `whenReady` callback and replayed from the CC entry on a hit.
         val toolchainHolder = AtomicReference(DetectedToolchain())
+        // Sibling mailbox for the JVM archive-task output locations (plan 072, research F22), filled by
+        // the same `whenReady` callback (from graph.allTasks — only tasks scheduled this build) and
+        // replayed from the CC entry on a hit via the finalizer's jvmArtifacts param below. Locations
+        // only — the File.length() read happens at Flow time (no config-phase file read → no CC input).
+        val jvmArtifactsHolder = AtomicReference<List<JvmArtifactLocation>>(emptyList())
         // Sibling mailbox for the declared build-structure inventory (plan 069, research F19),
         // filled by `projectsLoaded` — earlier than `whenReady`, since the descriptor tree only
         // populates after the settings script's include(...) calls run (apply() itself is too
@@ -94,6 +101,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             agp = settings.providers.gradleProperty("buildhound.internal.toolchain.agp").orNull,
             kgp = settings.providers.gradleProperty("buildhound.internal.toolchain.kgp").orNull,
             ksp = settings.providers.gradleProperty("buildhound.internal.toolchain.ksp").orNull,
+            springBoot = settings.providers.gradleProperty("buildhound.internal.toolchain.springBoot").orNull,
         )
 
         val collector = settings.gradle.sharedServices.registerIfAbsent(
@@ -193,6 +201,24 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
                 )
             }.onFailure {
                 logger.warn("[buildhound] toolchain detection failed (build unaffected): {}", it.message)
+            }
+            // JVM archive-size locations (plan 072, research F22): its own guard, after the higher-stakes
+            // task/test capture, so a failure can never block them. Filter graph.allTasks (only tasks
+            // scheduled this build = "what's built") to core-Gradle AbstractArchiveTask whose name is a
+            // known JVM archive; record the output *location* only (no file read → no CC input). Skipped
+            // under isolated projects, where the graph walk is illegal — degrades to empty like the task
+            // dictionary and toolchain triple. AbstractArchiveTask is public core API always on the plugin
+            // classpath, so — unlike the plan-031 AGP path — there is no external classloader to fault.
+            runCatching {
+                jvmArtifactsHolder.set(
+                    if (isolatedProjects) {
+                        emptyList()
+                    } else {
+                        graph.allTasks.mapNotNull { task -> jvmArtifactLocationOf(task) }
+                    },
+                )
+            }.onFailure {
+                logger.warn("[buildhound] jvm artifact-location capture failed (build unaffected): {}", it.message)
             }
             // Internal-adapters capture (plan 074): driven from here, post-DSL, so the toggles are set.
             // The wiring is fully guarded and no-ops when every effective toggle is off — the point where
@@ -397,6 +423,10 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             // a composite build where an included build's task instantiates the collector early. The
             // resolved value is baked into the CC entry and replayed on a hit.
             spec.parameters.toolchain.set(settings.providers.provider { toolchainHolder.get() })
+            // JVM archive-size locations (plan 072, research F22): the same after-configuration
+            // Flow-action channel as [toolchain] — resolved after `whenReady` fills the mailbox, baked
+            // into the CC entry, replayed on a hit. The finalizer reads File.length() at execution time.
+            spec.parameters.jvmArtifacts.set(settings.providers.provider { jvmArtifactsHolder.get() })
             // Task type/cacheable dictionary (plan 016), same finalizer-parameter channel as
             // [toolchain] above (plan 056, closes plan 045): the finalizer is the dictionary's sole
             // reader, so it no longer rides the collector-service param that a composite build's
@@ -476,9 +506,37 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         return task.path to TestResultLocations(junitXmlDir = dir, module = module, junitXmlRequired = junitXmlRequired)
     }
 
+    /**
+     * The output location + kind for one core-Gradle JVM archive task (plan 072, research F22), or null
+     * when [task] is not an [AbstractArchiveTask] whose name is a known JVM archive
+     * (`bootJar`/`bootWar`/`jar`/`war`). Runs at configuration time inside `whenReady`, so resolving the
+     * archive-file *location* is CC-safe (a resolved path, not a file read — mirrors [testLocationOf]).
+     * The `bootJar`/`bootWar` names cover the Spring Boot deliverables; `jar`/`war` the plain archives.
+     */
+    private fun jvmArtifactLocationOf(task: Task): JvmArtifactLocation? {
+        val archive = task as? AbstractArchiveTask ?: return null
+        val kind = JVM_ARCHIVE_KINDS[task.name] ?: return null
+        val archivePath = archive.archiveFile.orNull?.asFile?.absolutePath ?: return null
+        val module = task.path.substringBeforeLast(':').ifEmpty { ":" }
+        return JvmArtifactLocation(module = module, kind = kind, taskPath = task.path, archivePath = archivePath)
+    }
+
     private companion object {
         const val SALT_PATH = ".gradle/buildhound/identity.salt"
         val logger = Logging.getLogger(BuildHoundSettingsPlugin::class.java)
+
+        /**
+         * Canonical JVM archive task names → [JvmArtifactKind] (plan 072). The Spring Boot deliverables
+         * (`bootJar`/`bootWar`) plus the plain Java/War archives; a task must ALSO be an
+         * [AbstractArchiveTask] to match, so an unrelated task that happens to share one of these names
+         * is not captured.
+         */
+        val JVM_ARCHIVE_KINDS: Map<String, JvmArtifactKind> = mapOf(
+            "bootJar" to JvmArtifactKind.BOOT_JAR,
+            "bootWar" to JvmArtifactKind.BOOT_WAR,
+            "jar" to JvmArtifactKind.JAR,
+            "war" to JvmArtifactKind.WAR,
+        )
     }
 }
 

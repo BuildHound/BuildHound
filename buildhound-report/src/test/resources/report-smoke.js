@@ -107,4 +107,13 @@ if (!hasText(tuning, "kotlin.daemon.jvmargs")) throw new Error("pinned-Xmx card 
 if (hasText(tuning, "org.gradle.jvmargs")) throw new Error("no GC-pressure card may fire for the calm Gradle daemon");
 if (hasText(tuning, "ParallelGC")) throw new Error("no ParallelGC trial may fire below the GC threshold");
 
+// JVM artifacts (plan 072): the bootJar/jar sizes render as a table, largest first. The section must
+// unhide, and its rows (kept in the table's tbody stub) carry the kind + a human-readable size
+// (24117248 B → "23.0 MB"), proving the render path executes end-to-end.
+const jvmSection = byId["jvm-artifacts"];
+if (!jvmSection || jvmSection.hidden) throw new Error("jvm-artifacts section stayed hidden with a populated artifacts.jvm block");
+const jvmRows = byId["jvm-artifacts-table"].querySelector("tbody");
+if (!hasText(jvmRows, "BOOT_JAR")) throw new Error("bootJar kind missing from the JVM artifacts table");
+if (!hasText(jvmRows, "23.0 MB")) throw new Error("bootJar human-readable size missing from the JVM artifacts table");
+
 console.log("report smoke OK");
