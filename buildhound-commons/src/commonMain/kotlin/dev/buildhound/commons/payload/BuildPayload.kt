@@ -61,6 +61,11 @@ data class BuildPayload(
      */
     val buildStructure: BuildStructureInfo? = null,
     /**
+     * Wrapper distribution/pinning posture + Gradle-User-Home dist warmth (plan 066, research F16);
+     * null when uncaptured (master switch off at apply time, or every probe degraded).
+     */
+    val wrapper: WrapperInfo? = null,
+    /**
      * Addon-contributed payload sections (plan 039), keyed by addon id (e.g. `"testQuarantine"`).
      * The value is addon-owned JSON carrying its own `schemaVersion`, so core stays decoupled from
      * addon types and needs no schema bump when an addon evolves. Empty on a build with no addon
@@ -149,6 +154,93 @@ data class BuildStructureInfo(
      * (no `PayloadCapper` change — there is no free text here to bound).
      */
     val emptyIntermediateCandidates: List<String> = emptyList(),
+)
+
+/**
+ * Wrapper distribution variant (plan 066, research F16): parsed from `distributionUrl` in
+ * `gradle-wrapper.properties`. `CUSTOM` covers anything that isn't a stock `services.gradle.org`
+ * `-bin`/`-all` filename (typically a private mirror) — the raw URL itself is never shipped (a
+ * custom-mirror host can embed credentials or an internal hostname, spec §3.7); only this coarse
+ * classification survives.
+ */
+@Serializable
+enum class WrapperDistributionType { BIN, ALL, CUSTOM }
+
+/**
+ * Gradle-User-Home wrapper-dist warmth (plan 066, research F16): whether *this daemon's* unpacked
+ * distribution under `<GUH>/wrapper/dists/…` looks freshly created (an ephemeral-CI cold start —
+ * the Docker-image-rebuild / first-checkout re-download cost the finding calls out) or a reused,
+ * already-warm directory. `UNKNOWN` is honest, not a guess (plan 005): a system/IDE Gradle run has
+ * no wrapper dist to compare, or the probe itself never ran.
+ *
+ * **The anchor is this daemon's own JVM start time, not any in-build task timestamp** — a
+ * plan-066-review correction. The wrapper's bootstrap unpacks the distribution *before* launching
+ * the daemon JVM, which itself starts before configuration, which itself precedes every task — so
+ * comparing the dist mtime against `startedAt` (the first task's start) can **never** observe
+ * `COLD`: the unpack is structurally always earlier than any task-derived timestamp, cold build or
+ * not. `jvmStartMs` (`ManagementFactory.getRuntimeMXBean().startTime`, captured in
+ * `WrapperValueSource.obtain()`) sits only moments after the actual unpack in a genuinely cold
+ * bootstrap, so it is the tightest anchor obtainable without hooking the wrapper's own (separate,
+ * already-exited) bootstrap process.
+ */
+@Serializable
+enum class GuhWarmth {
+    COLD, WARM, UNKNOWN;
+
+    companion object {
+        /**
+         * How close the dist's mtime must sit to this daemon's own [jvmStartMs] to count as
+         * unpacked *for this daemon's own bootstrap* rather than pre-existing. Generous enough to
+         * absorb a slow `-all` download over a throttled CI network (typically well under a
+         * minute), while staying far tighter than "reused from an earlier run" (typically hours to
+         * days old). Known limitation: a long-lived, **reused** daemon (`environment.daemonReused`)
+         * keeps the same `jvmStartMs` across every build it serves, so `COLD` can stay pinned for
+         * subsequent builds on that daemon even though only the first one paid the download cost —
+         * cross-reference `daemonReused` downstream to disambiguate. Ephemeral CI (this finding's
+         * primary target) typically launches a fresh daemon per job, where this limitation does not
+         * apply.
+         */
+        const val FRESH_WINDOW_MS: Long = 5 * 60 * 1000L
+
+        /**
+         * Pure classification (plan 066, corrected): `COLD` when the dist's mtime sits within
+         * [FRESH_WINDOW_MS] of this daemon's own [jvmStartMs] (unpacked at/around this daemon's own
+         * bootstrap); `WARM` when meaningfully older (a persisted, reused Gradle User Home).
+         * `UNKNOWN` when [distPresent] isn't `true` (no wrapper dist at all — system/IDE Gradle, or
+         * the probe never ran) or either timestamp is unavailable (a guarded stat/JVM-introspection
+         * failure).
+         */
+        fun classify(
+            distMtimeMs: Long?,
+            distPresent: Boolean?,
+            jvmStartMs: Long?,
+        ): GuhWarmth {
+            if (distPresent != true) return UNKNOWN
+            val mtime = distMtimeMs ?: return UNKNOWN
+            val jvmStart = jvmStartMs ?: return UNKNOWN
+            return if (kotlin.math.abs(jvmStart - mtime) <= FRESH_WINDOW_MS) COLD else WARM
+        }
+    }
+}
+
+/**
+ * Wrapper & startup-phase telemetry (plan 066, research F16): the committed wrapper config's
+ * distribution variant + SHA-pinning posture, the wrapper jar's own hash (rides for a later
+ * server-side cross-check against gradle.org's published checksums — deferred, own follow-up
+ * plan), and this build's Gradle-User-Home dist warmth. [distributionVariant]/
+ * [distributionSha256Pinned] describe the *committed* config and are reported even when
+ * [guhWarmth] is `UNKNOWN` (a deliberate decision — they are the drift/unpinned signal regardless
+ * of how this particular build was invoked). Null on the whole payload when uncaptured (master
+ * switch off, or every probe degraded) — never a half-populated block.
+ */
+@Serializable
+data class WrapperInfo(
+    val distributionVariant: WrapperDistributionType? = null,
+    /** `distributionSha256Sum=` present in `gradle-wrapper.properties` — the drift/unpinned signal. */
+    val distributionSha256Pinned: Boolean? = null,
+    /** Full lower-hex SHA-256 of `gradle-wrapper.jar` — a public, distribution-independent artifact. */
+    val wrapperJarSha256: String? = null,
+    val guhWarmth: GuhWarmth? = null,
 )
 
 /**

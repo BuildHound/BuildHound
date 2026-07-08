@@ -111,6 +111,8 @@ class GoldenPayloadTest {
         // `environment` without `isolatedProjects`, both default to null.
         assertNull(payload.buildStructure)
         assertNull(payload.environment?.isolatedProjects)
+        // Additive guarantee (plan 066): a payload without a `wrapper` block defaults to null.
+        assertNull(payload.wrapper)
     }
 
     @Test
@@ -130,6 +132,55 @@ class GoldenPayloadTest {
         assertEquals(false, structure.sourcesInRoot)
         // A ranked heuristic candidate list, not a verdict — Gradle paths only, never a filesystem path.
         assertEquals(listOf(":libs", ":libs:legacy"), structure.emptyIntermediateCandidates)
+    }
+
+    @Test
+    fun `schema v1 wrapper golden file deserializes with a populated distribution and warmth`() {
+        val payload = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            golden("build-payload-v1-wrapper.json"),
+        )
+
+        assertEquals(1, payload.schemaVersion, "wrapper telemetry is additive — the envelope stays schema v1")
+        val wrapper = payload.wrapper ?: error("expected a wrapper block")
+        assertEquals(WrapperDistributionType.BIN, wrapper.distributionVariant)
+        assertEquals(true, wrapper.distributionSha256Pinned)
+        assertEquals("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", wrapper.wrapperJarSha256)
+        assertEquals(GuhWarmth.COLD, wrapper.guhWarmth)
+    }
+
+    @Test
+    fun `GuhWarmth classify covers cold, warm, and absent-dist against this daemon's own JVM start`() {
+        val jvmStart = 1_000_000L
+        // COLD: the dist mtime sits within the fresh window of this daemon's own JVM start —
+        // unpacked at/around this daemon's own bootstrap. (Not the first task's start: the
+        // wrapper's bootstrap unpacks the dist *before* this JVM launches, which is before
+        // configuration, which is before any task — so an in-build task timestamp can never
+        // observe COLD; this is the plan-066-review correction.)
+        assertEquals(GuhWarmth.COLD, GuhWarmth.classify(distMtimeMs = jvmStart, distPresent = true, jvmStartMs = jvmStart))
+        assertEquals(
+            GuhWarmth.COLD,
+            GuhWarmth.classify(distMtimeMs = jvmStart - GuhWarmth.FRESH_WINDOW_MS, distPresent = true, jvmStartMs = jvmStart),
+        )
+        // A dist mtime slightly AFTER jvmStart (clock-skew tolerance) still reads as COLD.
+        assertEquals(GuhWarmth.COLD, GuhWarmth.classify(distMtimeMs = jvmStart + 1_000, distPresent = true, jvmStartMs = jvmStart))
+        // WARM: meaningfully older than this daemon's own start — a persisted, reused GUH.
+        assertEquals(
+            GuhWarmth.WARM,
+            GuhWarmth.classify(distMtimeMs = jvmStart - GuhWarmth.FRESH_WINDOW_MS - 1, distPresent = true, jvmStartMs = jvmStart),
+        )
+        // UNKNOWN: no dist to compare (system/IDE Gradle, or the probe never ran).
+        assertEquals(
+            GuhWarmth.UNKNOWN,
+            GuhWarmth.classify(distMtimeMs = jvmStart - 1, distPresent = false, jvmStartMs = jvmStart),
+        )
+        assertEquals(
+            GuhWarmth.UNKNOWN,
+            GuhWarmth.classify(distMtimeMs = jvmStart - 1, distPresent = null, jvmStartMs = jvmStart),
+        )
+        // UNKNOWN: a guarded stat/JVM-introspection failure left one of the timestamps unavailable.
+        assertEquals(GuhWarmth.UNKNOWN, GuhWarmth.classify(distMtimeMs = null, distPresent = true, jvmStartMs = jvmStart))
+        assertEquals(GuhWarmth.UNKNOWN, GuhWarmth.classify(distMtimeMs = jvmStart - 1, distPresent = true, jvmStartMs = null))
     }
 
     @Test
@@ -440,6 +491,7 @@ class GoldenPayloadTest {
             "build-payload-v1-failure-detail.json",
             "build-payload-v1-project-evaluations.json",
             "build-payload-v1-build-structure.json",
+            "build-payload-v1-wrapper.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

@@ -368,6 +368,19 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.descriptors.set(settings.providers.provider { buildStructureHolder.get().descriptors })
         }
 
+        // Wrapper & startup-phase telemetry (plan 066, research F16): only the properties/jar
+        // *locations* + the resolved Gradle User Home dir are captured here; every file read,
+        // hash, and GUH dist probe happens in obtain() at execution time (same CC rationale as
+        // fingerprints/invocation above), so nothing here becomes a configuration-cache input.
+        val wrapper = settings.providers.of(WrapperValueSource::class.java) { spec ->
+            spec.parameters.enabled.set(extension.enabled)
+            spec.parameters.propertiesFile.set(
+                File(settings.rootDir, "gradle/wrapper/gradle-wrapper.properties").absolutePath,
+            )
+            spec.parameters.jarFile.set(File(settings.rootDir, "gradle/wrapper/gradle-wrapper.jar").absolutePath)
+            spec.parameters.gradleUserHomeDir.set(settings.startParameter.gradleUserHomeDir.absolutePath)
+        }
+
         // Flow API is the CC-safe "build finished" hook (spec §3.2). The finalizer
         // assembles the payload and writes it next to the build outputs; the HTML
         // artifact and upload chunks build on it. It must never fail the build.
@@ -408,6 +421,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             // time — parallel to configurationCacheRequested below — so it stays accurate whether the
             // finalizer runs after a CC store or replays a CC hit.
             spec.parameters.isolatedProjectsActive.set(buildFeatures.isolatedProjects.active.getOrElse(false))
+            spec.parameters.wrapper.set(wrapper)
             spec.parameters.configurationCacheRequested.set(buildFeatures.configurationCache.requested.getOrElse(false))
             // Lazy: the settings script sets rootProject.name after apply() runs.
             spec.parameters.projectKey.set(settings.providers.provider { settings.rootProject.name })

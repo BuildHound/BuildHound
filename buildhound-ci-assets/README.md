@@ -5,11 +5,12 @@ deliberately not a Gradle module.
 
 | Asset | Purpose |
 |---|---|
-| `azure-pipelines/buildhound-gradle-steps.yml` | Reusable Azure Pipelines steps template: token injection, Gradle build, optional `verdictGate` step polling `GET /v1/builds/{id}/verdict` |
+| `azure-pipelines/buildhound-gradle-steps.yml` | Reusable Azure Pipelines steps template: token injection, Gradle build, optional `verdictGate` step polling `GET /v1/builds/{id}/verdict`, optional preventive `validateWrapper` wrapper-integrity step (plan 066) |
 | `github/action.yml` | Composite GitHub Action: Gradle build with telemetry + optional `verdict-gate` (`::warning::`/`::error::`), plan 041 |
 | `gitlab/buildhound-gradle.gitlab-ci.yml` | Includable GitLab CI template (`.buildhound-gradle` hidden job to `extends`): Gradle build + optional verdict gate, plan 041 |
 | `bin/buildhound-metric` | Metric CLI for non-Gradle steps → `POST /v1/metrics` (Datadog tag/measure model) |
 | `test/metric-cli-test.sh` | Stubbed-`curl` harness for the metric CLI (`sh buildhound-ci-assets/test/metric-cli-test.sh`); `shellcheck`-clean |
+| `test/wrapper-integrity-test.sh` | Harness mirroring the Azure template's `validateWrapper` grep/sha256sum logic (`sh buildhound-ci-assets/test/wrapper-integrity-test.sh`); `shellcheck`-clean (plan 066) |
 | `profiler-scenarios/buildhound.scenarios` | gradle-profiler scenarios for benchmark mode: `clean`/`no_op`/`incremental_non_abi`/`cc_hit` (plan 030) |
 | `profiler-pipeline/{github,azure}-nightly-benchmark.yml` | scheduled gradle-profiler pipeline → `mode=benchmark` tagged series (plan 030) |
 | `profiler-pipeline/isolation-modes.md` | the cache-isolation (`BUILDHOUND_BENCHMARK_ISOLATION`) mode table |
@@ -42,6 +43,19 @@ and exit 0); pass `--strict` to make those non-zero.
 Set `verdictGate: warn|fail` on the steps template to poll the per-build regression verdict after
 the Gradle build. `warn` logs an Azure warning on a `FAIL` verdict; `fail` fails the pipeline. The
 verdict is BuildHound's rolling-baseline comparison (spec §5, plan 025).
+
+## Wrapper-integrity check (plan 066, research F16)
+
+Set `validateWrapper: warn|fail` on the steps template for a **preventive** check that runs
+*before* `./gradlew`: it greps `gradle/wrapper/gradle-wrapper.properties` for
+`distributionSha256Sum=` (an absent key means the wrapper isn't pinned — drift risk) and, when
+`expectedWrapperJarSha256` is also set, compares `sha256sum gradle/wrapper/gradle-wrapper.jar`
+against it. `warn` logs an Azure warning; `fail` fails the pipeline before Gradle ever runs; `off`
+(the default) skips the step entirely. Network-free, no token — this is the preventive half of the
+finding; the plugin's own `payload.wrapper.wrapperJarSha256` telemetry is the detective half,
+computed *inside* the JVM the wrapper already launched (so it can never catch a wrapper that
+actively subverts the read — a genuine gradle.org checksum cross-check is a separate, deferred
+server-side slice).
 
 ## Azure DevOps CI connector (server-side, plan 028)
 

@@ -6,7 +6,9 @@
 #       parameters:
 #         gradleTasks: "assembleDebug"
 #         buildhoundServerUrl: "https://buildhound.example.com"
-#         verdictGate: "warn"   # off | warn | fail
+#         verdictGate: "warn"          # off | warn | fail
+#         validateWrapper: "fail"      # off | warn | fail (plan 066)
+#         expectedWrapperJarSha256: "" # optional: pin gradle-wrapper.jar to a known-good hash
 #
 # Runs Gradle with telemetry wired, then optionally polls the per-build regression verdict
 # (plan 025) and warns or fails the pipeline. The token is mapped from a pipeline secret and
@@ -27,8 +29,67 @@ parameters:
       - "off"
       - "warn"
       - "fail"
+  # Preventive wrapper-integrity check (plan 066, research F16), run BEFORE ./gradlew: greps
+  # gradle-wrapper.properties for distributionSha256Sum= (enforces pinning) and, when
+  # expectedWrapperJarSha256 is set, also verifies gradle-wrapper.jar's own hash. Network-free, no
+  # token — this is the "narrowing 2" preventive half; the plugin's own wrapperJarSha256 telemetry
+  # (detective, computed inside the JVM the wrapper already launched) is the other half.
+  - name: validateWrapper
+    type: string
+    default: "off"
+    values:
+      - "off"
+      - "warn"
+      - "fail"
+  # Optional known-good SHA-256 of gradle-wrapper.jar; empty skips the jar-hash comparison.
+  - name: expectedWrapperJarSha256
+    type: string
+    default: ""
 
 steps:
+  - ${{ if ne(parameters.validateWrapper, 'off') }}:
+      - script: |
+          set -eu
+          props="gradle/wrapper/gradle-wrapper.properties"
+          jar="gradle/wrapper/gradle-wrapper.jar"
+          issues=0
+
+          if [ ! -f "$props" ]; then
+            echo "buildhound: $props not found; skipping wrapper-integrity check"
+          elif grep -q '^distributionSha256Sum=' "$props"; then
+            echo "buildhound: wrapper distributionSha256Sum is pinned"
+          else
+            echo "buildhound: wrapper is NOT pinned (no distributionSha256Sum= in $props)"
+            issues=$((issues + 1))
+          fi
+
+          expected="${BUILDHOUND_EXPECTED_WRAPPER_JAR_SHA256:-}"
+          if [ -n "$expected" ]; then
+            if [ ! -f "$jar" ]; then
+              echo "buildhound: $jar not found; cannot verify its SHA-256"
+              issues=$((issues + 1))
+            else
+              actual=$(sha256sum "$jar" | awk '{print $1}')
+              if [ "$actual" = "$expected" ]; then
+                echo "buildhound: gradle-wrapper.jar SHA-256 matches the expected value"
+              else
+                echo "buildhound: gradle-wrapper.jar SHA-256 mismatch (expected $expected, got $actual)"
+                issues=$((issues + 1))
+              fi
+            fi
+          fi
+
+          if [ "$issues" -gt 0 ]; then
+            if [ "${{ parameters.validateWrapper }}" = "fail" ]; then
+              echo "##vso[task.logissue type=error]BuildHound wrapper-integrity check found $issues issue(s)"
+              exit 1
+            fi
+            echo "##vso[task.logissue type=warning]BuildHound wrapper-integrity check found $issues issue(s)"
+          fi
+        displayName: "BuildHound wrapper-integrity check (${{ parameters.validateWrapper }})"
+        env:
+          BUILDHOUND_EXPECTED_WRAPPER_JAR_SHA256: ${{ parameters.expectedWrapperJarSha256 }}
+
   - script: ./gradlew ${{ parameters.gradleTasks }}
     displayName: "Gradle build (with build telemetry)"
     env:

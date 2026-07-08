@@ -15,6 +15,7 @@ import dev.buildhound.commons.payload.EnvironmentInfo
 import dev.buildhound.commons.payload.FailureInfo
 import dev.buildhound.commons.payload.FingerprintInfo
 import dev.buildhound.commons.payload.GradlePropertyPosture
+import dev.buildhound.commons.payload.GuhWarmth
 import dev.buildhound.commons.payload.InvocationInfo
 import dev.buildhound.commons.payload.KotlinInfo
 import dev.buildhound.commons.payload.PayloadCapper
@@ -27,6 +28,7 @@ import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TestTaskResult
 import dev.buildhound.commons.payload.ToolchainInfo
 import dev.buildhound.commons.payload.VcsInfo
+import dev.buildhound.commons.payload.WrapperInfo
 import kotlinx.serialization.json.JsonElement
 
 /**
@@ -114,6 +116,9 @@ internal object PayloadAssembler {
         buildStructure: CollectedBuildStructure? = null,
         // Isolated-projects activation (plan 069); null only when [environment] itself is absent.
         isolatedProjects: Boolean? = null,
+        // Wrapper & startup-phase telemetry (plan 066, research F16); null when uncaptured (master
+        // switch off, or every probe degraded).
+        wrapper: CollectedWrapper? = null,
     ): BuildPayload {
         // Mirror the benchmark keys into tags (spec's tag contract), but user tags win on clash.
         val mergedTags = if (benchmark == null) {
@@ -204,6 +209,10 @@ internal object PayloadAssembler {
             projectEvaluations = projectEvaluations.takeIf { it.isNotEmpty() }?.sortedByDescending { it.evaluationMs },
             // Declared build-structure inventory (plan 069, research F19); null when uncaptured.
             buildStructure = buildStructureInfo(buildStructure),
+            // Wrapper & startup-phase telemetry (plan 066, research F16); null when uncaptured.
+            // guhWarmth is computed entirely from fields already inside CollectedWrapper (the dist
+            // mtime vs. this daemon's own JVM start time) — no build-timing input needed here.
+            wrapper = wrapperInfo(wrapper),
             // End-of-build JVM process snapshot (plan 029); empty when disabled/unobservable. Numeric
             // + enum only — nothing for the scrubber to touch (no PID, path, or command line).
             processes = processes.map {
@@ -292,6 +301,38 @@ internal object PayloadAssembler {
             buildSrcPresent = structure.buildSrcPresent,
             sourcesInRoot = structure.sourcesInRoot,
             emptyIntermediateCandidates = structure.emptyIntermediateCandidates,
+        )
+    }
+
+    /**
+     * Maps the plugin-side [CollectedWrapper] DTO onto the wire [WrapperInfo] (plan 066, research
+     * F16), folding in [GuhWarmth.classify] (the dist mtime vs. this daemon's own JVM start time —
+     * both already inside [wrapper], so no build-timing input is needed here). Null when [wrapper]
+     * itself is null (disabled) or every dimension is unknown (variant/pinned/jar hash all null AND
+     * the dist probe never resolved presence either way) — an all-unknown capture reports the same
+     * as "uncaptured", never a half-populated block. Otherwise `guhWarmth` is always a concrete
+     * `COLD`/`WARM`/`UNKNOWN` — never left null — since [distributionVariant]/
+     * [distributionSha256Pinned] describe the *committed* wrapper config independent of whether this
+     * particular invocation could confirm its own GUH dist warmth.
+     */
+    private fun wrapperInfo(wrapper: CollectedWrapper?): WrapperInfo? {
+        if (wrapper == null) return null
+        if (wrapper.variant == null &&
+            wrapper.distributionSha256Pinned == null &&
+            wrapper.wrapperJarSha256 == null &&
+            wrapper.distPresent == null
+        ) {
+            return null
+        }
+        return WrapperInfo(
+            distributionVariant = wrapper.variant,
+            distributionSha256Pinned = wrapper.distributionSha256Pinned,
+            wrapperJarSha256 = wrapper.wrapperJarSha256,
+            guhWarmth = GuhWarmth.classify(
+                distMtimeMs = wrapper.distMtimeMs,
+                distPresent = wrapper.distPresent,
+                jvmStartMs = wrapper.jvmStartMs,
+            ),
         )
     }
 
