@@ -72,6 +72,9 @@ const responses = {
         derived: { cacheableHitRate: 0.75 },
         environment: { configurationCache: "HIT" },
         vcs: { branch: "main", sha: "abcdef0123456789" },
+        // JDK 24 (plan-065 review fix): needed so the compact-object-headers tuning card has a
+        // qualifying jdkMajor to fire against below.
+        toolchain: { jdk: "24.0.1" },
         kotlin: {
             reportSchema: "KOTLIN_2_4",
             truncatedTasks: 2,
@@ -81,9 +84,17 @@ const responses = {
             ],
         },
         processes: [
-            { role: "GRADLE_DAEMON", heapUsedMb: 1462, heapCommittedMb: 2048, heapMaxMb: 4096, configuredXmxMb: 4096, gcTimeMs: 3120, rssMb: 2711, uptimeS: 812, pid: 41214, gcCollector: "G1", compactObjectHeaders: false },
+            // compactObjectHeaders: true so this calm daemon does NOT also trip the compact-headers
+            // card once toolchain.jdk (above) makes jdkMajor 24-qualifying — that card is exercised
+            // in isolation by the high-GC Kotlin daemon row below.
+            { role: "GRADLE_DAEMON", heapUsedMb: 1462, heapCommittedMb: 2048, heapMaxMb: 4096, configuredXmxMb: 4096, gcTimeMs: 3120, rssMb: 2711, uptimeS: 812, pid: 41214, gcCollector: "G1", compactObjectHeaders: true },
             // Pinned at 1900/2048 ≈ 93 % → the plan-065 kotlin.daemon.jvmargs tuning card fires.
             { role: "KOTLIN_DAEMON", heapUsedMb: 1900, configuredXmxMb: 2048 },
+            // High-GC-fraction G1 Kotlin daemon on JDK 24 (plan-065 review fix): gcTimeMs 4000 /
+            // uptimeS 20 → 20 % lifetime GC fraction, tripping the GC-pressure card and (since
+            // gcCollector is G1) the ParallelGC-trial card; rssMb 3072 with compactObjectHeaders
+            // false trips the compact-object-headers card. Previously CI-unverified.
+            { role: "KOTLIN_DAEMON", heapUsedMb: 800, configuredXmxMb: 4096, gcTimeMs: 4000, uptimeS: 20, rssMb: 3072, pid: 55832, gcCollector: "G1", compactObjectHeaders: false },
         ],
         tests: [
             {
@@ -446,10 +457,16 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "Gradle daemon")) throw new Error("process panel role row missing");
     if (!hasText(byId["app"], "Kotlin daemon")) throw new Error("process panel second role row missing");
     // Daemon-tuning candidates (plan 065): the pinned Kotlin daemon (1900/2048) fires the advisory
-    // card naming kotlin.daemon.jvmargs; the calm Gradle daemon (0.4 % GC) fires nothing else.
+    // card naming kotlin.daemon.jvmargs; the calm Gradle daemon (0.4 % GC, compactObjectHeaders
+    // true) fires no GC-pressure card at all (org.gradle.jvmargs never appears).
     if (!hasText(byId["app"], "Tuning candidates")) throw new Error("tuning-candidate cards missing");
     if (!hasText(byId["app"], "kotlin.daemon.jvmargs")) throw new Error("pinned-Xmx candidate must name kotlin.daemon.jvmargs");
     if (hasText(byId["app"], "org.gradle.jvmargs")) throw new Error("no GC-pressure card may fire for the calm Gradle daemon");
+    // The high-GC-fraction G1 Kotlin daemon (plan-065 review fix) trips all three previously
+    // CI-unverified cards; each assertion pins the interpolated PROCESS_ROLE_LABELS role label too.
+    if (!hasText(byId["app"], "Investigate high GC time (20 % of Kotlin daemon JVM time)")) throw new Error("GC-pressure candidate missing for the high-GC Kotlin daemon");
+    if (!hasText(byId["app"], "The Kotlin daemon runs G1 with high GC time — a ParallelGC trial")) throw new Error("ParallelGC-trial candidate missing for the high-GC Kotlin daemon");
+    if (!hasText(byId["app"], "The Kotlin daemon uses 3072 MB RSS on JDK 24 without compact object headers")) throw new Error("compact-object-headers candidate missing for the high-GC Kotlin daemon");
 
     // Minimal build (no tasks): ledger renders all-zero rows without dividing by zero.
     context.location.hash = "#/build/b2"; context._onhashchange(); await tick(); await tick();

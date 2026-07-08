@@ -510,6 +510,9 @@
         const gcFraction = p => (p.gcTimeMs != null && p.uptimeS > 0) ? p.gcTimeMs / (p.uptimeS * 1000) : null;
         const pct = f => Math.round(f * 100) + " %";
         const label = p => PROCESS_ROLE_LABELS[p.role] || p.role;
+        // parseInt is a prefix parser (stops at the first non-digit), unlike the Kotlin producer's
+        // all-digit jdkMajor extraction — they only diverge on a shape like "24ea" that the plugin
+        // never emits, so this is a documented divergence, not a bug.
         const jdkMajor = parseInt(String((toolchain && toolchain.jdk) || "").split(/[.\-_+]/)[0], 10);
         const cards = [];
         for (const p of processes.filter(p => gcFraction(p) != null && gcFraction(p) >= 0.15)) {

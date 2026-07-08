@@ -21,9 +21,11 @@ class ReportScriptTest {
     // empty `tests` block with a plan-053 `testTelemetry` note — one entry is a hostile task path
     // shaped like a script breakout, proving the JSON-escape (ReportAssets.render) + textContent
     // (report-template.html) chain holds end-to-end — plus a plan-065 pinned-Xmx Kotlin daemon
-    // (1900/2048 ≈ 93 %) whose tuning card must render, and a plan-072 springBoot toolchain chip +
-    // JVM-artifacts table (bootJar/jar sizes) — all render paths exercised in one fixture
-    // (minimal otherwise so no other section throws).
+    // (1900/2048 ≈ 93 %) and a second, high-GC-fraction G1 Kotlin daemon on JDK 24 (review fix:
+    // previously only the pinned-Xmx card was CI-verified on this surface — GC-pressure,
+    // ParallelGC-trial, and compact-object-headers were not) whose tuning cards must render, and a
+    // plan-072 springBoot toolchain chip + JVM-artifacts table (bootJar/jar sizes) — all render
+    // paths exercised in one fixture (minimal otherwise so no other section throws).
     private val failurePayload = """
         {
           "schemaVersion": 1,
@@ -49,7 +51,7 @@ class ReportScriptTest {
           },
           "tests": [],
           "testTelemetry": { "xmlDisabledTasks": [":app:test", ":app</script><script>evil()//:test"] },
-          "toolchain": { "gradle": "9.0.0", "jdk": "21.0.10", "springBoot": "3.3.2" },
+          "toolchain": { "gradle": "9.0.0", "jdk": "24.0.1", "springBoot": "3.3.2" },
           "artifacts": {
             "jvm": [
               { "module": ":app", "kind": "BOOT_JAR", "sizeBytes": 24117248 },
@@ -58,7 +60,8 @@ class ReportScriptTest {
           },
           "processes": [
             { "role": "GRADLE_DAEMON", "heapUsedMb": 1462, "configuredXmxMb": 4096, "gcTimeMs": 3120, "uptimeS": 812, "pid": 41214, "gcCollector": "G1" },
-            { "role": "KOTLIN_DAEMON", "heapUsedMb": 1900, "configuredXmxMb": 2048, "pid": 41377 }
+            { "role": "KOTLIN_DAEMON", "heapUsedMb": 1900, "configuredXmxMb": 2048, "pid": 41377 },
+            { "role": "KOTLIN_DAEMON", "heapUsedMb": 800, "configuredXmxMb": 4096, "gcTimeMs": 4000, "uptimeS": 20, "rssMb": 3072, "pid": 55832, "gcCollector": "G1", "compactObjectHeaders": false }
           ]
         }
     """.trimIndent()
