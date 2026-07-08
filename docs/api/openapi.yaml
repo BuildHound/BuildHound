@@ -279,6 +279,8 @@ paths:
         rather than a false "relocatable" verdict) plus per-salt-stream fingerprint volatility scoring
         (plan 022), with credential/timestamp/run-id name-pattern notes over the allowlisted fingerprint
         key names only — never a matched value. Benchmark builds excluded, like `/v1/rollups/bottlenecks`.
+        A stored build row whose payload fails to decode is silently skipped rather than surfaced as an
+        error, so a 500 from malformed data is impossible here — only a storage outage 503s.
       parameters:
         - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
       responses:

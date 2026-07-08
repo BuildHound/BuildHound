@@ -85,19 +85,22 @@ private const val INTERNAL_ADAPTERS_EXTENSION_KEY = "internalAdapters"
  * whole navigation is `runCatching`-guarded: server keeps **no** dependency on `buildhound-internal-
  * adapters` (plan 039 decoupling invariant — it treats `extensions` as opaque `JsonElement`), so a
  * shape the server doesn't expect (a future schema bump, or outright malformed JSON) degrades to an
- * empty list for this build rather than a crash — never fatal to the whole rollup.
+ * empty list for this build rather than a crash — never fatal to the whole rollup. The wire `origin`
+ * string is parsed to [RelocatabilityOrigin] here — the one boundary — so every downstream consumer
+ * compares an enum, never a raw string literal; an unrecognized wire value degrades to [OTHER].
  */
 internal fun relocatabilityRowsOf(payload: BuildPayload): List<RelocatabilityRow> {
     val hostnameHash = payload.environment?.hostnameHash
     val tasksByPath = payload.tasks.associateBy { it.path }
-    val originsByPath: List<Pair<String, String>> = runCatching {
+    val originsByPath: List<Pair<String, RelocatabilityOrigin>> = runCatching {
         val element = payload.extensions[INTERNAL_ADAPTERS_EXTENSION_KEY]
-            ?: return@runCatching emptyList<Pair<String, String>>()
+            ?: return@runCatching emptyList<Pair<String, RelocatabilityOrigin>>()
         element.jsonObject["tasks"]?.jsonArray.orEmpty().mapNotNull { taskElement ->
             val obj = taskElement.jsonObject
             val path = obj["path"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             val origin = obj["origin"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            path to origin
+            val parsedOrigin = RelocatabilityOrigin.entries.firstOrNull { it.name == origin } ?: RelocatabilityOrigin.OTHER
+            path to parsedOrigin
         }
     }.getOrElse { emptyList() }
 
@@ -449,7 +452,7 @@ interface MetricStore {
     fun correlate(projectId: String, provider: String?, runId: String?, buildId: String)
 
     /**
-     * The `"scope name"` keys already stored for one logical run (matched by {provider,runId}
+     * The `"scope name"` keys already stored for one logical run (matched by {provider,runId}
      * when given, else by buildId) — for the ≤100-measures-per-run cardinality cap (spec §5).
      */
     fun correlationKeys(projectId: String, buildId: String?, provider: String?, runId: String?): Set<String>
@@ -909,7 +912,7 @@ class InMemoryMetricStore : MetricStore {
     private val metrics = ConcurrentHashMap<String, Pair<String, MetricRecord>>()
 
     private fun key(projectId: String, m: MetricRecord): String =
-        listOf(projectId, m.buildId ?: "", m.provider ?: "", m.runId ?: "", m.scope, m.name).joinToString(" ")
+        listOf(projectId, m.buildId ?: "", m.provider ?: "", m.runId ?: "", m.scope, m.name).joinToString("\u0000")
 
     override fun upsert(projectId: String, metric: MetricRecord) {
         metrics[key(projectId, metric)] = projectId to metric

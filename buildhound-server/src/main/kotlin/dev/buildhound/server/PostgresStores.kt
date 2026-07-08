@@ -284,6 +284,13 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             }
         }
 
+    /**
+     * A corrupt/unexpected `payload` jsonb (a `SerializationException`, never caught by the route-layer
+     * [runQuery]'s `SQLException`-only classifier) degrades to the same `null` as "no such row" rather
+     * than a bare 500 — every caller (`/builds/{id}`, `/verdict`, `/compare`, `/diagnosis`,
+     * `/parallelism`, `/graph`, …) already treats `null` as "unknown build" (404), so this is a pure
+     * safety net, never a behavior change on well-formed data.
+     */
     override fun findById(projectId: String, buildId: String): BuildPayload? =
         dataSource.connection.use { connection ->
             connection.prepareStatement(
@@ -293,7 +300,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.setString(2, buildId)
                 statement.executeQuery().use { rows ->
                     if (!rows.next()) null
-                    else BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString(1))
+                    else runCatching { BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString(1)) }.getOrNull()
                 }
             }
         }
@@ -941,7 +948,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * both stores agree byte-for-byte by construction (the plan-026/032/036 parity discipline) without
      * hand-writing jsonb-path SQL for the nested `internalAdapters.tasks[]` array. Every bound value is a
      * parameter, never interpolated (architecture §6) — task paths and fingerprint keys are user-
-     * controlled build data.
+     * controlled build data. A row whose `payload` fails to decode (`SerializationException` — never
+     * caught by the route-layer [runQuery]'s `SQLException`-only classifier) is skipped rather than
+     * failing the whole rollup: one corrupt row must never turn a fleet-wide read into a 500.
      */
     override fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long): CacheMissDiagnostics =
         dataSource.connection.use { connection ->
@@ -961,7 +970,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.executeQuery().use { rows ->
                     buildList {
                         while (rows.next()) {
-                            add(BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")))
+                            runCatching { BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")) }
+                                .getOrNull()
+                                ?.let(::add)
                         }
                     }
                 }

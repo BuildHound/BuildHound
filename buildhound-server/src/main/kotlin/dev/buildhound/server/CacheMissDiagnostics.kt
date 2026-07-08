@@ -3,19 +3,40 @@ package dev.buildhound.server
 import kotlinx.serialization.Serializable
 
 /**
- * One fleet row for detector 1 (plan 068, research F18): a task's internal-adapters origin
- * (plan 038's `CacheOrigin`, carried here as the plain wire string — [RelocatabilityDetector] never
- * depends on `buildhound-internal-adapters`, mirroring the [RerunCause]/[FlakySignal]/[WarningCategory]
- * server-local-enum convention) joined by path to the core task's module/cacheable/duration.
- * [hostnameHash] is the build-level identity hash (§3.7); null when uncaptured (`strict` mode, or a
- * pre-existing payload) — such a row can never contribute to the ≥2-distinct-host count, but still
- * counts toward the task's REMOTE_HIT/non-hit tally.
+ * Server-local mirror of plan 038's `CacheOrigin` (never the real Gradle-API type —
+ * [RelocatabilityDetector] never depends on `buildhound-internal-adapters`, mirroring the
+ * [RerunCause]/[FlakySignal]/[WarningCategory] server-local-enum convention), parsed once at the
+ * [relocatabilityRowsOf] boundary so every downstream comparison is exhaustive-`when`-checked instead of
+ * a raw wire-string literal. [OTHER] absorbs any origin name the server doesn't recognize — a future
+ * wire value, or a malformed one — degrading to "not a hit, not a countable miss" rather than a crash.
+ */
+enum class RelocatabilityOrigin { REMOTE_HIT, STORED, MISS, OTHER }
+
+/**
+ * `"Miss"` means non-`REMOTE_HIT` **execution** (`STORED`|`MISS`), never the literal `MISS` case alone
+ * (see [RelocatabilityDetector.detect]'s KDoc). Exhaustive `when` (no `else`) so a future addition to
+ * [RelocatabilityOrigin] fails to compile here instead of silently defaulting.
+ */
+private val RelocatabilityOrigin.isNonHitExecution: Boolean
+    get() = when (this) {
+        RelocatabilityOrigin.STORED, RelocatabilityOrigin.MISS -> true
+        RelocatabilityOrigin.REMOTE_HIT, RelocatabilityOrigin.OTHER -> false
+    }
+
+/**
+ * One fleet row for detector 1 (plan 068, research F18): a task's internal-adapters origin, parsed to
+ * [RelocatabilityOrigin] at the [relocatabilityRowsOf] boundary, joined by path to the core task's
+ * module/cacheable/duration. [hostnameHash] is the build-level identity hash (§3.7); null when uncaptured
+ * (`strict` mode, or a pre-existing payload) — such a row can never contribute to the ≥2-distinct-host
+ * count or [NonRelocatableCandidate.wastedMs] (evidence-set consistency, see its KDoc), but still counts
+ * toward the task's REMOTE_HIT-anywhere check ([RelocatabilityDetector.remoteCacheObserved]/the per-task
+ * relocated-fine skip).
  */
 data class RelocatabilityRow(
     val taskPath: String,
     val module: String?,
     val hostnameHash: String?,
-    val origin: String,
+    val origin: RelocatabilityOrigin,
     val cacheable: Boolean?,
     val durationMs: Long,
 )
@@ -26,7 +47,10 @@ data class RelocatabilityRow(
  * prompt, never "change annotation X" (the plan's load-bearing candidate-not-fix framing, mirroring
  * [WarningRow]/[BuildLogicStormCandidate]). [crossHostCount] is the number of distinct machines the
  * task executed (`STORED`|`MISS`) on with zero `REMOTE_HIT`s anywhere for that task; [wastedMs] is the
- * summed duration of those non-hit executions — together the ranking key (`crossHostCount * wastedMs`).
+ * summed duration of those *same* hosted non-hit executions — a row with no captured `hostnameHash`
+ * (uncaptured/`strict` mode) contributes to neither, so the two numbers describe one consistent evidence
+ * set rather than [wastedMs] silently including executions [crossHostCount] never counted. Together the
+ * ranking key (`crossHostCount * wastedMs`).
  */
 @Serializable
 data class NonRelocatableCandidate(
@@ -59,7 +83,8 @@ object RelocatabilityDetector {
     const val MAX_DIAGNOSTIC_ROWS: Int = 20_000
 
     /** True when the window observed at least one `REMOTE_HIT` anywhere — the fleet gate for [detect]. */
-    fun remoteCacheObserved(rows: List<RelocatabilityRow>): Boolean = rows.any { it.origin == "REMOTE_HIT" }
+    fun remoteCacheObserved(rows: List<RelocatabilityRow>): Boolean =
+        rows.any { it.origin == RelocatabilityOrigin.REMOTE_HIT }
 
     /**
      * `"Miss"` means non-`REMOTE_HIT` **execution** (`STORED`|`MISS`), not the literal `MISS` enum: a
@@ -76,15 +101,18 @@ object RelocatabilityDetector {
 
         return rows.groupBy { it.taskPath }
             .mapNotNull { (path, group) ->
-                if (group.any { it.origin == "REMOTE_HIT" }) return@mapNotNull null // relocated fine somewhere
-                val executed = group.filter { (it.origin == "STORED" || it.origin == "MISS") && it.cacheable != false }
-                val hosts = executed.mapNotNull { it.hostnameHash }.distinct()
+                if (group.any { it.origin == RelocatabilityOrigin.REMOTE_HIT }) return@mapNotNull null // relocated fine somewhere
+                val executed = group.filter { it.origin.isNonHitExecution && it.cacheable != false }
+                // wastedMs sums the same hosted subset crossHostCount counts (evidence-set consistency,
+                // never a row whose host is uncaptured) — see NonRelocatableCandidate's KDoc.
+                val hostedExecuted = executed.filter { it.hostnameHash != null }
+                val hosts = hostedExecuted.mapNotNull { it.hostnameHash }.distinct()
                 if (hosts.size < MIN_HOSTS) return@mapNotNull null
                 NonRelocatableCandidate(
                     taskPath = path,
                     module = group.mapNotNull { it.module }.distinct().singleOrNull(),
                     crossHostCount = hosts.size,
-                    wastedMs = executed.sumOf { it.durationMs },
+                    wastedMs = hostedExecuted.sumOf { it.durationMs },
                     note = "Executed (never REMOTE_HIT) on ${hosts.size} distinct machines — investigate " +
                         "cache-key relocatability (e.g. absolute-path or output-location sensitivity) for this task.",
                 )
