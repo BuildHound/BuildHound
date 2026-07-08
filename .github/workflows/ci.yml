@@ -1,9 +1,24 @@
 name: CI
 
+# Markdown-only changes can't affect a build/test outcome, so skip the whole workflow
+# for them to save runner minutes — this also makes plan-commit PRs (docs/plans/NNN-*.md)
+# free. paths-ignore skips only when EVERY changed file matches; a docs change alongside
+# any code still runs CI. Deliberately NARROW to markdown (+ LICENSE): docs/ is NOT
+# docs-only — docs/api/openapi.yaml is copied into the server jar + OCI image and guarded
+# by OpenApiContractTest / DocsRoutesTest / the image smoke test, so it must still trigger
+# CI. '**/*.md' covers markdown under docs/ (spec, roadmap, plans); root + nested both
+# listed because '**/*.md' does not match root-level files on its own. Safe today because
+# no branch protection / ruleset marks these jobs as required status checks (a skipped
+# required check would otherwise wedge merges — revisit this filter if that changes).
 on:
   push:
     branches: [main]
+    paths-ignore: &docs-only
+      - '*.md'
+      - '**/*.md'
+      - 'LICENSE'
   pull_request:
+    paths-ignore: *docs-only
 
 concurrency:
   group: ci-${{ github.ref }}
