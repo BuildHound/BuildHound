@@ -63,6 +63,18 @@ class WrapperParsingTest {
     }
 
     @Test
+    fun `isPinned is false for an empty distributionSha256Sum value, matching the CI-side grep`() {
+        // Properties.load parses a bare "key=" line as the key mapped to "" (not absent) — the old
+        // `!= null` presence check misread this as pinned; the CI-side wrapper-integrity grep was
+        // already fixed to require a non-empty value (529c0f0), so the plugin-side check must match.
+        val emptyPin = propertiesFile(
+            "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14-bin.zip\n" +
+                "distributionSha256Sum=\n",
+        )
+        assertEquals(false, WrapperParsing.isPinned(WrapperParsing.loadProperties(emptyPin)))
+    }
+
+    @Test
     fun `distributionUrl reads the raw url, null for unreadable properties`() {
         assertNull(WrapperParsing.distributionUrl(null))
         val props = propertiesFile("distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14-all.zip\n")

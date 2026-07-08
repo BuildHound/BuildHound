@@ -203,12 +203,22 @@ enum class GuhWarmth {
         const val FRESH_WINDOW_MS: Long = 5 * 60 * 1000L
 
         /**
-         * Pure classification (plan 066, corrected): `COLD` when the dist's mtime sits within
-         * [FRESH_WINDOW_MS] of this daemon's own [jvmStartMs] (unpacked at/around this daemon's own
-         * bootstrap); `WARM` when meaningfully older (a persisted, reused Gradle User Home).
-         * `UNKNOWN` when [distPresent] isn't `true` (no wrapper dist at all — system/IDE Gradle, or
-         * the probe never ran) or either timestamp is unavailable (a guarded stat/JVM-introspection
-         * failure).
+         * Pure classification (plan 066, corrected; window made asymmetric on review): the wrapper
+         * unpacks the distribution *before* this JVM starts, so a real "this daemon's own bootstrap"
+         * unpack can only ever sit at-or-before [jvmStartMs] — a slightly-*after* mtime within
+         * [FRESH_WINDOW_MS] is still folded into `COLD` (write-completion/filesystem-timestamp lag
+         * racing the JVM's observable start), but a mtime *meaningfully* after [jvmStartMs] no longer
+         * fits either narrative: it isn't "unpacked by this daemon's own bootstrap" (impossible —
+         * bootstrap precedes JVM start) and it isn't "a persisted, reused Gradle User Home" either
+         * (that dist would be *older* than [jvmStartMs], not newer) — it reads as a concurrent build
+         * writing the same shared GUH, or clock skew, so it degrades to `UNKNOWN` rather than being
+         * mislabeled `WARM`. So: `COLD` when `mtime` sits within [FRESH_WINDOW_MS] of [jvmStartMs] on
+         * either side; `WARM` when `mtime` is meaningfully *older* than [jvmStartMs] (beyond the
+         * window, a persisted/reused Gradle User Home); `UNKNOWN` when `mtime` is meaningfully
+         * *newer* than [jvmStartMs] (beyond the window, chronologically inconsistent with this
+         * daemon's own bootstrap), when [distPresent] isn't `true` (no wrapper dist at all —
+         * system/IDE Gradle, or the probe never ran), or when either timestamp is unavailable (a
+         * guarded stat/JVM-introspection failure).
          */
         fun classify(
             distMtimeMs: Long?,
@@ -218,7 +228,12 @@ enum class GuhWarmth {
             if (distPresent != true) return UNKNOWN
             val mtime = distMtimeMs ?: return UNKNOWN
             val jvmStart = jvmStartMs ?: return UNKNOWN
-            return if (kotlin.math.abs(jvmStart - mtime) <= FRESH_WINDOW_MS) COLD else WARM
+            val delta = mtime - jvmStart
+            return when {
+                delta > FRESH_WINDOW_MS -> UNKNOWN
+                delta >= -FRESH_WINDOW_MS -> COLD
+                else -> WARM
+            }
         }
     }
 }
