@@ -1,5 +1,13 @@
 # 061 — Rerun-cause taxonomy over `executionReasons`
 
+## Implementation note (renumber)
+
+This plan's `V11` migration reference below was written before plan 057 (`V11__tag_index.sql`) landed
+on the branch and took `V11` first. The migration actually shipped as
+`V12__execution_reasons.sql` — the next free number at implementation time (verified against
+`buildhound-server/src/main/resources/db/migration/` at implementation time: `V1`–`V11` all taken).
+Every other design decision below is unchanged; read `V11` as `V12` throughout.
+
 ## Source
 
 Research finding **F11** (`docs/research/ingest-corpus-analysis.md`) — *"Rerun-cause
@@ -35,7 +43,7 @@ them. This is a **server-side-only** slice: no plugin change, no payload schema 
 - **Detector 2 (build-level only) — cascade-vs-contained:** classify each build `CASCADE`
   when its `IMPL_CLASSPATH`/`UPSTREAM_OUTPUT` coverage exceeds a threshold, `CONTAINED`
   otherwise; report the fleet cascade rate.
-- Additive DB migration `V11` adding a nullable `execution_reasons text[]` column to
+- Additive DB migration `V12` adding a nullable `execution_reasons text[]` column to
   `task_executions`, populated on ingest; threaded into the server-internal `TaskRow`.
 - `docs/api/openapi.yaml` entry for the new route (OpenApiContractTest drift guard).
 
@@ -84,8 +92,8 @@ Modules touched: **buildhound-server only.**
   a small `RerunCauseRollup` calculator (bucket coverage + cascade rate). Route added beside
   `/rollups/toolchain` (`Routes.kt:485`) via `authenticatedProject(tokens,
   TokenScope::allowsRead)` + `respondQuery`.
-- Migration `V11` (next free after `V10__retention.sql`): `ALTER TABLE task_executions ADD
-  COLUMN execution_reasons text[]` — additive, nullable, **no backfill**; pre-V11 rows read
+- Migration `V12` (next free after `V10__retention.sql`): `ALTER TABLE task_executions ADD
+  COLUMN execution_reasons text[]` — additive, nullable, **no backfill**; pre-V12 rows read
   NULL → `UNCLASSIFIED`. Column inherits plan-[042] raw-row retention (`rawCutoffMs`), so the
   taxonomy window is bounded exactly like project-cost/bottlenecks.
 - The classifier is reusable substrate a future F10 "warnings" family can share (avoids
@@ -103,7 +111,7 @@ Modules touched: **buildhound-server only.**
 - **Store parity (`RerunCauseStoresIntegrationTest`, Testcontainers, beside
   `RollupStoresIntegrationTest`/`BottleneckStoresIntegrationTest`):** identical builds into
   both stores yield byte-for-byte-equal `rerunCauses` output (freshly inserted rows populate
-  the column in both). One case with a NULL-reason (pre-V11-style) row confirms it degrades to
+  the column in both). One case with a NULL-reason (pre-V12-style) row confirms it degrades to
   `UNCLASSIFIED` without error.
 - **Route (`RerunCauseRoutesTest`):** read-scope + tenant isolation (a token for tenant A
   never sees tenant B's taxonomy); `days` clamping; empty-project honest-empty response.
@@ -123,7 +131,7 @@ Modules touched: **buildhound-server only.**
   `UNCLASSIFIED`. Mitigation: expose the unclassified share explicitly so a high value reads
   as "data opaque here," not "no rerun causes."
 - **Additive DB schema:** `execution_reasons` is a new nullable column, no golden/payload
-  change (`schemaVersion` = 1), no backfill; pre-V11 rows degrade to `UNCLASSIFIED`. Both
+  change (`schemaVersion` = 1), no backfill; pre-V12 rows degrade to `UNCLASSIFIED`. Both
   stores keep parity on fresh data.
 - **Privacy (§3.7):** reasons are already scrubbed pre-storage (`PayloadScrubber.kt:39-44` —
   paths relativized, secret-shaped tokens redacted). The rollup emits **enum buckets +
@@ -151,5 +159,5 @@ Modules touched: **buildhound-server only.**
   reasons degrade to `UNCLASSIFIED` without error.
 - In-memory and Postgres `rerunCauses` agree byte-for-byte (Testcontainers parity), including
   the NULL-reason degradation case.
-- `V11` migration is additive; payload `schemaVersion` unchanged; no golden file edited.
+- `V12` migration is additive; payload `schemaVersion` unchanged; no golden file edited.
 - `docs/api/openapi.yaml` updated; `OpenApiContractTest` green; `./gradlew build` green.

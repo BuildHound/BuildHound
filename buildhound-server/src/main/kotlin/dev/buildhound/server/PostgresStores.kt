@@ -148,8 +148,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         connection.prepareStatement(
             """
             INSERT INTO task_executions
-                (project_id, build_id, started_at, user_id, path, module, name, type, outcome, cacheable, duration_ms)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (project_id, build_id, started_at, user_id, path, module, name, type, outcome, cacheable,
+                 duration_ms, execution_reasons)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent(),
         ).use { statement ->
             val startedAt = OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC)
@@ -166,6 +167,10 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.setString(9, task.outcome.name)
                 task.cacheable?.let { statement.setBoolean(10, it) } ?: statement.setNull(10, java.sql.Types.BOOLEAN)
                 statement.setLong(11, task.durationMs)
+                // Rerun-cause taxonomy source (plan 061): a plain text[], written on ingest. A fresh
+                // insert always writes an array (possibly empty) — never NULL; NULL only occurs on rows
+                // from before this migration, which taskRowsBetween degrades to UNCLASSIFIED at read time.
+                statement.setArray(12, connection.createArrayOf("text", task.executionReasons.toTypedArray()))
                 statement.addBatch()
             }
             statement.executeBatch()
@@ -674,7 +679,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         connection.prepareStatement(
             """
             SELECT te.build_id, te.user_id, te.module, te.name, te.type, te.outcome,
-                   te.duration_ms, te.cacheable, b.duration_ms AS wall
+                   te.duration_ms, te.cacheable, te.execution_reasons, b.duration_ms AS wall
             FROM task_executions te
             JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
             WHERE te.project_id = ? AND te.started_at >= ? AND te.started_at < ? AND b.mode <> 'BENCHMARK'
@@ -697,12 +702,26 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                                 durationMs = rows.getLong("duration_ms"),
                                 buildWallMs = rows.getLong("wall"),
                                 cacheable = rows.getBoolean("cacheable").takeUnless { rows.wasNull() },
+                                // A pre-V12 row reads NULL here (never written) → empty list → the
+                                // classifier's UNCLASSIFIED degradation, never a null-pointer crash.
+                                executionReasons = executionReasonsOf(rows),
                             ),
                         )
                     }
                 }
             }
         }
+
+    /**
+     * `execution_reasons` text[] read back as a `List<String>`; NULL (pre-V12 row) → empty (plan 061).
+     * `filterIsInstance` (not a direct `Array<String>` cast) because the JDBC driver's `Array.getArray()`
+     * is only guaranteed to return `Array<*>` at the JVM level — casting straight to `Array<String?>`
+     * risks a `ClassCastException` if the driver hands back a plain `Object[]`.
+     */
+    private fun executionReasonsOf(rows: java.sql.ResultSet): List<String> {
+        val sqlArray = rows.getArray("execution_reasons") ?: return emptyList()
+        return (sqlArray.array as? Array<*>)?.filterIsInstance<String>() ?: emptyList()
+    }
 
     /** Build-level KPI rows for a half-open window (plan 032); benchmark builds excluded. */
     private fun kpiRowsBetween(
@@ -780,6 +799,16 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                     )
                 }
             }
+        }
+
+    /**
+     * Rerun-cause taxonomy (plan 061, research F11): reuses [taskRowsBetween] — the same half-open
+     * [cutoff, now) window + `mode <> 'BENCHMARK'` exclusion `bottlenecks` already applies — so both
+     * stores fold an identical row population through [RerunCauseRollupCalculator] (parity discipline).
+     */
+    override fun rerunCauses(projectId: String, days: Int, nowMs: Long): RerunCauseRollup =
+        dataSource.connection.use { connection ->
+            RerunCauseRollupCalculator.compute(taskRowsBetween(connection, projectId, cutoff(days, nowMs), atMs(nowMs)))
         }
 
     override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> =

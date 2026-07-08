@@ -209,6 +209,13 @@ paths:
         "200": { description: The toolchain rollup. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/rerun-causes:
+    get:
+      summary: Rerun-cause taxonomy rollup (plan 061).
+      responses:
+        "200": { description: Per-bucket coverage of executed task-hours (overlapping), a build-level cascade rate, and an optional build-logic-storm candidate. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
   /v1/settings:
     get:
       summary: Read this project's regression settings (plan 025).
