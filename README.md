@@ -13,7 +13,7 @@ fully standalone HTML report artifact. Apache-2.0. Home: [buildhound.dev](https:
 | `buildhound-gradle-plugin/` | Settings plugin (`dev.buildhound`): collectors (BuildService), Flow-API finalizer, `buildhound {}` DSL, uploader |
 | `buildhound-server/` | Ktor ingestion + query service (`POST /v1/builds`, rollups, regression engine, CI connectors, dashboard), shipped as an OCI image |
 | `buildhound-report/` | Standalone HTML build-report artifact (zero network access, enforced by test) |
-| `buildhound-internal-adapters/` | Opt-in module (`dev.buildhound.internal-adapters`) — the one sanctioned use of internal Gradle APIs: cache origin/keys + critical-path/avoided-time |
+| `buildhound-internal-adapters/` | Bundled-with-core module — the one quarantined use of internal Gradle APIs (cache origin/keys + critical-path/avoided-time, deprecation + WARN-log warnings). Dormant until a `buildhound { internalAdapters { } }` toggle is set (plan 051) |
 | `buildhound-addon-test-sharding/` | Opt-in addon (`dev.buildhound.test-sharding`): server-balanced test sharding across CI shards |
 | `buildhound-mcp/` | Opt-in read-only MCP server exposing the query API over stdio JSON-RPC (agent tooling) |
 | `buildhound-ci-assets/` | JVM-free CI assets: GitHub Action, GitLab + Azure Pipelines templates, metric CLI, overhead/profiler harnesses |
@@ -96,6 +96,46 @@ buildhound {
 Leaving `server {}` unset (or `url` empty) runs the plugin **offline** — it still writes the HTML
 report but uploads nothing.
 
+### Configuration reference
+
+Everything lives in the single `buildhound { }` block (there is one plugin — `dev.buildhound` — and
+one config block). Every knob has a safe default, so an empty `buildhound { }` is a valid, useful
+configuration. A fully-populated reference at defaults ships in
+[`samples/nowinandroid/settings.gradle.kts`](samples/nowinandroid/settings.gradle.kts).
+
+Most booleans/strings also accept a `buildhound.<key>` Gradle property or a `BUILDHOUND_<KEY>`
+environment variable (`<KEY>` = the key uppercased with `.`→`_`); an explicit DSL value always wins
+over an override, which wins over the built-in default (plan 027).
+
+| Option | Default | Override key | What it does |
+|---|---|---|---|
+| `enabled` | `true` | `buildhound.enabled` | Master switch; telemetry is skipped entirely when false |
+| `mode` | `AUTO` | `buildhound.mode` | `AUTO` detects CI vs LOCAL; force with `CI` / `LOCAL` / `DISABLED` |
+| `tags.put(k, v)` | none | — | Low-cardinality dimensions attached to every build |
+| `identity { pseudonymize }` | `true` | `buildhound.identity.pseudonymize` | Salted-HMAC pseudonyms for hostname/user (spec §3.7); `false` sends plaintext |
+| `htmlReport { enabled }` | `true` | `buildhound.htmlReport.enabled` | Per-build standalone HTML report under `build/buildhound/` |
+| `server { url }` | unset (offline) | `buildhound.server.url` | Ingest base URL; unset ⇒ offline (report only, no upload) |
+| `server { token }` | unset | **env/provider only** | Ingest token — wire from an env-var provider; never overridable (would serialize into the CC entry) |
+| `localBuilds { enabled }` | `true` | `buildhound.localBuilds.enabled` | Allow local (non-CI) builds to upload |
+| `localBuilds { requireOptInFile }` | `true` | `buildhound.localBuilds.requireOptInFile` | Local uploads additionally require the `~/.buildhound/optin` marker (spec §3.7) |
+| `upload { uploadInBackground }` | `false` | `buildhound.upload.uploadInBackground` | Local builds spool and let the next build drain, instead of uploading inline |
+| `fingerprints { systemProperties/envVars/gradleProperties }` | none | — | Extra build inputs fingerprinted as salted hashes for cache-miss comparison |
+| `kotlinReports { bundle }` | `true` | — | Bundle the Kotlin build report (phase times, incremental effectiveness) |
+| `tests { collect }` | `true` | — | Parse per-class JUnit test results into the payload |
+| `processProbe { enabled }` | `true` | `buildhound.processProbe.enabled` | End-of-build JVM process snapshot (heap, GC) |
+| `internalAdapters { collectCacheOrigins }` | `false` | `buildhound.internalAdapters.collectCacheOrigins` | Per-task cache origin/keys + critical-path / avoided-time. **Reads internal Gradle APIs** |
+| `internalAdapters { collectDeprecations }` | `false` | `buildhound.internalAdapters.collectDeprecations` | Capture Gradle deprecation warnings. **Reads internal Gradle APIs** |
+| `internalAdapters { collectLogWarnings }` | `false` | `buildhound.internalAdapters.collectLogWarnings` | Capture `WARN`-level log lines (`logger.warn`). **Reads internal Gradle APIs** |
+| `internalAdapters { perFileHashes }` | `false` | `buildhound.internalAdapters.perFileHashes` | Reserved for a v1.x follow-up; no effect yet |
+
+> **`internalAdapters { }` and internal Gradle APIs.** These four toggles drive capture that reads
+> *internal* Gradle APIs (build-operation types, `LoggingOutputInternal`) which carry no compatibility
+> guarantee. The code ships bundled with the core plugin but is **dormant** — off by default, and no
+> internal API is touched until you flip a toggle. Flipping one is the per-feature consent; the plugin
+> then logs a one-time notice that a Gradle upgrade may silently stop that signal. Capture never fails
+> the build (every path is reflection-guarded). See [architecture §7](docs/architecture.md#7-decision-log)
+> (plan 051) for why this is quarantined in its own module rather than living in core.
+
 ### Local development credentials
 
 The Compose stack ships committed **local-development-only** credentials so the harness works out
@@ -153,7 +193,8 @@ Roadmap phases 0–4 are implemented (see the [roadmap](docs/build-telemetry-roa
   GitLab) that enrich builds with pipeline timelines, retention with an `admin` scope, an
   OpenAPI-contracted API, and a zero-CDN dashboard + docs viewer.
 - **Artifacts & extension points** — the standalone HTML report, an addon SPI with the
-  test-sharding addon, the internal-adapters module, and an opt-in read-only MCP server.
+  test-sharding addon, the bundled internal-adapters capture (behind `internalAdapters {}`, off by
+  default), and an opt-in read-only MCP server.
 
 Two plans remain open, both blocked: [035](docs/plans/035-cc-miss-reason-capture.md) and
 [037](docs/plans/037-test-quarantine-addon.md).

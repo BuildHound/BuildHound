@@ -33,6 +33,9 @@ class BuildOperationAdapter(private val rootDir: java.io.File) : BuildOperationL
     }
 
     override fun started(descriptor: BuildOperationDescriptor, event: OperationStartEvent) {
+        // Task/parent correlation is only consumed by the cache data paths in finished() — gate it on
+        // the cache toggle so a build that enabled *only* a warning catcher accumulates nothing here.
+        if (!state.collectCacheOrigins()) return
         runCatching {
             val acc = state.accumulator()
             val id = descriptor.id?.id ?: return
@@ -63,6 +66,9 @@ class BuildOperationAdapter(private val rootDir: java.io.File) : BuildOperationL
     }
 
     override fun finished(descriptor: BuildOperationDescriptor, event: OperationFinishEvent) {
+        // Cache origin/key accumulation is gated on its own toggle (plan 051): deprecations ride the
+        // progress() path above, so a deprecations-only build must not collect cache telemetry here.
+        if (!state.collectCacheOrigins()) return
         runCatching {
             val acc = state.accumulator()
             val result = event.result ?: return

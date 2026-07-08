@@ -25,6 +25,7 @@ object InternalAdaptersState {
     private val logListenerRegistered = AtomicBoolean(false)
     private val accumulator = AtomicReference(Accumulator())
     private val perFileHashes = AtomicBoolean(false)
+    private val collectCacheOrigins = AtomicBoolean(false)
     private val collectDeprecations = AtomicBoolean(false)
     private val collectLogWarnings = AtomicBoolean(false)
     private val gradleVersion = AtomicReference("unknown")
@@ -41,6 +42,13 @@ object InternalAdaptersState {
     fun claimLogListenerRegistration(): Boolean = logListenerRegistered.compareAndSet(false, true)
 
     fun releaseLogListenerRegistration() = logListenerRegistered.set(false)
+
+    /**
+     * Cache-origin/key + critical-path capture toggle (plan 038/051), set via [configure] at config
+     * time. Gates the [BuildOperationAdapter] cache data paths, so enabling *only* a warning catcher
+     * never accumulates cache telemetry.
+     */
+    fun collectCacheOrigins(): Boolean = collectCacheOrigins.get()
 
     /** Warning-catcher toggles (plan 044), set via [configure] at config time — see its KDoc for why. */
     fun collectDeprecations(): Boolean = collectDeprecations.get()
@@ -59,13 +67,15 @@ object InternalAdaptersState {
         gradle: String,
         root: String?,
         edges: Map<String, List<String>>,
+        collectCacheOrigins: Boolean = false,
         collectDeprecations: Boolean = false,
         collectLogWarnings: Boolean = false,
     ) {
         perFileHashes.set(perFile)
-        // Warning toggles are read here (config time) not at apply(): the `internalAdapters {}` DSL
-        // block runs after apply() returns, so the user's value isn't set at apply. Daemon-static, so
-        // they persist across CC hits (the DSL value doesn't change between builds) — like perFileHashes.
+        // Toggles are read here (config time) not at apply(): the `buildhound { internalAdapters {} }`
+        // DSL block runs after apply() returns, so the user's value isn't set at apply. Daemon-static,
+        // so they persist across CC hits (the DSL value doesn't change between builds) — like perFileHashes.
+        this.collectCacheOrigins.set(collectCacheOrigins)
         this.collectDeprecations.set(collectDeprecations)
         this.collectLogWarnings.set(collectLogWarnings)
         gradleVersion.set(gradle)
@@ -97,6 +107,7 @@ object InternalAdaptersState {
         logListenerRegistered.set(false)
         accumulator.set(Accumulator())
         perFileHashes.set(false)
+        collectCacheOrigins.set(false)
         collectDeprecations.set(false)
         collectLogWarnings.set(false)
         gradleVersion.set("unknown")

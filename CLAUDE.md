@@ -66,7 +66,10 @@ constraints that always apply:
 - The plugin must never fail a build; every failure path degrades to a `warn` log.
 - Configuration-cache compatibility for all plugin code.
 - Schema changes are additive only; add golden files, never edit them.
-- No internal Gradle APIs (v1).
+- No internal Gradle APIs on the always-on core path (v1). All internal-API use is quarantined in
+  the bundled `buildhound-internal-adapters` module and stays dormant until a
+  `buildhound { internalAdapters { } }` toggle is set — enabling a toggle is the per-feature consent
+  (plan 051). Core's own source references no internal Gradle type.
 - Tokens/secrets only via providers/env — never in code, DSL literals, logs, or images.
 
 ### 3. Review with clean-context agents

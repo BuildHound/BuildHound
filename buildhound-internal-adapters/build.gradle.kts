@@ -1,10 +1,15 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
+    // Kept only for the `gradleApi()` compile classpath (this module references Gradle settings +
+    // internal build-operation APIs). It no longer declares a plugin: since plan 051 there is ONE
+    // plugin (`dev.buildhound`) that bundles and drives this module via `InternalAdaptersWiring`.
     `java-gradle-plugin`
 }
 
-description = "Opt-in internal-adapters plugin: cache origin, cache keys, tier-b fingerprints (plan 038)"
+description = "Internal-adapters capture bundled with the core plugin: cache origin/keys, critical path, " +
+    "deprecation + WARN-log warnings (plan 038/044). Uses internal Gradle APIs; dormant until a " +
+    "buildhound { internalAdapters { } } toggle is set (plan 051)."
 
 // JDK 26 builds the code; bytecode/API stay Java 21 (same pins as the core plugin, plan 011).
 val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26
@@ -41,51 +46,11 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
-// TestKit functional tests, kept apart so a Gradle-version matrix can run them (plan 021).
-val functionalTest: SourceSet = sourceSets.create("functionalTest")
-
-dependencies {
-    "functionalTestImplementation"(projects.buildhoundCommons)
-    // The core plugin, so the warning-capture functional test can apply BOTH plugins in one build
-    // (capture only happens with core present). Test-only — production still depends on commons alone.
-    "functionalTestImplementation"(projects.buildhoundGradlePlugin)
-    "functionalTestImplementation"(libs.kotlinx.serialization.json)
-    "functionalTestImplementation"(libs.kotlin.test.junit5)
-    "functionalTestImplementation"(libs.junit.jupiter)
-    "functionalTestImplementation"(gradleTestKit())
-    "functionalTestRuntimeOnly"(libs.junit.platform.launcher)
-}
-
-gradlePlugin {
-    testSourceSets(functionalTest)
-    plugins {
-        create("buildhoundInternalAdapters") {
-            id = "dev.buildhound.internal-adapters"
-            implementationClass = "dev.buildhound.internaladapters.InternalAdaptersSettingsPlugin"
-            displayName = "BuildHound internal adapters"
-            description = "Opt-in cache-origin, cache-key, and input-fingerprint capture via internal Gradle build operations"
-            tags = listOf("telemetry", "build-cache", "build-performance")
-        }
-    }
-}
-
-val functionalTestTask = tasks.register<Test>("functionalTest") {
-    description = "Runs TestKit functional tests for the internal-adapters module"
-    group = "verification"
-    testClassesDirs = functionalTest.output.classesDirs
-    classpath = functionalTest.runtimeClasspath
-    useJUnitPlatform()
-}
-
-tasks.check {
-    dependsOn(functionalTestTask)
-}
-
 tasks.named<Test>("test") {
     useJUnitPlatform()
 }
 
 tasks.withType<Test>().configureEach {
-    // TestKit runs the fixture Gradle on the consumer floor (JDK 21); compilation stays on 26 (plan 011).
+    // Compilation stays on 26; unit tests run on the consumer floor (JDK 21) for parity with core (plan 011).
     javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) })
 }

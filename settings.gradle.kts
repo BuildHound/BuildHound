@@ -36,14 +36,18 @@ include(":buildhound-commons")
 include(":buildhound-gradle-plugin")
 include(":buildhound-server")
 include(":buildhound-report")
+// Bundled with the core plugin since plan 051 (one plugin, one config block): the core plugin has an
+// `implementation` dependency on it, so it is always included. Its internal-Gradle-API code stays
+// quarantined here and is dormant until a `buildhound { internalAdapters { } }` toggle is set — bundling
+// is not blanket consent (spec §3.1, plan 051). The server OCI image copies its build.gradle.kts so this
+// unconditional include still evaluates in the minimal Docker context (buildhound-server/Dockerfile).
+include(":buildhound-internal-adapters")
 
 // Opt-in, separately-shipped modules — included only when their directory is present. The server OCI
 // image builds from a minimal context (buildhound-server/Dockerfile copies just the core modules), and
-// Gradle 9 rejects an included project whose directory does not exist; a full checkout has all three, so
-// `./gradlew build` is unchanged. Each is off the core plugin's classpath — applying/shipping is the consent.
+// Gradle 9 rejects an included project whose directory does not exist; a full checkout has all of them,
+// so `./gradlew build` is unchanged. Each is off the core plugin's classpath — applying/shipping is the consent.
 listOf(
-    // The single sanctioned exception to the no-internal-Gradle-APIs rule (spec §3.1, plan 038).
-    "buildhound-internal-adapters",
     // Test-sharding addon (plan 040): a settings plugin that fetches a server-balanced shard plan and
     // filters Test tasks across CI shards. commons-only, applied alongside core.
     "buildhound-addon-test-sharding",

@@ -12,8 +12,8 @@
 ```mermaid
 flowchart TD
     subgraph build["Gradle build (consumer machine / CI agent)"]
-        plugin["buildhound-gradle-plugin<br/>settings plugin: collectors + Flow finalizer"]
-        addons["opt-in addons<br/>internal-adapters · test-sharding"]
+        plugin["buildhound-gradle-plugin<br/>settings plugin: collectors + Flow finalizer<br/>bundles internal-adapters (dormant until a toggle)"]
+        addons["opt-in addon<br/>test-sharding"]
         report["buildhound-report<br/>standalone HTML artifact (zero network)"]
     end
 
@@ -44,7 +44,7 @@ flowchart TD
 | `buildhound-gradle-plugin` | Kotlin/JVM + `java-gradle-plugin` | 21 | Settings plugin: collectors, finalizer, uploader |
 | `buildhound-server` | Kotlin/JVM + Ktor, `application` | 21 | Ingest + query API, storage, rollups, regression + flaky engines, CI connectors, retention, dashboard |
 | `buildhound-report` | Kotlin/JVM (js candidate) | 21 | Standalone HTML artifact template + renderer, embedded into the plugin and served to the dashboard |
-| `buildhound-internal-adapters` | Kotlin/JVM + `java-gradle-plugin` (opt-in) | 21 | The one sanctioned internal-Gradle-API module: cache origin/keys, critical-path/avoided-time (contributes `extensions[]`) |
+| `buildhound-internal-adapters` | Kotlin/JVM + `gradleApi()` (bundled with core, plan 051) | 21 | The one quarantined internal-Gradle-API module: cache origin/keys, critical-path/avoided-time, deprecation + WARN-log warnings (contributes `extensions[]`). Bundled onto the core plugin's classpath but **dormant** until a `buildhound { internalAdapters { } }` toggle is set |
 | `buildhound-addon-test-sharding` | Kotlin/JVM + `java-gradle-plugin` (opt-in addon) | 21 | Server-balanced test sharding across CI shards |
 | `buildhound-mcp` | Kotlin/JVM (opt-in) | 21 | Read-only MCP server over stdio JSON-RPC (agent tooling) |
 | `buildhound-ci-assets` | not a Gradle module | none | GitHub Action, GitLab + Azure Pipelines templates, metric CLI (shell), overhead/profiler harnesses |
@@ -73,14 +73,17 @@ flowchart LR
     mcp --> commons
     ia --> commons
     sharding --> commons
+    plugin -- "bundles (plan 051)" --> ia
     plugin -. "inlines template + renderer" .-> report
     server -. "serves the same renderer (/timeline.js)" .-> report
 ```
 
 *Every module depends only on `buildhound-commons` (the contract); `buildhound-report` is the
-one shared rendering channel both the plugin and server may reference (plan 017). The opt-in
-modules (`internal-adapters`, `addon-test-sharding`) and `buildhound-mcp` never touch the core
-plugin or server — they attach through commons SPIs.*
+one shared rendering channel both the plugin and server may reference (plan 017). `internal-adapters`
+is **bundled** by the core plugin (plan 051) — a compile dependency so it needs no second plugin — but
+contributes its payload only through the commons SPI and stays dormant until a toggle is set. The
+remaining opt-in modules (`addon-test-sharding`, `buildhound-mcp`) never touch the core plugin or
+server — they attach through commons SPIs.*
 
 **JVM floors:** every module targets JVM 21 (owner decision, deviating from spec §3.1's
 Java 11+; see decision log). Consequence for the compatibility matrix: the plugin
@@ -123,8 +126,12 @@ These are the rules every plugin change is reviewed against:
    surface immediately.
 3. **The plugin must never fail a build.** Every failure path logs at `warn`, writes a
    marker file, and returns. Each phase adds failure-injection tests for this.
-4. **No internal Gradle APIs in v1.** The v1.x cache-origin feature gets an isolated
-   `internal-adapters` module, feature-flagged per Gradle version, degrading gracefully.
+4. **No internal Gradle APIs on the always-on core path.** All internal-Gradle-API use is
+   quarantined in the `internal-adapters` module, feature-flagged per Gradle version, degrading
+   gracefully. Since plan 051 that module is **bundled** onto the core plugin's classpath (one
+   plugin, one config block) but stays **dormant**: no internal-API class is loaded until a
+   `buildhound { internalAdapters { } }` toggle is set — flipping a toggle is the per-feature consent.
+   Core's own source references no internal Gradle type.
 5. **Laziness everywhere.** Extension properties are `Property`/`MapProperty`; conventions
    set via `convention()`, values read only at execution time. Nothing is resolved at
    configuration time that doesn't have to be.
@@ -436,5 +443,6 @@ consumed verbatim by plans 037 (quarantine) and 040 (sharding):
 | 2026-07-06 | **TestKit "fresh daemon" dirs live OUTSIDE the JUnit `@TempDir`, at an absolute path under the module `build/`** (plan 049). Fixes an intermittent `functionalTest` `TempDirDeletionStrategy$DeletionException` on the **blocking** macOS + **watched** Windows legs. Root cause: the env-detection tests set `withTestKitDir(File(projectDir, "testkit"))`, nesting the TestKit daemon's working dir *inside* the `@TempDir`; the daemon lingers past `.build()` and its open handles block `@TempDir` deletion on macOS/Windows (Linux's POSIX unlink is immune — why Linux was always green). The `DeletionException` naming only `<root>, testkit` (never `.gradle`/`build`) proved the held handles are testkit-only, so relocation is a *structural* fix, not a probabilistic one. A shared `freshDaemon()` helper (`TestKitDirs.kt`, mirroring `TestKitCc.kt`) now points every call at a per-call-unique `Files.createTempDirectory` under a `buildhound.testkit.root` system property (module `build/functionalTest-testkit`, `clean`-reclaimed); per-call uniqueness preserves the fresh-daemon-per-test semantics the env tests require — daemon selection ignores env, so a reused daemon would serve a **stale** environment. The dir is **absolute, not a relative constant** — TestKit's daemon starter rejects a relative testkit dir (`IdentityFileResolver` → `UnsupportedOperationException`, hit and reverted mid-fix). Daemons do **not** accumulate (TestKit idles them out quickly — verified). | Removes a cross-platform flake on the macOS **blocking** leg (plan 021 made macOS blocking precisely because a macOS-only bug once shipped) without weakening env-detection coverage. **`withTestKitDir` inside a `@TempDir` is now a known anti-pattern.** The absolute path entering the cacheable task's `@Input` fingerprint (so `functionalTest` is non-relocatable) is accepted, not fixed: a suite that spawns real daemons and reads the live environment is machine-specific and must never be cache-served across machines anyway. |
 
 | 2026-07-07 | **VCS probes discover the enclosing repository from a subdirectory (plan 050) — reverses the plan-004 ceiling finding.** `GitExec` set `GIT_CEILING_DIRECTORIES=<rootDir parent>` (a plan-004 review finding) so an enclosing repo was never attributed to the build; but that also blocked the *legitimate* case where the Gradle root is a subdirectory of its repository (included/composite build, monorepo subroot, an `androidApp/` inside a larger repo) — the probe returned null and the dashboard showed "no branch". `GitExec.run(..., searchParents = true)` now **omits** the ceiling by default so git walks up to the enclosing `.git` (its own behavior, stopping at a repo boundary or the filesystem root); `buildhound.vcs.searchParents=false` restores the confined ceiling. Only discovery *scope* changed — the bounded timeout (§2 rule 11) and `GIT_OPTIONAL_LOCKS`/`GIT_TERMINAL_PROMPT` env are untouched, and `vcs.remoteUrl` stays redacted (all-scheme, fail-closed, plan 027). No schema/dashboard/report change — the readers already render `vcs.branch`/`vcs.sha`. | The plugin should not diverge from git, which resolves repo context from any subdirectory; a Gradle project inside a repo *is* that repo's build. The ceiling's two guarded risks are covered otherwise (hangs by the timeout, credential leakage by remote redaction); the sole residual — a project checked out inside an *unrelated* enclosing repo (`$HOME` under git) now reports that repo's branch/sha + redacted remote — is exactly what `git branch` shows from that dir, the requester's intent, and `searchParents=false` restores fail-closed. `samples/nowinandroid` (no `.git` of its own) consequently reports **BuildHound's** branch, not "no branch" — the sharpest illustration of the trade-off, accepted for a vendored demo sample |
+| 2026-07-08 | **Internal-adapters folded behind the central `buildhound { internalAdapters { } }` block — one plugin, consent-by-toggle (plan 051), reversing the plan-038 "separate plugin is the consent" model.** Owner request: configure the internal-adapters capture from the single `buildhound { }` block and apply only one plugin, without granting blanket internal-Gradle-API consent. The `dev.buildhound.internal-adapters` **plugin id is removed**; the module stays a **separate module** (so all `org.gradle.internal.*` / `org.gradle.api.internal.*` code is quarantined in one auditable place) but is now an `implementation` dependency of the core plugin — hence **unconditionally included** in `settings.gradle.kts` (and its `build.gradle.kts` COPYed into the server's minimal Docker context so the include still evaluates). `InternalAdaptersSettingsPlugin` (a `Plugin<Settings>`) became `object InternalAdaptersWiring.install(settings, graph, collectCacheOrigins, collectDeprecations, collectLogWarnings, perFileHashes)` — a signature of public Gradle types + plain booleans; the internal-API touch points (`BuildOperationListenerManager`, `LoggingOutputInternal`) live only in private helpers reached **behind** a toggle check, so an all-off build never links them. Core drives it from its post-DSL `taskGraph.whenReady` (toggles are unreadable at `apply()`), mirroring the WARN-listener's original site; CC behavior is unchanged (whenReady skipped on a hit ⇒ capture rides the daemon-static listener from the first miss). **Consent moves from applying a plugin → flipping a toggle**, and every toggle is off by default. Two correctness consequences of "bundled but dormant": (1) cache-origin capture — previously **unconditional on apply** — is now gated by a new `collectCacheOrigins` toggle, enforced at each **data path** in `BuildOperationAdapter` (`started`/`finished` early-return), so a deprecations-only build accumulates no cache telemetry; (2) `InternalAdaptersState.configure()` is called **unconditionally every build** (it is internal-API-free) so a warm daemon that captured under a prior toggle resets to off when the user removes it — the lingering daemon-scoped listener then gates to no-op. Proven by a new all-off functional test (no `internalAdapters` key, no internal-API notice) plus toggle-on capture/CC-reuse/trap-2 cases; `CoreAbsentFunctionalTest` (apply-alone) is obsolete and removed, `WarningCaptureFunctionalTest` relocated to core applying only `dev.buildhound`. No payload schema change (the collector + `extensions["internalAdapters"]` shape are untouched) | One plugin + one config block is the owner's simplicity bar; the plan-038 two-plugin consent was the earlier reading of "keep internal APIs opt-in", now better served by dormant-until-toggle. Keeping the module physically separate preserves the audit boundary the internal-API rule (§2 rule 4) depends on — bundling changes *how consent is expressed*, not *where the risky code lives*. The unconditional-`configure()` reset is the subtle load-bearing fix: without it a warm-daemon toggle-removal would keep capturing, breaking "applied ≠ consent"; the all-off test is the guard. Default builds now lose `extensions.internalAdapters` + the derived `avoidedMs`/`criticalPathMs` until `collectCacheOrigins` is set — an intended default-behavior change, documented in README + spec §3.1/§3.4 |
 
 *Add a row (or a docs/plans entry) whenever an architectural decision is made or reversed.*
