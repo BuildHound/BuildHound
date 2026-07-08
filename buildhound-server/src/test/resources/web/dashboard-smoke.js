@@ -46,6 +46,8 @@ function findAll(node, pred, out) {
 const countTag = (node, tag) => findAll(node, n => n.tag === tag).length;
 const findTag = (node, tag) => findAll(node, n => n.tag === tag);
 const hasText = (node, sub) => findAll(node, n => (n.textContent || "").indexOf(sub) >= 0).length > 0;
+const hasExact = (node, text) => findAll(node, n => (n.textContent || "") === text).length > 0;
+const hasClass = (node, cls) => findAll(node, n => (n.className || "").indexOf(cls) >= 0).length > 0;
 function clickButton(node, label) {
     const button = findTag(node, "button").find(b => (b.textContent || "") === label);
     if (!button || !button.listeners.click) throw new Error("button not found: " + label);
@@ -129,6 +131,34 @@ const responses = {
         { day: "2026-06-30", module: ":app", variant: "release", type: "APK", avgSizeBytes: 8000000, maxSizeBytes: 8200000, builds: 3 },
         { day: "2026-07-01", module: ":app", variant: "release", type: "APK", avgSizeBytes: 8100000, maxSizeBytes: 8300000, builds: 2 },
     ],
+    // Tag-cohort comparison (plan 057): one tag key (R8) with two values; selecting it in the
+    // trends split picker fetches the per-cohort series + a distinguishable delta.
+    "/v1/tags": [
+        { key: "R8", values: [{ value: "true", count: 8 }, { value: "false", count: 4 }] },
+    ],
+    "/v1/trends/cohorts?days=30&tag=R8": {
+        tagKey: "R8",
+        cohorts: [
+            {
+                value: "true", sampleCount: 8, medianDurationMs: 58000,
+                points: [
+                    { day: "2026-06-30", builds: 4, failures: 0, avgDurationMs: 58000, maxDurationMs: 60000, avgHitRate: 0.6, interrupted: 0 },
+                    { day: "2026-07-01", builds: 4, failures: 0, avgDurationMs: 57000, maxDurationMs: 59000, avgHitRate: 0.65, interrupted: 0 },
+                ],
+            },
+            {
+                value: "false", sampleCount: 4, medianDurationMs: 70000,
+                points: [
+                    { day: "2026-06-30", builds: 2, failures: 0, avgDurationMs: 70000, maxDurationMs: 72000, avgHitRate: 0.5, interrupted: 0 },
+                    { day: "2026-07-01", builds: 2, failures: 0, avgDurationMs: 71000, maxDurationMs: 73000, avgHitRate: 0.5, interrupted: 0 },
+                ],
+            },
+        ],
+        delta: {
+            referenceValue: "true",
+            comparisons: [{ value: "false", medianDeltaMs: 12000, pctChange: 0.206897, robustZ: 4.1, status: "DISTINGUISHABLE" }],
+        },
+    },
     "/v1/builds/b1/compare/b2": {
         a: { buildId: "b1", startedAt: 1751450000000, outcome: "SUCCESS", mode: "CI", branch: "main", sha: "abcdef0123456789" },
         b: { buildId: "b2", startedAt: 1751450100000, outcome: "FAILED", mode: "LOCAL" },
@@ -410,6 +440,26 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "Artifact sizes")) throw new Error("artifact-size panel header missing");
     if (!hasText(byId["app"], ":app · release · APK")) throw new Error("artifact-size series label missing");
 
+    // Tag-cohort split (plan 057): the picker populates from /v1/tags (fetched alongside the
+    // artifact panel above); selecting "R8" re-renders the page and additionally fetches the
+    // cohort comparison, rendering a legend + multi-series chart + delta table with a semantic
+    // (goodness) coloured chip. CSP-safe: every fetch is same-origin, like every other view.
+    if (!fetched.includes("/v1/tags")) throw new Error("trends view did not fetch tag keys");
+    const tagSelect = findTag(byId["app"], "select").find(s => findAll(s, n => n.tag === "option" && n.value === "R8").length > 0);
+    if (!tagSelect) throw new Error("tag split picker missing an R8 option");
+    if (!tagSelect.listeners.change) throw new Error("tag split picker has no change listener");
+    tagSelect.value = "R8";
+    tagSelect.listeners.change[0]();
+    await tick(); await tick(); await tick(); await tick();
+    if (!fetched.includes("/v1/trends/cohorts?days=30&tag=R8")) throw new Error("tag split did not fetch the cohort comparison");
+    if (!hasText(byId["app"], "true (n=8)")) throw new Error("cohort legend missing the reference cohort");
+    if (!hasText(byId["app"], "false (n=4)")) throw new Error("cohort legend missing the second cohort");
+    if (!hasText(byId["app"], "true (reference)")) throw new Error("cohort delta table reference row missing");
+    if (!hasClass(byId["app"], "delta-bad")) throw new Error("cohort delta table missing the semantic-colouring chip");
+    // Baseline is 4 svgs (duration, hit-rate, builds-per-day bars, one artifact-size series); the
+    // cohort multi-series chart must add a 5th.
+    if (countTag(byId["app"], "svg") < 5) throw new Error("cohort chart svg missing (in addition to the duration/hit-rate/artifact charts)");
+
     // The error view must render, not throw, on API failure.
     context.location.hash = "#/build/missing"; context._onhashchange(); await tick(); await tick();
 
@@ -486,8 +536,6 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     // Bottlenecks landing (plan 032): KPI strip with semantic delta chips (colour = goodness, not
     // sign), four ranked families incl. new/vanished flags, cache-miss hotspots, and toolchain
     // adoption with a behind list + honest agp/kgp/ksp "not collected" panels.
-    const hasExact = (node, text) => findAll(node, n => (n.textContent || "") === text).length > 0;
-    const hasClass = (node, cls) => findAll(node, n => (n.className || "").indexOf(cls) >= 0).length > 0;
     context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/rollups/bottlenecks?period=7")) throw new Error("bottlenecks did not fetch the rollup");
     if (!fetched.includes("/v1/rollups/toolchain?days=30")) throw new Error("bottlenecks did not fetch toolchain adoption");

@@ -148,6 +148,32 @@ paths:
         "200": { description: Flaky records. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/trends/cohorts:
+    get:
+      summary: Split a trend by a tag's distinct values, with a cohort-vs-cohort delta (plan 057, research F7).
+      description: >
+        Per-cohort daily trend series (grouped by the `tag` query param's key) plus a median-delta /
+        %-change / robust-z verdict for each cohort against the largest (most stable) cohort. Cohorts
+        are capped to the top 6 by sample count; a cohort under the baseline minimum reads
+        `INSUFFICIENT_DATA`, never a claimed delta. Benchmark builds excluded by default, same as
+        `/v1/trends`. An unknown `tag` key returns an empty comparison (no cohorts), never a 404.
+      parameters:
+        - { name: tag, in: query, required: true, schema: { type: string }, description: The tag key to split by. }
+      responses:
+        "200": { description: The per-cohort series + delta comparison. }
+        "400": { description: Missing tag parameter, or an invalid mode/outcome/tag filter. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
+  /v1/tags:
+    get:
+      summary: Distinct tag keys + capped top-N values each (plan 057).
+      description: Populates the dashboard's split-by-tag picker. Benchmark builds excluded, days clamped like `/v1/trends`.
+      responses:
+        "200": { description: Tag keys with their most-frequent values. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
   /v1/rollups/project-cost:
     get:
       summary: Project cost rollup (plan 026).

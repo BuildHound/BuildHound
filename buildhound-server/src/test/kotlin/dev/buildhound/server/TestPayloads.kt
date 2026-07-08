@@ -42,6 +42,7 @@ object TestPayloads {
         tasks: List<TaskExecution> = emptyList(),
         sha: String? = null,
         tests: List<TestTaskResult> = emptyList(),
+        tags: Map<String, String> = emptyMap(),
     ): BuildPayload = BuildPayload(
         buildId = buildId,
         startedAt = startedAt,
@@ -58,6 +59,7 @@ object TestPayloads {
         toolchain = toolchain,
         tasks = tasks,
         tests = tests,
+        tags = tags,
     )
 
     /** A test-task result for flaky fixtures (plan 036): one class + optional fail-then-pass retries. */

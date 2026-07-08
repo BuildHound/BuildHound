@@ -5,6 +5,7 @@ import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.PayloadCapper
+import dev.buildhound.commons.payload.PayloadCaps
 import dev.buildhound.server.connector.CiEvent
 import dev.buildhound.server.connector.CiRunView
 import dev.buildhound.server.connector.CiSpanStore
@@ -514,6 +515,32 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val days = call.daysParam()
             call.respondQuery { store.flaky(project.id, days, System.currentTimeMillis()) }
         }
+
+        // Tag-cohort comparison (plan 057, research F7): split a trend by a tag's distinct values —
+        // per-cohort daily series plus a median-delta/%change/robust-z verdict vs the largest (most
+        // stable) cohort. Read-scope, tenant-scoped, days clamped like /trends; benchmark builds
+        // excluded by default (buildFilterOrNull, plan 030). An unknown tag key reads as an empty
+        // comparison (no cohorts), never a 404 — mirroring /trends' unmatched-filter behavior.
+        get("/trends/cohorts") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val filter = call.buildFilterOrNull()
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/tag filter"))
+            val tagKey = call.request.queryParameters["tag"]
+            if (tagKey.isNullOrBlank()) {
+                return@get call.respond(HttpStatusCode.BadRequest, ApiError("tag query parameter is required"))
+            }
+            val days = call.daysParam()
+            call.respondQuery {
+                CohortComparator.compare(tagKey, store.tagCohortTrends(project.id, tagKey, filter, days, System.currentTimeMillis()))
+            }
+        }
+
+        // Distinct tag keys + capped top-N values each (plan 057): populates the dashboard's
+        // split-by-tag picker. Read-scope, tenant-scoped, days clamped like /trends.
+        get("/tags") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            call.respondQuery { store.tagKeys(project.id, call.daysParam(), System.currentTimeMillis()) }
+        }
     }
 }
 
@@ -726,7 +753,27 @@ private fun ApplicationCall.buildFilterOrNull(): BuildFilter? {
     // the caller explicitly asks for mode=benchmark or passes includeBenchmark=true.
     val includeBenchmark = request.queryParameters["includeBenchmark"].toBoolean()
     val excludeModes = if (mode == BuildMode.BENCHMARK.name || includeBenchmark) emptySet() else setOf(BuildMode.BENCHMARK.name)
-    return BuildFilter(branch = request.queryParameters["branch"], mode = mode, outcome = outcome, excludeModes = excludeModes)
+    val tags = buildTagFilterOrNull() ?: return null
+    return BuildFilter(branch = request.queryParameters["branch"], mode = mode, outcome = outcome, excludeModes = excludeModes, tags = tags)
+}
+
+/**
+ * Parses `tag.<key>=<value>` params into the [BuildFilter.tags] equality map (plan 057); null when
+ * a key/value exceeds the same char caps ingest enforces ([PayloadCaps] — single source of truth,
+ * commons untouched) — the route rejects with 400 rather than silently truncating a filter, unlike
+ * the ingest-side clamp.
+ */
+private fun ApplicationCall.buildTagFilterOrNull(): Map<String, String>? {
+    val caps = PayloadCaps.DEFAULT
+    val tags = mutableMapOf<String, String>()
+    for (name in request.queryParameters.names()) {
+        if (!name.startsWith("tag.")) continue
+        val key = name.removePrefix("tag.")
+        val value = request.queryParameters[name] ?: continue
+        if (key.isEmpty() || key.length > caps.maxKeyChars || value.length > caps.maxValueChars) return null
+        tags[key] = value
+    }
+    return tags
 }
 
 private val ingestLogger = LoggerFactory.getLogger("dev.buildhound.server.Ingest")
