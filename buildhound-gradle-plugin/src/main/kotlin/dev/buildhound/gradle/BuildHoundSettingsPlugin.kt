@@ -48,7 +48,8 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         extension.processProbe.enabled.convention(overrides.bool("processProbe.enabled") ?: true)
         // internalAdapters {} (plan 051): bundled internal-Gradle-API capture, every toggle off by
         // default. Read at whenReady (post-DSL) and handed to the module's wiring; all-off touches no
-        // internal API. server.token-style precedence: explicit DSL > override > false.
+        // internal API. Standard override precedence (like htmlReport.enabled/processProbe.enabled):
+        // explicit DSL value > buildhound.internalAdapters.* override > false.
         extension.internalAdapters.collectCacheOrigins.convention(overrides.bool("internalAdapters.collectCacheOrigins") ?: false)
         extension.internalAdapters.collectDeprecations.convention(overrides.bool("internalAdapters.collectDeprecations") ?: false)
         extension.internalAdapters.collectLogWarnings.convention(overrides.bool("internalAdapters.collectLogWarnings") ?: false)
@@ -178,18 +179,26 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
                 logger.warn("[buildhound] toolchain detection failed (build unaffected): {}", it.message)
             }
             // Internal-adapters capture (plan 051): driven from here, post-DSL, so the toggles are set.
-            // The wiring is fully guarded and no-ops when every toggle is off — the point where "applied
-            // the plugin" stops short of "consented to internal Gradle APIs". Registering the daemon
-            // listeners here (not at apply) mirrors the WARN-log listener's original site; on a CC hit
-            // whenReady is skipped and capture rides the daemon-static listener from the first miss.
+            // The wiring is fully guarded and no-ops when every effective toggle is off — the point where
+            // "applied the plugin" stops short of "consented to internal Gradle APIs". Registering the
+            // daemon listeners here (not at apply) mirrors the WARN-log listener's original site; on a CC
+            // hit whenReady is skipped and capture rides the daemon-static listener from the first miss.
+            //
+            // The master switch gates every toggle: with telemetry off (enabled=false or mode=DISABLED)
+            // the finalizer short-circuits before the read-and-clear collector runs, so a capturing build
+            // here would leave stale rows in the daemon-static accumulator that a later on-build would
+            // emit. Forcing the toggles false when off means the wiring still calls configure() (resetting
+            // the daemon-static toggles, so a lingering listener from an earlier on-build gates to no-op)
+            // but registers nothing and captures nothing — parity with the other master-gated collectors.
+            val telemetryOn = extension.enabled.get() && extension.mode.get() != TelemetryMode.DISABLED
             runCatching {
                 InternalAdaptersWiring.install(
                     settings = settings,
                     graph = graph,
-                    collectCacheOrigins = extension.internalAdapters.collectCacheOrigins.get(),
-                    collectDeprecations = extension.internalAdapters.collectDeprecations.get(),
-                    collectLogWarnings = extension.internalAdapters.collectLogWarnings.get(),
-                    perFileHashes = extension.internalAdapters.perFileHashes.get(),
+                    collectCacheOrigins = telemetryOn && extension.internalAdapters.collectCacheOrigins.get(),
+                    collectDeprecations = telemetryOn && extension.internalAdapters.collectDeprecations.get(),
+                    collectLogWarnings = telemetryOn && extension.internalAdapters.collectLogWarnings.get(),
+                    perFileHashes = telemetryOn && extension.internalAdapters.perFileHashes.get(),
                 )
             }.onFailure {
                 logger.warn("[buildhound] internal-adapters wiring failed (build unaffected): {}", it.message)

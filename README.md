@@ -130,11 +130,14 @@ over an override, which wins over the built-in default (plan 027).
 
 > **`internalAdapters { }` and internal Gradle APIs.** These four toggles drive capture that reads
 > *internal* Gradle APIs (build-operation types, `LoggingOutputInternal`) which carry no compatibility
-> guarantee. The code ships bundled with the core plugin but is **dormant** — off by default, and no
-> internal API is touched until you flip a toggle. Flipping one is the per-feature consent; the plugin
-> then logs a one-time notice that a Gradle upgrade may silently stop that signal. Capture never fails
-> the build (every path is reflection-guarded). See [architecture §7](docs/architecture.md#7-decision-log)
-> (plan 051) for why this is quarantined in its own module rather than living in core.
+> guarantee. The code ships bundled with the core plugin but is **dormant** — off by default, and on a
+> daemon where no build has enabled a toggle, no internal API is touched. Flipping one is the per-feature
+> consent; the plugin then logs a one-time notice that a Gradle upgrade may silently stop that signal.
+> Capture never fails the build (every path is reflection-guarded). See
+> [architecture §7](docs/architecture.md#7-decision-log) (plan 051) for why this is quarantined in its
+> own module rather than living in core — including the one known limitation (a configuration-cache-hit
+> warm-daemon edge, deferred to plan 052) where a later all-off build in a daemon that already opted in
+> can still capture until the next CC miss.
 
 ### Local development credentials
 

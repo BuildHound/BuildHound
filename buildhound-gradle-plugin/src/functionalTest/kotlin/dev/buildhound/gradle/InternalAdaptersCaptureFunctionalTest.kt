@@ -3,12 +3,14 @@ package dev.buildhound.gradle
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
 import java.io.File
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.gradle.testkit.runner.GradleRunner
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.io.TempDir
 
 /**
@@ -33,21 +35,43 @@ class InternalAdaptersCaptureFunctionalTest {
             .withProjectDir(projectDir)
             .withPluginClasspath()
             .withArguments(*args)
-    // No freshDaemon(): a warm daemon is safe here because the wiring resets the daemon-static toggles
-    // for every build (unconditional configure()) and the collector reads-and-clears the accumulator
-    // each build — so one case's capture never leaks into the next, and CC entries reuse across builds.
+    // No freshDaemon(): a warm daemon is safe for most cases because the wiring resets the daemon-static
+    // toggles on every CC-miss build and the collector reads-and-clears the accumulator each build.
+
+    /**
+     * A runner pinned to [dir] so multiple builds of ONE test share a single, freshly-minted daemon.
+     * The master-switch test below needs that: it asserts one build's would-be capture doesn't leak into
+     * the next *in the same daemon*, but must not inherit `collectLogWarnings=true` bled from another test
+     * via the known plan-052 CC-hit toggle-bleed (which would otherwise make it flaky).
+     */
+    private fun runnerIn(dir: File, vararg args: String): GradleRunner =
+        GradleRunner.create()
+            .withProjectDir(projectDir)
+            .withPluginClasspath()
+            .withArguments(*args)
+            .withTestKitDir(dir)
+
+    /** A fresh, per-test-instance TestKit dir (⇒ a fresh uncontaminated daemon), shared across its builds. */
+    private val freshSharedTestKitDir: File by lazy {
+        val root = File(System.getProperty("buildhound.testkit.root") ?: System.getProperty("java.io.tmpdir"))
+        root.mkdirs()
+        Files.createTempDirectory(root.toPath(), "ia-master-").toFile()
+    }
 
     /**
      * @param internalAdapters the body of the `internalAdapters { }` block, or null to omit the block
      *   entirely (the default no-opt-in shape).
+     * @param enabled the master switch; false exercises the "telemetry off ⇒ no capture, no stale leak" path.
      */
-    private fun setUp(internalAdapters: String?) {
+    private fun setUp(internalAdapters: String?, enabled: Boolean = true) {
         val block = internalAdapters?.let { "internalAdapters {\n$it\n}" } ?: ""
+        val enabledLine = if (!enabled) "enabled = false" else ""
         File(projectDir, "settings.gradle.kts").writeText(
             """
             plugins { id("dev.buildhound") }
             rootProject.name = "ia-fixture"
             buildhound {
+                $enabledLine
                 $block
             }
             """.trimIndent(),
@@ -133,6 +157,22 @@ class InternalAdaptersCaptureFunctionalTest {
     }
 
     @Test
+    fun `a disabled build captures nothing and leaves no stale rows for a later enabled build`() {
+        // Build 1: master switch OFF but a toggle ON in the DSL. Telemetry off ⇒ the finalizer
+        // short-circuits before the read-and-clear collector, so if the wiring captured here the rows
+        // would survive in the daemon-static accumulator. The master gate must force the toggle off so
+        // nothing is registered or captured. Disabled builds write no payload, so nothing to read yet.
+        setUp(internalAdapters = "collectCacheOrigins = true", enabled = false)
+        runnerIn(freshSharedTestKitDir, "compileJava", "--build-cache").build()
+
+        // Build 2 (same daemon, same projectDir): master ON, every toggle OFF. Must not emit an
+        // internalAdapters block from build 1's would-be capture (the master-switch stale-leak guard).
+        setUp(internalAdapters = null)
+        runnerIn(freshSharedTestKitDir, "compileJava", "--build-cache").build()
+        assertTrue(block() == null, "a disabled prior build must leave no stale internalAdapters rows")
+    }
+
+    @Test
     fun `collectCacheOrigins captures task cache rows`() {
         setUp(internalAdapters = "collectCacheOrigins = true")
         runner("compileJava", "--build-cache").build()
@@ -152,13 +192,44 @@ class InternalAdaptersCaptureFunctionalTest {
         assertTrue(b.tasks == 0, "no cache rows when only a warning catcher is on: ${b.tasks}")
     }
 
+    @Disabled(
+        "Known limitation, deferred to plan 052: CC-hit warm-daemon toggle-bleed. On a configuration-" +
+            "cache HIT the plugin's whenReady (and thus the toggle-resetting configure()) does not run, so " +
+            "a daemon-static listener registered by an earlier toggle-on build keeps capturing on a later " +
+            "all-off build that reuses a pre-toggle CC entry. A proper fix must re-establish the current " +
+            "build's toggle intent at execution time (CC-surviving), which is its own change (plan 052). " +
+            "This test pins the exact scenario and is the acceptance criterion for that fix.",
+    )
     @Test
-    fun `capture survives a configuration-cache store then reuse`() {
+    fun `an all-off CC-hit build after a toggle-on build in the same daemon must not capture (plan 052)`() {
+        setUp(internalAdapters = null) // stable settings; the toggle is varied via -P so CC keys differ
+        // Build 1: all off → store an all-off CC entry.
+        runner("warn", "--configuration-cache", "--warning-mode=all").build()
+        assertTrue(block() == null, "build 1 (all off) captures nothing")
+        // Build 2 (same daemon): toggle ON via a property override (a distinct CC key) → registers the
+        // daemon-static WARN listener that persists for the daemon's life.
+        runner(
+            "warn", "--configuration-cache", "--warning-mode=all",
+            "-Pbuildhound.internalAdapters.collectLogWarnings=true",
+        ).build()
+        assertTrue(block()?.logWarnings?.isNotEmpty() == true, "build 2 (toggle on) captures")
+        // Build 3: all off again → CC HIT on build 1's entry → whenReady skipped → the daemon-static
+        // toggle is never reset to off, so the lingering listener captures. DESIRED: no capture.
+        val reuse = runner("warn", "--configuration-cache", "--warning-mode=all").build()
+        assertTrue(reuse.output.contains("Reusing configuration cache"), reuse.output)
+        assertTrue(block() == null, "an all-off CC-hit build must not capture from a prior toggle-on build")
+    }
+
+    @Test
+    fun `capture survives a configuration-cache store then reuse (same toggle state)`() {
         setUp(internalAdapters = "collectLogWarnings = true")
         val store = runner("warn", "--configuration-cache", "--warning-mode=all").build()
         assertTrue(block()?.logWarnings?.isNotEmpty() == true, "captured on the store run")
 
+        // The reuse run is a CC hit (whenReady skipped) with the SAME toggle state — capture rides the
+        // daemon-static listener registered on the store run (the plan-044 "survives a CC hit" design).
         val reuse = runner("warn", "--configuration-cache", "--warning-mode=all").build()
         assertTrue(reuse.output.contains("Reusing configuration cache"), reuse.output)
+        assertTrue(block()?.logWarnings?.isNotEmpty() == true, "capture continues on the CC-hit reuse run")
     }
 }
