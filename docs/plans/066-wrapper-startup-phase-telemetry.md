@@ -195,3 +195,6 @@ underspecified:
   step (the template stays fully self-contained — no external script dependency — matching the
   existing `verdictGate` step's style, since a template consumer only guarantees the template file
   itself, not a checkout of this repo's `bin/`); both are commented as needing to be kept in sync.
+  Accepted limitation (infra review): this hand-sync has no automated parity guard today — a future
+  addition could `yq`-diff the template's script block against the harness's `check_wrapper` body
+  in CI to catch drift mechanically instead of relying on the paired comments.
