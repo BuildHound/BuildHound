@@ -862,6 +862,75 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             RerunCauseRollupCalculator.compute(taskRowsBetween(connection, projectId, cutoff(days, nowMs), atMs(nowMs)))
         }
 
+    /**
+     * Warning taxonomy (plan 060, research F10): its own `jsonb_array_elements` scan over
+     * `builds.payload->'tasks'`, deliberately **not** [taskRowsBetween] — `task_executions` has no
+     * `incremental` column, and even its `execution_reasons` column is NULL for any build ingested
+     * before V12, while the jsonb payload has carried both fields since schema v1 (no historical
+     * blind spot). Own dedicated scan so `/rollups/bottlenecks`/`/rollups/rerun-causes` stay on the
+     * indexed table — the plan's accepted cost tradeoff (a heavier windowed scan for this one route).
+     */
+    override fun warnings(projectId: String, period: Int, nowMs: Long): WarningsRollup =
+        dataSource.connection.use { connection ->
+            WarningCalculator.compute(taskRowsFromPayloadJsonb(connection, projectId, cutoff(period, nowMs), atMs(nowMs)), period)
+        }
+
+    /**
+     * Flat [TaskRow]s read straight from `builds.payload->'tasks'` (plan 060) — every field
+     * [WarningCalculator] needs (`incremental`, `executionReasons`, `cacheable`, `outcome`) survives
+     * for the whole retained window, not just builds ingested after some column existed. Bound params
+     * only; every jsonb path (`payload -> 'tasks'`, `t ->> 'module'`, …) is a compile-time literal —
+     * no free text, no interpolation (architecture §6). `userId`/`buildWallMs` are left at their
+     * defaults (null/0) — [WarningCalculator] never reads either, mirroring [taskRowsInDaysWindow]'s
+     * own placeholder convention.
+     */
+    private fun taskRowsFromPayloadJsonb(
+        connection: java.sql.Connection,
+        projectId: String,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ): List<TaskRow> =
+        connection.prepareStatement(
+            """
+            SELECT b.build_id AS build_id,
+                   t ->> 'module' AS module,
+                   t ->> 'path' AS path,
+                   t ->> 'type' AS type,
+                   t ->> 'outcome' AS outcome,
+                   (t ->> 'durationMs')::bigint AS duration_ms,
+                   (t ->> 'cacheable')::boolean AS cacheable,
+                   COALESCE((t ->> 'incremental')::boolean, false) AS incremental,
+                   ARRAY(SELECT jsonb_array_elements_text(COALESCE(t -> 'executionReasons', '[]'::jsonb))) AS execution_reasons
+            FROM builds b, jsonb_array_elements(COALESCE(b.payload -> 'tasks', '[]'::jsonb)) AS t
+            WHERE b.project_id = ? AND b.mode <> 'BENCHMARK' AND b.started_at >= ? AND b.started_at < ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setObject(1, UUID.fromString(projectId))
+            statement.setObject(2, from)
+            statement.setObject(3, to)
+            statement.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        add(
+                            TaskRow(
+                                buildId = rows.getString("build_id"),
+                                userId = null,
+                                module = rows.getString("module"),
+                                name = (rows.getString("path") ?: "").substringAfterLast(':'),
+                                type = rows.getString("type"),
+                                outcome = rows.getString("outcome"),
+                                durationMs = rows.getLong("duration_ms"),
+                                buildWallMs = 0L,
+                                cacheable = rows.getBoolean("cacheable").takeUnless { rows.wasNull() },
+                                executionReasons = executionReasonsOf(rows),
+                                incremental = rows.getBoolean("incremental"),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
     override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> =
         dataSource.connection.use { connection ->
             // Read the narrow per-class outcome table (indexed on (project, sha, module, class)) and

@@ -527,6 +527,16 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             call.respondQuery { store.rerunCauses(project.id, days, System.currentTimeMillis()) }
         }
 
+        // Build-Analyzer-style warning taxonomy (plan 060, research F10): three rule-based candidate
+        // families over already-collected task data (ALWAYS_RUN / NON_INCREMENTAL_AP /
+        // DYNAMIC_DEBUG_VALUES). Read-scope, tenant-scoped; period clamped like /rollups/bottlenecks
+        // (its own jsonb scan, not task_executions — see BuildStore.warnings).
+        get("/rollups/warnings") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val period = call.periodParam()
+            call.respondQuery { store.warnings(project.id, period, System.currentTimeMillis()) }
+        }
+
         // Flaky-test detection (plan 036, spec §5): two-signal per-(module, class) records over the
         // window, ranked by flake rate. Read-scope, tenant-scoped, days clamped like /trends.
         get("/flaky") {

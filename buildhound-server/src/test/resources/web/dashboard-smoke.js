@@ -281,6 +281,16 @@ const responses = {
         kgp: { available: false, versions: [], behind: [] },
         ksp: { available: false, versions: [], behind: [] },
     },
+    // Warning taxonomy (plan 060): one ALWAYS_RUN candidate with evidence; period=14/30 are empty
+    // (also covers the additive-field-absent path, mirroring topPlugins above).
+    "/v1/rollups/warnings?period=7": {
+        period: 7,
+        warnings: [
+            { category: "ALWAYS_RUN", key: "customTask", module: ":app", buildsObserved: 10, buildsAffected: 9, share: 0.9, totalMs: 9000, evidenceReason: "Task.upToDateWhen is false." },
+        ],
+        typeDataAvailable: true,
+    },
+    "/v1/rollups/warnings?period=14": { period: 14, warnings: [], typeDataAvailable: true },
 };
 // X-Total-Count values by path; a path absent here → header missing (tolerance case).
 const totals = {
@@ -587,10 +597,30 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     // Verdict card omitted while budget/trend counts are null.
     if (hasText(byId["app"], "budget breaches")) throw new Error("verdict card must be omitted when counts are null");
 
-    // Period toggle refetches the new window.
+    // Warnings section (plan 060): best-effort fetch, one ranked ALWAYS_RUN candidate with its
+    // evidence and remediation copy, an allowlisted category badge class, no console error.
+    if (!fetched.includes("/v1/rollups/warnings?period=7")) throw new Error("bottlenecks did not fetch warnings");
+    if (!hasText(byId["app"], "Warnings — candidates to investigate")) throw new Error("warnings section header missing");
+    if (!hasText(byId["app"], "customTask")) throw new Error("warnings candidate row missing");
+    if (!hasText(byId["app"], "9/10 builds")) throw new Error("warnings evidence (buildsAffected/buildsObserved) missing");
+    if (!hasText(byId["app"], "Task.upToDateWhen is false.")) throw new Error("warnings evidenceReason missing");
+    if (!hasText(byId["app"], "investigate")) throw new Error("warnings remediation copy missing");
+    if (findAll(byId["app"], n => (n.className || "").indexOf("warn-always-run") >= 0).length === 0) throw new Error("warning category badge class missing");
+
+    // Period toggle refetches the new window (bottlenecks + warnings both share `period`); the
+    // period=14 fixture has an empty warnings list → the honest empty-state line, not a blank card.
     clickButton(byId["app"], "14 days");
     await tick(); await tick();
     if (!fetched.includes("/v1/rollups/bottlenecks?period=14")) throw new Error("period toggle did not refetch period=14");
+    if (!fetched.includes("/v1/rollups/warnings?period=14")) throw new Error("period toggle did not refetch warnings at period=14");
+    if (!hasText(byId["app"], "No warning candidates in this window.")) throw new Error("warnings empty-state missing at period=14");
+
+    // Warnings fetch failure must not blank the rest of the Bottlenecks page (best-effort, like toolchain).
+    delete responses["/v1/rollups/warnings?period=7"];
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "Warnings data unavailable.")) throw new Error("warnings fetch-failure notice missing");
+    if (!hasText(byId["app"], "Success rate")) throw new Error("a warnings fetch failure must not blank the rest of the bottlenecks page");
 
     // Cacheability unavailable → the honest degraded notice, never an empty table read as consensus.
     responses["/v1/rollups/bottlenecks?period=7"] = Object.assign({}, responses["/v1/rollups/bottlenecks?period=7"], { cacheDataAvailable: false, cacheMissHotspots: [] });
