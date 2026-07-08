@@ -13,6 +13,8 @@ import dev.buildhound.commons.payload.DerivedMetricsCalculator
 import dev.buildhound.commons.payload.EnvironmentInfo
 import dev.buildhound.commons.payload.FailureInfo
 import dev.buildhound.commons.payload.FingerprintInfo
+import dev.buildhound.commons.payload.GradlePropertyPosture
+import dev.buildhound.commons.payload.InvocationInfo
 import dev.buildhound.commons.payload.KotlinInfo
 import dev.buildhound.commons.payload.PayloadCapper
 import dev.buildhound.commons.payload.PayloadCaps
@@ -78,6 +80,7 @@ internal object PayloadAssembler {
         requestedTasks: List<String>,
         tasks: List<TaskExecution>,
         environment: CollectedEnvironment?,
+        invocation: CollectedInvocation? = null,
         vcs: CollectedVcs?,
         ci: CollectedCi?,
         configurationCache: ConfigurationCacheState,
@@ -148,6 +151,8 @@ internal object PayloadAssembler {
                     ideVersion = it.ideVersion,
                     ideSync = it.ideSync,
                     aiAgent = it.aiAgent,
+                    // Invocation-switch & performance-flag posture (plan 051); null when uncaptured.
+                    invocation = invocationInfo(invocation),
                 )
             },
             // AGP/KGP/KSP (plan 046) join Gradle/JDK here; emitted whenever any dimension is known,
@@ -223,6 +228,26 @@ internal object PayloadAssembler {
         val jdk = environment?.jdkVersion
         if (gradle == null && jdk == null && agp == null && kgp == null && ksp == null) return null
         return ToolchainInfo(gradle = gradle, jdk = jdk, agp = agp, kgp = kgp, ksp = ksp)
+    }
+
+    /**
+     * Maps the plugin-side [CollectedInvocation] DTO onto the wire [InvocationInfo] (plan 051).
+     * Null when uncaptured (telemetry disabled, or the environment snapshot itself is absent).
+     */
+    private fun invocationInfo(invocation: CollectedInvocation?): InvocationInfo? {
+        if (invocation == null) return null
+        return InvocationInfo(
+            buildCacheEnabled = invocation.buildCacheEnabled,
+            offline = invocation.offline,
+            rerunTasks = invocation.rerunTasks,
+            refreshDependencies = invocation.refreshDependencies,
+            configureOnDemand = invocation.configureOnDemand,
+            maxWorkerCount = invocation.maxWorkerCount,
+            parallel = invocation.parallel,
+            fileEncoding = invocation.fileEncoding,
+            locale = invocation.locale,
+            properties = invocation.properties.map { GradlePropertyPosture(it.key, it.value, it.origin) },
+        )
     }
 
     /** Git wins; CI context fills the gaps (detached HEAD on CI has no branch name). */

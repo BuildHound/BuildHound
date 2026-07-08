@@ -8,6 +8,7 @@ import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.CiInfo
 import dev.buildhound.commons.payload.DerivedMetrics
 import dev.buildhound.commons.payload.EnvironmentInfo
+import dev.buildhound.commons.payload.InvocationInfo
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
 import dev.buildhound.commons.payload.TestCaseDetail
@@ -34,6 +35,7 @@ object TestPayloads {
         runId: String? = null,
         buildUrl: String? = null,
         userId: String? = null,
+        invocation: InvocationInfo? = null,
         benchmark: BenchmarkInfo? = null,
         artifacts: ArtifactSizes? = null,
         toolchain: ToolchainInfo? = null,
@@ -50,7 +52,7 @@ object TestPayloads {
         vcs = if (branch != null || sha != null) VcsInfo(branch = branch, sha = sha) else null,
         ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl) },
         derived = if (hitRate != null || avoidedMs != null) DerivedMetrics(cacheableHitRate = hitRate, avoidedMs = avoidedMs) else null,
-        environment = userId?.let { EnvironmentInfo(userId = it) },
+        environment = if (userId != null || invocation != null) EnvironmentInfo(userId = userId, invocation = invocation) else null,
         benchmark = benchmark,
         artifacts = artifacts,
         toolchain = toolchain,

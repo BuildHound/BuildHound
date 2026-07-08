@@ -491,6 +491,11 @@ class InMemoryBuildStore : BuildStore {
             .filter { it.mode.name == query.mode }
             .filter { it.ci?.pipelineName == query.pipelineName }
             .filter { RegressionEngine.requestedTasksSignature(it.requestedTasks) == query.requestedTasksSig }
+            // Baseline hygiene (plan 051): rerunTasks/refreshDependencies builds have zero avoidance
+            // by design (the same rationale that excluded INTERRUPTED in plan 033) — mirrors the
+            // Postgres store's jsonb guard so the two agree byte-for-byte (plan-025 parity).
+            .filter { it.environment?.invocation?.rerunTasks != true }
+            .filter { it.environment?.invocation?.refreshDependencies != true }
             .sortedByDescending { it.startedAt }
             .take(n)
             .map { BaselinePoint(durationMs = it.finishedAt - it.startedAt, hitRate = it.derived?.cacheableHitRate) }

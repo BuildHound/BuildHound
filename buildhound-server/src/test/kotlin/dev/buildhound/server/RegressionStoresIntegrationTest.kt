@@ -62,6 +62,47 @@ class RegressionStoresIntegrationTest {
     }
 
     @Test
+    fun `baseline window excludes rerunTasks and refreshDependencies builds and agrees with the in-memory store`() {
+        val project = tokens.ensureProjectWithToken("baseline-hygiene-project", sha256Hex("bhp"))
+        val inMemory = InMemoryBuildStore()
+        fun seed(payload: dev.buildhound.commons.payload.BuildPayload) {
+            builds.save(project.id, payload)
+            inMemory.save(project.id, payload)
+        }
+
+        repeat(5) { i -> seed(TestPayloads.build(buildId = "h-$i", durationMs = 1000, startedAt = 1_000_000L + i * 1000)) }
+        seed(
+            TestPayloads.build(
+                buildId = "rerun",
+                durationMs = 999_000,
+                startedAt = 2_000_000L,
+                invocation = dev.buildhound.commons.payload.InvocationInfo(rerunTasks = true),
+            ),
+        )
+        seed(
+            TestPayloads.build(
+                buildId = "refresh",
+                durationMs = 999_000,
+                startedAt = 3_000_000L,
+                invocation = dev.buildhound.commons.payload.InvocationInfo(refreshDependencies = true),
+            ),
+        )
+        // No environment/invocation at all — absence must not be mistaken for a rerun.
+        seed(TestPayloads.build(buildId = "no-invocation", durationMs = 1000, startedAt = 4_000_000L))
+
+        val sig = RegressionEngine.requestedTasksSignature(listOf("build"))
+        val query = BaselineQuery("android-ci", sig, "CI")
+        val pgWindow = builds.baselineWindow(project.id, "main", query, excludingBuildId = "candidate", n = 20)
+        val memWindow = inMemory.baselineWindow(project.id, "main", query, excludingBuildId = "candidate", n = 20)
+
+        assertEquals(6, pgWindow.size, "5 normal + the no-invocation build; rerun/refresh must be excluded")
+        assertTrue(pgWindow.all { it.durationMs == 1000L })
+        // plan-025 parity oracle: in-memory and Postgres must agree byte-for-byte (same order too —
+        // both sort newest-first on startedAt).
+        assertEquals(memWindow, pgWindow)
+    }
+
+    @Test
     fun `resolveBuildId finds the newest build for a provider and run id`() {
         val project = tokens.ensureProjectWithToken("correlate-project", sha256Hex("cp"))
         builds.save(project.id, TestPayloads.build(buildId = "old", provider = "azure-devops", runId = "run-9", startedAt = 1_000L))

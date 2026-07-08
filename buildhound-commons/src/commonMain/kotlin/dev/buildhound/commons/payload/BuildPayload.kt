@@ -276,10 +276,63 @@ data class EnvironmentInfo(
     val ideSync: Boolean? = null,
     /** Coarse AI-agent attribution (plan 027): "Claude Code"/"Cursor"/…; null when none detected. */
     val aiAgent: String? = null,
+    /** Invocation-switch & performance-flag posture (plan 051); null when uncaptured. */
+    val invocation: InvocationInfo? = null,
 )
 
 @Serializable
 enum class ConfigurationCacheState { HIT, MISS_STORED, DISABLED, INCOMPATIBLE }
+
+/**
+ * Invocation-switch & performance-flag posture (plan 051, spec §3.2/§4, research finding F1):
+ * seven public `StartParameter` scalars, plus genuinely-new plaintext `fileEncoding`/`locale`
+ * which — together with [parallel]/[maxWorkerCount] — stand **alongside** the salted
+ * `FingerprintInfo` hashes (never replacing them) so absolute-value rules can fire (e.g.
+ * "Cp1252 fleet → set UTF-8"). [properties] is a fixed, non-secret `gradle.properties` allowlist
+ * (`org.gradle.caching`, `org.gradle.parallel`, `org.gradle.vfs.watch`,
+ * `android.enableJetifier`, `android.nonTransitiveRClass`) attributed to the layer that declared
+ * it — see [PropertyOrigin]. Every field is nullable/empty-defaulted (additive).
+ *
+ * Field names are load-bearing: the server's `baselineWindow` hygiene filter (plan 051) reads
+ * [rerunTasks]/[refreshDependencies] straight out of the wire JSON via a jsonb path
+ * (`payload->'environment'->'invocation'->>'rerunTasks'`), so a rename here silently breaks that
+ * filter with no compile error.
+ */
+@Serializable
+data class InvocationInfo(
+    val buildCacheEnabled: Boolean? = null,
+    val offline: Boolean? = null,
+    /** No avoidance by design (plan-025 baseline hygiene excludes these, like INTERRUPTED in plan 033). */
+    val rerunTasks: Boolean? = null,
+    val refreshDependencies: Boolean? = null,
+    val configureOnDemand: Boolean? = null,
+    val maxWorkerCount: Int? = null,
+    val parallel: Boolean? = null,
+    /** `file.encoding` sysprop, plaintext (already salted in `FingerprintInfo`; this rides alongside). */
+    val fileEncoding: String? = null,
+    /** `user.language[-user.country]`, plaintext (already salted in `FingerprintInfo`; rides alongside). */
+    val locale: String? = null,
+    val properties: List<GradlePropertyPosture> = emptyList(),
+)
+
+/** One allowlisted `gradle.properties` key's effective value + declaring layer (plan 051). */
+@Serializable
+data class GradlePropertyPosture(
+    val key: String,
+    val value: String,
+    val origin: PropertyOrigin,
+)
+
+/**
+ * Which layer's `gradle.properties` (or system property) declares an allowlisted key (plan 051).
+ * Presence-by-precedence, not value-matching: project and Gradle User Home can both declare the
+ * same value, and only "which layer declares it" reveals a silent GUH win — the finding's whole
+ * point. `UNKNOWN` is honest, not a guess: attributed whenever a layer cannot be confirmed as the
+ * effective source (spec §3.7 — a confident-but-wrong "developer overrode this locally" would
+ * defeat the feature).
+ */
+@Serializable
+enum class PropertyOrigin { PROJECT, GRADLE_USER_HOME, OVERRIDE, UNKNOWN }
 
 @Serializable
 data class ToolchainInfo(

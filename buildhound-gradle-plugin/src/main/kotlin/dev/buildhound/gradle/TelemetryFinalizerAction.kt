@@ -79,6 +79,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Input
         val environment: Property<CollectedEnvironment>
 
+        /** Invocation-switch & performance-flag posture (plan 051); optional/absent when disabled. */
+        @get:Input
+        @get:Optional
+        val invocation: Property<CollectedInvocation>
+
         @get:Input
         val vcs: Property<CollectedVcs>
 
@@ -285,6 +290,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 requestedTasks = parameters.requestedTasks.getOrElse(emptyList()),
                 tasks = tasks,
                 environment = parameters.environment.orNull,
+                invocation = parameters.invocation.orNull,
                 vcs = parameters.vcs.orNull,
                 ci = ci,
                 configurationCache = ccState,
