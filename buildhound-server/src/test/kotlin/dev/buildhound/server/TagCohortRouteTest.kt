@@ -136,6 +136,19 @@ class TagCohortRouteTest {
     }
 
     @Test
+    fun `more than maxTags distinct tag filter params is a 400, matching ingest symmetry`() = testApplication {
+        val fx = fx(); appWith(fx)
+        seed(fx)
+        val maxTags = dev.buildhound.commons.payload.PayloadCaps.DEFAULT.maxTags
+        val withinCap = (1..maxTags).joinToString("&") { "tag.k$it=v" }
+        assertEquals(HttpStatusCode.OK, get("/v1/builds?$withinCap").status, "exactly maxTags filters must still be accepted")
+        val overCap = (1..(maxTags + 1)).joinToString("&") { "tag.k$it=v" }
+        assertEquals(HttpStatusCode.BadRequest, get("/v1/builds?$overCap").status, "more than maxTags filters must be rejected")
+        assertEquals(HttpStatusCode.BadRequest, get("/v1/trends?$overCap").status)
+        assertEquals(HttpStatusCode.BadRequest, get("/v1/trends/cohorts?tag=R8&$overCap").status)
+    }
+
+    @Test
     fun `a tag equality filter narrows v1 builds and v1 trends`() = testApplication {
         val fx = fx(); appWith(fx)
         seed(fx)

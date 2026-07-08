@@ -110,6 +110,42 @@ class TagCohortStoresIntegrationTest {
     }
 
     @Test
+    fun `a multi-key tag filter (2+ simultaneous tag equality params) matches identically between stores`() {
+        // Only the "true" cohort carries both R8=true and env=staging; bench-true has R8=true but no
+        // env tag at all, so it must drop out once the second key is added to the filter.
+        val filter = BuildFilter(tags = mapOf("R8" to "true", "env" to "staging"))
+        val pg = postgresStore.list(projectId, filter, 50, 0).map { it.buildId }.toSet()
+        val mem = inMemory.list(projectId, filter, 50, 0).map { it.buildId }.toSet()
+        assertEquals(mem, pg, "a 2+ key tag filter must match byte-for-byte between stores")
+        assertEquals(setOf("true-0", "true-1", "true-2"), pg, "bench-true lacks the env tag and must not match")
+    }
+
+    @Test
+    fun `a tag value with jsonb-significant characters matches identically through the real containment filter`() {
+        // Single-quote, backslash, and non-ASCII characters all have special meaning either in SQL
+        // string literals or in jsonb's own text encoding; every value here is bound (never
+        // interpolated — see filterSql), so all three must round-trip and match through @> exactly
+        // like an ordinary tag value.
+        val special = mapOf(
+            "special.quote" to "O'Brien",
+            "special.backslash" to """back\slash""",
+            "special.unicode" to "héllo-世界-😀",
+        )
+        special.forEach { (key, value) ->
+            val buildId = "special-${key.substringAfterLast('.')}"
+            val payload = TestPayloads.build(buildId = buildId, startedAt = recent, tags = mapOf(key to value))
+            postgresStore.save(projectId, payload)
+            inMemory.save(projectId, payload)
+
+            val filter = BuildFilter(tags = mapOf(key to value))
+            val pg = postgresStore.list(projectId, filter, 50, 0).map { it.buildId }.toSet()
+            val mem = inMemory.list(projectId, filter, 50, 0).map { it.buildId }.toSet()
+            assertEquals(mem, pg, "a jsonb-significant tag value must match identically between stores: $value")
+            assertEquals(setOf(buildId), pg, "the special-char build must be the only match for its own tag: $value")
+        }
+    }
+
+    @Test
     fun `v1 tags key-value ranking agrees between stores`() {
         val pg = postgresStore.tagKeys(projectId, 30, now)
         val mem = inMemory.tagKeys(projectId, 30, now)

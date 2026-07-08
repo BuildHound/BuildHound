@@ -916,7 +916,13 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             // SQL. Both stores hand these to the same TagCohortCalculator.groupByCohort, so the daily
             // bucketing + median/MAD math run identically over the same rows either store produces
             // (the plan-026/032 "raw rows -> one pure calculator" discipline). Builds missing the tag
-            // key entirely are excluded (`IS NOT NULL`) — no synthetic "null" cohort.
+            // key entirely are excluded via the GIN-indexable key-existence operator (`payload -> 'tags'
+            // ? tagKey`, escaped as `??` for the JDBC driver, which otherwise parses a bare `?` as a bind
+            // placeholder) — no synthetic "null" cohort. The earlier `payload->'tags'->>? IS NOT NULL`
+            // form used the `->>` value-extraction operator in the predicate, which the V11 GIN index
+            // (jsonb_ops) cannot accelerate; only `@>`/`?`/`?&`/`?|` are indexable, so that form forced a
+            // full scan on every default (untagged-filter) `/v1/trends/cohorts` call. The `->>?` in the
+            // SELECT list below is projection only, not a filter, so it stays as-is.
             val (clauses, params) = filterSql(filter)
             connection.prepareStatement(
                 """
@@ -924,7 +930,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                        (started_at AT TIME ZONE 'UTC')::date AS day,
                        outcome, duration_ms, hit_rate
                 FROM builds
-                WHERE project_id = ? AND started_at >= ? AND payload->'tags'->>? IS NOT NULL$clauses
+                WHERE project_id = ? AND started_at >= ? AND payload -> 'tags' ?? ?$clauses
                 """.trimIndent(),
             ).use { statement ->
                 statement.setString(1, tagKey)
