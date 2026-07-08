@@ -266,7 +266,9 @@ paths:
         the `jdk` dimension groups by JDK **major** (leading numeric segment) and each of its rows
         carries `durationP50Ms` — the daemon-JDK fleet comparison ("your JDK 17 daemons are p50 X %
         slower than your JDK 21 daemons"). Other dimensions stay per full version with
-        `durationP50Ms` null.
+        `durationP50Ms` null. Since plan 072 an additive `springBoot` dimension rides alongside
+        agp/kgp/ksp (the server-service JVM analogue), read from the same `builds.payload` jsonb with
+        no migration.
       responses:
         "200": { description: The toolchain rollup. }
         "401": { $ref: '#/components/responses/Unauthorized' }

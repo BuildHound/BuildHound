@@ -831,7 +831,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                        payload->'toolchain'->>'jdk' AS jdk,
                        payload->'toolchain'->>'agp' AS agp,
                        payload->'toolchain'->>'kgp' AS kgp,
-                       payload->'toolchain'->>'ksp' AS ksp
+                       payload->'toolchain'->>'ksp' AS ksp,
+                       payload->'toolchain'->>'springBoot' AS spring_boot
                 FROM builds
                 WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
                 """.trimIndent(),
@@ -845,6 +846,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                     val agp = mutableListOf<ToolchainSample>()
                     val kgp = mutableListOf<ToolchainSample>()
                     val ksp = mutableListOf<ToolchainSample>()
+                    val springBoot = mutableListOf<ToolchainSample>()
                     while (rows.next()) {
                         val userId = rows.getString("user_id")
                         val startedMs = rows.getLong("started_ms")
@@ -856,6 +858,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                         agp.add(ToolchainSample(rows.getString("agp"), userId, startedMs))
                         kgp.add(ToolchainSample(rows.getString("kgp"), userId, startedMs))
                         ksp.add(ToolchainSample(rows.getString("ksp"), userId, startedMs))
+                        // Spring Boot adoption (plan 072, research F22): no duration, per full version —
+                        // the same jsonb-field read as agp/kgp/ksp, no migration (rides builds.payload).
+                        springBoot.add(ToolchainSample(rows.getString("spring_boot"), userId, startedMs))
                     }
                     ToolchainRollup(
                         gradle = ToolchainCalculator.dimension(gradle),
@@ -863,6 +868,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                         agp = ToolchainCalculator.dimension(agp),
                         kgp = ToolchainCalculator.dimension(kgp),
                         ksp = ToolchainCalculator.dimension(ksp),
+                        springBoot = ToolchainCalculator.dimension(springBoot),
                     )
                 }
             }

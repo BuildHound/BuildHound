@@ -1312,7 +1312,7 @@
     function toolchainPanel(label, dim) {
         const box = document.createDocumentFragment();
         box.append(el("h3", label));
-        if (!dim.available) {
+        if (!dim || !dim.available) {
             box.append(el("p", "Not collected yet — this dimension populates once the plugin reports it.", "notice-warn"));
             return box;
         }
@@ -1510,6 +1510,7 @@
             for (const [label, dim] of [
                 ["Gradle", toolchain.gradle], ["JDK", toolchain.jdk],
                 ["Android Gradle Plugin", toolchain.agp], ["Kotlin Gradle Plugin", toolchain.kgp], ["KSP", toolchain.ksp],
+                ["Spring Boot", toolchain.springBoot],
             ]) {
                 app.append(toolchainPanel(label, dim));
             }

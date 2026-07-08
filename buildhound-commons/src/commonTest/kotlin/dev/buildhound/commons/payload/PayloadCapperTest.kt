@@ -91,6 +91,25 @@ class PayloadCapperTest {
     }
 
     @Test
+    fun over_cap_jvm_artifacts_are_dropped_smallest_first_into_the_shared_counter() {
+        // Defense-in-depth (plan 072): a hostile POST can carry an unbounded jvm array. 5 jvm + 4 android,
+        // cap 3 → each list keeps its 3 largest independently, and both drops (2 jvm + 1 android) sum into
+        // the single droppedArtifacts counter.
+        val jvm = (1..5).map { JvmArtifactSize(":m$it", JvmArtifactKind.JAR, it.toLong()) }
+        val android = (1..4).map { ArtifactSize(variant = "v$it", module = ":app", type = ArtifactType.APK, sizeBytes = it.toLong()) }
+        val capped = PayloadCapper.cap(
+            payload(artifacts = ArtifactSizes(android = android, jvm = jvm)),
+            PayloadCaps(maxArtifacts = 3),
+        )
+        val cappedArtifacts = capped.artifacts ?: error("artifacts must survive")
+        assertEquals(3, cappedArtifacts.jvm.size)
+        assertEquals(5L, cappedArtifacts.jvm.maxOf { it.sizeBytes })
+        assertEquals(3L, cappedArtifacts.jvm.minOf { it.sizeBytes }) // 5,4,3 kept
+        assertEquals(3, cappedArtifacts.android.size)
+        assertEquals(3, capped.caps?.droppedArtifacts) // 2 jvm + 1 android share the counter
+    }
+
+    @Test
     fun over_cap_project_evaluations_are_dropped_fastest_first_and_counted() {
         // 5 evaluations, cap 3 → keep the 3 slowest, drop 2, recorded in the caps summary.
         val evaluations = (1..5).map { ProjectEvaluation(path = ":m$it", evaluationMs = it.toLong()) }

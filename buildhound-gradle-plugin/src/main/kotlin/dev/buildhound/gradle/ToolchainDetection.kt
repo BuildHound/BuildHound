@@ -15,10 +15,14 @@ data class DetectedToolchain(
     val agp: String? = null,
     val kgp: String? = null,
     val ksp: String? = null,
+    val springBoot: String? = null,
 ) : Serializable {
-    fun isEmpty(): Boolean = agp == null && kgp == null && ksp == null
+    fun isEmpty(): Boolean = agp == null && kgp == null && ksp == null && springBoot == null
 
     private companion object {
+        // Unbumped despite the added field (plan 072): the plugin writes and reads DetectedToolchain
+        // with the same class version (finalizer param baked into and replayed from the CC entry), and
+        // a new field with a default is Java-serialization compatible under a stable serialVersionUID.
         private const val serialVersionUID: Long = 1L
     }
 }
@@ -69,6 +73,7 @@ internal object ToolchainDetection {
         var agp: String? = null
         var kgp: String? = null
         var ksp: String? = null
+        var springBoot: String? = null
         for (project in projects) {
             val plugins = project.pluginManager
             if (agp == null && ANDROID_PLUGIN_IDS.any { plugins.hasPlugin(it) }) {
@@ -80,9 +85,12 @@ internal object ToolchainDetection {
             if (ksp == null && plugins.hasPlugin("com.google.devtools.ksp")) {
                 ksp = guarded("ksp") { kspVersion(project) }
             }
-            if (agp != null && kgp != null && ksp != null) break
+            if (springBoot == null && plugins.hasPlugin("org.springframework.boot")) {
+                springBoot = guarded("springBoot") { springBootVersion(project) }
+            }
+            if (agp != null && kgp != null && ksp != null && springBoot != null) break
         }
-        return DetectedToolchain(agp = agp, kgp = kgp, ksp = ksp)
+        return DetectedToolchain(agp = agp, kgp = kgp, ksp = ksp, springBoot = springBoot)
     }
 
     /**
@@ -129,6 +137,19 @@ internal object ToolchainDetection {
         invokeNoArg(plugin, "getPluginArtifact")?.let { artifact ->
             noArgStringGetter(artifact, "getVersion")?.let { return it }
         }
+        return plugin.javaClass.getPackage()?.implementationVersion
+    }
+
+    /**
+     * Spring Boot Gradle plugin version (plan 072, research F22). Presence detects reliably via the
+     * `org.springframework.boot` plugin id; the version comes from the applied plugin's jar manifest
+     * (`Implementation-Version`, exposed as `Package.getImplementationVersion()`) — the exact KSP-style
+     * manifest fallback used by [kspVersion] above. Boot publishes proper jar manifests, so the version
+     * resolves in the common case; honest-null when the manifest carries none. Pure reflection over the
+     * plugin object — no compile-time Spring type is referenced, so a non-Boot build links nothing.
+     */
+    private fun springBootVersion(project: Project): String? {
+        val plugin = project.plugins.firstOrNull { it.javaClass.name.startsWith("org.springframework.boot") } ?: return null
         return plugin.javaClass.getPackage()?.implementationVersion
     }
 

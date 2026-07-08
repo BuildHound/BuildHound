@@ -221,6 +221,23 @@ class PayloadAssemblerTest {
         assertNull(payload.toolchain?.agp)
         assertNull(payload.toolchain?.kgp)
         assertNull(payload.toolchain?.ksp)
+        assertNull(payload.toolchain?.springBoot)
+    }
+
+    @Test
+    fun `a detected springBoot version joins the toolchain block (plan 072)`() {
+        val withBoot = assemble(tasks = listOf(task(":a", 0, 1_000, TaskOutcome.EXECUTED)), springBoot = "3.3.2")
+        assertEquals("3.3.2", withBoot.toolchain?.springBoot)
+        assertEquals("8.14.3", withBoot.toolchain?.gradle, "springBoot does not drop gradle/jdk")
+        // Reported even without an environment snapshot, like agp/kgp/ksp.
+        val noEnv = PayloadAssembler.assemble(
+            buildId = "b", projectKey = null, mode = BuildMode.CI, buildFailed = false,
+            requestedTasks = emptyList(), tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)),
+            environment = null, vcs = null, ci = null,
+            configurationCache = ConfigurationCacheState.DISABLED, daemonReused = false,
+            tags = emptyMap(), nowMs = 0, projectRoots = emptyList(), springBoot = "3.3.2",
+        )
+        assertEquals("3.3.2", noEnv.toolchain?.springBoot)
     }
 
     @Test
@@ -394,6 +411,51 @@ class PayloadAssemblerTest {
         assertEquals(200, android.size)
         assertEquals(250L, android.maxOf { it.sizeBytes })
         assertEquals(51L, android.minOf { it.sizeBytes }) // smallest kept = 250 - 200 + 1
+    }
+
+    @Test
+    fun `assemble carries jvm artifacts and leaves android empty when only jvm were collected`() {
+        val jvm = listOf(
+            dev.buildhound.commons.payload.JvmArtifactSize(":app", dev.buildhound.commons.payload.JvmArtifactKind.BOOT_JAR, 24_117_248),
+            dev.buildhound.commons.payload.JvmArtifactSize(":core", dev.buildhound.commons.payload.JvmArtifactKind.JAR, 131_072),
+        )
+        val artifacts = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), jvmArtifacts = jvm).artifacts
+            ?: error("expected an artifacts block when jvm sizes are present")
+        assertEquals(jvm, artifacts.jvm)
+        assertTrue(artifacts.android.isEmpty(), "a pure-JVM build carries no android artifacts")
+    }
+
+    @Test
+    fun `assemble emits the artifacts block when android and jvm are both present`() {
+        val android = listOf(
+            dev.buildhound.commons.payload.ArtifactSize("release", ":app", dev.buildhound.commons.payload.ArtifactType.APK, 8000),
+        )
+        val jvm = listOf(
+            dev.buildhound.commons.payload.JvmArtifactSize(":svc", dev.buildhound.commons.payload.JvmArtifactKind.BOOT_JAR, 9000),
+        )
+        val artifacts = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), artifacts = android, jvmArtifacts = jvm).artifacts
+            ?: error("expected an artifacts block")
+        assertEquals(android, artifacts.android)
+        assertEquals(jvm, artifacts.jvm)
+    }
+
+    @Test
+    fun `assemble leaves artifacts null when neither android nor jvm were collected`() {
+        assertNull(
+            assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), artifacts = emptyList(), jvmArtifacts = emptyList()).artifacts,
+        )
+    }
+
+    @Test
+    fun `assemble truncates an over-cap jvm artifacts list largest-first`() {
+        // 250 records with ascending sizes; the cap keeps the 200 largest (mirrors the android cap).
+        val jvm = (1..250).map {
+            dev.buildhound.commons.payload.JvmArtifactSize(":m$it", dev.buildhound.commons.payload.JvmArtifactKind.JAR, it.toLong())
+        }
+        val kept = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), jvmArtifacts = jvm).artifacts?.jvm!!
+        assertEquals(200, kept.size)
+        assertEquals(250L, kept.maxOf { it.sizeBytes })
+        assertEquals(51L, kept.minOf { it.sizeBytes }) // smallest kept = 250 - 200 + 1
     }
 
     @Test
@@ -745,6 +807,7 @@ class PayloadAssemblerTest {
         processes: List<CollectedProcess> = emptyList(),
         benchmark: CollectedBenchmark? = null,
         artifacts: List<dev.buildhound.commons.payload.ArtifactSize> = emptyList(),
+        jvmArtifacts: List<dev.buildhound.commons.payload.JvmArtifactSize> = emptyList(),
         projectEvaluations: List<dev.buildhound.commons.payload.ProjectEvaluation> = emptyList(),
         buildStructure: CollectedBuildStructure? = null,
         isolatedProjects: Boolean? = null,
@@ -761,6 +824,7 @@ class PayloadAssemblerTest {
         agp: String? = null,
         kgp: String? = null,
         ksp: String? = null,
+        springBoot: String? = null,
     ) = PayloadAssembler.assemble(
         buildId = "test-build",
         projectKey = "fixture",
@@ -786,11 +850,13 @@ class PayloadAssemblerTest {
         processes = processes,
         benchmark = benchmark,
         artifacts = artifacts,
+        jvmArtifacts = jvmArtifacts,
         projectEvaluations = projectEvaluations,
         extensions = extensions,
         agp = agp,
         kgp = kgp,
         ksp = ksp,
+        springBoot = springBoot,
         buildStructure = buildStructure,
         isolatedProjects = isolatedProjects,
         wrapper = wrapper,

@@ -104,7 +104,8 @@ class ToolchainFunctionalTest {
         setUpProject(
             gradleProperties = "buildhound.internal.toolchain.agp=8.9.0\n" +
                 "buildhound.internal.toolchain.kgp=2.2.20\n" +
-                "buildhound.internal.toolchain.ksp=2.2.20-2.0.2\n",
+                "buildhound.internal.toolchain.ksp=2.2.20-2.0.2\n" +
+                "buildhound.internal.toolchain.springBoot=3.3.2\n",
         )
 
         val first = runner("hello").build()
@@ -113,6 +114,8 @@ class ToolchainFunctionalTest {
             assertEquals("8.9.0", toolchain?.agp)
             assertEquals("2.2.20", toolchain?.kgp)
             assertEquals("2.2.20-2.0.2", toolchain?.ksp)
+            // Spring Boot (plan 072) rides the same whenReady→finalizer channel as agp/kgp/ksp.
+            assertEquals("3.3.2", toolchain?.springBoot)
         }
 
         // The versions are captured at configuration time and replayed from the service parameter,
@@ -120,6 +123,7 @@ class ToolchainFunctionalTest {
         val second = runner("hello").build()
         assertTrue(second.output.contains("Reusing configuration cache"), second.output)
         assertEquals("8.9.0", readPayload().toolchain?.agp)
+        assertEquals("3.3.2", readPayload().toolchain?.springBoot, "springBoot survives a cc hit")
     }
 
     @Test
@@ -132,6 +136,7 @@ class ToolchainFunctionalTest {
         assertEquals("2.4.0", toolchain?.kgp)
         assertNull(toolchain?.agp, "AGP was not seeded → stays null")
         assertNull(toolchain?.ksp, "KSP was not seeded → stays null")
+        assertNull(toolchain?.springBoot, "Spring Boot was not seeded → stays null")
     }
 
     @Test
@@ -175,5 +180,6 @@ class ToolchainFunctionalTest {
         assertNull(toolchain?.agp)
         assertNull(toolchain?.kgp)
         assertNull(toolchain?.ksp)
+        assertNull(toolchain?.springBoot)
     }
 }

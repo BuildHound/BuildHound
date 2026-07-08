@@ -90,6 +90,13 @@
             <tbody></tbody>
         </table>
     </section>
+    <section id="jvm-artifacts" hidden>
+        <h2>JVM artifacts</h2>
+        <table id="jvm-artifacts-table">
+            <thead><tr><th>Module</th><th>Kind</th><th class="num">Size</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </section>
 </main>
 <script>
     // The shared timeline renderer is spliced in here at report time (defines the global
@@ -135,6 +142,7 @@
         if (d.toolchain && d.toolchain.agp) chip("agp", d.toolchain.agp);
         if (d.toolchain && d.toolchain.kgp) chip("kgp", d.toolchain.kgp);
         if (d.toolchain && d.toolchain.ksp) chip("ksp", d.toolchain.ksp);
+        if (d.toolchain && d.toolchain.springBoot) chip("spring boot", d.toolchain.springBoot);
         chips.hidden = false;
 
         // Build failure (plan 044): exception class + scrubbed message, and the scrubbed stacktrace
@@ -332,6 +340,23 @@
                 abody.append(row);
             }
             document.getElementById("artifacts").hidden = false;
+        }
+
+        // JVM artifacts (plan 072, research F22): the current build's bootJar/bootWar/jar/war sizes,
+        // largest first — measured only for archive tasks that ran. Hidden when the build produced none
+        // (non-JVM-archive). All strings via textContent; `kind` is an allowlisted enum from the payload.
+        const jvmArtifacts = (d.artifacts && d.artifacts.jvm) || [];
+        if (jvmArtifacts.length) {
+            const size = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? (n / 1024).toFixed(1) + " KB" : n + " B";
+            const jbody = document.getElementById("jvm-artifacts-table").querySelector("tbody");
+            for (const a of [...jvmArtifacts].sort((x, y) => y.sizeBytes - x.sizeBytes)) {
+                const row = el("tr");
+                row.append(el("td", a.module || ""));
+                row.append(el("td", a.kind));
+                row.append(el("td", size(a.sizeBytes), "num"));
+                jbody.append(row);
+            }
+            document.getElementById("jvm-artifacts").hidden = false;
         }
     })(buildhoundData);
 </script>

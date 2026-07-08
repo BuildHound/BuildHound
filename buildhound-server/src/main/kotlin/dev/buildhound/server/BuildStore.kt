@@ -792,6 +792,9 @@ class InMemoryBuildStore : BuildStore {
             agp = ToolchainCalculator.dimension(samples { it.toolchain?.agp }),
             kgp = ToolchainCalculator.dimension(samples { it.toolchain?.kgp }),
             ksp = ToolchainCalculator.dimension(samples { it.toolchain?.ksp }),
+            // Spring Boot adoption (plan 072, research F22): no duration, per full version — like
+            // agp/kgp/ksp; only the jdk dimension carries a p50 duration.
+            springBoot = ToolchainCalculator.dimension(samples { it.toolchain?.springBoot }),
         )
     }
 

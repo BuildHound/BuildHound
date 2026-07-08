@@ -95,17 +95,27 @@ object PayloadCapper {
             if (seed != null && seed.length > caps.maxValueChars) b.copy(seedRef = seed.substring(0, caps.maxValueChars)) else b
         }
 
-        // Android artifacts (plan 031): the plugin caps at assembly, but a hostile/foreign ingest can
-        // POST an unbounded array — keep the largest N (they carry the signal), drop + count the rest.
+        // Artifacts (plan 031 Android, plan 072 JVM): the plugin caps at assembly, but a hostile/foreign
+        // ingest can POST an unbounded array — keep the largest N (they carry the signal), drop + count
+        // the rest. Each list is capped independently largest-first; both drops sum into the single
+        // droppedArtifacts counter (the two lists share the per-payload artifact budget).
         var droppedArtifacts = 0
         val cappedArtifacts = payload.artifacts?.let { a ->
-            if (a.android.size <= caps.maxArtifacts) {
-                a
+            val android = if (a.android.size <= caps.maxArtifacts) {
+                a.android
             } else {
                 val kept = a.android.sortedByDescending { it.sizeBytes }.take(caps.maxArtifacts)
-                droppedArtifacts = a.android.size - kept.size
-                a.copy(android = kept)
+                droppedArtifacts += a.android.size - kept.size
+                kept
             }
+            val jvm = if (a.jvm.size <= caps.maxArtifacts) {
+                a.jvm
+            } else {
+                val kept = a.jvm.sortedByDescending { it.sizeBytes }.take(caps.maxArtifacts)
+                droppedArtifacts += a.jvm.size - kept.size
+                kept
+            }
+            if (droppedArtifacts == 0) a else a.copy(android = android, jvm = jvm)
         }
 
         // Per-project configuration-time attribution (plan 052): the plugin already sorts slowest-first

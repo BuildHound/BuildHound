@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "buildId": "d1e2f3a4-b5c6-4d7e-8f90-1a2b3c4d5e6f",
+  "projectKey": "pilot-springboot",
+  "startedAt": 1751520000000,
+  "finishedAt": 1751520075000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["bootJar"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "toolchain": {
+    "gradle": "9.0.0",
+    "jdk": "21.0.10",
+    "springBoot": "3.3.2"
+  },
+  "tasks": [
+    {
+      "path": ":app:bootJar",
+      "module": ":app",
+      "startMs": 1751520010000,
+      "durationMs": 3000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "artifacts": {
+    "jvm": [
+      { "module": ":app", "kind": "BOOT_JAR", "sizeBytes": 24117248 },
+      { "module": ":core", "kind": "JAR", "sizeBytes": 131072 }
+    ]
+  }
+}

@@ -9,10 +9,12 @@ import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.ExtensionContributionContext
 import dev.buildhound.commons.payload.FingerprintInfo
+import dev.buildhound.commons.payload.JvmArtifactSize
 import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.commons.payload.ProjectEvaluation
 import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.commons.payload.TaskExecution
+import dev.buildhound.commons.payload.TaskOutcome
 import dev.buildhound.commons.payload.TestTelemetryInfo
 import dev.buildhound.report.ReportAssets
 import java.io.File
@@ -66,6 +68,17 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Input
         @get:Optional
         val toolchain: Property<DetectedToolchain>
+
+        /**
+         * JVM archive-task output locations (plan 072, research F22), delivered on the same
+         * after-configuration Flow-action channel as [toolchain] — resolved after `whenReady` fills the
+         * mailbox, immune to the composite-build service-param freeze, replayed on a CC hit. Locations
+         * only; the finalizer reads `File.length()` at execution time, gated on the task's
+         * produced-output outcome + `File.exists()` (only-what-ran). Empty when no archive task ran.
+         */
+        @get:Input
+        @get:Optional
+        val jvmArtifacts: ListProperty<JvmArtifactLocation>
 
         /**
          * Task path → static type/cacheable/nonCacheableReason dictionary (plan 016), delivered as a
@@ -332,6 +345,17 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // runCatching → warn + marker, never a failed build (§3 finalizer read).
             val artifacts = parameters.rootDir.orNull?.let { readArtifacts(File(it)) }.orEmpty()
 
+            // JVM archive sizes (plan 072, research F22): cross-reference each config-time archive
+            // location against this build's task outcomes and measure File.length() only for archive
+            // tasks that actually produced output — applying org.springframework.boot disables the
+            // plain `jar` task, so a naive stat of the declared `-plain.jar` path would report a
+            // stale/absent artifact; the produced-output-outcome + File.exists() filter prevents it.
+            // Runs inside the finalizer's outer runCatching → warn + marker, never a failed build.
+            val jvmArtifacts = readJvmArtifacts(
+                parameters.jvmArtifacts.getOrElse(emptyList()),
+                tasks.associate { it.path to it.outcome },
+            )
+
             // Addon extensions (plan 039): ServiceLoader-discover contributors on the settings
             // classpath and merge their JSON sections. Execution-time only (adds no CC input — the
             // functional test asserts CC reuse); every failure degrades to no extensions. Each
@@ -390,6 +414,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 processes = parameters.processes.getOrElse(emptyList()),
                 benchmark = benchmark,
                 artifacts = artifacts,
+                jvmArtifacts = jvmArtifacts,
                 // Declared build-structure inventory + isolated-projects flag (plan 069); the former
                 // is a plugin-side DTO the assembler maps to the wire BuildStructureInfo (null when
                 // unknown), the latter rides in environment.isolatedProjects.
@@ -403,6 +428,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 agp = toolchain.agp,
                 kgp = toolchain.kgp,
                 ksp = toolchain.ksp,
+                springBoot = toolchain.springBoot,
             )
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so
@@ -604,6 +630,27 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
     }
 
     /**
+     * Measures each config-time JVM archive [location] (plan 072, research F22): the size is read only
+     * when the location's [JvmArtifactLocation.taskPath] resolved to a produced-output outcome
+     * (EXECUTED/UP_TO_DATE/FROM_CACHE — never SKIPPED/NO_SOURCE/FAILED, nor an absent join) **and** the
+     * archive file exists on disk. This is the load-bearing "measure-only-what-ran": applying
+     * `org.springframework.boot` disables the plain `jar` task, so its declared `-plain.jar` path would
+     * otherwise report a stale/absent artifact. `File.length()` runs here at execution time (no
+     * config-phase read → no CC fingerprint input); the absolute [JvmArtifactLocation.archivePath]
+     * never enters the returned [JvmArtifactSize] (spec §3.7 — only size + module + kind ship).
+     */
+    private fun readJvmArtifacts(
+        locations: List<JvmArtifactLocation>,
+        taskOutcomes: Map<String, TaskOutcome>,
+    ): List<JvmArtifactSize> =
+        locations.mapNotNull { location ->
+            if (taskOutcomes[location.taskPath] !in PRODUCED_OUTPUT_OUTCOMES) return@mapNotNull null
+            val file = File(location.archivePath)
+            if (!file.exists()) return@mapNotNull null
+            JvmArtifactSize(module = location.module, kind = location.kind, sizeBytes = file.length())
+        }
+
+    /**
      * Reads (then clears) the `beforeProject`/`afterProject` sidecar under
      * `<root>/.gradle/buildhound/config-timings` (plan 052). Called unconditionally at the top of
      * [execute] — the drain must run even on a DSL-disabled or CC-hit build (052 review fix), so the
@@ -633,6 +680,13 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
         /** Wire format stays [BuildHoundJson.payload]; pretty printing is for the local file only. */
         val prettyJson = Json(from = BuildHoundJson.payload) { prettyPrint = true }
+
+        /**
+         * Outcomes for which a JVM archive task actually produced its output (plan 072) — the
+         * only-what-ran gate. SKIPPED/NO_SOURCE/FAILED (and an absent join) leave the artifact
+         * unmeasured, so a disabled `-plain.jar` never contributes a stale size.
+         */
+        val PRODUCED_OUTPUT_OUTCOMES = setOf(TaskOutcome.EXECUTED, TaskOutcome.UP_TO_DATE, TaskOutcome.FROM_CACHE)
     }
 }
 
