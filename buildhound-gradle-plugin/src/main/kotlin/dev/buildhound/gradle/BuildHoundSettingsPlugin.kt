@@ -458,12 +458,19 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
      * The JUnit XML dir + module for one `Test` task, via the public Test report API (plan 024).
      * Runs at configuration time inside `whenReady`, so resolving the output location is CC-safe
      * (spike §4a). Null when the task is not a `Test` or the location is unresolvable.
+     *
+     * [TestResultLocations.junitXmlRequired] (plan 053, research F3) is a sibling read on the same
+     * `DirectoryReport` — `Report.getRequired(): Property<Boolean>`, public API, no internal Gradle
+     * type. It must run here, in `whenReady`, never in `apply()`: `required` (like `outputLocation`)
+     * only reflects the task's real configuration after `afterEvaluate`, which `whenReady` guarantees
+     * and `apply()` does not.
      */
     private fun testLocationOf(task: Task): Pair<String, TestResultLocations>? {
         val test = task as? Test ?: return null
         val dir = test.reports.junitXml.outputLocation.orNull?.asFile?.absolutePath ?: return null
         val module = task.path.substringBeforeLast(':').ifEmpty { ":" }
-        return task.path to TestResultLocations(junitXmlDir = dir, module = module)
+        val junitXmlRequired = test.reports.junitXml.required.getOrElse(true)
+        return task.path to TestResultLocations(junitXmlDir = dir, module = module, junitXmlRequired = junitXmlRequired)
     }
 
     private companion object {

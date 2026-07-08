@@ -27,6 +27,7 @@ import dev.buildhound.commons.payload.ProjectEvaluation
 import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TestTaskResult
+import dev.buildhound.commons.payload.TestTelemetryInfo
 import dev.buildhound.commons.payload.ToolchainInfo
 import dev.buildhound.commons.payload.VcsInfo
 import dev.buildhound.commons.payload.WrapperInfo
@@ -98,6 +99,9 @@ internal object PayloadAssembler {
         fingerprints: FingerprintInfo? = null,
         kotlin: KotlinInfo? = null,
         tests: List<TestTaskResult> = emptyList(),
+        // Honest degraded state for JUnit-XML-disabled Test tasks (plan 053, research F3); null when
+        // no executed task ran with the flag off this build.
+        testTelemetry: TestTelemetryInfo? = null,
         processes: List<CollectedProcess> = emptyList(),
         benchmark: CollectedBenchmark? = null,
         artifacts: List<ArtifactSize> = emptyList(),
@@ -201,6 +205,8 @@ internal object PayloadAssembler {
             kotlin = kotlin,
             // Per-test-task results parsed from JUnit XML (plan 024); empty when no test ran.
             tests = tests,
+            // Honest degraded state for JUnit-XML-disabled Test tasks (plan 053); null when uncaptured.
+            testTelemetry = testTelemetry,
             // Android artifact sizes (plan 031); null when not an Android build / nothing produced.
             // Capped largest-first so a pathological flavor matrix can't blow the payload budget.
             artifacts = artifacts.takeIf { it.isNotEmpty() }?.let { ArtifactSizes(android = capArtifacts(it)) },

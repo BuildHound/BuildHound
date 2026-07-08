@@ -347,9 +347,18 @@
 
     // Test-results panel (plan 024): summary sentence, failures/retries table, slowest classes.
     // Shared by the build detail and the Tests page. textContent-only (message text is untrusted).
-    function testsPanel(tests) {
+    // `testTelemetry` (plan 053, research F3) carries the honest degraded-state note for executed
+    // Test tasks whose JUnit XML was disabled — rendered even when `tests` itself is empty, so an
+    // empty/partial block reads as "collection turned off," not "no tests ran".
+    function testsPanel(tests, testTelemetry) {
         const box = document.createDocumentFragment();
         box.append(el("h3", "Tests"));
+
+        const xmlDisabledTasks = (testTelemetry && testTelemetry.xmlDisabledTasks) || [];
+        if (xmlDisabledTasks.length) {
+            box.append(el("p", "Test telemetry unavailable — JUnit XML disabled on " + xmlDisabledTasks.join(", ") + ".", "notice-warn"));
+        }
+        if (!tests.length) return box;
 
         let cases = 0, classCount = 0, failed = 0, skipped = 0;
         const allClasses = [];
@@ -436,8 +445,9 @@
             const build = await api("/v1/builds/" + encodeURIComponent(buildId));
             if (mySeq !== renderSeq) return;
             holder.textContent = "";
-            if (Array.isArray(build.tests) && build.tests.length) {
-                holder.append(testsPanel(build.tests));
+            const xmlDisabledTasks = (build.testTelemetry && build.testTelemetry.xmlDisabledTasks) || [];
+            if ((Array.isArray(build.tests) && build.tests.length) || xmlDisabledTasks.length) {
+                holder.append(testsPanel(build.tests || [], build.testTelemetry));
             } else {
                 holder.append(emptyState({
                     title: "No test results in this build",
@@ -588,8 +598,13 @@
         }
         app.append(table);
 
-        // Test results, when any test task's JUnit XML was collected for this build.
-        if (Array.isArray(build.tests) && build.tests.length) app.append(testsPanel(build.tests));
+        // Test results (plan 024), plus the honest degraded-state note (plan 053, research F3) when
+        // JUnit XML was disabled on an executed Test task — shown even when `tests` itself is empty,
+        // so an empty/partial block reads as "collection turned off," not "no tests ran".
+        const xmlDisabledTasks = (build.testTelemetry && build.testTelemetry.xmlDisabledTasks) || [];
+        if ((Array.isArray(build.tests) && build.tests.length) || xmlDisabledTasks.length) {
+            app.append(testsPanel(build.tests || [], build.testTelemetry));
+        }
 
         // Build warnings (plan 044/045): opt-in deprecation + logger.warn capture, carried in the
         // independently-versioned extensions.internalAdapters block. Absent for every build without

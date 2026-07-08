@@ -36,6 +36,13 @@ data class BuildPayload(
     val kotlin: KotlinInfo? = null,
     /** Per-test-task results parsed from JUnit XML (plan 024); empty when no test ran or disabled. */
     val tests: List<TestTaskResult> = emptyList(),
+    /**
+     * Honest degraded-state signal when JUnit XML was disabled on an executed `Test` task (plan 053,
+     * research F3: Gradle's own perf guide recommends `reports.junitXml.required = false`, which
+     * silently blanks [tests] with zero signal otherwise). Null when no such task ran this build — a
+     * populated [tests] entry and an appearance in here are mutually exclusive for the same task path.
+     */
+    val testTelemetry: TestTelemetryInfo? = null,
     /** Source/commit/PR links composed from the git remote + CI context (plan 027); null when uncomposable. */
     val links: LinksInfo? = null,
     /** End-of-build JVM process snapshot (plan 029, spec §3.6); empty when disabled or unobservable. */
@@ -337,6 +344,18 @@ data class TestCaseDetail(
 
 @Serializable
 enum class TestCaseOutcome { PASSED, FAILED, ERROR, SKIPPED }
+
+/**
+ * Task paths of executed `Test` tasks whose `reports.junitXml.required` was `false` this build (plan
+ * 053, research F3). The flag is authoritative — the collector short-circuits before reading whatever
+ * XML happens to sit on disk for that task, so an entry here never coexists with a [TestTaskResult]
+ * for the same path (stale-XML phantom-result guard). Task paths are declared data (spec §4); the
+ * absolute `junitXmlDir` never reaches the payload.
+ */
+@Serializable
+data class TestTelemetryInfo(
+    val xmlDisabledTasks: List<String> = emptyList(),
+)
 
 /**
  * Kotlin build-report metrics bundled from the KGP json report (plan 023, spec §4). The KGP

@@ -80,4 +80,12 @@ if (!hasText(body, "bar() in Baz has been deprecated")) throw new Error("log-war
 if (!hasText(body, "3 more warnings dropped past the cap")) throw new Error("dropped-warnings note missing");
 if (findAll(body, n => n.tag === "ul" && (n.className || "").indexOf("warnings") >= 0).length === 0) throw new Error("warnings <ul> structure missing");
 
+// Tests section, degraded state (plan 053): an empty `tests` block plus a populated `testTelemetry`
+// still surfaces the honest "JUnit XML disabled" note — the section must not stay hidden just
+// because `tests` itself is empty (that would silently read as "no tests ran").
+const tests = byId["tests"];
+if (!tests || tests.hidden) throw new Error("tests section stayed hidden with a populated testTelemetry block");
+if (!hasText(byId["tests-degraded-note"], "Test telemetry unavailable")) throw new Error("degraded-note text missing");
+if (!hasText(byId["tests-degraded-note"], ":app:test")) throw new Error("degraded-note task path missing");
+
 console.log("report smoke OK");

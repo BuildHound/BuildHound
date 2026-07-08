@@ -49,4 +49,29 @@ class TestLocationSidecarTest {
         TestLocationSidecar.write(tmp, mapOf(":b:test" to TestResultLocations("/b", ":b")))
         assertEquals(mapOf(":b:test" to TestResultLocations("/b", ":b")), TestLocationSidecar.read(tmp))
     }
+
+    // --- plan 053: junitXmlRequired round-trip ---
+
+    @Test
+    fun `junitXmlRequired false round-trips through encode-decode`() {
+        val map = mapOf(":app:test" to TestResultLocations("/x/test-results/test", ":app", junitXmlRequired = false))
+        assertEquals(map, TestLocationSidecar.decode(TestLocationSidecar.encode(map)))
+    }
+
+    @Test
+    fun `junitXmlRequired true is omitted from the encoded line but still round-trips`() {
+        val map = mapOf(":app:test" to TestResultLocations("/x/test-results/test", ":app", junitXmlRequired = true))
+        val encoded = TestLocationSidecar.encode(map)
+        assertTrue(!encoded.contains("junitXmlRequired"), "the common case (true) is omitted to keep legacy lines compatible")
+        assertEquals(map, TestLocationSidecar.decode(encoded))
+    }
+
+    @Test
+    fun `a legacy line without junitXmlRequired decodes to true`() {
+        val legacyLine = """{"taskPath":":app:test","junitXmlDir":"/x/test-results/test","module":":app"}"""
+        assertEquals(
+            mapOf(":app:test" to TestResultLocations("/x/test-results/test", ":app", junitXmlRequired = true)),
+            TestLocationSidecar.decode(legacyLine),
+        )
+    }
 }

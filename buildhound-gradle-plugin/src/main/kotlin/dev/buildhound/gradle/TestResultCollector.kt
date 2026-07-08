@@ -10,7 +10,7 @@ import java.io.File
  * Reads the JUnit XML each executed `Test` task wrote and assembles `List<TestTaskResult>` at
  * build finish (plan 024). All file IO is here, at execution time — no configuration-phase reads
  * (architecture §2 rule 9, parity with the KGP-report reader). Never throws: any failure degrades
- * to `emptyList` (absent over wrong), honoring the never-fail rule.
+ * to an empty [TestCollectionResult] (absent over wrong), honoring the never-fail rule.
  *
  * Only tasks with a **this-build execution outcome** (EXECUTED/FAILED) are ingested: a
  * `FROM_CACHE`/`UP_TO_DATE` test task leaves prior-build XML on disk that must not be
@@ -23,21 +23,43 @@ internal object TestResultCollector {
     private const val MAX_CLASSES_PER_TASK = 2000
     private const val MAX_DETAIL_PER_TASK = 500
 
+    /**
+     * The parsed results alongside the flag-authoritative degraded state (plan 053, research F3):
+     * [xmlDisabledTasks] names the executed Test tasks whose `junitXmlRequired` flag was `false` —
+     * mutually exclusive with a [results] entry for the same task path, since [collect] short-circuits
+     * before any `listFiles`/parse for a disabled task (the stale-XML phantom-result guard).
+     */
+    data class TestCollectionResult(
+        val results: List<TestTaskResult>,
+        val xmlDisabledTasks: List<String>,
+    )
+
+    private val EMPTY = TestCollectionResult(emptyList(), emptyList())
+
     fun collect(
         locations: Map<String, TestResultLocations>,
         taskOutcomes: Map<String, TaskOutcome>,
         warn: (String) -> Unit = {},
         failInjection: Boolean = false,
-    ): List<TestTaskResult> = runCatching {
+    ): TestCollectionResult = runCatching {
         check(!failInjection) { "test-collection failpoint" }
-        if (locations.isEmpty()) return emptyList()
-        locations.entries.mapNotNull { (taskPath, location) ->
+        if (locations.isEmpty()) return EMPTY
+        val xmlDisabledTasks = ArrayList<String>()
+        val results = locations.entries.mapNotNull { (taskPath, location) ->
             if (taskOutcomes[taskPath] !in EXECUTED_OUTCOMES) return@mapNotNull null
+            // Flag-authoritative (plan 053): a disabled task's XML dir is never listed/parsed, even
+            // when a stale file from a prior required=true run still sits there — the note and a
+            // result must never coexist for the same task path.
+            if (!location.junitXmlRequired) {
+                xmlDisabledTasks += taskPath
+                return@mapNotNull null
+            }
             collectTask(taskPath, location)
         }
+        TestCollectionResult(results, xmlDisabledTasks.sorted())
     }.getOrElse {
         warn("[buildhound] test result collection failed (build unaffected): ${it::class.java.simpleName}")
-        emptyList()
+        EMPTY
     }
 
     private fun collectTask(taskPath: String, location: TestResultLocations): TestTaskResult? {
