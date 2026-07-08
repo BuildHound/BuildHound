@@ -9,7 +9,7 @@ import org.gradle.internal.operations.BuildOperationListenerManager
 import org.gradle.util.GradleVersion
 
 /**
- * Internal-adapters wiring, bundled with the core plugin and driven from it (plan 051). This replaced
+ * Internal-adapters wiring, bundled with the core plugin and driven from it (plan 074). This replaced
  * the standalone `dev.buildhound.internal-adapters` settings plugin: there is now **one** plugin
  * (`dev.buildhound`) and **one** config block (`buildhound { internalAdapters { } }`).
  *
@@ -22,7 +22,7 @@ import org.gradle.util.GradleVersion
  *
  * Called from core's `taskGraph.whenReady` (execution-time facts, CC-safe); on a CC hit `whenReady`
  * does not run, so — exactly as before — capture rides the daemon-static listener registered on the
- * first miss. **Known limitation (plan 052):** because the toggle-resetting [InternalAdaptersState.configure]
+ * first miss. **Known limitation (plan 075):** because the toggle-resetting [InternalAdaptersState.configure]
  * also runs only in `whenReady`, a CC-hit build does not re-establish its own toggle intent — so once
  * some build in a warm daemon has opted in, a later all-off build that reuses a *pre-toggle* CC entry can
  * still capture (via the lingering daemon-static listener) until the next CC miss. The captured data is

@@ -62,11 +62,11 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
 }
 
 /**
- * `internalAdapters { ... }` (spec §3.4, plans 038/044/051): capture that reads **internal Gradle
+ * `internalAdapters { ... }` (spec §3.4, plans 038/044/074): capture that reads **internal Gradle
  * APIs** (build-operation types, `LoggingOutputInternal`) that carry no compatibility guarantee. It
  * ships bundled with the core plugin but every toggle is **off by default and dormant** — no internal
  * API is touched until you enable a specific one. Flipping a toggle here *is* the per-feature consent
- * (plan 051 replaced the old "apply a second `dev.buildhound.internal-adapters` plugin" consent). When
+ * (plan 074 replaced the old "apply a second `dev.buildhound.internal-adapters` plugin" consent). When
  * a toggle is on the plugin logs a one-time notice that a Gradle upgrade may silently stop that signal;
  * capture never fails the build (every path is reflection-guarded).
  */

@@ -69,8 +69,8 @@ constraints that always apply:
 - No internal Gradle APIs on the always-on core path (v1). All internal-API use is quarantined in
   the bundled `buildhound-internal-adapters` module and stays dormant until a
   `buildhound { internalAdapters { } }` toggle is set — enabling a toggle is the per-feature consent
-  (plan 051). Core's own source references no internal Gradle type. (Honest scope: dormancy holds on a
-  daemon where no build has enabled a toggle; a known CC-hit warm-daemon edge is tracked in plan 052.)
+  (plan 074). Core's own source references no internal Gradle type. (Honest scope: dormancy holds on a
+  daemon where no build has enabled a toggle; a known CC-hit warm-daemon edge is tracked in plan 075.)
 - Tokens/secrets only via providers/env — never in code, DSL literals, logs, or images.
 
 ### 3. Review with clean-context agents

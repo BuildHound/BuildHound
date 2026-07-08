@@ -36,10 +36,10 @@ include(":buildhound-commons")
 include(":buildhound-gradle-plugin")
 include(":buildhound-server")
 include(":buildhound-report")
-// Bundled with the core plugin since plan 051 (one plugin, one config block): the core plugin has an
+// Bundled with the core plugin since plan 074 (one plugin, one config block): the core plugin has an
 // `implementation` dependency on it, so it is always included. Its internal-Gradle-API code stays
 // quarantined here and is dormant until a `buildhound { internalAdapters { } }` toggle is set — bundling
-// is not blanket consent (spec §3.1, plan 051). The server OCI image copies its build.gradle.kts so this
+// is not blanket consent (spec §3.1, plan 074). The server OCI image copies its build.gradle.kts so this
 // unconditional include still evaluates in the minimal Docker context (buildhound-server/Dockerfile).
 include(":buildhound-internal-adapters")
 

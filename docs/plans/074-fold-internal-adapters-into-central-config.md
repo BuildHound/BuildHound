@@ -1,4 +1,4 @@
-# 051 — One plugin, one config block: fold internal-adapters behind `buildhound { internalAdapters { } }`
+# 074 — One plugin, one config block: fold internal-adapters behind `buildhound { internalAdapters { } }`
 
 ## 1. Source
 

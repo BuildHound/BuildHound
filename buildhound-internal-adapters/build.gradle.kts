@@ -2,14 +2,14 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
     // Kept only for the `gradleApi()` compile classpath (this module references Gradle settings +
-    // internal build-operation APIs). It no longer declares a plugin: since plan 051 there is ONE
+    // internal build-operation APIs). It no longer declares a plugin: since plan 074 there is ONE
     // plugin (`dev.buildhound`) that bundles and drives this module via `InternalAdaptersWiring`.
     `java-gradle-plugin`
 }
 
 description = "Internal-adapters capture bundled with the core plugin: cache origin/keys, critical path, " +
     "deprecation + WARN-log warnings (plan 038/044). Uses internal Gradle APIs; dormant until a " +
-    "buildhound { internalAdapters { } } toggle is set (plan 051)."
+    "buildhound { internalAdapters { } } toggle is set (plan 074)."
 
 // JDK 26 builds the code; bytecode/API stay Java 21 (same pins as the core plugin, plan 011).
 val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26

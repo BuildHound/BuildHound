@@ -15,7 +15,7 @@ import org.junit.jupiter.api.io.TempDir
 
 /**
  * Internal-adapters capture, driven from the **single** core plugin + the **single** config block
- * (plan 051). Since the module is bundled onto the core plugin's classpath (`implementation`), a real
+ * (plan 074). Since the module is bundled onto the core plugin's classpath (`implementation`), a real
  * `logger.warn`, a real Gradle deprecation, and real cache operations flow through the actual daemon
  * listeners when a `buildhound { internalAdapters { } }` toggle is on — and through **nothing** when the
  * block is absent. The test JVM only reads the resulting payload JSON (parsed generically), so it
@@ -193,15 +193,15 @@ class InternalAdaptersCaptureFunctionalTest {
     }
 
     @Disabled(
-        "Known limitation, deferred to plan 052: CC-hit warm-daemon toggle-bleed. On a configuration-" +
+        "Known limitation, deferred to plan 075: CC-hit warm-daemon toggle-bleed. On a configuration-" +
             "cache HIT the plugin's whenReady (and thus the toggle-resetting configure()) does not run, so " +
             "a daemon-static listener registered by an earlier toggle-on build keeps capturing on a later " +
             "all-off build that reuses a pre-toggle CC entry. A proper fix must re-establish the current " +
-            "build's toggle intent at execution time (CC-surviving), which is its own change (plan 052). " +
+            "build's toggle intent at execution time (CC-surviving), which is its own change (plan 075). " +
             "This test pins the exact scenario and is the acceptance criterion for that fix.",
     )
     @Test
-    fun `an all-off CC-hit build after a toggle-on build in the same daemon must not capture (plan 052)`() {
+    fun `an all-off CC-hit build after a toggle-on build in the same daemon must not capture (plan 075)`() {
         setUp(internalAdapters = null) // stable settings; the toggle is varied via -P so CC keys differ
         // Build 1: all off → store an all-off CC entry.
         runner("warn", "--configuration-cache", "--warning-mode=all").build()

@@ -19,7 +19,7 @@ COPY buildhound-commons/build.gradle.kts buildhound-commons/
 COPY buildhound-server/build.gradle.kts buildhound-server/
 COPY buildhound-gradle-plugin/build.gradle.kts buildhound-gradle-plugin/
 COPY buildhound-report/build.gradle.kts buildhound-report/
-# buildhound-internal-adapters is unconditionally included since plan 051 (the core plugin bundles it),
+# buildhound-internal-adapters is unconditionally included since plan 074 (the core plugin bundles it),
 # so settings.gradle.kts references it even in this minimal context. Only its build script is needed —
 # the server depends on neither the plugin nor this module, so no source is compiled here.
 COPY buildhound-internal-adapters/build.gradle.kts buildhound-internal-adapters/
