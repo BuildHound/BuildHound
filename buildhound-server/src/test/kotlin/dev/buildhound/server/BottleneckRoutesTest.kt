@@ -200,6 +200,40 @@ class BottleneckRoutesTest {
         assertTrue(bottlenecks().slowestWork.none { it.key == "BenchType" }, "benchmark work is not a fleet bottleneck")
     }
 
+    @Test
+    fun `top plugins folds current-window tasks by owning plugin and ranks by total time`() = testApplication {
+        val fx = fx(); appWith(fx)
+        fx.stores.builds.save(
+            fx.project.id,
+            TestPayloads.build(
+                buildId = "tp-1", durationMs = 6500, startedAt = current,
+                tasks = listOf(
+                    TestPayloads.task(":app:compileKotlin", TaskOutcome.EXECUTED, 4000, type = "org.jetbrains.kotlin.gradle.tasks.KotlinCompile"),
+                    TestPayloads.task(":app:mergeRes", TaskOutcome.EXECUTED, 2000, type = "com.android.build.gradle.tasks.MergeResources"),
+                    TestPayloads.task(":app:custom", TaskOutcome.EXECUTED, 500, type = "com.example.MyTask"),
+                ),
+            ),
+        )
+        val plugins = bottlenecks().topPlugins
+        assertEquals("Kotlin Gradle Plugin", plugins[0].key, "ranked first — largest total time: $plugins")
+        assertEquals(4000, plugins[0].currentMs)
+        assertTrue(plugins.any { it.key == "Android Gradle Plugin" && it.currentMs == 2000L }, "$plugins")
+        assertTrue(plugins.any { it.key == "(unattributed)" && it.currentMs == 500L }, "an unrecognized FQCN prefix must not be dropped: $plugins")
+    }
+
+    @Test
+    fun `top plugins inherit the fleet-view benchmark exclusion`() = testApplication {
+        val fx = fx(); appWith(fx)
+        fx.stores.builds.save(
+            fx.project.id,
+            TestPayloads.build(
+                buildId = "bench-tp", durationMs = 9000, startedAt = current, mode = BuildMode.BENCHMARK,
+                tasks = listOf(TestPayloads.task(":app:bench", TaskOutcome.EXECUTED, 9000, type = "org.jetbrains.kotlin.gradle.tasks.KotlinCompile")),
+            ),
+        )
+        assertTrue(bottlenecks().topPlugins.isEmpty(), "a benchmark-only fleet has no plugin-cost bottleneck")
+    }
+
     // ---- toolchain ----
 
     private suspend fun ApplicationTestBuilder.toolchain(query: String = "", token: String = "read-token"): ToolchainRollup =

@@ -471,6 +471,15 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             call.respondQuery { store.negativeAvoidance(project.id, days, System.currentTimeMillis()) }
         }
 
+        // Owning-plugin cost rollup (plan 058, research F8 Layer 1): FQCN-prefix rollup over
+        // already-collected task types — zero new collection. Read-scope, tenant-scoped, days clamped
+        // like its taskDuration/projectCost/negativeAvoidance siblings (benchmark builds included).
+        get("/rollups/plugin-cost") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.pluginCost(project.id, days, System.currentTimeMillis()) }
+        }
+
         // Benchmark series (plan 030, spec §7): mode=BENCHMARK builds grouped by (scenario, isolation)
         // with percentiles. Read-scope, tenant-scoped; optional scenario/isolationMode/branch narrowing.
         // Benchmark builds are excluded from the fleet /trends + /builds views (buildFilterOrNull); this

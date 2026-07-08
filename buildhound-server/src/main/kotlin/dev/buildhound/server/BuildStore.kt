@@ -216,6 +216,15 @@ interface BuildStore {
     fun negativeAvoidance(projectId: String, days: Int, nowMs: Long): List<NegativeAvoidanceRow>
 
     /**
+     * Owning-plugin cost rollup over the last [days] (plan 058, research F8 Layer 1): the same
+     * days-window, **benchmark-included** convention as [taskDuration]/[projectCost]/[negativeAvoidance]
+     * (its sibling) — not [bottlenecks]' period-window, benchmark-excluded convention. Both stores
+     * fetch the identical windowed [TaskRow]s and defer to [RollupCalculator.pluginCost], so in-memory
+     * and Postgres agree byte-for-byte (the plan-026 parity discipline).
+     */
+    fun pluginCost(projectId: String, days: Int, nowMs: Long): PluginCostRollup
+
+    /**
      * Benchmark series over the last [days] (plan 030): `mode=BENCHMARK` builds grouped by
      * (scenario, isolationMode), optionally narrowed by [scenario]/[isolationMode]/[branch]. Each
      * group carries oldest-first points + a percentile summary. Empty when no benchmark builds match.
@@ -566,6 +575,9 @@ class InMemoryBuildStore : BuildStore {
 
     override fun negativeAvoidance(projectId: String, days: Int, nowMs: Long): List<NegativeAvoidanceRow> =
         RollupCalculator.negativeAvoidance(taskRowsInWindow(projectId, days, nowMs))
+
+    override fun pluginCost(projectId: String, days: Int, nowMs: Long): PluginCostRollup =
+        RollupCalculator.pluginCost(taskRowsInWindow(projectId, days, nowMs))
 
     override fun benchmarkSeries(
         projectId: String,

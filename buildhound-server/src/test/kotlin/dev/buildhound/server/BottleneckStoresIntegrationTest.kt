@@ -165,6 +165,17 @@ class BottleneckStoresIntegrationTest {
             r.regressedTasks.none { it.key == "OldOnlyType" } && r.slowestWork.none { it.key == "OldOnlyType" },
             "a 20-day-old build is outside both 7-day windows",
         )
+
+        // Top plugins (plan 058): every fixture type here is a bare label ("KotlinCompile", "NewType",
+        // …), not a real FQCN, so all current-window tasks fold into one honest "(unattributed)" row —
+        // 5000+800+1200 (b-c1) + 5000+800+9000 (b-c2, incl. the FROM_CACHE hit — topPlugins folds every
+        // outcome, like slowestWork) = 21800 over 6 tasks. A leaked benchmark/old-build task would
+        // inflate this total, so the exact value doubles as the exclusion check.
+        assertEquals(1, r.topPlugins.size, "$r")
+        val onlyPlugin = r.topPlugins.single()
+        assertEquals(PluginAttribution.UNATTRIBUTED, onlyPlugin.key)
+        assertEquals(21800, onlyPlugin.currentMs)
+        assertEquals(6, onlyPlugin.count)
     }
 
     @Test

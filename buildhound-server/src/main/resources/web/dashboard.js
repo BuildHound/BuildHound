@@ -1077,25 +1077,42 @@
             app.append(table);
         }
 
-        // Task duration with a name/type toggle.
+        // Task duration with a name/type/plugin toggle. "By plugin" (plan 058) is fetched lazily —
+        // only once the button is first clicked — since it's a fourth rollup the other two groupings
+        // don't need; pluginCost caches the response so re-clicking never re-fetches.
         app.append(el("h3", "Task duration"));
         const bar = el("div", null, "filters");
         const durationHolder = el("div");
-        let showType = false;
-        const renderDuration = () => {
+        let mode = "name"; // "name" | "type" | "plugin"
+        let pluginCost = null;
+        const renderDuration = async () => {
             durationHolder.textContent = "";
-            if (showType && !duration.byTypeAvailable) {
+            if (mode === "type" && !duration.byTypeAvailable) {
                 durationHolder.append(emptyState({
                     title: "Task types not populated yet",
                     lines: ["By-type rankings appear once the plugin's task-type capture (plan 016) is deployed."],
                 }));
                 return;
             }
-            const rows = showType ? duration.byType : duration.byName;
+            if (mode === "plugin") {
+                if (!pluginCost) pluginCost = await api("/v1/rollups/plugin-cost?days=30");
+                if (!pluginCost.available) {
+                    durationHolder.append(emptyState({
+                        title: "Task types not populated yet",
+                        lines: ["Plugin attribution needs task types — deploy the plugin's task-type capture (plan 016)."],
+                    }));
+                    return;
+                }
+                if (!pluginCost.plugins.length) { durationHolder.append(el("p", "No task durations in this window.", "muted")); return; }
+                durationHolder.append(rankedTable(["Plugin", "Total", "Share", "Runs"], pluginCost.plugins, r =>
+                    [el("td", r.plugin), el("td", ms(r.totalMs), "num"), el("td", pctFmt(r.sharePct), "num"), el("td", r.count, "num")]));
+                return;
+            }
+            const rows = mode === "type" ? duration.byType : duration.byName;
             if (!rows.length) { durationHolder.append(el("p", "No task durations in this window.", "muted")); return; }
             const table = el("table");
             const head = el("tr");
-            for (const columnName of [showType ? "Type" : "Name", "Count", "Total", "Avg", "Min", "Max"]) head.append(el("th", columnName));
+            for (const columnName of [mode === "type" ? "Type" : "Name", "Count", "Total", "Avg", "Min", "Max"]) head.append(el("th", columnName));
             table.append(head);
             for (const r of rows) {
                 const row = el("tr");
@@ -1111,11 +1128,13 @@
         };
         const byName = el("button", "By name");
         const byType = el("button", "By type");
-        byName.addEventListener("click", () => { showType = false; renderDuration(); });
-        byType.addEventListener("click", () => { showType = true; renderDuration(); });
-        bar.append(byName, byType);
+        const byPlugin = el("button", "By plugin");
+        byName.addEventListener("click", () => { mode = "name"; renderDuration().catch(fail); });
+        byType.addEventListener("click", () => { mode = "type"; renderDuration().catch(fail); });
+        byPlugin.addEventListener("click", () => { mode = "plugin"; renderDuration().catch(fail); });
+        bar.append(byName, byType, byPlugin);
         app.append(bar, durationHolder);
-        renderDuration();
+        await renderDuration();
 
         // Negative avoidance.
         app.append(el("h3", "Negative avoidance (avoiding cost more than doing)"));
@@ -1330,6 +1349,14 @@
         } else {
             app.append(rankedTable(["Task", "Total time", "Runs"], b.slowestWork, r =>
                 [keyCell(r), el("td", ms(r.currentMs), "num"), el("td", r.count, "num")]));
+        }
+
+        // Top plugins by time (plan 058, research F8 Layer 1): omitted entirely when empty, rather
+        // than rendering an empty card — mirrors the verdict chips' null-omits-the-card convention.
+        if (b.topPlugins && b.topPlugins.length) {
+            app.append(el("h3", "Top plugins by time"));
+            app.append(rankedTable(["Plugin", "Total time", "Runs"], b.topPlugins, r =>
+                [el("td", r.key), el("td", ms(r.currentMs), "num"), el("td", r.count, "num")]));
         }
 
         app.append(el("h3", "Negative avoidance (avoiding cost more than doing)"));

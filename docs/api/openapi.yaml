@@ -195,6 +195,14 @@ paths:
         "200": { description: Negative-avoidance rows. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/plugin-cost:
+    get:
+      summary: Owning-plugin cost rollup (plan 058, research F8 Layer 1).
+      description: FQCN-prefix rollup over already-collected task types (zero new collection); days-window, benchmark-included, like `/v1/rollups/task-duration`.
+      responses:
+        "200": { description: Per-plugin task-time rows plus an honest availability flag. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
   /v1/rollups/bottlenecks:
     get:
       summary: Bottlenecks rollup (plan 032).

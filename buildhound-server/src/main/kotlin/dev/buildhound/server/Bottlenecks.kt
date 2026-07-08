@@ -45,6 +45,13 @@ data class BottlenecksRollup(
     val cacheDataAvailable: Boolean,
     val budgetBreaches: Int? = null,
     val trendRegressions: Int? = null,
+    /**
+     * Owning-plugin ranking by total task time this window (plan 058, research F8 Layer 1), folded
+     * from the same [currentTasks][BottleneckCalculator.compute] as [slowestWork] — so it inherits the
+     * bottlenecks store's period window + benchmark exclusion for free. Additive, defaulted empty:
+     * older clients ignore it, like [budgetBreaches].
+     */
+    val topPlugins: List<BottleneckRow> = emptyList(),
 )
 
 /** One toolchain version's fleet footprint (plan 032); [distinctUsers] counts hashed ids only. */
@@ -159,6 +166,14 @@ object BottleneckCalculator {
             .sortedWith(compareByDescending<BottleneckRow> { it.currentMs }.thenBy { it.key })
             .take(TOP_N)
 
+        // Owning-plugin ranking (plan 058): folds the same currentTasks slowestWork uses, so it
+        // inherits the period window + benchmark exclusion with no extra store call. module is left
+        // null — a plugin's tasks span many modules, so a single "owning module" would be misleading.
+        val topPlugins = currentTasks.groupBy { PluginAttribution.owningPlugin(it.type) }
+            .map { (plugin, group) -> BottleneckRow(key = plugin, currentMs = group.sumOf { it.durationMs }, count = group.size) }
+            .sortedWith(compareByDescending<BottleneckRow> { it.currentMs }.thenBy { it.key })
+            .take(TOP_N)
+
         return BottlenecksRollup(
             period = period,
             buildCount = kpi(currentBuilds.size.toDouble(), priorBuilds.size.toDouble()),
@@ -172,6 +187,7 @@ object BottleneckCalculator {
             cacheDataAvailable = currentTasks.any { it.cacheable != null },
             budgetBreaches = budgetBreaches,
             trendRegressions = trendRegressions,
+            topPlugins = topPlugins,
         )
     }
 

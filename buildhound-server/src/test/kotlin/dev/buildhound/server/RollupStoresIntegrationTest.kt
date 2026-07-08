@@ -5,6 +5,7 @@ import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
 import javax.sql.DataSource
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
@@ -105,6 +106,19 @@ class RollupStoresIntegrationTest {
         assertEquals(inMemory.projectCost(project.id, 30, now), postgresStore.projectCost(project.id, 30, now), "projectCost")
         assertEquals(inMemory.taskDuration(project.id, 30, now), postgresStore.taskDuration(project.id, 30, now), "taskDuration")
         assertEquals(inMemory.negativeAvoidance(project.id, 30, now), postgresStore.negativeAvoidance(project.id, 30, now), "negativeAvoidance")
+        assertEquals(inMemory.pluginCost(project.id, 30, now), postgresStore.pluginCost(project.id, 30, now), "pluginCost")
+    }
+
+    @Test
+    fun `plugin cost folds fixture types by owning-plugin prefix (all KotlinCompile here, so one bucket)`() {
+        // fixtures() types are the bare label "KotlinCompile"/"Test"/"Lint" (no FQCN prefix), so they
+        // all fold into the honest "(unattributed)" bucket — the parity test above is what proves the
+        // FQCN-prefix fold itself agrees between stores; this pins the shape over these fixtures.
+        val project = tokens.ensureProjectWithToken("plugin-cost-project", sha256Hex("pcp"))
+        for (build in fixtures()) postgresStore.save(project.id, build)
+        val rollup = postgresStore.pluginCost(project.id, 30, now)
+        assertTrue(rollup.available, "every fixture task carries a type")
+        assertEquals(listOf(PluginAttribution.UNATTRIBUTED), rollup.plugins.map { it.plugin })
     }
 
     @Test
