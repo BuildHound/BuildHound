@@ -42,6 +42,15 @@ object GatingAnalyzer {
      * boundary timestamp, ends are applied before starts, so a task ending exactly when another begins
      * is correctly excluded from the interval that follows (half-open `[start, end)` occupancy) —
      * deterministic regardless of input order since membership is a set, never order-dependent.
+     *
+     * Known limitation: `maxStart` is a single scalar taken from the raw `startMs` values below, with no
+     * cross-check against the payload's own `startedAt`/`finishedAt` build envelope. One corrupted or
+     * future-dated `startMs` outlier (clock skew on a collecting agent, bad collector data) inflates
+     * `maxStart` and defeats the "work remained" tail-exclusion test for every other task, misattributing
+     * every genuine solo tail as gating. `TaskExecution` carries no independent wall-clock field to
+     * cross-check `startMs` against, so guarding this would mean threading the build-level envelope through
+     * this function's signature (and every [GatingAnalyzerTest] call site) rather than a one-line clamp —
+     * left as a documented gap, not a silent trust assumption.
      */
     fun analyze(tasks: List<TaskExecution>, topN: Int = RollupCalculator.TOP_N): List<BlockerRow> {
         val eligible = tasks.filter(::occupiesSlot)

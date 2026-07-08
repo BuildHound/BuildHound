@@ -449,9 +449,12 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
 
         // Dependency-graph export (plan 062): GEXF (default) or DOT, label-escaped (architecture §6 —
         // task paths are project-internal but still ride unsanitized into a downstream graph tool).
-        // Bounded by the ≤2000-edge cap plan 038 already enforces at collection time (no re-cap here).
-        // 404 when the build carries no dependency edges (adapters off / isolated-projects / capped) —
-        // the same absent-cases /parallelism's centrality=null covers.
+        // The plan-038 ≤2000-edge cap is client-side (a compliant plugin only) and does not bound a
+        // hostile ingester; the real bound here is PayloadCapper's server-side maxExtensionsBytes=256KiB
+        // re-cap enforced at ingest (POST /v1/builds, above), which caps the whole internalAdapters blob
+        // this route reads through dependencyEdgesOf — no re-cap needed here. 404 when the build carries
+        // no dependency edges (adapters off / isolated-projects / capped) — the same absent-cases
+        // /parallelism's centrality=null covers.
         get("/builds/{buildId}/graph") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val buildId = call.parameters.getOrFail("buildId")

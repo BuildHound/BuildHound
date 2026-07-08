@@ -140,9 +140,10 @@ paths:
       description: >
         Exports the internal-adapters dependency-edge list as a GEXF (default) or DOT graph, every
         task-path label escaped for its target format (architecture §6 — task paths are project-internal
-        identifiers, but still ride unsanitized into a downstream graph tool). Bounded by the ≤2000-edge
-        cap already enforced at collection time (plan 038). 404 when the build carries no dependency
-        edges.
+        identifiers, but still ride unsanitized into a downstream graph tool). The plan-038 ≤2000-edge cap
+        is enforced client-side and only bounds a compliant plugin; the actual bound against a hostile
+        ingester is the server-side PayloadCapper maxExtensionsBytes=256KiB re-cap applied at ingest. 404
+        when the build carries no dependency edges.
       parameters:
         - { name: buildId, in: path, required: true, schema: { type: string } }
         - { name: format, in: query, required: false, schema: { type: string, enum: [gexf, dot], default: gexf } }

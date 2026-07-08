@@ -13,7 +13,14 @@ class GraphExporterTest {
     private fun task(path: String, durationMs: Long = 100) =
         TaskExecution(path = path, startMs = 0, durationMs = durationMs, outcome = TaskOutcome.EXECUTED)
 
-    /** Decodes the first double-quoted DOT string's `\\`/`\"` escaping (test-only, no graphviz parser dep). */
+    /**
+     * Decodes the first double-quoted DOT string's `\\`/`\"` escaping (test-only, no graphviz parser dep).
+     * Self-referential by construction: this decoder implements the exact same escaping convention as
+     * [GraphExporter.dotEscape] rather than an independent DOT grammar/parser, so the DOT tests below prove
+     * internal round-trip consistency, not real Graphviz-grammar validity — unlike the `gexf` tests, which
+     * parse through a real `javax.xml` [org.w3c.dom.Document] parser. Don't read DOT coverage here as
+     * "validated against Graphviz."
+     */
     private fun firstQuotedDotString(dot: String): String {
         val start = dot.indexOf('"')
         check(start >= 0) { "no quoted string found in: $dot" }
