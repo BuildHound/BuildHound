@@ -1,0 +1,12 @@
+// Spring Boot application module. Applies the boot plugin imperatively from the
+// root buildscript classpath (legacy `apply plugin:` style, not the plugins {} DSL).
+apply plugin: 'org.springframework.boot'
+
+dependencies {
+    implementation project(':services:users:domain')
+    implementation project(':services:notifications:domain')
+    implementation project(':services:pricing:domain')
+    implementation project(':services:reviews:domain')
+    implementation project(':services:search:domain')
+    implementation 'org.springframework.boot:spring-boot-starter'
+}

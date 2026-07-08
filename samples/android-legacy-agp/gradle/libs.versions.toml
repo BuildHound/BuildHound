@@ -1,0 +1,17 @@
+[versions]
+# Deliberately an OLDER Android Gradle Plugin (request: "an older AGP version like 8.5").
+# AGP 8.5's supported Gradle window is 8.7..8.x; the BuildHound plugin floor is Gradle 8.14+
+# (spec §53), so the sample runs on Gradle 8.14.5 — the only line that satisfies both.
+agp = "8.5.2"
+kotlin = "2.0.21"
+androidx-core = "1.13.1"
+androidx-appcompat = "1.7.0"
+
+[libraries]
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
+androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "androidx-appcompat" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

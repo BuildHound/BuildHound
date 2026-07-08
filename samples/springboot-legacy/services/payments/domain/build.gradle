@@ -1,0 +1,8 @@
+// Library module. java plugin, repositories, Spring BOM, slf4j all inherited from the
+// root subprojects {} block (the deliberate cross-project anti-pattern).
+
+dependencies {
+    implementation project(':services:payments:api')
+    implementation project(':libs:validation')
+    implementation project(':libs:util')
+}
