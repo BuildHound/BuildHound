@@ -257,6 +257,7 @@ dashboard view.
 - `POST /v1/kotlin-report` — accepts raw KGP HTTP-report POSTs for teams preferring direct `kotlin.build.report.http.url` wiring; correlated by label/buildId.
 - `GET /v1/...` query API mirroring every dashboard view (JSON + CSV) — public, documented, versioned (agent/MCP-friendly). *(Delivered plan 042: OpenAPI 3.1 at `/openapi.yaml` + a zero-CDN `/docs` viewer, kept in lockstep with the route table by a contract test; a read-only MCP surface ships as the separate `buildhound-mcp` module.)*
 - `GET /v1/builds/{a}/compare/{b}` — read-scope, tenant-scoped input-fingerprint comparison (plan 022): ranks the salted-hash inputs (build-level + declared toolchain/env fields) that differ between two builds by how much of B's cache misses (executed in B, avoided in A) they could explain, with catalog notes; 400 when `a == b`, 404 when either build is missing or foreign-tenant.
+- `GET /v1/builds/{buildId}/parallelism` and `GET /v1/builds/{buildId}/graph?format=gexf|dot` — read-scope, tenant-scoped parallelism-blocker analytics (plan 062, research F12): sweep-line gating-task detection over the core task timeline (always available) plus duration-weighted degree centrality + a label-escaped dependency-graph export over the already-serialized `internalAdapters` edge list (both degrade to null/404, never 500, when the build carries no edges — adapters off, isolated projects, or capped). 404 when the build is missing or foreign-tenant.
 - Webhook receiver mount point per connector (below).
 
 **CI connector SPI (backend side):**

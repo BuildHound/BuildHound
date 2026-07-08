@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "buildId": "c8f4b2d1-3e5a-4b7c-9d1e-2f3a4b5c6d7e",
+  "projectKey": "pilot-android",
+  "startedAt": 1751451000000,
+  "finishedAt": 1751451030000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["assembleDebug"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileDebugKotlin",
+      "module": ":app",
+      "type": "KotlinCompile",
+      "startMs": 1751451001000,
+      "durationMs": 8000,
+      "outcome": "FROM_CACHE",
+      "cacheable": true,
+      "incremental": false,
+      "worker": 1,
+      "executionReasons": []
+    },
+    {
+      "path": ":app:testDebugUnitTest",
+      "module": ":app",
+      "type": "Test",
+      "startMs": 1751451009000,
+      "durationMs": 15000,
+      "outcome": "EXECUTED",
+      "cacheable": true,
+      "incremental": false,
+      "worker": 2,
+      "executionReasons": []
+    },
+    {
+      "path": ":app:assembleDebug",
+      "module": ":app",
+      "type": "Assemble",
+      "startMs": 1751451024000,
+      "durationMs": 5000,
+      "outcome": "EXECUTED",
+      "cacheable": false,
+      "incremental": false,
+      "worker": 1,
+      "executionReasons": []
+    }
+  ],
+  "derived": {
+    "cacheableHitRate": 0.5,
+    "avoidedMs": 8000,
+    "criticalPathMs": 28000,
+    "parallelUtilization": 0.65,
+    "configurationMs": 900
+  },
+  "extensions": {
+    "internalAdapters": {
+      "schemaVersion": 1,
+      "gradleVersion": "8.14.3",
+      "tasks": [
+        {
+          "path": ":app:compileDebugKotlin",
+          "cacheKey": "9f86d081884c7d65…",
+          "origin": "LOCAL_HIT",
+          "originBuildInvocationId": "fcde2b2edba56bf4…",
+          "originCacheKey": "9f86d081884c7d65…",
+          "propertyHashes": { "source": "2c26b46b68ffc68f…" }
+        },
+        {
+          "path": ":app:testDebugUnitTest",
+          "cacheKey": "486ea46224d1bb4f…",
+          "origin": "MISS",
+          "propertyHashes": { "testClassesDirs": "1b16b1df538ba12d…" }
+        },
+        {
+          "path": ":app:assembleDebug",
+          "origin": "UNKNOWN",
+          "cachingDisabledReason": "Not worth caching",
+          "cachingDisabledCategory": "NOT_WORTH_CACHING",
+          "propertyHashes": {}
+        }
+      ],
+      "dependencyEdges": {
+        ":app:assembleDebug": [":app:compileDebugKotlin", ":app:testDebugUnitTest"],
+        ":app:testDebugUnitTest": [":app:compileDebugKotlin"]
+      }
+    }
+  }
+}

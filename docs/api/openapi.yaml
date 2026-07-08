@@ -119,6 +119,39 @@ paths:
         "404": { description: No such build for this tenant. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/builds/{buildId}/parallelism:
+    get:
+      summary: Gating-task blockers + weighted-degree centrality candidates (plan 062, research F12).
+      description: >
+        Sweep-line gating-task detection over the core task timeline (always available, needs no opt-in
+        module) plus duration-weighted degree centrality over the internal-adapters dependency-edge
+        list. `centrality` is null and `centralityAvailable` is false — never a 500 — when the build
+        carries no dependency edges (adapters off, isolated projects, or a capped-away extensions
+        blob). Both rankings are candidates to investigate, not confirmed fixes.
+      parameters: [{ name: buildId, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Gating blockers + an optional centrality ranking. }
+        "404": { description: No such build for this tenant. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/builds/{buildId}/graph:
+    get:
+      summary: Dependency-graph export as GEXF or DOT (plan 062, research F12).
+      description: >
+        Exports the internal-adapters dependency-edge list as a GEXF (default) or DOT graph, every
+        task-path label escaped for its target format (architecture §6 — task paths are project-internal
+        identifiers, but still ride unsanitized into a downstream graph tool). Bounded by the ≤2000-edge
+        cap already enforced at collection time (plan 038). 404 when the build carries no dependency
+        edges.
+      parameters:
+        - { name: buildId, in: path, required: true, schema: { type: string } }
+        - { name: format, in: query, required: false, schema: { type: string, enum: [gexf, dot], default: gexf } }
+      responses:
+        "200": { description: The exported graph (application/xml for gexf, text/vnd.graphviz for dot). }
+        "400": { description: Unsupported format value. }
+        "404": { description: No such build for this tenant, or the build carries no dependency edges. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
   /v1/trends:
     get:
       summary: Fleet duration/cache trend points over a window.
