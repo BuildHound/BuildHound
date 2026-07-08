@@ -49,11 +49,16 @@ class TagCohortStoresIntegrationTest {
     }
 
     private fun fixtures(): List<dev.buildhound.commons.payload.BuildPayload> = buildList {
-        listOf(58_000L, 59_000L, 60_000L, 61_000L, 62_000L).forEachIndexed { i, duration ->
-            add(TestPayloads.build(buildId = "false-$i", startedAt = recent + i * 1000, durationMs = duration, tags = mapOf("R8" to "false", "env" to "prod")))
+        // hitRate is set here (unlike most other server fixtures) specifically so the parity
+        // assertion below exercises TagCohortCalculator's avgHitRate aggregation across both
+        // stores, not just duration — a plain unsorted average would be order-sensitive (the
+        // BottleneckCalculator.avgHitRate lesson) and Postgres/in-memory feed rows in different
+        // orders (no ORDER BY on the raw-rows query).
+        listOf(58_000L to 0.61, 59_000L to 0.62, 60_000L to 0.63, 61_000L to 0.64, 62_000L to 0.65).forEachIndexed { i, (duration, hitRate) ->
+            add(TestPayloads.build(buildId = "false-$i", startedAt = recent + i * 1000, durationMs = duration, hitRate = hitRate, tags = mapOf("R8" to "false", "env" to "prod")))
         }
-        listOf(98_000L, 100_000L, 102_000L).forEachIndexed { i, duration ->
-            add(TestPayloads.build(buildId = "true-$i", startedAt = recent + i * 1000, durationMs = duration, tags = mapOf("R8" to "true", "env" to "staging")))
+        listOf(98_000L to 0.71, 100_000L to 0.72, 102_000L to 0.73).forEachIndexed { i, (duration, hitRate) ->
+            add(TestPayloads.build(buildId = "true-$i", startedAt = recent + i * 1000, durationMs = duration, hitRate = hitRate, tags = mapOf("R8" to "true", "env" to "staging")))
         }
         add(TestPayloads.build(buildId = "bench-true", startedAt = recent, durationMs = 200_000, mode = BuildMode.BENCHMARK, tags = mapOf("R8" to "true")))
         add(TestPayloads.build(buildId = "no-tags", startedAt = recent))
