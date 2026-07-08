@@ -627,6 +627,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         branch: String?,
         days: Int,
         nowMs: Long,
+        workersMax: Int?,
     ): List<BenchmarkSeries> =
         dataSource.connection.use { connection ->
             // Benchmark keys live in the jsonb payload (no hot columns, no migration). Optional
@@ -637,6 +638,10 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             scenario?.let { clauses.append(" AND payload->'benchmark'->>'scenario' = ?"); strParams.add(it) }
             isolationMode?.let { clauses.append(" AND payload->'benchmark'->>'isolationMode' = ?"); strParams.add(it) }
             branch?.let { clauses.append(" AND branch = ?"); strParams.add(it) }
+            // workersMax slicing (plan 065): text-equality on the jsonb scalar (a canonical int
+            // serializes identically), bound as a param like its three siblings — no cast, so a
+            // malformed stored value can never error the query; it just doesn't match.
+            workersMax?.let { clauses.append(" AND payload->'environment'->>'workersMax' = ?"); strParams.add(it.toString()) }
             connection.prepareStatement(
                 """
                 SELECT build_id, started_at, duration_ms, hit_rate,
@@ -821,6 +826,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 """
                 SELECT payload->'environment'->>'userId' AS user_id,
                        (extract(epoch from started_at) * 1000)::bigint AS started_ms,
+                       duration_ms,
                        payload->'toolchain'->>'gradle' AS gradle,
                        payload->'toolchain'->>'jdk' AS jdk,
                        payload->'toolchain'->>'agp' AS agp,
@@ -843,14 +849,17 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                         val userId = rows.getString("user_id")
                         val startedMs = rows.getLong("started_ms")
                         gradle.add(ToolchainSample(rows.getString("gradle"), userId, startedMs))
-                        jdk.add(ToolchainSample(rows.getString("jdk"), userId, startedMs))
+                        // duration_ms is the finishedAt-startedAt hot column written at insert, so
+                        // it equals the in-memory store's computed wall-clock by construction
+                        // (plan-065 daemon-JDK comparison; jdk samples only, like the in-memory pass).
+                        jdk.add(ToolchainSample(rows.getString("jdk"), userId, startedMs, durationMs = rows.getLong("duration_ms")))
                         agp.add(ToolchainSample(rows.getString("agp"), userId, startedMs))
                         kgp.add(ToolchainSample(rows.getString("kgp"), userId, startedMs))
                         ksp.add(ToolchainSample(rows.getString("ksp"), userId, startedMs))
                     }
                     ToolchainRollup(
                         gradle = ToolchainCalculator.dimension(gradle),
-                        jdk = ToolchainCalculator.dimension(jdk),
+                        jdk = ToolchainCalculator.dimension(jdk, ToolchainCalculator::jdkMajor),
                         agp = ToolchainCalculator.dimension(agp),
                         kgp = ToolchainCalculator.dimension(kgp),
                         ksp = ToolchainCalculator.dimension(ksp),

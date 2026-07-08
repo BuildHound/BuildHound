@@ -1,5 +1,6 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.payload.GcCollector
 import dev.buildhound.commons.payload.ProcessRole
 import java.io.Serializable
 import org.gradle.api.logging.Logging
@@ -7,9 +8,14 @@ import org.gradle.api.provider.Property
 import org.gradle.api.provider.ValueSource
 import org.gradle.api.provider.ValueSourceParameters
 
-/** One JVM's collected snapshot (plan 029); the plugin-side DTO mapped to `ProcessInfo` at assembly. */
+/**
+ * One JVM's collected snapshot (plan 029); the plugin-side DTO mapped to `ProcessInfo` at assembly.
+ * [pid] (already parsed from jps since plan 029, carried since plan 065 — see the decision-log row)
+ * plus the typed-allowlist [gcCollector]/[compactObjectHeaders] jinfo reads (plan 065).
+ */
 data class CollectedProcess(
     val role: ProcessRole,
+    val pid: Long? = null,
     val heapUsedMb: Long? = null,
     val heapCommittedMb: Long? = null,
     val heapMaxMb: Long? = null,
@@ -17,6 +23,8 @@ data class CollectedProcess(
     val gcTimeMs: Long? = null,
     val rssMb: Long? = null,
     val uptimeS: Long? = null,
+    val gcCollector: GcCollector? = null,
+    val compactObjectHeaders: Boolean? = null,
 ) : Serializable
 
 /**
@@ -28,9 +36,11 @@ data class CollectedProcess(
  * Never fails and never hangs: each JDK-tool exec is bounded ([ProcessMetrics]); one failed probe
  * drops one field (not the process), and the whole obtain is wrapped so any exception — no `jps` on
  * PATH, a killed daemon, a parse miss — degrades to `emptyList()`. A timeout on any exec stops
- * probing further PIDs (a hung tool will hang again). Only numbers/roles are kept — never a PID or
- * command line (host-local noise; jinfo/ps args can embed secrets, spec §3.7); failures log the
- * exception **class** only.
+ * probing further PIDs (a hung tool will hang again). Only numbers/roles/typed-allowlist enums are
+ * kept — never a command line (jinfo/ps args can embed secrets, spec §3.7). The pid is carried
+ * since plan 065 (superseding plan 029's "no PID" — see the 2026-07-08 decision-log row): an
+ * ephemeral host-local integer used only as a within-one-`hostnameHash` correlation key. Failures
+ * log the exception **class** only.
  */
 abstract class ProcessProbeValueSource : ValueSource<List<CollectedProcess>, ProcessProbeValueSource.Parameters> {
 

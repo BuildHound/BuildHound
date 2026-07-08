@@ -55,6 +55,8 @@ object TestPayloads {
         tags: Map<String, String> = emptyMap(),
         /** Build-level identity hash (plan 022/068 fixtures); the single-salt-stream grouping key. */
         hostnameHash: String? = null,
+        /** Plaintext workers.max (plan 065 fixtures); the benchmarkSeries slicing dimension. */
+        workersMax: Int? = null,
         /** Salted input fingerprints (plan 022/068 fixtures); null means "uncaptured", not "empty". */
         fingerprints: FingerprintInfo? = null,
         /** Opaque addon sections (plan 039/068 fixtures), e.g. `internalAdapters` (plan 038). */
@@ -70,8 +72,8 @@ object TestPayloads {
         vcs = if (branch != null || sha != null) VcsInfo(branch = branch, sha = sha) else null,
         ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl, attributes = ciAttributes) },
         derived = if (hitRate != null || avoidedMs != null) DerivedMetrics(cacheableHitRate = hitRate, avoidedMs = avoidedMs) else null,
-        environment = if (userId != null || invocation != null || hostnameHash != null) {
-            EnvironmentInfo(userId = userId, invocation = invocation, hostnameHash = hostnameHash)
+        environment = if (userId != null || invocation != null || hostnameHash != null || workersMax != null) {
+            EnvironmentInfo(userId = userId, invocation = invocation, hostnameHash = hostnameHash, workersMax = workersMax)
         } else {
             null
         },

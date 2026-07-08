@@ -315,7 +315,8 @@ interface BuildStore {
 
     /**
      * Benchmark series over the last [days] (plan 030): `mode=BENCHMARK` builds grouped by
-     * (scenario, isolationMode), optionally narrowed by [scenario]/[isolationMode]/[branch]. Each
+     * (scenario, isolationMode), optionally narrowed by [scenario]/[isolationMode]/[branch]/
+     * [workersMax] (plan 065 — an exact match on the plaintext `environment.workersMax`). Each
      * group carries oldest-first points + a percentile summary. Empty when no benchmark builds match.
      */
     fun benchmarkSeries(
@@ -325,6 +326,7 @@ interface BuildStore {
         branch: String?,
         days: Int,
         nowMs: Long,
+        workersMax: Int? = null,
     ): List<BenchmarkSeries>
 
     /**
@@ -718,6 +720,7 @@ class InMemoryBuildStore : BuildStore {
         branch: String?,
         days: Int,
         nowMs: Long,
+        workersMax: Int?,
     ): List<BenchmarkSeries> {
         val cutoff = nowMs - days.toLong() * 86_400_000
         return builds.entries
@@ -727,6 +730,9 @@ class InMemoryBuildStore : BuildStore {
             .filter { branch == null || it.vcs?.branch == branch }
             .filter { scenario == null || it.benchmark?.scenario == scenario }
             .filter { isolationMode == null || it.benchmark?.isolationMode == isolationMode }
+            // workersMax slicing (plan 065): exact match on the plaintext environment scalar; a
+            // build that never carried one matches no workersMax filter (honest, never a guess).
+            .filter { workersMax == null || it.environment?.workersMax == workersMax }
             .groupBy { it.benchmark!!.scenario to it.benchmark!!.isolationMode }
             .map { (key, group) -> benchmarkSeriesOf(key.first, key.second, group) }
             .sortedWith(compareBy({ it.scenario }, { it.isolationMode ?: "" }))
@@ -775,9 +781,14 @@ class InMemoryBuildStore : BuildStore {
         val payloads = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
         fun samples(select: (BuildPayload) -> String?): List<ToolchainSample> =
             payloads.map { ToolchainSample(select(it), it.environment?.userId, it.startedAt) }
+        // The jdk dimension (plan 065): duration-carrying samples, grouped by JDK major — the
+        // daemon-JDK fleet comparison; the other four dimensions stay per full version, no duration.
+        val jdkSamples = payloads.map {
+            ToolchainSample(it.toolchain?.jdk, it.environment?.userId, it.startedAt, durationMs = it.finishedAt - it.startedAt)
+        }
         return ToolchainRollup(
             gradle = ToolchainCalculator.dimension(samples { it.toolchain?.gradle }),
-            jdk = ToolchainCalculator.dimension(samples { it.toolchain?.jdk }),
+            jdk = ToolchainCalculator.dimension(jdkSamples, ToolchainCalculator::jdkMajor),
             agp = ToolchainCalculator.dimension(samples { it.toolchain?.agp }),
             kgp = ToolchainCalculator.dimension(samples { it.toolchain?.kgp }),
             ksp = ToolchainCalculator.dimension(samples { it.toolchain?.ksp }),

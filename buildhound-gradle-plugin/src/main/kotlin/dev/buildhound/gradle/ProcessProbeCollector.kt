@@ -30,6 +30,8 @@ internal object ProcessProbeCollector {
             processes.add(
                 CollectedProcess(
                     role = role,
+                    // Already parsed from jps; carried since plan 065 (within-host correlation key).
+                    pid = pid,
                     heapUsedMb = gc?.let(ProcessParsing::heapUsedMb),
                     heapCommittedMb = gc?.let(ProcessParsing::heapCommittedMb),
                     heapMaxMb = capacity?.let(ProcessParsing::heapMaxMb),
@@ -37,6 +39,9 @@ internal object ProcessProbeCollector {
                     gcTimeMs = gc?.let(ProcessParsing::gcTimeMs),
                     rssMb = rss?.let(ProcessParsing::rssMb),
                     uptimeS = etime?.let(ProcessParsing::uptimeSeconds),
+                    // Typed-allowlist reads over the SAME jinfo line (plan 065) — no new subprocess.
+                    gcCollector = flags?.let(ProcessParsing::parseGcCollector),
+                    compactObjectHeaders = flags?.let(ProcessParsing::parseCompactObjectHeaders),
                 ),
             )
             if (probe.timedOut) break

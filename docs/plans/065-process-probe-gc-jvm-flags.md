@@ -150,3 +150,20 @@ genuinely widen.
   stores stay byte-for-byte parity.
 - New golden added, existing goldens unchanged, `schemaVersion` 1; decision-log + plan-029 doc comments
   updated; `./gradlew build` green.
+
+## Implementation notes (2026-07-08)
+
+- **How "consumed by the dashboard/artifact" is realized.** The HTML artifact is zero-network
+  (locked decision #4) and the dashboard's build-detail reads the tenant-scoped payload route, so
+  neither surface can call a server evaluator directly. The pure `DaemonTuningCandidates` is the
+  pinned, unit-tested source of truth for the rules/thresholds; the dashboard `detailView` and the
+  artifact's process section render client-side mirrors of its **primary-input** rules (lifetime
+  fraction only) from the already-fetched payload. Server-side, the evaluator rides the existing
+  plan-071 `GET /v1/builds/{buildId}/diagnosis` synthesis as an additive `tuningCandidates` field
+  (openapi updated) — still no new endpoint/store/migration, and agents get the ranked list too.
+- **pid-delta scope.** The refinement (monotonic GCT + `daemonReused` guard, negative-delta
+  fallback) is implemented and unit-pinned in `DaemonTuningCandidates.gcFraction` via an optional
+  prior-snapshot parameter; no store lookup for "the prior same-pid build" exists yet (this plan
+  adds no store method), so the `/diagnosis` call site passes no prior and production cards use the
+  always-on lifetime fraction — exactly the plan's "primary input"; the delta channel is ready for
+  a follow-up that wires a prior-build fetch.

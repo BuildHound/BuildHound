@@ -63,6 +63,12 @@ data class Diagnosis(
     val cacheHitRate: HitRateAssessment? = null,
     val topHotspots: List<Hotspot> = emptyList(),
     val deltas: MetricDeltas? = null,
+    /**
+     * Ranked daemon-tuning candidates (plan 065, research F15) over this build's process snapshot —
+     * advisory only, never auto-applied. Empty when the probe collected nothing or no rule fired.
+     * Additive, defaulted empty: older consumers ignore it, like [deltas].
+     */
+    val tuningCandidates: List<TuningCandidate> = emptyList(),
 )
 
 /**
@@ -83,6 +89,15 @@ object BuildDiagnoser {
         cacheHitRate = cacheHitRate(payload),
         topHotspots = topHotspots(payload),
         deltas = deltas(verdict),
+        // Daemon-tuning candidates (plan 065): the lifetime-fraction primary input only — this
+        // synthesis is single-payload by design, so the optional prior-build pid-delta refinement
+        // (which needs the previous same-hostnameHash snapshot) is not wired here.
+        tuningCandidates = DaemonTuningCandidates.evaluate(
+            processes = payload.processes,
+            environment = payload.environment,
+            toolchain = payload.toolchain,
+            buildDurationMs = payload.finishedAt - payload.startedAt,
+        ),
     )
 
     /**

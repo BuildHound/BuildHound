@@ -51,16 +51,25 @@ class ProcessProbeFunctionalTest {
         val result = runner("hello").build()
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
 
-        val processes = readPayload().processes
+        val payload = readPayload()
+        val processes = payload.processes
         // JDK-tool availability varies across agents: the field is always a valid list and every row
-        // is well-formed (role present) — never a specific count.
+        // is well-formed (role + jps pid present) — never a specific count.
         processes.forEach { assertNotNull(it.role, "each process row carries a role") }
+        processes.forEach { assertNotNull(it.pid, "each observed row carries its jps pid (plan 065): $it") }
+        // workersMax is a config-time StartParameter scalar (plan 065) — populated on every real
+        // build regardless of JDK-tool availability.
+        assertNotNull(payload.environment?.workersMax, "workersMax must be captured")
         // The build runs in a daemon, so on an agent with jps its GRADLE_DAEMON row is present with the
         // exit-criterion "configured vs used" pair. When JDK tools are absent the list is empty — then
         // this is a no-op, never a flaky skip.
         processes.firstOrNull { it.role == ProcessRole.GRADLE_DAEMON }?.let { daemon ->
             assertNotNull(daemon.configuredXmxMb, "configured -Xmx must be captured: $daemon")
             assertNotNull(daemon.heapUsedMb, "heap used must be captured: $daemon")
+            // Same jinfo line the -Xmx parse read (plan 065): every supported JDK prints its
+            // ergonomically-selected collector flag, so a parsed jinfo implies a collector. Field
+            // *presence*, never a specific value — the ergonomic pick varies by agent size.
+            assertNotNull(daemon.gcCollector, "gcCollector must be extracted when jinfo was parsed: $daemon")
         }
     }
 
@@ -73,8 +82,11 @@ class ProcessProbeFunctionalTest {
         // A CC violation in the ValueSource would surface as a problem, not a clean reuse.
         assertTrue(reuse.output.contains("Reusing configuration cache"), reuse.output)
         assertEquals(TaskOutcome.SUCCESS, reuse.task(":hello")?.outcome)
-        // The probe is a ValueSource re-obtained on reuse; the field is still present.
-        assertNotNull(readPayload().processes)
+        // The probe is a ValueSource re-obtained on reuse; the fields are still present — including
+        // the plan-065 workersMax scalar, which replays from the CC entry on a hit.
+        val payload = readPayload()
+        assertNotNull(payload.processes)
+        assertNotNull(payload.environment?.workersMax, "workersMax must survive a CC hit")
     }
 
     @Test

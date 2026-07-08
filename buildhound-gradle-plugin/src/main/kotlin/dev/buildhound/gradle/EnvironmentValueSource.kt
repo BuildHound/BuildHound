@@ -29,6 +29,13 @@ data class CollectedEnvironment(
     val ideVersion: String? = null,
     val ideSync: Boolean? = null,
     val aiAgent: String? = null,
+    /**
+     * Plaintext `org.gradle.workers.max` (plan 065): the CC-safe `startParameter.maxWorkerCount`
+     * scalar baked into [EnvironmentValueSource.Parameters.workersMax] at registration — the same
+     * value the plan-022 fingerprint hashes and plan-051's `InvocationInfo.maxWorkerCount` carries;
+     * this copy is the environment-level benchmark-slicing dimension.
+     */
+    val workersMax: Int? = null,
 ) : Serializable
 
 /**
@@ -50,6 +57,12 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
         val pseudonymize: Property<Boolean>
         /** Absolute path of the salt file, e.g. `<rootDir>/.gradle/buildhound/identity.salt`. */
         val identitySaltFile: Property<String>
+
+        /**
+         * `startParameter.maxWorkerCount`, baked at registration (plan 065) — a config-time scalar
+         * like the fingerprints' `parallel`/`maxWorkers` params, so no new CC fingerprint input.
+         */
+        val workersMax: Property<Int>
     }
 
     override fun obtain(): CollectedEnvironment {
@@ -86,6 +99,7 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
             ideVersion = ide.version,
             ideSync = ide.sync,
             aiAgent = aiAgent,
+            workersMax = parameters.workersMax.orNull,
         )
     }
 
