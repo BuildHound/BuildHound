@@ -78,6 +78,60 @@ class WarningCalculatorTest {
     }
 
     @Test
+    fun `ALWAYS_RUN totalMs attributes only the module occurrences that actually matched, not the whole multi-module group`() {
+        // Same group key ("customTask", by name — type is null) spans two modules. In every build,
+        // only the :lib occurrence's reason matches the always-run patterns; the :app occurrence of
+        // the same key executes for an unrelated reason. The build still "fires" (per-build ANY
+        // semantics), but totalMs must reflect only the matching (:lib) occurrences' duration — not
+        // the :app occurrences' duration folded in just because the build as a whole fired.
+        val rows = (1..3).flatMap { i ->
+            listOf(
+                row("b$i", "customTask", 1000, module = ":app", executionReasons = listOf("Some unrelated reason.")),
+                row("b$i", "customTask", 10, module = ":lib", executionReasons = listOf("Task.upToDateWhen is false.")),
+            )
+        }
+        val rollup = WarningCalculator.compute(rows, period = 7)
+        val warning = rollup.warnings.single { it.category == WarningCategory.ALWAYS_RUN.name }
+        assertEquals(3, warning.buildsObserved)
+        assertEquals(3, warning.buildsAffected)
+        assertEquals(
+            30L,
+            warning.totalMs,
+            "only the :lib occurrences (10ms x 3 builds) matched the always-run reason; the :app " +
+                "occurrences' 1000ms/build must not be folded into totalMs just because the build fired",
+        )
+    }
+
+    @Test
+    fun `ALWAYS_RUN fires at exactly the 0_9 share threshold — the non-firing comparison is strict`() {
+        // 9 of 10 builds match: share is exactly 0.9. compute()'s guard is `share < THRESHOLD`, so
+        // exactly-0.9 must still fire (mirrors 061's exactly-30pct/50pct boundary convention).
+        val matching = (1..9).map { i -> row("b$i", "customTask", 100, executionReasons = listOf("Task.upToDateWhen is false.")) }
+        val nonMatching = listOf(row("b10", "customTask", 100, outcome = "UP_TO_DATE"))
+        val rollup = WarningCalculator.compute(matching + nonMatching, period = 7)
+        val warning = rollup.warnings.single { it.category == WarningCategory.ALWAYS_RUN.name }
+        assertEquals(10, warning.buildsObserved)
+        assertEquals(9, warning.buildsAffected)
+        assertEquals(0.9, warning.share)
+    }
+
+    @Test
+    fun `ALWAYS_RUN evidenceReason is defensively scrubbed even though the plugin already scrubs client-side`() {
+        // Defense-in-depth (§3.2 hardening): a non-compliant client's unscrubbed reason string must
+        // not surface a path verbatim through this route. Path/expected-output pinned to the known-good
+        // PayloadScrubberTest.paths_outside_the_project_are_redacted() case (no project root supplied).
+        val rows = (1..3).map { i ->
+            row(
+                "b$i", "customTask", 100,
+                executionReasons = listOf("Task.upToDateWhen is false: file /home/dylan/.gradle/caches/thing.bin has been removed."),
+            )
+        }
+        val rollup = WarningCalculator.compute(rows, period = 7)
+        val warning = rollup.warnings.single { it.category == WarningCategory.ALWAYS_RUN.name }
+        assertEquals("Task.upToDateWhen is false: file <path> has been removed.", warning.evidenceReason)
+    }
+
+    @Test
     fun `ALWAYS_RUN evidenceReason is deterministic regardless of build encounter order`() {
         val forward = listOf(
             row("b1", "customTask", 100, executionReasons = listOf("Task.upToDateWhen is false.")),
@@ -143,6 +197,35 @@ class WarningCalculatorTest {
         val warning = rollup.warnings.single { it.category == WarningCategory.NON_INCREMENTAL_AP.name }
         assertEquals(3, warning.buildsObserved, "the 2 clean/full-rebuild builds must be excluded from the denominator")
         assertEquals(3, warning.buildsAffected)
+    }
+
+    @Test
+    fun `NON_INCREMENTAL_AP clean-build gate ignores a cache-relevant sibling that never resolved to EXECUTED-FROM_CACHE-UP_TO_DATE`() {
+        // The clean-build gate must mirror cacheableHitRate's denominator convention: only tasks whose
+        // outcome is EXECUTED/FROM_CACHE/UP_TO_DATE are "considered" toward the avoided-share judgment.
+        // A cache-relevant sibling that is SKIPPED carries zero considered evidence, so it must NOT be
+        // read as proof of a clean/full rebuild (which would wrongly exclude all 3 builds below).
+        val rows = (1..3).flatMap { i ->
+            listOf(
+                row("b$i", "kaptDebugKotlin", 200, incremental = false),
+                row("b$i", "compileDebugKotlin", 0, cacheable = true, outcome = "SKIPPED"),
+            )
+        }
+        val rollup = WarningCalculator.compute(rows, period = 7)
+        val warning = rollup.warnings.single { it.category == WarningCategory.NON_INCREMENTAL_AP.name }
+        assertEquals(3, warning.buildsObserved, "a SKIPPED cache-relevant sibling has no considered evidence and must not count as a clean/full rebuild")
+        assertEquals(3, warning.buildsAffected)
+    }
+
+    @Test
+    fun `NON_INCREMENTAL_AP fires at exactly the 0_9 share threshold — the non-firing comparison is strict`() {
+        val nonIncremental = (1..9).map { i -> row("b$i", "kaptDebugKotlin", 100, incremental = false) }
+        val incremental = listOf(row("b10", "kaptDebugKotlin", 100, incremental = true))
+        val rollup = WarningCalculator.compute(nonIncremental + incremental, period = 7)
+        val warning = rollup.warnings.single { it.category == WarningCategory.NON_INCREMENTAL_AP.name }
+        assertEquals(10, warning.buildsObserved)
+        assertEquals(9, warning.buildsAffected)
+        assertEquals(0.9, warning.share)
     }
 
     @Test

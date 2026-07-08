@@ -1,5 +1,6 @@
 package dev.buildhound.server
 
+import dev.buildhound.commons.payload.PayloadScrubber
 import kotlinx.serialization.Serializable
 
 /**
@@ -22,9 +23,10 @@ enum class WarningCategory { ALWAYS_RUN, NON_INCREMENTAL_AP, DYNAMIC_DEBUG_VALUE
  * actually fired; [share] = affected/observed. [totalMs] is the rule's attributable EXECUTED
  * milliseconds (summed only over the builds where the rule fired) — the ranking metric across
  * categories. [evidenceReason] is populated only for `ALWAYS_RUN` (a representative matched
- * `executionReasons` string); it is already scrubbed — the same `executionReasons` values
- * [RerunCauseRollupCalculator] reads, scrubbed once at ingest by `PayloadScrubber`, not re-scrubbed
- * or newly exposed here.
+ * `executionReasons` string); it is the same `executionReasons` value [RerunCauseRollupCalculator]
+ * reads — scrubbed client-side by the plugin before upload (spec §3.7), not re-scrubbed by the
+ * server (only `PayloadCapper` caps at ingest). Not a new exposure: `GET /v1/builds/{buildId}`
+ * already returns these same stored strings at the same read scope.
  */
 @Serializable
 data class WarningRow(
@@ -129,12 +131,21 @@ object WarningCalculator {
      * never populated — pre-016 payload, or isolated-projects degradation) cannot be judged either
      * way, so it is **not** excluded — never silently drop non-incremental evidence just because
      * `cacheable` happens to be absent.
+     *
+     * Aligned with `DerivedMetricsCalculator.cacheableHitRate`'s `considered` denominator: a
+     * cache-relevant task only counts toward the avoided-share judgment when its outcome is EXECUTED,
+     * FROM_CACHE, or UP_TO_DATE. A cache-relevant task that landed as e.g. SKIPPED, NO_SOURCE, or
+     * FAILED carries no avoidance evidence either way and must not, on its own, make a build's
+     * cache-relevant set non-empty — otherwise a build whose only cache-relevant tasks are SKIPPED
+     * would be misjudged "clean" (avoided share vacuously 0-of-0) instead of "unjudgeable", the same
+     * distinction `cacheableHitRate` draws by returning null when its `considered` count is 0.
      */
     private fun cleanBuildIds(rows: List<TaskRow>): Set<String> =
         rows.groupBy { it.buildId }
             .filterValues { buildRows ->
                 val cacheRelevant = buildRows.filter { it.cacheable == true || it.outcome == "FROM_CACHE" }
-                cacheRelevant.isNotEmpty() && cacheRelevant.none { it.outcome == "UP_TO_DATE" || it.outcome == "FROM_CACHE" }
+                val considered = cacheRelevant.filter { it.outcome == "EXECUTED" || it.outcome == "FROM_CACHE" || it.outcome == "UP_TO_DATE" }
+                considered.isNotEmpty() && considered.none { it.outcome == "UP_TO_DATE" || it.outcome == "FROM_CACHE" }
             }
             .keys
 
@@ -144,6 +155,13 @@ object WarningCalculator {
      * fires when the share of fired builds (over every build the group appeared in, any outcome)
      * clears [ALWAYS_RUN_SHARE_THRESHOLD]. An unrecognized reason simply doesn't count toward
      * "fired" — it never forces a false positive (the plan's "unclassified fallback ... no fire").
+     *
+     * [totalMs] sums only the EXECUTED *occurrences whose own reason matched* — not every EXECUTED
+     * occurrence in a fired build. This matters for a multi-module group (grouped by [key] =
+     * `type ?: name`, which spans task paths in every module): if only one module's occurrence of the
+     * group matched in a given build, an unrelated module's occurrence of the same group must not have
+     * its duration folded into this warning just because the build as a whole fired (mirrors
+     * [nonIncrementalAp]'s `filter { !it.incremental }` before summing).
      */
     private fun alwaysRun(key: String, rows: List<TaskRow>): WarningRow? {
         val byBuild = rows.groupBy { it.buildId }
@@ -154,12 +172,17 @@ object WarningCalculator {
         val matchedReasons = mutableListOf<String>()
         byBuild.values.forEach { buildRows ->
             val executed = buildRows.filter { it.outcome == "EXECUTED" }
-            val matches = executed.flatMap { it.executionReasons }
-                .filter { reason -> ALWAYS_RUN_PATTERNS.any { pattern -> reason.lowercase().contains(pattern) } }
-            if (matches.isNotEmpty()) {
+            val matchedRows = executed.filter { row ->
+                row.executionReasons.any { reason -> ALWAYS_RUN_PATTERNS.any { pattern -> reason.lowercase().contains(pattern) } }
+            }
+            if (matchedRows.isNotEmpty()) {
                 affected++
-                totalMs += executed.sumOf { it.durationMs }
-                matchedReasons += matches
+                totalMs += matchedRows.sumOf { it.durationMs }
+                matchedRows.forEach { row ->
+                    matchedReasons += row.executionReasons.filter { reason ->
+                        ALWAYS_RUN_PATTERNS.any { pattern -> reason.lowercase().contains(pattern) }
+                    }
+                }
             }
         }
         val share = affected.toDouble() / observed
@@ -173,8 +196,11 @@ object WarningCalculator {
             share = roundTo6(share),
             totalMs = totalMs,
             // Deterministic representative, NOT "first seen" (byte-for-byte parity discipline: the two
-            // stores feed builds in different orders — see the class KDoc).
-            evidenceReason = matchedReasons.minOrNull(),
+            // stores feed builds in different orders — see the class KDoc). Defense-in-depth scrub
+            // (§3.2 hardening): the plugin already scrubs client-side before upload (spec §3.7) and the
+            // server does not re-scrub stored payloads, but this route echoes the string back out, so
+            // it is run through the same KMP-pure scrubber here as a no-op-for-compliant-clients guard.
+            evidenceReason = matchedReasons.minOrNull()?.let { PayloadScrubber.scrubText(it, emptyList()) },
         )
     }
 
