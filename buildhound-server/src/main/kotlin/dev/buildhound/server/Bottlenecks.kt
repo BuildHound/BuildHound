@@ -52,6 +52,14 @@ data class BottlenecksRollup(
      * older clients ignore it, like [budgetBreaches].
      */
     val topPlugins: List<BottleneckRow> = emptyList(),
+    /**
+     * Mirrors [PluginCostRollup.available]/[TaskDurationRollup.byTypeAvailable]: false only when no
+     * task in the window carries a `type` at all (isolated-projects degradation, plan 016). Without this
+     * flag, an all-null-type window would fold every [topPlugins] row into the single "(unattributed)"
+     * bucket — a non-empty list the dashboard would render as if it were real data, instead of the
+     * plan-016 "not collected yet" notice.
+     */
+    val topPluginsAvailable: Boolean,
 )
 
 /** One toolchain version's fleet footprint (plan 032); [distinctUsers] counts hashed ids only. */
@@ -188,6 +196,7 @@ object BottleneckCalculator {
             budgetBreaches = budgetBreaches,
             trendRegressions = trendRegressions,
             topPlugins = topPlugins,
+            topPluginsAvailable = currentTasks.any { it.type != null },
         )
     }
 

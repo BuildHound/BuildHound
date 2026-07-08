@@ -235,12 +235,14 @@ const responses = {
         cacheDataAvailable: true,
         budgetBreaches: null,
         trendRegressions: null,
-        // Top plugins by time (plan 058): omitted entirely on period=14/30 below to also cover the
-        // additive-field-absent (older-server) rendering path.
+        // Top plugins by time (plan 058; topPluginsAvailable added in review follow-up): omitted
+        // entirely on period=14/30 below to also cover the additive-field-absent (older-server)
+        // rendering path — topPluginsAvailable is then undefined/falsy, so the degraded notice shows.
         topPlugins: [
             { key: "Kotlin Gradle Plugin", currentMs: 5000, count: 8 },
             { key: "(unattributed)", currentMs: 800, count: 4 },
         ],
+        topPluginsAvailable: true,
     },
     "/v1/rollups/bottlenecks?period=14": {
         period: 14,
@@ -627,6 +629,17 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
     context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
     if (!hasText(byId["app"], "Cacheability not collected yet")) throw new Error("cache-miss degraded notice missing");
+
+    // Plugin attribution unavailable (isolated-projects, plan 058 review fix) → the honest degraded
+    // notice, never the "(unattributed)" fold rendered as if it were real plugin-cost data.
+    responses["/v1/rollups/bottlenecks?period=7"] = Object.assign({}, responses["/v1/rollups/bottlenecks?period=7"], {
+        topPluginsAvailable: false,
+        topPlugins: [{ key: "(unattributed)", currentMs: 800, count: 4 }],
+    });
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "Task types not collected yet")) throw new Error("top-plugins degraded notice missing");
+    if (hasText(byId["app"], "(unattributed)")) throw new Error("top-plugins unattributed fold must not render as if it were real data");
 
     // Flaky page (plan 036): renders the records with the allowlisted signal badge classes.
     context.location.hash = "#/flaky"; context._onhashchange(); await tick(); await tick();
