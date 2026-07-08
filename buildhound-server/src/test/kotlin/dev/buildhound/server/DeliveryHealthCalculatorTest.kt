@@ -171,6 +171,38 @@ class DeliveryHealthCalculatorTest {
     }
 
     @Test
+    fun `an intervening SUCCESS recovers the same-key group - a later non-overlapping build must not stay flagged`() {
+        val rows = listOf(
+            // f1 fails; s1 is a genuine sequential rerun of f1 and IS flagged.
+            row("f1", "FAILED", sha = "abc", startedAt = 0, finishedAt = 100),
+            row("s1", "SUCCESS", sha = "abc", startedAt = 120, finishedAt = 150),
+            // s2 comes long after s1 recovered the key. The most-recently-FINISHED same-key build
+            // before s2 started is s1 (SUCCESS), not the stale f1 — s2 must NOT be flagged, even
+            // though an early FAILED still sits in the group (a nightly rebuild of a pinned tag must
+            // never be miscounted as a rerun just because the key once failed).
+            row("s2", "SUCCESS", sha = "abc", startedAt = 1_000_000, finishedAt = 1_000_050),
+        )
+        val tax = DeliveryHealthCalculator.compute(rows, 30).retryTax
+        assertEquals(setOf("s1"), tax.rerunBuildIds.toSet(), "s1 is the rerun; s2 is a fresh build after recovery: $tax")
+        assertEquals(1, tax.sameKeyCandidates)
+    }
+
+    @Test
+    fun `a concurrent leg finishing more recently does not shadow an earlier FAILED leg that finished later`() {
+        val rows = listOf(
+            // f1 fails, finishing at t=100s. c1 is a concurrent leg on the same sha that finishes
+            // earlier (t=60s) but is not the most-recently-finished build before r1 starts (t=200s) —
+            // f1 (finishes at 100s) is more recent than c1 (finishes at 60s), so r1 IS a rerun of f1.
+            row("f1", "FAILED", sha = "xyz", startedAt = 0, finishedAt = 100),
+            row("c1", "SUCCESS", sha = "xyz", startedAt = 20, finishedAt = 60),
+            row("r1", "SUCCESS", sha = "xyz", startedAt = 200, finishedAt = 250),
+        )
+        val tax = DeliveryHealthCalculator.compute(rows, 30).retryTax
+        assertEquals(setOf("r1"), tax.rerunBuildIds.toSet(), "the most-recently-finished build before r1 started is FAILED f1, not SUCCESS c1: $tax")
+        assertEquals(1, tax.sameKeyCandidates)
+    }
+
+    @Test
     fun `a garbage runAttempt attribute parses to null, never a throw`() {
         assertNull(DeliveryHealthCalculator.parseRunAttempt("garbage"))
         assertNull(DeliveryHealthCalculator.parseRunAttempt(""))
@@ -188,9 +220,38 @@ class DeliveryHealthCalculatorTest {
         val tax = DeliveryHealthCalculator.compute(rows, 30).retryTax
         assertEquals(2, tax.sameKeyCandidates)
         assertEquals(1, tax.chainCount, "both reruns chase the same (projectKey, sha, sig) — one chain")
-        assertEquals(2.5, tax.wastedCiMinutesLowerBound, "60s + 90s = 2.5 min")
+        assertEquals(2.5, tax.wastedCiMinutesLowerBound, "60s + 90s = 2.5 min, summed over the uncapped set")
         assertEquals(150_000L, tax.wastedMsLowerBound)
-        assertEquals(listOf("r1", "r2"), tax.rerunBuildIds, "oldest-first, deterministic")
+        assertEquals(listOf("r2", "r1"), tax.rerunBuildIds, "most-recent-first, deterministic")
+    }
+
+    @Test
+    fun `capping rerunBuildIds at MAX_RERUN_BUILD_IDS keeps the most recent reruns, not the oldest`() {
+        // 60 sequential same-key reruns chained off one initial FAILED — well over the cap of 50. Each
+        // rerun's most-recently-finished prior is FAILED (the one right before it), so all 60 chain.
+        val rows = mutableListOf(row("f0", "FAILED", sha = "cap", startedAt = 0, finishedAt = 1_000))
+        for (i in 1..60) {
+            val start = i * 10_000L
+            rows += row("r$i", "FAILED", sha = "cap", startedAt = start, finishedAt = start + 1_000)
+        }
+        val tax = DeliveryHealthCalculator.compute(rows, 30).retryTax
+        assertEquals(60, tax.sameKeyCandidates, "all 60 reruns are same-key candidates")
+        assertEquals(
+            1.0,
+            tax.wastedCiMinutesLowerBound,
+            "60 reruns x 1s each = 60s = 1 min, summed over the UNCAPPED set even though the id list is capped",
+        )
+        assertEquals(
+            DeliveryHealthCalculator.MAX_RERUN_BUILD_IDS,
+            tax.rerunBuildIds.size,
+            "rerunBuildIds is capped at MAX_RERUN_BUILD_IDS even though 60 candidates exist",
+        )
+        // Most recent 50 by startedAt: r60 down to r11 — the oldest (r1..r10) are dropped.
+        assertEquals(
+            (60 downTo 11).map { "r$it" },
+            tax.rerunBuildIds,
+            "the cap keeps the most recent reruns, not the oldest",
+        )
     }
 
     @Test
