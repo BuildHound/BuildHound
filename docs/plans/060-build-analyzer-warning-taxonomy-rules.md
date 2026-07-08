@@ -171,9 +171,11 @@ scale — which is why warnings get their **own** route, keeping `/rollups/bottl
   = ?` on every scan; a Testcontainers/testApplication test proves cross-tenant isolation. No global
   or unauthenticated surface added.
 - **Privacy (spec §3.7).** `evidenceReason` echoes an `executionReasons` string that is **already
-  scrubbed** at ingest (PayloadScrubber) and already stored — same exposure class, no new field.
-  Task types/names/modules are declared data. No absolute paths, env dumps, or secrets enter any
-  warning; the scan selects fixed jsonb paths only.
+  scrubbed client-side by the plugin before upload** (PayloadScrubber, spec §3.7) — the server does
+  not re-scrub it (only `PayloadCapper` caps at ingest) — and already stored, so this is the same
+  exposure class as the existing `GET /v1/builds/{buildId}` read, not a new field or a new read
+  scope. Task types/names/modules are declared data. No absolute paths, env dumps, or secrets enter
+  any warning; the scan selects fixed jsonb paths only.
 - **Security / injection.** The Postgres scan uses bound params and compile-time-literal jsonb paths
   (`payload->'tasks'`, `->>'outcome'` …) — no free text, no interpolation; `period`/top-N clamped.
 - **Never-fail (server-side analogue).** No plugin or commons-collector code runs — CC-safety and the
