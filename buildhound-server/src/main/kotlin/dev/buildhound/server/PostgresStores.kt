@@ -316,6 +316,14 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             clauses.append(" AND mode NOT IN (${excluded.joinToString(",") { "?" }})")
             params.addAll(excluded)
         }
+        // Tag equality filter (plan 057): one bound {"key":"value"} jsonb containment (`@>`) param
+        // per entry — key AND value are always bound (encoded through the same BuildHoundJson used
+        // for every other jsonb write), never interpolated, since tags are user-controlled strings.
+        // GIN-indexed via V11 (`payload -> 'tags'`).
+        filter.tags.forEach { (key, value) ->
+            clauses.append(" AND payload -> 'tags' @> ?::jsonb")
+            params.add(BuildHoundJson.payload.encodeToString(MapSerializer(String.serializer(), String.serializer()), mapOf(key to value)))
+        }
         return clauses.toString() to params
     }
 
@@ -871,6 +879,74 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                     }
                 }
             }.flatMap { classTimingsOf(it) }.groupBy({ it.first }, { it.second })
+        }
+
+    override fun tagCohortTrends(projectId: String, tagKey: String, filter: BuildFilter, days: Int, nowMs: Long): List<TagCohortRaw> =
+        dataSource.connection.use { connection ->
+            // Raw per-build rows (cohort value, day, outcome, duration, hit rate) — no aggregation in
+            // SQL. Both stores hand these to the same TagCohortCalculator.groupByCohort, so the daily
+            // bucketing + median/MAD math run identically over the same rows either store produces
+            // (the plan-026/032 "raw rows -> one pure calculator" discipline). Builds missing the tag
+            // key entirely are excluded (`IS NOT NULL`) — no synthetic "null" cohort.
+            val (clauses, params) = filterSql(filter)
+            connection.prepareStatement(
+                """
+                SELECT payload->'tags'->>? AS cohort_value,
+                       (started_at AT TIME ZONE 'UTC')::date AS day,
+                       outcome, duration_ms, hit_rate
+                FROM builds
+                WHERE project_id = ? AND started_at >= ? AND payload->'tags'->>? IS NOT NULL$clauses
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setString(1, tagKey)
+                statement.setObject(2, UUID.fromString(projectId))
+                statement.setObject(3, cutoff(days, nowMs))
+                statement.setString(4, tagKey)
+                params.forEachIndexed { index, value -> statement.setString(index + 5, value) }
+                statement.executeQuery().use { rows ->
+                    val out = buildList {
+                        while (rows.next()) {
+                            add(
+                                TagCohortBuildRow(
+                                    value = rows.getString("cohort_value"),
+                                    day = rows.getDate("day").toLocalDate().toString(),
+                                    outcome = rows.getString("outcome"),
+                                    durationMs = rows.getLong("duration_ms"),
+                                    hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
+                                ),
+                            )
+                        }
+                    }
+                    TagCohortCalculator.groupByCohort(out)
+                }
+            }
+        }
+
+    override fun tagKeys(projectId: String, days: Int, nowMs: Long): List<TagKeySummary> =
+        dataSource.connection.use { connection ->
+            // Only the `tags` sub-object (not the whole jsonb payload) over the fleet-view window
+            // (benchmark excluded, same convention as toolchainAdoption/bottlenecks); decoded and
+            // ranked by the shared TagCohortCalculator so both stores agree.
+            connection.prepareStatement(
+                """
+                SELECT payload->'tags' AS tags FROM builds
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                  AND payload->'tags' IS NOT NULL AND payload->'tags' <> '{}'::jsonb
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.setObject(3, atMs(nowMs))
+                statement.executeQuery().use { rows ->
+                    val tagMaps = buildList {
+                        while (rows.next()) {
+                            val json = rows.getString("tags") ?: continue
+                            add(BuildHoundJson.payload.decodeFromString(MapSerializer(String.serializer(), String.serializer()), json))
+                        }
+                    }
+                    TagCohortCalculator.tagKeySummaries(tagMaps)
+                }
+            }
         }
 }
 

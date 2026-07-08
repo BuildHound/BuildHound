@@ -24,6 +24,11 @@
     // Views are async; only the most recently started render may touch the DOM.
     let renderSeq = 0;
 
+    // The trends page's "split by tag" picker (plan 057) persists across re-renders of that page
+    // (range toggle, filter apply) the same way the token/filter state does — reset only by
+    // reloading the page, not by every trendsView() call.
+    let selectedTagKey = "";
+
     const el = (tag, text, className) => {
         const node = document.createElement(tag);
         if (text !== undefined && text !== null) node.textContent = String(text);
@@ -727,6 +732,96 @@
         return svg;
     }
 
+    // Tag-cohort comparison (plan 057, research F7): a fixed color cycle for the multi-series chart
+    // + legend, reused by both (an SVG `fill` attribute, not a CSS class — the same literal-hex
+    // pattern trendChart/bottlenecksView already use for series colors).
+    const COHORT_COLORS = ["#3b82f6", "#22c55e", "#f97316", "#a855f7", "#ef4444", "#06b6d4"];
+
+    function legendSwatch(color) {
+        const svg = svgEl("svg", { viewBox: "0 0 10 10", width: "10", height: "10" });
+        svg.append(svgEl("circle", { cx: 5, cy: 5, r: 5, fill: color }));
+        return svg;
+    }
+
+    function cohortLegend(cohorts) {
+        const ul = el("ul", null, "chips");
+        cohorts.forEach((cohort, i) => {
+            const li = el("li");
+            li.append(legendSwatch(COHORT_COLORS[i % COHORT_COLORS.length]));
+            li.append(el("span", " " + cohort.value + " (n=" + cohort.sampleCount + ")"));
+            ul.append(li);
+        });
+        return ul;
+    }
+
+    // Generalizes trendChart to overlay one line per cohort (plan 057) — same axis/tooltip
+    // conventions, a distinct color per series from COHORT_COLORS.
+    function cohortChart(cohorts) {
+        const width = 720, height = 200, pad = 30;
+        const svg = svgEl("svg", { viewBox: "0 0 " + width + " " + height });
+        const values = cohorts.flatMap(c => c.points.map(p => p.avgDurationMs)).filter(v => v != null);
+        const max = Math.max(...values, 1);
+        svg.append(svgEl("line", { x1: pad, y1: height - pad, x2: width - pad, y2: height - pad, stroke: "#8886" }));
+        cohorts.forEach((cohort, ci) => {
+            const color = COHORT_COLORS[ci % COHORT_COLORS.length];
+            const points = cohort.points;
+            const stepX = points.length > 1 ? (width - 2 * pad) / (points.length - 1) : 0;
+            const x = i => pad + i * stepX;
+            const y = v => height - pad - (v / max) * (height - 2 * pad);
+            let path = "";
+            points.forEach((point, i) => {
+                const value = point.avgDurationMs;
+                if (value == null) return;
+                path += (path ? " L" : "M") + x(i).toFixed(1) + " " + y(value).toFixed(1);
+                const dot = svgEl("circle", { cx: x(i).toFixed(1), cy: y(value).toFixed(1), r: 2.5, fill: color });
+                const title = document.createElementNS(SVG_NS, "title");
+                title.textContent = cohort.value + " · " + point.day + ": " + ms(value);
+                dot.append(title);
+                svg.append(dot);
+            });
+            if (path) svg.append(svgEl("path", { d: path, fill: "none", stroke: color, "stroke-width": 1.5 }));
+        });
+        return svg;
+    }
+
+    // Per-cohort delta table (plan 057): the reference row first (labelled, no delta against
+    // itself), then every other cohort's median/Δ/%change with the existing semantic-goodness
+    // delta chip (duration: a rise is bad, upIsGood=false) plus the honest status label — a
+    // DISTINGUISHABLE signal is a candidate to investigate, never a claimed "N% faster".
+    function cohortDeltaTable(cohorts, delta) {
+        const byValue = new Map(cohorts.map(c => [c.value, c]));
+        const table = el("table");
+        const head = el("tr");
+        for (const columnName of ["Cohort", "n", "Median", "Δ vs " + delta.referenceValue, "% change", "Signal"]) head.append(el("th", columnName));
+        table.append(head);
+        const reference = byValue.get(delta.referenceValue);
+        if (reference) {
+            const row = el("tr");
+            row.append(el("td", reference.value + " (reference)"));
+            row.append(el("td", reference.sampleCount, "num"));
+            row.append(el("td", ms(reference.medianDurationMs), "num"));
+            row.append(el("td", "—", "num"));
+            row.append(el("td", "—", "num"));
+            row.append(el("td", "—"));
+            table.append(row);
+        }
+        for (const c of delta.comparisons) {
+            const cohort = byValue.get(c.value);
+            const row = el("tr");
+            row.append(el("td", c.value));
+            row.append(el("td", cohort ? cohort.sampleCount : "", "num"));
+            row.append(el("td", cohort ? ms(cohort.medianDurationMs) : "", "num"));
+            row.append(el("td", signedMs(c.medianDeltaMs), "num"));
+            row.append(el("td", c.pctChange == null ? "—" : (c.pctChange > 0 ? "+" : "") + Math.round(c.pctChange * 100) + "%", "num"));
+            const signal = el("td");
+            signal.append(deltaChip(c.pctChange, false));
+            signal.append(el("span", " " + c.status.toLowerCase().replace(/_/g, " "), "muted"));
+            row.append(signal);
+            table.append(row);
+        }
+        return table;
+    }
+
     async function trendsView(filter, days) {
         const seq = ++renderSeq;
         const params = query(filter);
@@ -786,6 +881,44 @@
             bars.append(bar);
         });
         app.append(bars);
+
+        // Tag-cohort comparison (plan 057, research F7): a "split by tag" picker populated from
+        // /v1/tags; when a key is selected, fetch the per-cohort series + delta and render a
+        // multi-series chart + delta table. Best-effort like the artifact panel below: a fetch
+        // error just omits the section, never blanks the rest of the trends page.
+        try {
+            const tagKeys = await api("/v1/tags");
+            if (seq !== renderSeq) return;
+            if (tagKeys.length) {
+                app.append(el("h3", "Split by tag"));
+                const picker = el("div", null, "filters");
+                const select = document.createElement("select");
+                select.append(new Option("no split", ""));
+                for (const summary of tagKeys) select.append(new Option(summary.key, summary.key));
+                select.value = selectedTagKey;
+                select.addEventListener("change", () => {
+                    selectedTagKey = select.value;
+                    trendsView(filter, days).catch(fail);
+                });
+                picker.append(select);
+                app.append(picker);
+
+                if (selectedTagKey) {
+                    const cohortParams = query(filter);
+                    cohortParams.set("days", String(days));
+                    cohortParams.set("tag", selectedTagKey);
+                    const comparison = await api("/v1/trends/cohorts?" + cohortParams);
+                    if (seq !== renderSeq) return;
+                    if (!comparison.cohorts.length) {
+                        app.append(el("p", "No builds carry the \"" + selectedTagKey + "\" tag in this range.", "muted"));
+                    } else {
+                        app.append(cohortLegend(comparison.cohorts));
+                        app.append(cohortChart(comparison.cohorts));
+                        if (comparison.delta) app.append(cohortDeltaTable(comparison.cohorts, comparison.delta));
+                    }
+                }
+            }
+        } catch (e) { /* keep the rest of the trends page */ }
 
         // Artifact sizes (plan 031): one line per (module, variant, type), reusing trendChart with a
         // bytes→MB formatter. Best-effort — a fetch error just omits the panel, never blanks the page.

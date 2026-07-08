@@ -77,6 +77,13 @@ data class BuildFilter(
     val outcome: String? = null,
     /** Modes excluded from fleet views (plan 030): benchmark builds are excluded by default. */
     val excludeModes: Set<String> = emptySet(),
+    /**
+     * Tag equality filter (plan 057): a build matches only when every entry here equals the
+     * build's own `tags[key]`. Additive, default empty (no narrowing). Postgres binds this as a
+     * `payload -> 'tags' @> ?::jsonb` containment param per entry (GIN-indexed, V11) — key and
+     * value are always bound, never interpolated, since tags are user-controlled strings.
+     */
+    val tags: Map<String, String> = emptyMap(),
 )
 
 /** One point of a benchmark series (plan 030); ordered oldest-first within its (scenario, isolation). */
@@ -263,6 +270,25 @@ interface BuildStore {
      */
     fun metricsSnapshot(projectId: String, days: Int, nowMs: Long): MetricsSnapshot
 
+    /**
+     * Raw per-cohort material for [tagKey]'s distinct values over [filter]+[days] (plan 057): the
+     * pure [CohortComparator] (called by the route) folds this into per-cohort trend series and a
+     * median/MAD delta. A build missing [tagKey] entirely contributes to no cohort — never a
+     * synthetic "null" bucket. Both stores fetch raw per-build rows and defer to
+     * [TagCohortCalculator.groupByCohort], so in-memory and Postgres agree byte-for-byte (the
+     * plan-026 parity discipline).
+     */
+    fun tagCohortTrends(projectId: String, tagKey: String, filter: BuildFilter, days: Int, nowMs: Long): List<TagCohortRaw>
+
+    /**
+     * Distinct tag keys observed over [days], each with its top-N most-frequent values (plan 057) —
+     * populates the dashboard's tag-key split picker. Benchmark builds are excluded (the same
+     * fleet-view convention `bottlenecks`/`toolchainAdoption` use; benchmark has its own dedicated
+     * view, plan 030). Capped ([TagCohortCalculator.MAX_KEYS] keys, [TagCohortCalculator.MAX_VALUES_PER_KEY]
+     * values each) so a misused high-cardinality tag can't blow up the response.
+     */
+    fun tagKeys(projectId: String, days: Int, nowMs: Long): List<TagKeySummary>
+
     /** Every project id with stored data (retention sweep, plan 042); default empty for a store that has none. */
     fun allProjectIds(): List<String> = emptyList()
 
@@ -424,6 +450,7 @@ class InMemoryBuildStore : BuildStore {
             .filter { filter.mode == null || it.mode.name == filter.mode }
             .filter { filter.outcome == null || it.outcome.name == filter.outcome }
             .filter { it.mode.name !in filter.excludeModes }
+            .filter { payload -> filter.tags.all { (key, value) -> payload.tags[key] == value } }
 
     override fun list(projectId: String, filter: BuildFilter, limit: Int, offset: Int): List<BuildSummary> =
         matching(projectId, filter)
@@ -465,6 +492,28 @@ class InMemoryBuildStore : BuildStore {
                     interrupted = dayBuilds.count { it.outcome.name == "INTERRUPTED" },
                 )
             }
+    }
+
+    override fun tagCohortTrends(projectId: String, tagKey: String, filter: BuildFilter, days: Int, nowMs: Long): List<TagCohortRaw> {
+        val cutoff = nowMs - days.toLong() * 86_400_000
+        val rows = matching(projectId, filter)
+            .filter { it.startedAt >= cutoff }
+            .mapNotNull { payload ->
+                val value = payload.tags[tagKey] ?: return@mapNotNull null
+                TagCohortBuildRow(
+                    value = value,
+                    day = LocalDate.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC).toString(),
+                    outcome = payload.outcome.name,
+                    durationMs = payload.finishedAt - payload.startedAt,
+                    hitRate = payload.derived?.cacheableHitRate,
+                )
+            }
+        return TagCohortCalculator.groupByCohort(rows)
+    }
+
+    override fun tagKeys(projectId: String, days: Int, nowMs: Long): List<TagKeySummary> {
+        val payloads = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+        return TagCohortCalculator.tagKeySummaries(payloads.map { it.tags })
     }
 
     override fun resolveBuildId(projectId: String, provider: String?, runId: String?): String? =
