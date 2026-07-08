@@ -57,7 +57,12 @@ vm.createContext(context);
 // which auto-executes on the embedded buildhoundData). Extract and run them the same way.
 const html = fs.readFileSync(process.argv[2], "utf8");
 const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
-if (scripts.length < 2) throw new Error("expected the timeline + render script blocks, found " + scripts.length);
+if (scripts.length !== 2) {
+    // A hostile testTelemetry.xmlDisabledTasks entry shaped like a script breakout is in the fixture
+    // (see ReportScriptTest); if ReportAssets.render()'s less-than escape ever regressed, the
+    // payload's literal </script><script> would split/inject an HTML script element here.
+    throw new Error("expected exactly the timeline + render script blocks, found " + scripts.length);
+}
 scripts.forEach((src, i) => vm.runInContext(src, context, { filename: "report-script-" + i + ".js" }));
 
 // Failure section (plan 044): exception class + message in the summary, stacktrace in the <pre>.
@@ -87,6 +92,11 @@ const tests = byId["tests"];
 if (!tests || tests.hidden) throw new Error("tests section stayed hidden with a populated testTelemetry block");
 if (!hasText(byId["tests-degraded-note"], "Test telemetry unavailable")) throw new Error("degraded-note text missing");
 if (!hasText(byId["tests-degraded-note"], ":app:test")) throw new Error("degraded-note task path missing");
+// The hostile second entry must survive the JSON-escape (render) + JSON.parse + textContent chain
+// intact and un-mangled — proof the escaping is reversible, not merely non-breaking.
+if (!hasText(byId["tests-degraded-note"], ":app</script><script>evil()//:test")) {
+    throw new Error("degraded-note hostile task path missing or mangled by the escaping chain");
+}
 
 // Daemon-tuning candidates (plan 065): the pinned Kotlin daemon (1900/2048 ≈ 93 %) fires the
 // advisory card naming kotlin.daemon.jvmargs; the calm G1 Gradle daemon (0.4 % lifetime GC)

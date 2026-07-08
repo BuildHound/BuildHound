@@ -18,9 +18,11 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 class ReportScriptTest {
 
     // A failed build with plan-044 failure detail + the opt-in internal-adapters warning block, an
-    // empty `tests` block with a plan-053 `testTelemetry` note, plus a plan-065 pinned-Xmx Kotlin
-    // daemon (1900/2048 ≈ 93 %) whose tuning card must render — all render paths exercised in one
-    // fixture (minimal otherwise so no other section throws).
+    // empty `tests` block with a plan-053 `testTelemetry` note — one entry is a hostile task path
+    // shaped like a script breakout, proving the JSON-escape (ReportAssets.render) + textContent
+    // (report-template.html) chain holds end-to-end — plus a plan-065 pinned-Xmx Kotlin daemon
+    // (1900/2048 ≈ 93 %) whose tuning card must render — all render paths exercised in one fixture
+    // (minimal otherwise so no other section throws).
     private val failurePayload = """
         {
           "schemaVersion": 1,
@@ -45,7 +47,7 @@ class ReportScriptTest {
             }
           },
           "tests": [],
-          "testTelemetry": { "xmlDisabledTasks": [":app:test"] },
+          "testTelemetry": { "xmlDisabledTasks": [":app:test", ":app</script><script>evil()//:test"] },
           "processes": [
             { "role": "GRADLE_DAEMON", "heapUsedMb": 1462, "configuredXmxMb": 4096, "gcTimeMs": 3120, "uptimeS": 812, "pid": 41214, "gcCollector": "G1" },
             { "role": "KOTLIN_DAEMON", "heapUsedMb": 1900, "configuredXmxMb": 2048, "pid": 41377 }

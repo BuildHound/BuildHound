@@ -180,6 +180,30 @@ class TestResultCollectorTest {
     }
 
     @Test
+    fun `a mixed build with one enabled and one disabled Test task returns both a result and a note`() {
+        // Two Test tasks in one build, one per module: :app has XML disabled, :lib has it enabled.
+        // The two lists must never cross-contaminate — :app appears only in xmlDisabledTasks, :lib
+        // only in results.
+        val appDir = File(dir, "app")
+        val libDir = File(dir, "lib")
+        writeXml(libDir, "TEST-com.example.FooTest.xml", passAndFail)
+        val locations = mapOf(
+            ":app:test" to TestResultLocations(appDir.absolutePath, ":app", junitXmlRequired = false),
+            ":lib:test" to TestResultLocations(libDir.absolutePath, ":lib", junitXmlRequired = true),
+        )
+        val collection = TestResultCollector.collect(
+            locations,
+            mapOf(":app:test" to TaskOutcome.EXECUTED, ":lib:test" to TaskOutcome.FAILED),
+        )
+
+        assertEquals(listOf(":app:test"), collection.xmlDisabledTasks)
+        val result = collection.results.single()
+        assertEquals(":lib:test", result.taskPath)
+        assertEquals(1, result.classes.single().passed)
+        assertEquals(1, result.classes.single().failed)
+    }
+
+    @Test
     fun `the failure-injection seam leaves xmlDisabledTasks empty too`() {
         val warnings = ArrayList<String>()
         val collection = TestResultCollector.collect(

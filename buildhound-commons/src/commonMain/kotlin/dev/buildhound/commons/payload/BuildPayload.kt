@@ -420,6 +420,8 @@ data class CapsSummary(
     val droppedExtensions: Int = 0,
     /** `projectEvaluations` entries dropped past the per-payload cap (plan 052), fastest-first. */
     val droppedProjectEvaluations: Int = 0,
+    /** `testTelemetry.xmlDisabledTasks` entries dropped past the per-payload cap (plan 053), kept first-N alphabetically. */
+    val droppedXmlDisabledTasks: Int = 0,
     /**
      * `buildStructure.emptyIntermediateCandidates` entries dropped past the collecting
      * `BuildStructureValueSource`'s own MAX_EMPTY_INTERMEDIATE_CANDIDATES cap (plan 069 review):
