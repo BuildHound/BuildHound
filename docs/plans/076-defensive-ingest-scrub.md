@@ -25,9 +25,24 @@
 
 **In:** one call to `PayloadScrubber.scrub(payload, emptyList())` in the `buildhound-server`
 ingest path (`Routes.kt`, `POST /v1/builds`), before the payload is capped and stored — so a
-non-compliant or buggy client's unscrubbed absolute paths / secret-shaped strings never reach
-`store.save`, and therefore never reach any read (`GET /v1/builds/{buildId}`, rollups,
-`Warnings.kt`'s `evidenceReason`, etc.).
+non-compliant or buggy client's unscrubbed absolute paths / secret-shaped strings in the fields
+the scrubber actually covers never reach `store.save`, and therefore never reach any read
+(`GET /v1/builds/{buildId}`, rollups, `Warnings.kt`'s `evidenceReason`, etc.).
+
+**Scope of "never reach storage" — enumerated, not blanket (076 review fix, MED).** The line
+above must not be read as "no unscrubbed free text of any kind ever reaches storage." It holds
+only for the specific fields `PayloadScrubber.scrub` touches: `executionReasons`,
+`nonCacheableReason`, `kotlin.{taskPath,nonIncrementalReasons,compilerTimesMs keys}`,
+`tests[].{failedOrRetried,allCases}[].message`, `benchmark.{scenario,isolationMode,seedRef}`,
+`failure.{message,stackTrace}`, and fingerprint key names — see `PayloadScrubber.kt`'s class
+KDoc for the authoritative field list. By spec-§3.7 design, the scrubber does **not** touch (and
+this plan does not extend it to) tag values, metric `text`/`value`, `ci.*`, `vcs.*`, `links`,
+`requestedTasks`, `environment.*`, or the addon-owned `extensions` blob — those fields are
+declared/structured data per the spec, not free text, and a value placed in one of them by a
+misconfigured or hostile client reaches storage and every read path unscrubbed, exactly as
+before this plan. Do not extend the scrubber to those fields as a "fix" for this note; if a real
+need for it emerges, it is its own scoped plan (spec §3.7's field-scoping is a deliberate
+boundary, not an oversight).
 
 **Out (explicitly deferred):**
 
@@ -128,6 +143,37 @@ gap this plan deliberately leaves open.
 - **Ingest latency.** Addressed above: bounded by the existing `receiveBounded` ceiling
   regardless of scrub/cap order; the micro-benchmark test pins a concrete number for the
   realistic capped-payload case rather than leaving this as an unverified assumption.
+  **Coverage caveat (076 review fix, LOW):** the micro-benchmark only exercises the uniform
+  20,000-task shape (many small execution-reason strings) — it says nothing about an
+  adversarial *single*-field shape (one pathological string in one field). That gap is what
+  the ReDoS finding below actually hit, and is now covered by the 8192-char input clamp
+  (`PayloadScrubber.MAX_SCRUB_INPUT_CHARS`) rather than by the benchmark; see
+  `PayloadScrubberTest`'s `redos_guard_*` cases for the adversarial-shape coverage the
+  micro-benchmark itself does not provide.
+- **ReDoS via unbounded scrub input (076 review fix, HIGH).** Wiring `PayloadScrubber.scrubText`
+  into server ingest made it reachable on unbounded, attacker-controlled, gzip-amplified text
+  for the first time — two of its regexes (`longBlob`, `secretPair`) are empirically O(n²) on a
+  long run of matching-shape characters that never resolves the pattern (measured on JVM 21: a
+  pure `/` run costs ~23s at 65536 chars; a pure word-character run, `secretPair`'s worse case,
+  costs far longer). Fixed with a hard 8192-char clamp applied inside `scrubText` before any
+  regex runs (both plugin- and server-side, since it is one shared KMP function) — see
+  `PayloadScrubber.kt`'s `MAX_SCRUB_INPUT_CHARS` KDoc for the full measurement table and why
+  the originally-proposed 65536-char clamp was rejected (it does not bound cost). This is a
+  mitigation, not a fix for the regexes' underlying O(n²) shape — both stay quadratic, just
+  capped to a fixed, small ceiling regardless of caller-supplied input size. A future rewrite
+  of `longBlob`/`secretPair` to a genuinely linear form (e.g. character-class scanning instead
+  of backtracking regex) would remove the mitigation's need but is out of scope here.
+- **Scrub-error handling is `Exception`-scoped, not `Throwable`-scoped (076 review fix, MED).**
+  The scrub-error fallback (see Divergences) deliberately catches `Exception` only, not
+  `Throwable`/`Error`. Trade-off, stated explicitly: a `StackOverflowError` or
+  `OutOfMemoryError` mid-scrub now propagates and fails the ingest request loudly (a 500,
+  through Ktor's default handling) rather than being silently swallowed into storing the
+  *unscrubbed* payload the old `runCatching` (which catches `Throwable`) would have done. This
+  is judged the safer failure mode for a privacy-scrubbing defense: a loud failure on a
+  near-unreachable pathological case beats a silent one that defeats the scrub entirely for
+  that request. `Exception`-level fail-open (the documented "never fail ingest" bias) is
+  otherwise unchanged — a normal `RuntimeException` from the scrubber still degrades to
+  storing capped-but-unscrubbed with a warn log, exactly as before.
 - **Double-scrub / client-server scrubber version drift.** Both plugin and server run the
   *same* `buildhound-commons` `PayloadScrubber` (KMP-pure, one artifact) — there is no
   separate server copy to drift, and both sides are versioned together in this monorepo. The
@@ -178,15 +224,25 @@ gap this plan deliberately leaves open.
   scrub with a real root, then scrub the output again with `emptyList()`, assert byte-identical —
   is implemented instead in `buildhound-server`'s `IngestScrubTest` (`a client-scrubbed payload is
   byte-identical after the server's empty-root pass`). No scrubber behavior changed; only where
-  the proof lives. Follow-up: port/duplicate this case into `PayloadScrubberTest` once commons is
-  free, per the "one committed plan per feature" discipline this repo otherwise favors having the
-  test live alongside the code it most directly documents.
+  the proof lives.
+  - [x] Follow-up: port/duplicate this case into `PayloadScrubberTest` once commons is free, per
+    the "one committed plan per feature" discipline this repo otherwise favors having the test
+    live alongside the code it most directly documents. **Done** in the 076 review-fix pass —
+    `PayloadScrubberTest.a_client_scrubbed_payload_is_byte_identical_after_a_second_pass_with_empty_roots`
+    (commons is free of the concurrent-edit constraint that originally blocked this). The
+    `IngestScrubTest` copy is left in place too — it also exercises the real `Routes.kt`
+    composition end to end, which the commons-only case does not.
 - **Scrub-error handling (plan was silent).** The plan's Design section does not say what happens
-  if `PayloadScrubber.scrub` throws unexpectedly at ingest. Implemented as: `runCatching { … }`
-  around the scrub call, falling back to the raw (unscrubbed) payload — which still goes through
-  `PayloadCapper.cap` and storage — with a `warn` log naming the project and exception type. This
-  mirrors the plugin-side "never fail a build" bias (`CLAUDE.md`) applied to the server's own
-  "never fail ingest" equivalent, and is a pure defense-in-depth measure: `PayloadScrubber` is
-  pure functional code with no I/O, so this path is not expected to be reachable in practice.
+  if `PayloadScrubber.scrub` throws unexpectedly at ingest. Implemented as: a `try`/`catch (e:
+  Exception)` around the scrub call, falling back to the raw (unscrubbed) payload — which still
+  goes through `PayloadCapper.cap` and storage — with a `warn` log naming the project and
+  exception type. This mirrors the plugin-side "never fail a build" bias (`CLAUDE.md`) applied to
+  the server's own "never fail ingest" equivalent, and is a pure defense-in-depth measure:
+  `PayloadScrubber` is pure functional code with no I/O, so this path is not expected to be
+  reachable in practice. **Updated in the 076 review-fix pass (MED):** originally implemented
+  with `runCatching { … }`, which catches `Throwable` (including `Error`); narrowed to
+  `catch (e: Exception)` so a `StackOverflowError`/`OutOfMemoryError` propagates instead of being
+  swallowed into storing unscrubbed data — see the Risks section's dedicated bullet for the
+  trade-off.
 - **Micro-benchmark bound widened from the doc's `< 2000ms` example to `< 5000ms`.** See Exit
   criteria above for the measured number and rationale.

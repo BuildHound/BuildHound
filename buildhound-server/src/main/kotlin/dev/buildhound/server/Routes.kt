@@ -111,14 +111,21 @@ fun Route.ingestRoutes(
             // storing the capped-but-unscrubbed payload with a warn log, matching the plugin's own
             // "never fail a build" bias — the scrubber is pure with no I/O, so this path should be
             // unreachable in practice, but ingest must degrade, never break, if it ever isn't.
-            val scrubbed = runCatching { PayloadScrubber.scrub(payload, emptyList()) }
-                .getOrElse {
-                    ingestLogger.warn(
-                        "payload scrub threw for '{}', storing capped-but-unscrubbed: {}",
-                        project.key, it::class.java.simpleName,
-                    )
-                    payload
-                }
+            // Deliberately `catch (e: Exception)`, NOT `runCatching`/`catch (e: Throwable)` (076
+            // review fix, MED): `runCatching` swallows `Throwable`, including `Error` — a
+            // `StackOverflowError` or `OutOfMemoryError` mid-scrub must propagate and fail the
+            // request loudly, not be caught here and silently fall through to storing the
+            // *unscrubbed* payload. Fail-open stays scoped to `Exception` only — a narrower,
+            // documented trade-off vs. blanket `Throwable` fail-open (see the plan's Risks section).
+            val scrubbed = try {
+                PayloadScrubber.scrub(payload, emptyList())
+            } catch (e: Exception) {
+                ingestLogger.warn(
+                    "payload scrub threw for '{}', storing capped-but-unscrubbed: {}",
+                    project.key, e::class.java.simpleName,
+                )
+                payload
+            }
 
             // Defensive clamp (plan 019): a compliant plugin makes this a no-op; a hostile or
             // buggy client is bounded, not rejected — the telemetry survives, and only counts

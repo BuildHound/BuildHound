@@ -348,6 +348,109 @@ class PayloadScrubberTest {
         assertFalse(scrubbed.contains("id_rsa"))
     }
 
+    // --- 076 review-fix: ReDoS guard (HIGH) ---------------------------------------------------
+    //
+    // [longBlob] and [secretPair] both exhibit super-linear (empirically quadratic) backtracking
+    // on a long run of matching-shape characters that never resolves the pattern. Since server
+    // ingest (plan 076) now runs scrubText on unbounded, attacker-controlled, pre-cap fields, an
+    // unclamped input is a CPU-exhaustion DoS. The fix clamps every scrub input to 8192 chars
+    // before any regex runs — measured (not guessed): the review's proposed 64 KiB clamp was
+    // rejected because it does NOT bound cost (longBlob alone ~23s at 65536 chars; secretPair,
+    // the worse offender, far longer) — see PayloadScrubber's MAX_SCRUB_INPUT_CHARS KDoc for the
+    // full measurement table and the 8192 derivation (at/above every downstream text cap in the
+    // file, comfortably bounded regex cost).
+
+    @Test
+    fun redos_guard_clamps_a_pathological_slash_run_to_bounded_time() {
+        // longBlob's worst case: a long run of '/' with no digit ever satisfies its lookahead.
+        val slashes = "/".repeat(1_000_000) // 1 MiB pathological input
+        val startedAt = kotlin.time.TimeSource.Monotonic.markNow()
+        val scrubbed = PayloadScrubber.scrubText(slashes, root)
+        val elapsedMs = startedAt.elapsedNow().inWholeMilliseconds
+        assertTrue(elapsedMs < 2000, "scrub of a 1 MiB slash-run took ${elapsedMs}ms, expected < 2000ms (076 review fix)")
+        // Clamped to 8192 chars before any regex runs; a pure slash run matches none of the
+        // scrubber's regexes, so the clamped slice survives untouched, with the marker appended.
+        assertEquals("/".repeat(8192) + "…<truncated>", scrubbed)
+    }
+
+    @Test
+    fun redos_guard_bounds_the_worse_secretPair_word_run_shape() {
+        // secretPair's worst case is a long run of plain word characters with no '='/':' anywhere
+        // — measured worse than longBlob's slash-run at the same size (8192 chars: ~1.9s vs
+        // ~340ms). A wider bound avoids flaking near that margin; the slash-run test above stays
+        // tight at < 2s.
+        val wordRun = "a".repeat(1_000_000)
+        val startedAt = kotlin.time.TimeSource.Monotonic.markNow()
+        PayloadScrubber.scrubText(wordRun, root)
+        val elapsedMs = startedAt.elapsedNow().inWholeMilliseconds
+        assertTrue(elapsedMs < 5000, "scrub of a 1 MiB word-character run took ${elapsedMs}ms, expected < 5000ms (076 review fix)")
+    }
+
+    @Test
+    fun secret_sitting_before_the_clamp_boundary_is_still_redacted_even_when_the_tail_is_truncated() {
+        // The secret sits entirely inside the first 8192 chars (well clear of the boundary); a
+        // long, unrelated tail past the clamp must not stop the whole-value secret match.
+        val secret = "token=abc123XYZ456def"
+        val prefix = "z".repeat(8000) // filler with no secret/path shape, under the 8192 clamp
+        val tail = "y".repeat(50_000) // pushes total length far past the clamp
+        val scrubbed = PayloadScrubber.scrubText("$prefix $secret $tail", root)
+        assertFalse(scrubbed.contains("abc123XYZ456def"), "secret before the clamp boundary must still be redacted")
+        assertTrue(scrubbed.contains("token=<redacted>"), scrubbed.take(8100))
+    }
+
+    @Test
+    fun inputs_under_the_clamp_are_byte_identical_to_pre_clamp_behavior() {
+        // Realistic, well-under-8192-char text must scrub exactly as before the clamp landed —
+        // no truncation marker, same redaction/relativization as every other test in this file.
+        val text = "Input property 'x' file $root/src/main/A.kt has changed, token=abc123 also seen. " + "z".repeat(200) + " tail."
+        assertTrue(text.length < 8192)
+        val scrubbed = PayloadScrubber.scrubText(text, root)
+        assertFalse(scrubbed.contains("…<truncated>"), scrubbed)
+        assertTrue(scrubbed.contains("src/main/A.kt"), scrubbed)
+        assertTrue(scrubbed.contains("token=<redacted>"), scrubbed)
+        assertTrue(scrubbed.endsWith("z".repeat(200) + " tail."), scrubbed)
+    }
+
+    // --- 076 review-fix: port the idempotency case out of buildhound-server's IngestScrubTest --
+    //
+    // The plan 076 Divergences section notes this case was implemented in `IngestScrubTest`
+    // instead of here because the implementation session was barred from touching commons
+    // (a concurrent agent held uncommitted edits there). Commons is free now — ported verbatim
+    // (same fixture shape) per the plan's own follow-up.
+
+    @Test
+    fun a_client_scrubbed_payload_is_byte_identical_after_a_second_pass_with_empty_roots() {
+        val payload = BuildPayload(
+            buildId = "compliant-1",
+            startedAt = 0,
+            finishedAt = 1,
+            outcome = BuildOutcome.FAILED,
+            tasks = listOf(
+                TaskExecution(
+                    path = ":app:compile",
+                    startMs = 0,
+                    durationMs = 1,
+                    outcome = TaskOutcome.EXECUTED,
+                    executionReasons = listOf(
+                        "Input property 'x' file $root/src/main/A.kt has changed.",
+                        "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+                    ),
+                ),
+            ),
+            failure = FailureInfo(
+                exceptionClass = "java.lang.IllegalStateException",
+                messageHash = "deadbeef",
+                message = "Execution failed: token=abc123XYZ456def in $root/src/Main.kt",
+                stackTrace = "java.lang.IllegalStateException: boom at $root/src/Main.kt:10",
+            ),
+        )
+
+        val clientScrubbed = PayloadScrubber.scrub(payload, root) // real client-side root
+        val serverScrubbed = PayloadScrubber.scrub(clientScrubbed, emptyList()) // the server's ingest call
+
+        assertEquals(clientScrubbed, serverScrubbed)
+    }
+
     private fun payloadWith(reason: String) = BuildPayload(
         buildId = "b-1",
         startedAt = 0,

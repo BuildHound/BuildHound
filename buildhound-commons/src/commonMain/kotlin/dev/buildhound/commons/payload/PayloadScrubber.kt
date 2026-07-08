@@ -130,6 +130,43 @@ object PayloadScrubber {
         scrubText(text, listOfNotNull(projectRoot))
 
     /**
+     * Hard length clamp applied before any regex in [scrubText] runs — a ReDoS guard (plan 076
+     * review fix, HIGH). [longBlob] and [secretPair] both exhibit super-linear (empirically
+     * quadratic) backtracking cost on a long run of matching-shape characters that never
+     * resolves the pattern (no digit for [longBlob]'s lookahead; no `=`/`:` for [secretPair]'s
+     * alternation) — e.g. a multi-megabyte run of `/`, `+`, or plain word characters. Since plan
+     * 076 wired [scrub]/[scrubText] into the server's ingest path (`Routes.kt`), this now runs
+     * *before* [PayloadCapper] on an unbounded, attacker-controlled, gzip-amplified field (a
+     * small compressed POST can inflate to tens of MB in a single string) — unbounded regex cost
+     * here is a CPU-exhaustion DoS pinning a shared Netty worker, not just a latency concern.
+     *
+     * **The review's proposed clamp value (64 KiB / 65536 chars) was measured and rejected.**
+     * On the reference dev machine (JVM 21, `java.util.regex`), a pure `/` run of 65536 chars
+     * alone costs [longBlob] ~23s, and a pure word-character run of the same size costs
+     * [secretPair] far longer still (secretPair's worst case is *worse* than longBlob's, not
+     * milder — measured ~1.9s already at 8192 chars, ~7.7s at 16384) — nowhere near a "bounded
+     * time" fix. 8192 chars (8 KiB) is the value that satisfies both constraints at once: it
+     * sits at or above every downstream free-text cap in this file ([MAX_FAILURE_STACKTRACE_CHARS]
+     * = 8192 is the largest; [MAX_FAILURE_MESSAGE_CHARS]/[MAX_TEST_MESSAGE_CHARS] = 512), so no
+     * legitimate value is ever truncated earlier than its own downstream cap would already cut
+     * it — and at 8192 chars the measured worst case is [longBlob] ~340ms / [secretPair] ~1.9s,
+     * comfortably bounded and CI-safe. 8 KiB is still far above any real secret shape (a JWT
+     * runs a few KB at most, an AWS key is 20 chars, the blob floor is 32 chars), so whole-value
+     * secret matching is preserved for every legitimate case; only pathological/hostile input is
+     * ever truncated.
+     *
+     * This is a mitigation, not a fix for the underlying shape: both regexes stay O(n²), just
+     * bounded to a fixed, small ceiling regardless of the caller's input size (plan 076 Risks).
+     */
+    private const val MAX_SCRUB_INPUT_CHARS = 8192
+
+    /** Appended when [clampForScrub] truncates — a visible signal that the field was cut short. */
+    private const val SCRUB_TRUNCATION_MARKER = "…<truncated>"
+
+    private fun clampForScrub(text: String): String =
+        if (text.length <= MAX_SCRUB_INPUT_CHARS) text else text.substring(0, MAX_SCRUB_INPUT_CHARS) + SCRUB_TRUNCATION_MARKER
+
+    /**
      * Keyed/shaped secrets first, then paths — a secret value containing a path must
      * not survive as a "relativized" fragment. The literal-root strip runs BEFORE the
      * blob rule: the roots are not secrets (they are the location the payload
@@ -140,7 +177,7 @@ object PayloadScrubber {
      * in-project paths with spaces relativize (the path regexes cannot span spaces).
      */
     fun scrubText(text: String, projectRoots: List<String>): String {
-        var result = text
+        var result = clampForScrub(text)
         result = urlCredentials.replace(result, "://<redacted>@")
         result = jwt.replace(result, "<redacted>")
         result = bearerToken.replace(result, "<redacted>")
