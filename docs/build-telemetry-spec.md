@@ -184,7 +184,7 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
                    "ide": "...", "ideVersion": "...", "ideSync": false, "aiAgent": "..." },
     // ^ ide/ideVersion/ideSync/aiAgent are additive (plan 027); aiAgent is positive-only attribution
     //   (only a confirmed agent, e.g. CLAUDECODE, is named — a miss is silent, never a wrong guess)
-  "toolchain": { "gradle": "9.x", "jdk": "...", "agp": "...", "kgp": "...", "ksp": "..." },
+  "toolchain": { "gradle": "9.x", "jdk": "...", "agp": "...", "kgp": "...", "ksp": "...", "springBoot": "..." },
   "vcs": { "branch": "...", "sha": "...", "dirty": false, "remoteUrl": "..." },
     // ^ remoteUrl is redacted all-scheme + fail-closed (userInfo stripped; dropped when it can't be
     //   confidently parsed — never a credential; §3.7). Additive (plan 027).
@@ -218,7 +218,8 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
   "processes": [ { "role": "KOTLIN_DAEMON", "heapUsedMb": 0, "heapCommittedMb": 0, "heapMaxMb": 0,
                    "configuredXmxMb": 0, "gcTimeMs": 0, "rssMb": 0, "uptimeS": 0 } ],
   "benchmark": { "scenario": "clean", "iteration": 3, "isolationMode": "no_build_cache", "seedRef": "..." },
-  "artifacts": { "android": [ { "variant": "release", "module": ":app", "type": "APK", "sizeBytes": 0 } ] },
+  "artifacts": { "android": [ { "variant": "release", "module": ":app", "type": "APK", "sizeBytes": 0 } ],
+                "jvm": [ { "module": ":service", "kind": "BOOT_JAR", "sizeBytes": 0 } ] },
   "extensions": { "<addonId>": { "schemaVersion": 1, "…": "opaque addon-owned JSON" } }
 }
 ```
@@ -233,10 +234,14 @@ v1 golden untouched) and, unlike core fields, is **not deep-scrubbed by core** �
 own §3.7 bar. The plan-019 `PayloadCapper` bounds it to a 256 KiB budget (largest-first drop, counted
 in `caps.droppedExtensions`), enforced at plugin assembly and re-clamped on server ingest.
 
-The `artifacts` block (plan 031) is present only on Android builds; `android` is a single list mixing
-APK/AAB/AAR (disambiguated by `type`, not a filename-encoded key). Byte size only — no path or
-contents (§3.7); `module`/`variant` are project-internal Gradle names. Server-side it is projected
-into the `apk_sizes` hot table for the per-(module, variant, type) trend at `GET /v1/artifacts/trends`.
+The `artifacts` block (plan 031 Android, plan 072 JVM) is present whenever *either* list is non-empty;
+`android` is a single list mixing APK/AAB/AAR (disambiguated by `type`, not a filename-encoded key),
+`jvm` mixes `bootJar`/`bootWar`/`jar`/`war` (disambiguated by `kind`) and is measured only for archive
+tasks that actually produced output this invocation (§3.2) — a default Spring Boot module contributes
+both a `JAR` and a `BOOT_JAR` row. Byte size only — no path or contents (§3.7); `module`/`variant` are
+project-internal Gradle names. Server-side, `android` is projected into the `apk_sizes` hot table for
+the per-(module, variant, type) trend at `GET /v1/artifacts/trends`; `jvm` is not yet projected (deferred,
+plan 072 Risks).
 
 The `benchmark` block (plan 030) is present only on `mode=benchmark` builds; its `scenario`/
 `iteration`/`isolationMode` are **also** mirrored into `tags` (the tag contract). Benchmark builds
