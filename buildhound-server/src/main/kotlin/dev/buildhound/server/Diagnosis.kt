@@ -2,6 +2,7 @@ package dev.buildhound.server
 
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
+import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
 import kotlinx.serialization.Serializable
 
@@ -107,11 +108,16 @@ object BuildDiagnoser {
         )
     }
 
-    /** This build's `EXECUTED` tasks ranked by duration, top-N; empty (never fabricated) under IP. */
+    /**
+     * This build's `EXECUTED` tasks ranked by duration, top-N; empty (never fabricated) under IP.
+     * Tie-break on [TaskExecution.path] for a deterministic order at the top-N boundary — the same
+     * `.thenBy { key }` discipline as every other ranker in this module (see [BuildComparator] and
+     * `BottleneckCalculator`).
+     */
     private fun topHotspots(payload: BuildPayload): List<Hotspot> =
         payload.tasks
             .filter { it.outcome == TaskOutcome.EXECUTED }
-            .sortedByDescending { it.durationMs }
+            .sortedWith(compareByDescending<TaskExecution> { it.durationMs }.thenBy { it.path })
             .take(TOP_HOTSPOTS_LIMIT)
             .map { Hotspot(path = it.path, module = it.module, type = it.type, durationMs = it.durationMs) }
 

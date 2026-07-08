@@ -122,6 +122,27 @@ class BuildDiagnoserTest {
         assertEquals(":t15", hotspots.first().path) // largest duration first
     }
 
+    @Test
+    fun `a duration tie at the top-10 boundary is broken deterministically by path`() {
+        // Six tasks share the max duration (3000) — only some of them fit under the top-10 cap once
+        // combined with the four distinct-duration tasks below, so the tie-break at the boundary must
+        // be a stable, path-ordered pick rather than whatever order sortedByDescending happened to
+        // preserve.
+        val tied = listOf(":z", ":a", ":m", ":q", ":b", ":k").map { task(it, TaskOutcome.EXECUTED, durationMs = 3000) }
+        val distinct = (1..4).map { i -> task(":d$i", TaskOutcome.EXECUTED, durationMs = i.toLong()) }
+        val hotspots = BuildDiagnoser.diagnose(build(tasks = tied + distinct), verdict = null).topHotspots
+
+        assertEquals(10, hotspots.size)
+        // All six duration-3000 ties come first, alphabetically by path (thenBy { it.path }).
+        assertEquals(listOf(":a", ":b", ":k", ":m", ":q", ":z"), hotspots.take(6).map { it.path })
+        // Then the distinct-duration tasks, largest first.
+        assertEquals(listOf(":d4", ":d3", ":d2", ":d1"), hotspots.drop(6).map { it.path })
+
+        // Re-running with the same inputs must reproduce the exact same order (determinism, not luck).
+        val again = BuildDiagnoser.diagnose(build(tasks = tied + distinct), verdict = null).topHotspots
+        assertEquals(hotspots.map { it.path }, again.map { it.path })
+    }
+
     // ---- deltas vs the comparable baseline ----
 
     @Test
@@ -156,5 +177,31 @@ class BuildDiagnoserTest {
         val deltas = BuildDiagnoser.diagnose(build(), verdict).deltas
         assertEquals(1000.0, deltas?.durationMs?.value)
         assertNull(deltas?.cacheableHitRate)
+    }
+
+    /**
+     * Pins the wiring between [RegressionEngine.builtInMetrics] (which names its metrics
+     * "durationMs"/"cacheableHitRate") and [BuildDiagnoser.deltas] (which independently hardcodes the
+     * same two literals to look them back up, Diagnosis.kt:122-123 / RegressionEngine.kt:91,93). A
+     * rename on either side that isn't mirrored on the other would silently null out the corresponding
+     * delta — honest-null-degrade means that drift produces no failure anywhere else, so this test runs
+     * a build through the *real* engine (not a hand-built [Verdict]) and asserts both deltas survive.
+     */
+    @Test
+    fun `deltas stay wired to RegressionEngine's actual built-in metric names`() {
+        val payload = TestPayloads.build(durationMs = 4000, hitRate = 0.5)
+        val baselines = mapOf(
+            "durationMs" to List(5) { 1000.0 },
+            "cacheableHitRate" to List(5) { 0.9 },
+        )
+        val verdict = RegressionEngine.evaluate(
+            inputs = RegressionEngine.builtInMetrics(payload),
+            baselines = baselines,
+            settings = ProjectSettings(),
+            baselineKey = "k",
+        )
+        val deltas = BuildDiagnoser.diagnose(payload, verdict).deltas
+        assertTrue(deltas?.durationMs != null, "durationMs delta went null — check the metric name in RegressionEngine.builtInMetrics still matches BuildDiagnoser.deltas' lookup")
+        assertTrue(deltas?.cacheableHitRate != null, "cacheableHitRate delta went null — check the metric name in RegressionEngine.builtInMetrics still matches BuildDiagnoser.deltas' lookup")
     }
 }
