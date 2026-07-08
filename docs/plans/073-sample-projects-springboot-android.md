@@ -1,4 +1,4 @@
-# Plan 051 — two more dev-harness samples: suboptimal Spring Boot (50 modules) + legacy-AGP Android
+# Plan 073 — two more dev-harness samples: suboptimal Spring Boot (50 modules) + legacy-AGP Android
 
 **Status: planned** · 2026-07-08
 
