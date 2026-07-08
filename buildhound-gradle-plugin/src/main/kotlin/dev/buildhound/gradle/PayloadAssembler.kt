@@ -20,6 +20,7 @@ import dev.buildhound.commons.payload.PayloadCapper
 import dev.buildhound.commons.payload.PayloadCaps
 import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.commons.payload.ProcessInfo
+import dev.buildhound.commons.payload.ProjectEvaluation
 import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TestTaskResult
@@ -96,6 +97,9 @@ internal object PayloadAssembler {
         processes: List<CollectedProcess> = emptyList(),
         benchmark: CollectedBenchmark? = null,
         artifacts: List<ArtifactSize> = emptyList(),
+        // Per-project configuration-time attribution (plan 052); empty on a CC hit or when nothing was
+        // captured, in which case the payload's block below collapses to null (`takeIf { isNotEmpty() }`).
+        projectEvaluations: List<ProjectEvaluation> = emptyList(),
         extensions: Map<String, JsonElement> = emptyMap(),
         avoidedMs: Long? = null,
         dependencyEdges: Map<String, List<String>>? = null,
@@ -186,6 +190,10 @@ internal object PayloadAssembler {
             // Android artifact sizes (plan 031); null when not an Android build / nothing produced.
             // Capped largest-first so a pathological flavor matrix can't blow the payload budget.
             artifacts = artifacts.takeIf { it.isNotEmpty() }?.let { ArtifactSizes(android = capArtifacts(it)) },
+            // Per-project configuration-time attribution (plan 052); ranked slowest-first so the
+            // top-N cardinality cap (PayloadCapper) keeps the projects that carry the signal. Null when
+            // nothing was captured (a CC hit, or a build too fast/degenerate to leave any timing).
+            projectEvaluations = projectEvaluations.takeIf { it.isNotEmpty() }?.sortedByDescending { it.evaluationMs },
             // End-of-build JVM process snapshot (plan 029); empty when disabled/unobservable. Numeric
             // + enum only — nothing for the scrubber to touch (no PID, path, or command line).
             processes = processes.map {

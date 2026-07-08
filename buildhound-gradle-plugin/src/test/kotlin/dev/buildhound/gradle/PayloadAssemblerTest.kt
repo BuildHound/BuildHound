@@ -358,6 +358,36 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `assemble leaves projectEvaluations null when none were collected`() {
+        assertNull(assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED))).projectEvaluations)
+    }
+
+    @Test
+    fun `assemble ranks projectEvaluations slowest-first regardless of input order`() {
+        val evaluations = listOf(
+            dev.buildhound.commons.payload.ProjectEvaluation(":fast", 100),
+            dev.buildhound.commons.payload.ProjectEvaluation(":slow", 4200),
+            dev.buildhound.commons.payload.ProjectEvaluation(":mid", 900),
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), projectEvaluations = evaluations)
+        assertEquals(listOf(":slow", ":mid", ":fast"), payload.projectEvaluations?.map { it.path })
+    }
+
+    @Test
+    fun `assemble truncates an over-cap projectEvaluations list slowest-first`() {
+        val evaluations = (1..10).map { dev.buildhound.commons.payload.ProjectEvaluation(":m$it", it.toLong()) }
+        val payload = assemble(
+            tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)),
+            projectEvaluations = evaluations,
+            caps = PayloadCaps(maxProjectEvaluations = 3),
+        )
+        val kept = payload.projectEvaluations ?: error("expected a capped projectEvaluations list")
+        assertEquals(3, kept.size)
+        assertEquals(listOf(10L, 9L, 8L), kept.map { it.evaluationMs })
+        assertEquals(7, payload.caps?.droppedProjectEvaluations)
+    }
+
+    @Test
     fun `assemble passes test results through and scrubs the failure message`() {
         val tests = listOf(
             dev.buildhound.commons.payload.TestTaskResult(
@@ -522,6 +552,7 @@ class PayloadAssemblerTest {
         processes: List<CollectedProcess> = emptyList(),
         benchmark: CollectedBenchmark? = null,
         artifacts: List<dev.buildhound.commons.payload.ArtifactSize> = emptyList(),
+        projectEvaluations: List<dev.buildhound.commons.payload.ProjectEvaluation> = emptyList(),
         environment: CollectedEnvironment = CollectedEnvironment(
             os = "Linux", arch = "amd64", cores = 8, ramMb = 16_000,
             hostnameHash = "h_0123456789ab", userId = "u_0123456789ab",
@@ -559,6 +590,7 @@ class PayloadAssemblerTest {
         processes = processes,
         benchmark = benchmark,
         artifacts = artifacts,
+        projectEvaluations = projectEvaluations,
         extensions = extensions,
         agp = agp,
         kgp = kgp,

@@ -93,6 +93,25 @@ the stale note the finding calls out (`build-telemetry-research.md:95`).
   finalizer **read-then-clear** on every completed build + per-project overwrite on MISS + the HIT-guard
   (no read on a hit). Residual: a build whose finalizer never ran (interrupted) leaks into exactly the
   next MISS, then self-heals on that build's finalizer — acceptable for best-effort telemetry.
+- **DSL-only `enabled=false`/`mode=DISABLED` does not stop the collector (named, implementation finding).**
+  `masterEnabled` — the env/property override resolved at `apply()` time — is the *only* thing that can
+  gate `installProjectEvaluationCollector`'s registration (mirroring `installAndroidArtifactCollector`);
+  a settings-script `buildhound { enabled = false }` DSL value is configured *after* `apply()` returns (the
+  `plugins {}` block always applies before the rest of the script body runs), and a `beforeProject`/
+  `afterProject` `IsolatedAction` cannot capture the extension to re-check it later (architecture §7's
+  2026-07-03 decision-log row: "the isolated-projects-safe `GradleLifecycle.beforeProject` hook cannot
+  isolate an action holding a service/extension reference"). So a build with the master switch ON (the
+  common case) but DSL `enabled = false`/`mode = DISABLED` still writes per-project timing files under
+  `.gradle/buildhound/config-timings/` — the finalizer just never reads them (its own `enabled`/`mode`
+  check, sourced from the live DSL `Property` via a normal finalizer parameter, short-circuits first).
+  Contrast `TestLocationSidecar`, whose write sits inside `taskGraph.whenReady` (a plain, non-isolated
+  closure that runs after the DSL configures) and so *can* honor a DSL-only disable. Two existing
+  `BuildHoundSettingsPluginFunctionalTest` cases (`mode disabled writes no payload`,
+  `enabled false disables collection and salt creation`) asserted the *whole* `.gradle/buildhound` dir was
+  untouched in this scenario; that passed only because `AndroidArtifactCollector` happens to no-op without
+  AGP applied. Both were narrowed to assert the identity-salt file specifically (their actual intent) with
+  a comment explaining the gap — not silently loosened. Self-heals like the stale-file case above: the
+  leftover files sit inert (never read) until read-then-clear on a later enabled/non-DISABLED build.
 - **Not a `configurationMs` decomposition (narrowing 1).** `beforeProject`/`afterProject` time project
   evaluation only (script + plugin apply + `afterEvaluate`); settings/init, buildSrc/included builds,
   task-graph population, and CC-store fall outside, and under parallel/IP per-project times overlap

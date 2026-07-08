@@ -477,7 +477,17 @@ class BuildHoundSettingsPluginFunctionalTest {
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
         assertFalse(result.output.contains("[buildhound] build "), result.output)
         assertFalse(File(projectDir, "build/buildhound").exists(), "disabled mode must not write payloads")
-        assertFalse(File(projectDir, ".gradle/buildhound").exists(), "disabled mode must not create a salt")
+        // The identity salt is the finalizer-owned concern DSL `mode`/`enabled` actually gates (it is
+        // read via a ValueSource inside the finalizer's parameters, which short-circuit before probing
+        // anything). NOT asserted here: the whole `.gradle/buildhound` dir, because the apply-time-only
+        // `masterEnabled` switch (env/property override, resolved before this DSL block even runs — see
+        // the comment on `masterEnabled` in `apply()`) is what gates the project-evaluation collector
+        // (plan 052) and the Android artifact collector (plan 031); a DSL-only `mode`/`enabled` cannot
+        // reach an already-registered `beforeProject`/`afterProject` reaction (an `IsolatedAction` can't
+        // capture the extension to re-check it — architecture §7 2026-07-03 row). So a DSL-disabled build
+        // still writes sibling per-project timing files under `.gradle/buildhound/config-timings/`; the
+        // finalizer simply never reads them (mode DISABLED returns before that point).
+        assertFalse(File(projectDir, ".gradle/buildhound/identity.salt").isFile, "disabled mode must not create a salt")
     }
 
     @Test
@@ -508,8 +518,12 @@ class BuildHoundSettingsPluginFunctionalTest {
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
         assertFalse(result.output.contains("[buildhound] build "), result.output)
+        // See the identical note on `mode disabled writes no payload` (plan 052): DSL `enabled = false`
+        // is a finalizer-time check (the identity salt is never created), but it cannot retroactively
+        // un-register the apply-time `masterEnabled`-gated beforeProject/afterProject collectors — this
+        // fixture still writes sibling per-project timing files under `.gradle/buildhound/config-timings/`.
         assertFalse(
-            File(projectDir, ".gradle/buildhound").exists(),
+            File(projectDir, ".gradle/buildhound/identity.salt").isFile,
             "enabled=false must not touch the identity salt",
         )
         assertFalse(File(projectDir, "build/buildhound").exists())

@@ -105,6 +105,22 @@ class GoldenPayloadTest {
         // Additive guarantee (plan 039): a payload without an `extensions` block defaults to empty,
         // and the v1 golden — authored before the field existed — still deserializes.
         assertTrue(payload.extensions.isEmpty())
+        // Additive guarantee (plan 052): a payload without a `projectEvaluations` block defaults to null.
+        assertNull(payload.projectEvaluations)
+    }
+
+    @Test
+    fun `schema v1 project-evaluations golden file deserializes ranked slowest-first`() {
+        val payload = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            golden("build-payload-v1-project-evaluations.json"),
+        )
+
+        assertEquals(1, payload.schemaVersion, "per-project timing is additive — the envelope stays schema v1")
+        val evaluations = payload.projectEvaluations ?: error("expected a projectEvaluations block")
+        assertEquals(3, evaluations.size)
+        assertEquals(listOf(":app", ":core:network", ":core:common"), evaluations.map { it.path })
+        assertEquals(listOf(4200L, 1800L, 300L), evaluations.map { it.evaluationMs }, "ranked slowest-first")
     }
 
     @Test
@@ -368,6 +384,7 @@ class GoldenPayloadTest {
             "build-payload-v1-internal-adapters.json",
             "build-payload-v1-sharding.json",
             "build-payload-v1-failure-detail.json",
+            "build-payload-v1-project-evaluations.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)
