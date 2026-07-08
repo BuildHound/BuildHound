@@ -1055,6 +1055,49 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             )
         }
 
+    /**
+     * Fleet remote-cache ROI (plan 067, research F17): `origin` lives only in the payload jsonb (plan
+     * 026's `task_executions` predates plan 038), and the `environment.buildCache` snapshot likewise, so
+     * this reads the whole `payload` column — gated to builds carrying either the opaque `internalAdapters`
+     * extension or the `buildCache` snapshot, most-recent first, capped at [MAX_CACHE_ROI_ROWS] with a
+     * `(started_at, build_id)` tie-break identical to the in-memory store's sort — and hands each decoded
+     * [BuildPayload] to the same [cacheRoiRowsOf]/[cacheConfigRowOf] flatteners, so both stores agree
+     * byte-for-byte by construction (the plan-026/032/068 parity discipline). Every bound value is a
+     * parameter, never interpolated (architecture §6). A row whose `payload` fails to decode is skipped
+     * (never fatal), exactly like [cacheMissDiagnostics].
+     */
+    override fun cacheRoi(projectId: String, days: Int, nowMs: Long): CacheRoiRollup =
+        dataSource.connection.use { connection ->
+            val windowed = connection.prepareStatement(
+                """
+                SELECT payload FROM builds
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                  AND (payload -> 'extensions' -> 'internalAdapters' IS NOT NULL
+                       OR payload -> 'environment' -> 'buildCache' IS NOT NULL)
+                ORDER BY started_at DESC, build_id DESC
+                LIMIT ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.setObject(3, atMs(nowMs))
+                statement.setInt(4, MAX_CACHE_ROI_ROWS)
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            runCatching { BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")) }
+                                .getOrNull()
+                                ?.let(::add)
+                        }
+                    }
+                }
+            }
+            CacheRoiCalculator.compute(
+                originRows = windowed.flatMap { cacheRoiRowsOf(it) },
+                configRows = windowed.mapNotNull { cacheConfigRowOf(it) },
+            )
+        }
+
     override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> =
         dataSource.connection.use { connection ->
             // Read the narrow per-class outcome table (indexed on (project, sha, module, class)) and

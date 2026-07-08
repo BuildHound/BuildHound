@@ -89,6 +89,69 @@ class InternalAdaptersUnitTest {
     }
 
     @Test
+    fun `payload round-trips the additive cache-transfer fields`() {
+        val payload = InternalAdaptersPayload(
+            gradleVersion = "9.0.0",
+            tasks = listOf(
+                InternalTaskDetail(
+                    path = ":a:compileJava",
+                    origin = CacheOrigin.REMOTE_HIT,
+                    transferBytes = 4096,
+                    loadMs = 12,
+                    storeMs = null,
+                ),
+            ),
+        )
+        val element: JsonElement = BuildHoundJson.payload.encodeToJsonElement(InternalAdaptersPayload.serializer(), payload)
+        val decoded = BuildHoundJson.payload.decodeFromJsonElement(InternalAdaptersPayload.serializer(), element)
+        assertEquals(payload, decoded)
+        val task = decoded.tasks.single()
+        assertEquals(4096, task.transferBytes)
+        assertEquals(12, task.loadMs)
+        assertNull(task.storeMs, "an unmeasured store stays an honest null, never a fabricated 0")
+    }
+
+    @Test
+    fun `TaskAccum transfer accumulation sums non-nulls and leaves an all-null field null`() {
+        val t = TaskAccum()
+        assertNull(t.transferBytes)
+        assertNull(t.loadMs)
+        // A load then a store on the same task accumulate bytes; each duration lands in its own field.
+        t.addLoadMs(10); t.addTransferBytes(2048)
+        t.addStoreMs(7); t.addTransferBytes(2048)
+        assertEquals(4096, t.transferBytes, "bytes sum across the load + store ops")
+        assertEquals(10, t.loadMs)
+        assertEquals(7, t.storeMs)
+        // A null read (getter unavailable / no bytes) never fabricates a zero.
+        val untouched = TaskAccum()
+        untouched.addTransferBytes(null); untouched.addLoadMs(null); untouched.addStoreMs(null)
+        assertNull(untouched.transferBytes)
+        assertNull(untouched.loadMs)
+        assertNull(untouched.storeMs)
+    }
+
+    @Test
+    fun `the collector maps accumulated transfer timings onto the task detail`() {
+        InternalAdaptersState.resetForTest()
+        InternalAdaptersState.accumulator().forPath(":app:compileJava").apply {
+            remoteLoadHit = true
+            addLoadMs(15)
+            addTransferBytes(8192)
+        }
+        InternalAdaptersState.configure(perFile = false, gradle = "9.0.0", root = null, edges = emptyMap())
+
+        val ctx = ExtensionContributionContext(projectKey = "p", mode = BuildMode.CI, tasks = emptyList())
+        val json = InternalAdaptersCollector().contribute(ctx) ?: error("expected a contribution")
+        val payload = BuildHoundJson.payload.decodeFromJsonElement(InternalAdaptersPayload.serializer(), json)
+
+        val compile = payload.tasks.single { it.path == ":app:compileJava" }
+        assertEquals(CacheOrigin.REMOTE_HIT, compile.origin)
+        assertEquals(8192, compile.transferBytes)
+        assertEquals(15, compile.loadMs)
+        assertNull(compile.storeMs, "no store op ran → an honest null")
+    }
+
+    @Test
     fun `the collector assembles the extension from captured state and then clears it`() {
         InternalAdaptersState.resetForTest()
         InternalAdaptersState.accumulator().forPath(":app:compileJava").apply {

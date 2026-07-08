@@ -731,6 +731,35 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `build-cache config snapshot maps onto environment buildCache`() {
+        val snapshot = BuildCacheConfigSnapshot(
+            localEnabled = true,
+            remoteEnabled = true,
+            remotePush = false,
+            remoteType = "HttpBuildCache",
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), buildCache = snapshot)
+
+        val info = payload.environment?.buildCache ?: error("expected environment.buildCache")
+        assertEquals(true, info.localEnabled)
+        assertEquals(true, info.remoteEnabled)
+        assertEquals(false, info.remotePush)
+        assertEquals("HttpBuildCache", info.remoteType)
+    }
+
+    @Test
+    fun `no build-cache snapshot leaves environment buildCache null`() {
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)))
+        assertNull(payload.environment?.buildCache)
+    }
+
+    @Test
+    fun `an all-null build-cache snapshot maps to a null block (honest nulls, never half-populated)`() {
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), buildCache = BuildCacheConfigSnapshot())
+        assertNull(payload.environment?.buildCache, "an all-null capture reports the same as uncaptured")
+    }
+
+    @Test
     fun `links compose from the redacted remote, sha, and the ci pr number`() {
         val vcs = CollectedVcs(branch = "feature", sha = "a".repeat(40), remoteUrl = "https://github.com/org/repo.git")
         val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), vcs = vcs)
@@ -812,6 +841,7 @@ class PayloadAssemblerTest {
         buildStructure: CollectedBuildStructure? = null,
         isolatedProjects: Boolean? = null,
         wrapper: CollectedWrapper? = null,
+        buildCache: BuildCacheConfigSnapshot? = null,
         environment: CollectedEnvironment = CollectedEnvironment(
             os = "Linux", arch = "amd64", cores = 8, ramMb = 16_000,
             hostnameHash = "h_0123456789ab", userId = "u_0123456789ab",
@@ -860,6 +890,7 @@ class PayloadAssemblerTest {
         buildStructure = buildStructure,
         isolatedProjects = isolatedProjects,
         wrapper = wrapper,
+        buildCache = buildCache,
     )
 
     private fun task(

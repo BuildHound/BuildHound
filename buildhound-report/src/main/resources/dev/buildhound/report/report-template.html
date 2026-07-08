@@ -136,6 +136,16 @@
         if (d.environment) {
             if (d.environment.configurationCache) chip("config cache", d.environment.configurationCache);
             if (d.environment.daemonReused != null) chip("daemon reused", d.environment.daemonReused);
+            // Remote build-cache config snapshot (plan 067): the "0% hit: no remote configured" vs
+            // "configured but cold" triage — booleans + a normalized type only, never a URL.
+            const bc = d.environment.buildCache;
+            if (bc) {
+                if (bc.remoteEnabled) {
+                    chip("remote cache", "configured" + (bc.remotePush ? ", push" : "") + (bc.remoteType ? ", " + bc.remoteType : ""));
+                } else {
+                    chip("remote cache", "not configured");
+                }
+            }
         }
         if (d.toolchain && d.toolchain.gradle) chip("gradle", d.toolchain.gradle);
         if (d.toolchain && d.toolchain.jdk) chip("jdk", d.toolchain.jdk);

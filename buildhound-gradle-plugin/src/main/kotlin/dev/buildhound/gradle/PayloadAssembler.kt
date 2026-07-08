@@ -4,6 +4,7 @@ import dev.buildhound.commons.ci.SourceLinks
 import dev.buildhound.commons.payload.ArtifactSize
 import dev.buildhound.commons.payload.ArtifactSizes
 import dev.buildhound.commons.payload.BenchmarkInfo
+import dev.buildhound.commons.payload.BuildCacheConfigInfo
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
@@ -129,6 +130,9 @@ internal object PayloadAssembler {
         // Wrapper & startup-phase telemetry (plan 066, research F16); null when uncaptured (master
         // switch off, or every probe degraded).
         wrapper: CollectedWrapper? = null,
+        // Committed build-cache config snapshot (plan 067, research F17); null when uncaptured (a guarded
+        // settingsEvaluated read failure) — mapped into environment.buildCache below.
+        buildCache: BuildCacheConfigSnapshot? = null,
     ): BuildPayload {
         // Mirror the benchmark keys into tags (spec's tag contract), but user tags win on clash.
         val mergedTags = if (benchmark == null) {
@@ -183,6 +187,8 @@ internal object PayloadAssembler {
                     // Plaintext workers.max (plan 065): the benchmark-slicing dimension; the salted
                     // gradle.maxWorkers fingerprint (plan 022) stays a separate channel.
                     workersMax = it.workersMax,
+                    // Committed build-cache config snapshot (plan 067); null when uncaptured or all-null.
+                    buildCache = buildCacheConfigInfo(buildCache),
                 )
             },
             // AGP/KGP/KSP (plan 046) + Spring Boot (plan 072) join Gradle/JDK here; emitted whenever any
@@ -384,6 +390,23 @@ internal object PayloadAssembler {
                 distPresent = wrapper.distPresent,
                 jvmStartMs = wrapper.jvmStartMs,
             ),
+        )
+    }
+
+    /**
+     * Maps the plugin-side [BuildCacheConfigSnapshot] DTO onto the wire [BuildCacheConfigInfo] (plan
+     * 067, research F17). Null when [snapshot] itself is null (uncaptured) or every field is null (a
+     * guarded read degraded every dimension) — an all-null capture reports the same as "uncaptured",
+     * never a half-populated block (honest nulls, plan 005). Only booleans + the normalized remote type
+     * cross this boundary; the snapshot never carried a URL or path in the first place (spec §3.7).
+     */
+    private fun buildCacheConfigInfo(snapshot: BuildCacheConfigSnapshot?): BuildCacheConfigInfo? {
+        if (snapshot == null || snapshot.isEmpty()) return null
+        return BuildCacheConfigInfo(
+            localEnabled = snapshot.localEnabled,
+            remoteEnabled = snapshot.remoteEnabled,
+            remotePush = snapshot.remotePush,
+            remoteType = snapshot.remoteType,
         )
     }
 

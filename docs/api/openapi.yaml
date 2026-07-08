@@ -333,6 +333,27 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "503": { $ref: '#/components/responses/Unavailable' }
+  /v1/rollups/cache-roi:
+    get:
+      summary: Fleet remote-cache ROI rollup (plan 067, research F17).
+      description: >
+        Per-build-mode remote/local cache-hit rate from the opt-in plan-038 internal-adapters origin
+        (denominator `LOCAL_HIT+REMOTE_HIT+MISS`, excluding `STORED` — a cold first store is not missed
+        reuse), plus a config-snapshot summary (share of window builds that configured an enabled remote,
+        from the always-on plan-067 `environment.buildCache`) and a ranked near-zero-CI-reuse candidate.
+        Two-tier: with the opt-in module off there is no remote-hit rate at all — `remoteHitRateAvailable`
+        is false and the rollup degrades to the config-snapshot summary (never synthesizing a rate from
+        `cacheableHitRate`). The candidate is gated on a configured remote so it never fires on an
+        unconfigured fleet, and reads as an investigate-prompt, never a verdict (cold/first-build CI
+        legitimately shows near-zero reuse). Benchmark builds excluded, like `/v1/rollups/bottlenecks`.
+        A stored build row whose payload fails to decode is silently skipped, so only a storage outage 503s.
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
+      responses:
+        "200": { description: The remote-cache ROI rollup for the window. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
   /v1/settings:
     get:
       summary: Read this project's regression settings (plan 025).

@@ -181,9 +181,15 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
   "environment": { "os": "...", "arch": "...", "cores": 0, "ramMb": 0,
                    "hostnameHash": "...", "userId": "...", "daemonReused": true,
                    "configurationCache": "HIT|MISS_STORED|DISABLED|INCOMPATIBLE",
-                   "ide": "...", "ideVersion": "...", "ideSync": false, "aiAgent": "..." },
+                   "ide": "...", "ideVersion": "...", "ideSync": false, "aiAgent": "...",
+                   "buildCache": { "localEnabled": true, "remoteEnabled": true, "remotePush": true,
+                                   "remoteType": "HttpBuildCache" } },
     // ^ ide/ideVersion/ideSync/aiAgent are additive (plan 027); aiAgent is positive-only attribution
     //   (only a confirmed agent, e.g. CLAUDECODE, is named — a miss is silent, never a wrong guess)
+    // ^ buildCache is the committed Settings.buildCache config snapshot (plan 067, F17): booleans + the
+    //   normalized remote backend simpleName ONLY — never the remote URL or the local cache directory
+    //   (§3.7). remoteType/remoteEnabled null when no remote backend is configured. The --build-cache
+    //   invocation flag is a separate signal: environment.invocation.buildCacheEnabled (plan 051).
   "toolchain": { "gradle": "9.x", "jdk": "...", "agp": "...", "kgp": "...", "ksp": "...", "springBoot": "..." },
   "vcs": { "branch": "...", "sha": "...", "dirty": false, "remoteUrl": "..." },
     // ^ remoteUrl is redacted all-scheme + fail-closed (userInfo stripped; dropped when it can't be

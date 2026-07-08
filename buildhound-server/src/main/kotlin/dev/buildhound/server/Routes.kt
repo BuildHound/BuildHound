@@ -619,6 +619,17 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             call.respondQuery { store.cacheMissDiagnostics(project.id, days, System.currentTimeMillis()) }
         }
 
+        // Fleet remote-cache ROI (plan 067, research F17): per-mode remote/local hit rate from the opt-in
+        // plan-038 origin, plus a config-snapshot summary (share of window builds with a configured remote,
+        // from the always-on plan-067 environment.buildCache) and a ranked near-zero-CI-reuse candidate.
+        // Two-tier: remoteHitRateAvailable=false degrades to the config-snapshot summary. Read-scope,
+        // tenant-scoped, days clamped like /trends; benchmark builds excluded (the fleet-view convention).
+        get("/rollups/cache-roi") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.cacheRoi(project.id, days, System.currentTimeMillis()) }
+        }
+
         // Delivery-health proxies (plan 059, research F9): CFR per (branch, pipeline), time-to-green
         // (a CI-recovery proxy — never claimed as production MTTR), build-only lead time, and the
         // retry tax — all over already-ingested build rows (zero new collection; the spec-§1 Git/DORA

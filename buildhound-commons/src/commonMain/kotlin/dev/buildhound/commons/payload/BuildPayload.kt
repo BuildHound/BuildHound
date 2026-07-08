@@ -528,10 +528,48 @@ data class EnvironmentInfo(
      * `environment.workersMax`); the hashed fingerprint stays. Null when uncaptured.
      */
     val workersMax: Int? = null,
+    /**
+     * Build-cache **configuration** snapshot (plan 067, research F17): read from the public
+     * `Settings.buildCache` DSL after settings evaluation. Distinguishes "no remote cache configured"
+     * from "remote cache configured but cold/broken" — the most basic cache-triage signal `FROM_CACHE`
+     * outcomes + `derived.cacheableHitRate` alone cannot supply (both are local/remote-blind). Null when
+     * uncaptured (master switch off, or every read degraded). Whether the `--build-cache` flag was passed
+     * is a *separate* signal carried by [InvocationInfo.buildCacheEnabled] (plan 051) — this block is the
+     * committed `buildCache {}` config, not the invocation switch.
+     */
+    val buildCache: BuildCacheConfigInfo? = null,
 )
 
 @Serializable
 enum class ConfigurationCacheState { HIT, MISS_STORED, DISABLED, INCOMPATIBLE }
+
+/**
+ * Build-cache configuration snapshot (plan 067, research F17), read from the public `Settings.buildCache`
+ * DSL: whether the local + remote caches are enabled, whether the remote pushes, and the remote backend's
+ * normalized class `simpleName` (e.g. `"HttpBuildCache"`). Every field is nullable/additive.
+ *
+ * **Privacy (spec §3.7, named in the plan):** only booleans + a normalized type identifier ship. The
+ * remote backend's URL (`HttpBuildCache.getUrl()` — a hostname, possibly with embedded credentials) and
+ * the local cache's directory (`DirectoryBuildCache.getDirectory()` — an absolute path) are **never**
+ * captured. [remoteType] is the class `simpleName`, a code identifier, not user data; it is null when no
+ * remote backend is configured (`Settings.buildCache.remote == null`).
+ *
+ * **Not** the `--build-cache` invocation switch: that is [InvocationInfo.buildCacheEnabled] (plan 051),
+ * which reads `StartParameter.isBuildCacheEnabled`. This block is the committed `buildCache {}` config,
+ * so a consumer that wants "is the build cache actually on" reads the invocation switch and cross-refs
+ * this for "…and is a remote backend even configured".
+ */
+@Serializable
+data class BuildCacheConfigInfo(
+    /** `Settings.buildCache.local.isEnabled` — the local (directory) cache. Defaults true in Gradle. */
+    val localEnabled: Boolean? = null,
+    /** `Settings.buildCache.remote?.isEnabled`; null when no remote backend is configured at all. */
+    val remoteEnabled: Boolean? = null,
+    /** `Settings.buildCache.remote?.isPush` — whether this build writes to the remote. */
+    val remotePush: Boolean? = null,
+    /** Normalized remote backend class `simpleName` (e.g. `"HttpBuildCache"`); null when no remote. */
+    val remoteType: String? = null,
+)
 
 /**
  * Invocation-switch & performance-flag posture (plan 051, spec §3.2/§4, research finding F1):

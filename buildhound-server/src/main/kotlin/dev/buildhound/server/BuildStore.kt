@@ -134,6 +134,45 @@ internal fun carriesCacheMissDiagnosticsBlock(payload: BuildPayload): Boolean =
     payload.extensions.containsKey(INTERNAL_ADAPTERS_EXTENSION_KEY) || payload.fingerprints != null
 
 /**
+ * Flatten one payload's `extensions["internalAdapters"].tasks[]` (plan 038) — origin only — into
+ * [CacheRoiRow]s tagged with the build mode, for [CacheRoiCalculator] (plan 067). Same opaque-`extensions`
+ * decoupling + `runCatching` guard as [relocatabilityRowsOf]: the server keeps **no** dependency on
+ * `buildhound-internal-adapters`, so an unexpected shape (a future schema bump, malformed JSON) degrades
+ * to an empty list for this build rather than crashing the whole rollup. The wire `origin` string is
+ * parsed to [CacheRoiOrigin] here — the one boundary — so every downstream comparison is an enum, never a
+ * raw literal; an unrecognized value degrades to [CacheRoiOrigin.OTHER].
+ */
+internal fun cacheRoiRowsOf(payload: BuildPayload): List<CacheRoiRow> {
+    val mode = payload.mode.name
+    return runCatching {
+        val element = payload.extensions[INTERNAL_ADAPTERS_EXTENSION_KEY]
+            ?: return@runCatching emptyList<CacheRoiRow>()
+        element.jsonObject["tasks"]?.jsonArray.orEmpty().mapNotNull { taskElement ->
+            val origin = taskElement.jsonObject["origin"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            CacheRoiRow(mode, CacheRoiOrigin.entries.firstOrNull { it.name == origin } ?: CacheRoiOrigin.OTHER)
+        }
+    }.getOrElse { emptyList() }
+}
+
+/**
+ * One build's committed build-cache config fact (plan 067) for the config-snapshot summary: null when the
+ * payload carries no `environment.buildCache` block (a pre-067 plugin), so it never counts toward
+ * [CacheRoiRollup.buildsWithConfig]. `remoteEnabled` is `true` only when a remote backend was configured
+ * **and** enabled — the plan's `remoteEnabled` share.
+ */
+internal fun cacheConfigRowOf(payload: BuildPayload): CacheConfigRow? {
+    val buildCache = payload.environment?.buildCache ?: return null
+    return CacheConfigRow(mode = payload.mode.name, remoteEnabled = buildCache.remoteEnabled == true)
+}
+
+/** True when a payload feeds the cache-ROI rollup (plan 067): it carries origin data OR the config snapshot. */
+internal fun carriesCacheRoiBlock(payload: BuildPayload): Boolean =
+    payload.extensions.containsKey(INTERNAL_ADAPTERS_EXTENSION_KEY) || payload.environment?.buildCache != null
+
+/** Defensive ceiling on builds scanned for one `/rollups/cache-roi` query (plan 067), mirroring [RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS]. */
+internal const val MAX_CACHE_ROI_ROWS: Int = 20_000
+
+/**
  * Server-local minimal view of `extensions["internalAdapters"]` (plan 062) carrying only
  * [dependencyEdges] — the plan-039 decoupling principle applied to a second reader: the server decodes
  * this narrow shape through the commons [BuildHoundJson] (`ignoreUnknownKeys`) rather than depending on
@@ -426,6 +465,21 @@ interface BuildStore {
      * inflate both the cross-host count and the fingerprint-volatility signal).
      */
     fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long): CacheMissDiagnostics
+
+    /**
+     * Fleet remote-cache ROI over the last [days] (plan 067, research F17): per-build-mode remote/local
+     * cache-hit rate (from the opt-in plan-038 `origin`, denominator `LOCAL_HIT+REMOTE_HIT+MISS`) plus a
+     * config-snapshot summary (share of window builds with a configured remote, from the always-on plan-067
+     * `environment.buildCache`) and a ranked near-zero-CI-reuse candidate. Two-tier: with the opt-in module
+     * off there is no remote-hit rate at all — [CacheRoiRollup.remoteHitRateAvailable] is false and the rollup
+     * degrades to the config-snapshot summary (never synthesizing a rate from `cacheableHitRate`). Both stores
+     * read the same windowed builds — gated to those carrying either the opaque `internalAdapters` extension
+     * or the `buildCache` snapshot, most-recent-first, capped at [MAX_CACHE_ROI_ROWS] — flatten via guarded
+     * JsonElement navigation, and defer to the pure [CacheRoiCalculator], so in-memory and Postgres agree
+     * byte-for-byte (the plan-026/032/068 parity discipline). Benchmark builds excluded (the fleet-view
+     * convention — a repeated same-scenario benchmark build on a fixed runner would skew the fleet rate).
+     */
+    fun cacheRoi(projectId: String, days: Int, nowMs: Long): CacheRoiRollup
 
     /**
      * Delivery-health **proxies** over the last [days] (plan 059, research F9): change-failure rate
@@ -830,6 +884,21 @@ class InMemoryBuildStore : BuildStore {
             remoteCacheObserved = RelocatabilityDetector.remoteCacheObserved(relocatabilityRows),
             nonRelocatable = RelocatabilityDetector.detect(relocatabilityRows),
             volatileInputs = FingerprintVolatilityDetector.detect(streamRows),
+        )
+    }
+
+    override fun cacheRoi(projectId: String, days: Int, nowMs: Long): CacheRoiRollup {
+        // Same fleet-view window as bottlenecks/toolchainAdoption/cacheMissDiagnostics (benchmark
+        // excluded), further gated to builds carrying either block and capped/tie-broken identically to
+        // the Postgres store's `ORDER BY started_at DESC, build_id DESC LIMIT` so the two agree
+        // byte-for-byte even above the cap (plan 067).
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+            .filter { carriesCacheRoiBlock(it) }
+            .sortedWith(compareByDescending<BuildPayload> { it.startedAt }.thenByDescending { it.buildId })
+            .take(MAX_CACHE_ROI_ROWS)
+        return CacheRoiCalculator.compute(
+            originRows = windowed.flatMap { cacheRoiRowsOf(it) },
+            configRows = windowed.mapNotNull { cacheConfigRowOf(it) },
         )
     }
 

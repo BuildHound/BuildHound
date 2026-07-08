@@ -93,6 +93,18 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         // Replayed from the CC entry on a hit via the BuildStructureValueSource parameters below
         // (same channel as toolchainHolder).
         val buildStructureHolder = AtomicReference(CapturedBuildStructure())
+        // Sibling mailbox for the committed build-cache config snapshot (plan 067, research F17),
+        // filled by `settingsEvaluated` — the earliest hook where the settings-script `buildCache {}`
+        // block is guaranteed fully evaluated (never at apply(), where it may be empty). Reading only
+        // `settings.buildCache` here touches no `Gradle.includedBuilds` (the call that forced the other
+        // walks off `settingsEvaluated`), so this hook is safe. Replayed from the CC entry on a hit via
+        // the finalizer's buildCache param below — correct, because cache *configuration* is stable
+        // across builds (unlike per-build timings). Public API only; no internal Gradle type.
+        val buildCacheHolder = AtomicReference(BuildCacheConfigSnapshot())
+        settings.gradle.settingsEvaluated { s ->
+            runCatching { buildCacheHolder.set(BuildCacheConfigReader.snapshot(s.buildCache)) }
+                .onFailure { logger.warn("[buildhound] build-cache config snapshot failed (build unaffected): {}", it.message) }
+        }
         // Internal test seam (mirrors the other `buildhound.internal.*` failpoints): when any of
         // these is set, its value is reported verbatim instead of walking the project graph — lets
         // the TestKit suite exercise the whenReady→service→payload channel (and its CC replay)
@@ -455,6 +467,11 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             // finalizer runs after a CC store or replays a CC hit.
             spec.parameters.isolatedProjectsActive.set(buildFeatures.isolatedProjects.active.getOrElse(false))
             spec.parameters.wrapper.set(wrapper)
+            // Build-cache config snapshot (plan 067, research F17): the same after-configuration
+            // Flow-action channel as [toolchain] — the provider resolves after `settingsEvaluated` fills
+            // the mailbox, is baked into the CC entry, and replays on a hit (correct: cache config is
+            // stable across builds). Public Settings.buildCache read only; no URL/path ever captured.
+            spec.parameters.buildCache.set(settings.providers.provider { buildCacheHolder.get() })
             spec.parameters.configurationCacheRequested.set(buildFeatures.configurationCache.requested.getOrElse(false))
             // Lazy: the settings script sets rootProject.name after apply() runs.
             spec.parameters.projectKey.set(settings.providers.provider { settings.rootProject.name })

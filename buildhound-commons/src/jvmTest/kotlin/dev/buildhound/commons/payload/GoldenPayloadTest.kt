@@ -119,6 +119,28 @@ class GoldenPayloadTest {
         assertNull(payload.environment?.workersMax)
         // Additive guarantee (plan 072): a payload without a `toolchain.springBoot` dimension defaults null.
         assertNull(payload.toolchain?.springBoot)
+        // Additive guarantee (plan 067): an `environment` without a `buildCache` config block defaults null.
+        assertNull(payload.environment?.buildCache)
+    }
+
+    @Test
+    fun `schema v1 buildcache golden file deserializes with a populated remote-cache config snapshot`() {
+        val payload = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            golden("build-payload-v1-buildcache.json"),
+        )
+
+        assertEquals(1, payload.schemaVersion, "the build-cache config snapshot is additive — the envelope stays schema v1")
+        val buildCache = payload.environment?.buildCache ?: error("expected an environment.buildCache block")
+        assertEquals(true, buildCache.localEnabled)
+        assertEquals(true, buildCache.remoteEnabled)
+        assertEquals(true, buildCache.remotePush)
+        // The normalized backend simpleName — a code identifier, never the URL (spec §3.7).
+        assertEquals("HttpBuildCache", buildCache.remoteType)
+        // Privacy: no remote URL or local cache directory anywhere in the wire payload (grep the JSON).
+        val wire = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
+        assertTrue(!wire.contains("http://") && !wire.contains("://"), "no remote-cache URL may leak into the payload")
+        assertTrue(!wire.contains("getUrl") && !wire.contains("getDirectory"), "no cache-location accessor output may leak")
     }
 
     @Test
@@ -579,6 +601,7 @@ class GoldenPayloadTest {
             "build-payload-v1-wrapper.json",
             "build-payload-v1-test-telemetry.json",
             "build-payload-v1-process-tuning.json",
+            "build-payload-v1-buildcache.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

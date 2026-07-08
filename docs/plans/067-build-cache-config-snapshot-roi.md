@@ -65,7 +65,6 @@ BuildCacheConfigInfo?` param, mapped into the `EnvironmentInfo(...)` block (`:13
 
 ```kotlin
 @Serializable data class BuildCacheConfigInfo(
-    val enabled: Boolean? = null,        // StartParameter.isBuildCacheEnabled()
     val localEnabled: Boolean? = null,
     val remoteEnabled: Boolean? = null,
     val remotePush: Boolean? = null,
@@ -73,6 +72,18 @@ BuildCacheConfigInfo?` param, mapped into the `EnvironmentInfo(...)` block (`:13
 )
 // EnvironmentInfo gains:  val buildCache: BuildCacheConfigInfo? = null
 ```
+
+> **Divergence (implementation):** the planned `enabled` field (`StartParameter.isBuildCacheEnabled()`)
+> was **dropped from `BuildCacheConfigInfo`.** The §Out note anticipated exactly this — *"when [F1's
+> `environment.invocation`] lands, this scalar moves there and `buildCache` references it instead of
+> double-emitting."* F1's invocation block (**plan 051**) has since landed and already carries
+> `invocation.buildCacheEnabled` wired from `settings.startParameter.isBuildCacheEnabled`
+> (`BuildHoundSettingsPlugin.kt:366`), so re-emitting it here would be the double-emit the plan set out to
+> avoid. `BuildCacheConfigInfo` is new/never-shipped, so removing the field pre-merge is not a schema
+> break; a consumer that wants "is the build cache flag on" reads `invocation.buildCacheEnabled` and
+> cross-refs `buildCache` for "…and is a remote backend even configured". The transfer-timing schema bump
+> was **not** taken: the new `InternalTaskDetail.transferBytes/loadMs/storeMs` are additive-nullable, so
+> `InternalAdaptersPayload.SCHEMA_VERSION` stays **1** (the plan permitted this — "optional").
 
 `schemaVersion` stays **1**. `encodeDefaults=true`+`explicitNulls=false` omit the null default, so
 `build-payload-v1.json` stays valid untouched; add `build-payload-v1-buildcache.json` for the

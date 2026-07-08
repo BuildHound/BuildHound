@@ -182,4 +182,21 @@ class TaskAccum {
     @Volatile var originExecutionTimeMs: Long? = null
     @Volatile var cachingDisabledReason: String? = null
     @Volatile var cachingDisabledCategory: String? = null
+
+    /**
+     * Cache-transfer accumulation (plan 067): bytes moved + load/store op wall time, summed across this
+     * task's `BuildCache{Local,Remote}{Load,Store}` ops. A task has at most one load and one store, run
+     * sequentially, so the plain `+=` accumulation carries no meaningful cross-op race (same soft-cap
+     * rationale as the warning set); a null stays null (the getter was unavailable / no bytes moved).
+     */
+    @Volatile var transferBytes: Long? = null
+    @Volatile var loadMs: Long? = null
+    @Volatile var storeMs: Long? = null
+
+    /** Accumulate a nullable Long into a running total, treating null-plus-value as value (never fabricating 0). */
+    fun addTransferBytes(bytes: Long?) { if (bytes != null) transferBytes = (transferBytes ?: 0L) + bytes }
+
+    fun addLoadMs(ms: Long?) { if (ms != null) loadMs = (loadMs ?: 0L) + ms }
+
+    fun addStoreMs(ms: Long?) { if (ms != null) storeMs = (storeMs ?: 0L) + ms }
 }
