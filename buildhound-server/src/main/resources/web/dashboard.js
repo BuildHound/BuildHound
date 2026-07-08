@@ -1501,6 +1501,104 @@
         app.append(table);
     }
 
+    // Delivery-health page (plan 059, research F9): DORA-style PROXIES over already-ingested build
+    // telemetry — labeled honestly throughout (CI failure share, CI recovery, build/pipeline lead-time
+    // contribution, retry tax), never claimed as real DORA (no deployment or incident data). Every
+    // payload-derived string reaches the DOM via el()/textContent; degraded states are honest notices,
+    // never zeros read as data.
+    async function deliveryHealthView() {
+        const seq = ++renderSeq;
+        const d = await api("/v1/rollups/delivery-health?days=30");
+        if (seq !== renderSeq) return;
+
+        app.textContent = "";
+        app.append(el("p", "Delivery health — the last " + d.period + " days", "summary-sentence"));
+        app.append(el("p", "DORA-style proxies computed from build telemetry BuildHound already ingests — not real DORA metrics (no deployment or incident data is collected).", "muted"));
+
+        app.append(el("h3", "Change-failure rate (CI failure share per branch & pipeline — a proxy, not deploy failures)"));
+        if (!d.changeFailureRate.length) {
+            app.append(el("p", "Not enough finished builds per branch/pipeline yet — a cohort needs a few finished builds before a rate is claimed.", "muted"));
+        } else {
+            app.append(rankedTable(["Branch", "Pipeline", "Failed", "Succeeded", "CFR"], d.changeFailureRate, r => {
+                const cfrCell = el("td", null, "num");
+                cfrCell.append(el("span", pctFmt(r.changeFailureRate), "delta " + (r.failed === 0 ? "delta-good" : "delta-bad")));
+                return [
+                    el("td", r.branch || "—"),
+                    el("td", r.pipelineName || "—"),
+                    el("td", r.failed, "num"),
+                    el("td", r.succeeded, "num"),
+                    cfrCell,
+                ];
+            }));
+        }
+
+        app.append(el("h3", "Time to green (CI recovery, not production MTTR)"));
+        if (!d.timeToGreen.length) {
+            app.append(el("p", "No failure-to-recovery episodes in this window.", "muted"));
+        } else {
+            app.append(rankedTable(["Branch", "Pipeline", "Recoveries", "Median", "P90", "Status"], d.timeToGreen, r => {
+                const statusCell = el("td");
+                if (r.openEpisode) statusCell.append(el("span", "still red", "badge FAILED"));
+                else statusCell.append(el("span", "green", "delta delta-good"));
+                return [
+                    el("td", r.branch || "—"),
+                    el("td", r.pipelineName || "—"),
+                    el("td", r.recoveries, "num"),
+                    el("td", r.medianRecoveryMs == null ? "—" : ms(r.medianRecoveryMs), "num"),
+                    el("td", r.p90RecoveryMs == null ? "—" : ms(r.p90RecoveryMs), "num"),
+                    statusCell,
+                ];
+            }));
+        }
+
+        app.append(el("h3", "Lead-time contribution (time a change spends in the build & pipeline)"));
+        if (!d.connectorDataAvailable) {
+            app.append(el("p", "Queue time and Gradle share need a CI connector — connect one (Azure DevOps, GitHub Actions or GitLab) to populate those columns. Build durations always render.", "notice-warn"));
+        }
+        if (!d.leadTime.length) {
+            app.append(el("p", "No finished builds in this window.", "muted"));
+        } else {
+            app.append(rankedTable(["Branch", "Pipeline", "Builds", "Median build time", "Median queue", "Gradle share of pipeline"], d.leadTime, r => [
+                el("td", r.branch || "—"),
+                el("td", r.pipelineName || "—"),
+                el("td", r.buildCount, "num"),
+                el("td", ms(r.medianDurationMs), "num"),
+                el("td", r.medianQueuedMs == null ? "—" : ms(r.medianQueuedMs), "num"),
+                el("td", r.medianGradleSharePct == null ? "—" : pctFmt(r.medianGradleSharePct), "num"),
+            ]));
+        }
+
+        app.append(el("h3", "Retry tax (rerun chains priced in CI minutes)"));
+        const tax = d.retryTax;
+        if (!tax.chainCount) {
+            app.append(el("p", "No rerun chains detected in this window.", "muted"));
+        } else {
+            const chips = el("ul", null, "chips");
+            chips.append(chipItem("rerun chains", tax.chainCount));
+            chips.append(chipItem("wasted CI minutes", tax.wastedCiMinutesLowerBound + " (lower bound)"));
+            chips.append(chipItem("via runAttempt", tax.runAttemptReruns));
+            chips.append(chipItem("same-key candidates", tax.sameKeyCandidates));
+            app.append(chips);
+            app.append(el("p", d.connectorDataAvailable
+                ? "Connector-enriched reruns are priced at pipeline wall-clock; the rest at Gradle wall-clock only — still a lower bound (checkout/setup excluded). Same-key reruns are heuristic candidates, not confirmed reruns."
+                : "Priced at Gradle wall-clock only (checkout/setup excluded) — a lower bound. Same-key reruns are heuristic candidates, not confirmed reruns.", "muted"));
+        }
+        if (d.flakyRerunTax.length) {
+            app.append(el("h3", "Flaky-rerun candidates (reruns that hit a known flaky class)"));
+            app.append(rankedTable(["Module", "Class", "Rerun builds", "Wasted CI minutes"], d.flakyRerunTax, c => [
+                el("td", c.module || "(root)"),
+                el("td", c.className),
+                el("td", c.rerunBuildCount, "num"),
+                el("td", c.wastedCiMinutesLowerBound + " (lower bound)", "num"),
+            ]));
+            const note = el("p", "Ranked candidates, not confirmed causes — not every rerun is flakiness. ", "muted");
+            const link = el("a", "See the flaky-tests page");
+            link.href = "#/flaky";
+            note.append(link);
+            app.append(note);
+        }
+    }
+
     // Admin / retention page (plan 042). Uses its OWN admin-scoped token in a separate sessionStorage
     // slot — a read token can't reach /v1/admin (403). Every string reaches the DOM via textContent.
     async function adminView() {
@@ -1606,6 +1704,7 @@
                 : hash.startsWith("#/tasks") ? tasksRollupView()
                 : hash.startsWith("#/tests") ? testsView()
                 : hash.startsWith("#/flaky") ? flakyView()
+                : hash.startsWith("#/delivery") ? deliveryHealthView()
                 : hash.startsWith("#/benchmark") ? benchmarkView()
                 : hash.startsWith("#/bottlenecks") ? bottlenecksView(7)
                 : bottlenecksView(7);

@@ -258,6 +258,28 @@ paths:
         "200": { description: Per-bucket coverage of executed task-hours (overlapping), a build-level cascade rate, and an optional build-logic-storm candidate. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/delivery-health:
+    get:
+      summary: Delivery-health rollup — DORA proxies + the retry tax (plan 059, research F9).
+      description: >
+        Three DORA-style **proxies** over already-ingested build rows — zero new collection, no
+        git-history or deployment mining (the spec-§1 Git/DORA non-goal holds): change-failure rate
+        per (branch, pipeline) (CI failure share — the per-cohort refinement of the fleet
+        `successRate`), time-to-green (a **CI-recovery** proxy, never production MTTR), and
+        build-duration lead time — plus a retry-tax summary (rerun chains via GHA `runAttempt > 1`
+        (authoritative) and a sequential same-`(projectKey, sha, requestedTasksSig)`-after-FAILED
+        heuristic (labeled candidates), priced in CI minutes as an explicit **lower bound**).
+        Queue-time/Gradle-share lead-time columns and pipeline-wall-clock rerun pricing populate only
+        for connector-enriched builds (`connectorDataAvailable`); `flakyRerunTax` ranks flaky classes
+        (plan 036) whose affected builds intersect the rerun set — candidates, not confirmed causes.
+        Benchmark builds excluded, like `/v1/rollups/bottlenecks`.
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
+      responses:
+        "200": { description: The delivery-health rollup for the window. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
   /v1/rollups/warnings:
     get:
       summary: Build-Analyzer-style warning taxonomy rollup (plan 060, research F10).

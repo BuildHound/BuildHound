@@ -870,6 +870,60 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         }
 
     /**
+     * Delivery-health proxies (plan 059, research F9): one indexed hot-column scan over `builds`
+     * (`builds_project_started_idx` covers the window — no migration, per the plan's default) plus
+     * three jsonb extracts (`vcs.sha`, `projectKey`, `ci.attributes.runAttempt`) the hot columns don't
+     * carry. Same half-open window + `mode <> 'BENCHMARK'` fleet-view convention as [bottlenecks];
+     * rows are handed to the shared [DeliveryHealthCalculator] (which sorts internally), so both
+     * stores agree byte-for-byte (the plan-026/032 parity discipline). `requested_tasks_sig` is
+     * written on every insert (plan 025) and V3-backfilled, so the `?: ""` fallback is unreachable in
+     * practice — belt-and-braces against a hand-edited row, never a crash. `runAttempt` goes through
+     * [DeliveryHealthCalculator.parseRunAttempt] (`toIntOrNull`) — a garbage attribute never throws.
+     */
+    override fun deliveryHealth(projectId: String, days: Int, nowMs: Long): DeliveryHealthRollup =
+        dataSource.connection.use { connection ->
+            val rows = connection.prepareStatement(
+                """
+                SELECT build_id, branch, pipeline_name, ci_provider, outcome,
+                       (extract(epoch from started_at) * 1000)::bigint AS started_ms,
+                       (extract(epoch from finished_at) * 1000)::bigint AS finished_ms,
+                       payload -> 'vcs' ->> 'sha' AS sha,
+                       payload ->> 'projectKey' AS project_key,
+                       requested_tasks_sig,
+                       payload -> 'ci' -> 'attributes' ->> 'runAttempt' AS run_attempt
+                FROM builds
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.setObject(3, atMs(nowMs))
+                statement.executeQuery().use { resultSet ->
+                    buildList {
+                        while (resultSet.next()) {
+                            add(
+                                DeliveryBuildRow(
+                                    buildId = resultSet.getString("build_id"),
+                                    branch = resultSet.getString("branch"),
+                                    pipelineName = resultSet.getString("pipeline_name"),
+                                    provider = resultSet.getString("ci_provider"),
+                                    outcome = resultSet.getString("outcome"),
+                                    startedAtMs = resultSet.getLong("started_ms"),
+                                    finishedAtMs = resultSet.getLong("finished_ms"),
+                                    sha = resultSet.getString("sha"),
+                                    projectKey = resultSet.getString("project_key"),
+                                    requestedTasksSig = resultSet.getString("requested_tasks_sig") ?: "",
+                                    runAttempt = DeliveryHealthCalculator.parseRunAttempt(resultSet.getString("run_attempt")),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+            DeliveryHealthCalculator.compute(rows, days)
+        }
+
+    /**
      * Warning taxonomy (plan 060, research F10): its own `jsonb_array_elements` scan over
      * `builds.payload->'tasks'`, deliberately **not** [taskRowsBetween] — `task_executions` has no
      * `incremental` column, and even its `execution_reasons` column is NULL for any build ingested

@@ -425,6 +425,20 @@ interface BuildStore {
      */
     fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long): CacheMissDiagnostics
 
+    /**
+     * Delivery-health **proxies** over the last [days] (plan 059, research F9): change-failure rate
+     * per (branch, pipeline), time-to-green (a CI-recovery proxy, not production MTTR), build-only
+     * lead time, and the retry tax — all from build rows already ingested, zero new collection (the
+     * spec-§1 Git/DORA non-goal stays intact). Benchmark builds excluded (the bottlenecks/toolchain/
+     * rerun-causes fleet-view convention — CFR is the per-cohort refinement of plan-032's fleet
+     * `successRate`, so it inherits that KPI's population). Both stores fetch the same windowed
+     * [DeliveryBuildRow]s and defer to [DeliveryHealthCalculator], so in-memory and Postgres agree
+     * byte-for-byte (the plan-026/032 parity discipline). Connector/flaky enrichment happens at the
+     * route, never here — the parity core stays build-only (no [dev.buildhound.server.connector.CiSpanStore]
+     * in any store constructor).
+     */
+    fun deliveryHealth(projectId: String, days: Int, nowMs: Long): DeliveryHealthRollup
+
     /** Every project id with stored data (retention sweep, plan 042); default empty for a store that has none. */
     fun allProjectIds(): List<String> = emptyList()
 
@@ -804,6 +818,29 @@ class InMemoryBuildStore : BuildStore {
             volatileInputs = FingerprintVolatilityDetector.detect(streamRows),
         )
     }
+
+    override fun deliveryHealth(projectId: String, days: Int, nowMs: Long): DeliveryHealthRollup {
+        // Same fleet-view window + benchmark exclusion as bottlenecks/toolchainAdoption/rerunCauses
+        // (payloadsBetween) — CFR refines plan-032's fleet successRate, so it inherits its population.
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+        return DeliveryHealthCalculator.compute(windowed.map { deliveryRowOf(it) }, days)
+    }
+
+    /** Flatten one payload into the plan-059 delivery row — the exact shape the Postgres SQL mirrors. */
+    private fun deliveryRowOf(payload: BuildPayload): DeliveryBuildRow =
+        DeliveryBuildRow(
+            buildId = payload.buildId,
+            branch = payload.vcs?.branch,
+            pipelineName = payload.ci?.pipelineName,
+            provider = payload.ci?.provider,
+            outcome = payload.outcome.name,
+            startedAtMs = payload.startedAt,
+            finishedAtMs = payload.finishedAt,
+            sha = payload.vcs?.sha,
+            projectKey = payload.projectKey,
+            requestedTasksSig = RegressionEngine.requestedTasksSignature(payload.requestedTasks),
+            runAttempt = DeliveryHealthCalculator.parseRunAttempt(payload.ci?.attributes?.get("runAttempt")),
+        )
 
     override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> {
         val cutoff = nowMs - days.toLong() * 86_400_000

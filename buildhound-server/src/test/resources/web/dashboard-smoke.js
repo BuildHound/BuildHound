@@ -283,6 +283,32 @@ const responses = {
         kgp: { available: false, versions: [], behind: [] },
         ksp: { available: false, versions: [], behind: [] },
     },
+    // Delivery health (plan 059): connector-enriched happy path — CFR rows (one green, one red),
+    // time-to-green incl. a still-red open episode, lead time with queue/share populated, and a
+    // retry-tax card with a flaky-rerun candidate linking to #/flaky.
+    "/v1/rollups/delivery-health?days=30": {
+        period: 30,
+        changeFailureRate: [
+            { branch: "main", pipelineName: "android-ci", failed: 3, succeeded: 7, changeFailureRate: 0.3 },
+            { branch: "release", pipelineName: "android-ci", failed: 0, succeeded: 5, changeFailureRate: 0.0 },
+        ],
+        timeToGreen: [
+            { branch: "main", pipelineName: "android-ci", recoveries: 2, medianRecoveryMs: 5400000, p90RecoveryMs: 9000000, openEpisode: false },
+            { branch: "release", pipelineName: "android-ci", recoveries: 0, medianRecoveryMs: null, p90RecoveryMs: null, openEpisode: true },
+        ],
+        leadTime: [
+            { branch: "main", pipelineName: "android-ci", buildCount: 10, medianDurationMs: 300000, medianQueuedMs: 42000, medianGradleSharePct: 0.35 },
+            { branch: "release", pipelineName: "android-ci", buildCount: 5, medianDurationMs: 280000, medianQueuedMs: null, medianGradleSharePct: null },
+        ],
+        retryTax: {
+            chainCount: 2, rerunBuildIds: ["b1", "b2"], wastedCiMinutesLowerBound: 12.5,
+            runAttemptReruns: 1, sameKeyCandidates: 1,
+        },
+        connectorDataAvailable: true,
+        flakyRerunTax: [
+            { module: ":app", className: "com.example.CartTest", rerunBuildCount: 2, wastedCiMinutesLowerBound: 8.0 },
+        ],
+    },
     // Warning taxonomy (plan 060): one ALWAYS_RUN candidate with evidence; period=14/30 are empty
     // (also covers the additive-field-absent path, mirroring topPlugins above).
     "/v1/rollups/warnings?period=7": {
@@ -654,6 +680,46 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
     context.location.hash = "#/flaky"; context._onhashchange(); await tick(); await tick();
     if (!hasText(byId["app"], "No flaky tests detected")) throw new Error("flaky empty state missing");
+
+    // Delivery-health page (plan 059): all four panels render — CFR with semantic (goodness)
+    // colouring, time-to-green with the honest CI-recovery caption + a still-red open episode,
+    // lead time with connector-populated queue/share, and the retry-tax card whose flaky-rerun
+    // candidate links to #/flaky. CSP-safe: same-origin fetch, textContent only, like every view.
+    context.location.hash = "#/delivery"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/rollups/delivery-health?days=30")) throw new Error("delivery view did not fetch");
+    if (!hasText(byId["app"], "Delivery health")) throw new Error("delivery summary sentence missing");
+    if (!hasText(byId["app"], "not real DORA metrics")) throw new Error("delivery proxy-honesty caption missing");
+    if (!hasText(byId["app"], "Change-failure rate")) throw new Error("CFR section missing");
+    if (!hasText(byId["app"], "android-ci")) throw new Error("CFR pipeline row missing");
+    if (!hasClass(byId["app"], "delta-bad")) throw new Error("CFR semantic (bad) colouring missing");
+    if (!hasClass(byId["app"], "delta-good")) throw new Error("CFR semantic (good) colouring missing");
+    if (!hasText(byId["app"], "CI recovery, not production MTTR")) throw new Error("time-to-green honesty caption missing");
+    if (!hasExact(byId["app"], "still red")) throw new Error("open-episode still-red badge missing");
+    if (!hasText(byId["app"], "Lead-time contribution")) throw new Error("lead-time section missing");
+    if (hasText(byId["app"], "need a CI connector")) throw new Error("connector notice must be absent when connectorDataAvailable is true");
+    if (!hasText(byId["app"], "Retry tax")) throw new Error("retry-tax section missing");
+    if (!hasText(byId["app"], "12.5 (lower bound)")) throw new Error("wasted-CI-minutes lower-bound chip missing");
+    if (!hasText(byId["app"], "same-key candidates")) throw new Error("retry-tax signal split missing");
+    if (!hasText(byId["app"], "Flaky-rerun candidates")) throw new Error("flaky-rerun candidates section missing");
+    if (!hasText(byId["app"], "com.example.CartTest")) throw new Error("flaky-rerun candidate row missing");
+    const flakyLink = findTag(byId["app"], "a").find(a => a.href === "#/flaky");
+    if (!flakyLink) throw new Error("flaky-rerun candidates must link to #/flaky");
+
+    // Delivery-health degraded state (plan 059): no connector data → the honest "connect a CI
+    // connector" notice; empty families → honest empty lines, never zeros read as data; the
+    // flaky-rerun section is absent entirely.
+    responses["/v1/rollups/delivery-health?days=30"] = {
+        period: 30, changeFailureRate: [], timeToGreen: [], leadTime: [],
+        retryTax: { chainCount: 0, rerunBuildIds: [], wastedCiMinutesLowerBound: 0.0, runAttemptReruns: 0, sameKeyCandidates: 0 },
+        connectorDataAvailable: false, flakyRerunTax: [],
+    };
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/delivery"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "need a CI connector")) throw new Error("connector-absent notice missing");
+    if (!hasText(byId["app"], "Not enough finished builds")) throw new Error("CFR empty state missing");
+    if (!hasText(byId["app"], "No failure-to-recovery episodes")) throw new Error("time-to-green empty state missing");
+    if (!hasText(byId["app"], "No rerun chains detected")) throw new Error("retry-tax empty state missing");
+    if (hasText(byId["app"], "Flaky-rerun candidates")) throw new Error("flaky-rerun section must be absent without candidates");
 
     // Empty rollups render without throwing (server-side never-fail analogue).
     responses["/v1/rollups/project-cost?days=30"] = [];
