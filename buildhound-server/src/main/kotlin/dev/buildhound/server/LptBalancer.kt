@@ -39,14 +39,8 @@ object LptBalancer {
         return shards.map { it.toList() }
     }
 
-    /** Nearest-rank p90 over a duration list (plan 040 timing input); 0 when empty. */
-    fun p90(durations: List<Long>): Long {
-        if (durations.isEmpty()) return 0
-        val sorted = durations.sorted()
-        // Nearest-rank: ceil(0.90 * n), 1-based → 0-based index.
-        val rank = Math.ceil(0.90 * sorted.size).toInt().coerceIn(1, sorted.size)
-        return sorted[rank - 1]
-    }
+    /** Nearest-rank p90 over a duration list (plan 040 timing input); 0 when empty. See [NearestRankPercentile]. */
+    fun p90(durations: List<Long>): Long = NearestRankPercentile.of(durations, 0.90)
 
     private fun medianLong(values: List<Long>): Long {
         val sorted = values.sorted()

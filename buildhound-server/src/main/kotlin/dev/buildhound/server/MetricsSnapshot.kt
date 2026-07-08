@@ -1,7 +1,5 @@
 package dev.buildhound.server
 
-import kotlin.math.ceil
-
 /**
  * Per-project metrics snapshot for the Prometheus egress endpoint (plan 070, spec §5 F20). Every field
  * is `null`/omitted when the window carries no underlying samples for it — the omit-not-zero rule
@@ -29,12 +27,12 @@ data class MetricsSnapshot(
  * (the plan-026/032 parity discipline) — same windowed [BuildKpiRow]s the bottlenecks/trends rollups
  * already fetch.
  *
- * Percentiles use a local nearest-rank implementation rather than the commons
+ * Percentiles use the shared [NearestRankPercentile] helper rather than the commons
  * `BenchmarkSeriesCalculator` the plan's Design section points at: that calculator only exposes p50/p90
  * and is `private`-percentile internally, and generalizing it to p95 would mean editing
  * `buildhound-commons` — out of scope for this server-only slice (the plan's own "Modules touched" line
- * says "No `buildhound-commons`"). `LptBalancer.p90` is existing precedent for a server-local nearest-rank
- * percentile living outside commons, so this mirrors that rather than introducing a new pattern.
+ * says "No `buildhound-commons`"). [NearestRankPercentile] is the same nearest-rank formula `LptBalancer.p90`
+ * used before the two were unified behind one server-local helper (plan 070 review finding #2).
  */
 object MetricsSnapshotCalculator {
 
@@ -61,9 +59,6 @@ object MetricsSnapshotCalculator {
         )
     }
 
-    /** Nearest-rank: rank = ceil(q·n), 1-indexed, clamped to `[1, n]`. [sorted] must be non-empty. */
-    private fun percentile(sorted: List<Long>, q: Double): Long {
-        val rank = ceil(q * sorted.size).toInt().coerceIn(1, sorted.size)
-        return sorted[rank - 1]
-    }
+    /** [sorted] must be non-empty. See [NearestRankPercentile]. */
+    private fun percentile(sorted: List<Long>, q: Double): Long = NearestRankPercentile.ofSorted(sorted, q)
 }
