@@ -73,6 +73,23 @@ class RerunCauseRollupCalculatorTest {
     }
 
     @Test
+    fun `all-zero-duration EXECUTED tasks report 0pct share, never NaN`() {
+        // Every EXECUTED task recorded 0ms — totalMs is 0, so a naive durationSum/totalMs divides 0.0 by
+        // 0.0. Pins the explicit zero-guard (mirrors the cascade loop's buildTotalMs <= 0L guard).
+        val rows = listOf(
+            row("b1", 0, reasons = listOf("Value of input property 'x' has changed.")),
+            row("b1", 0, reasons = listOf("No history is available.")),
+        )
+        val rollup = RerunCauseRollupCalculator.compute(rows)
+        assertEquals(2, rollup.executedTaskCount)
+        assertEquals(2, rollup.buckets.size)
+        rollup.buckets.forEach { bucket ->
+            assertEquals(0.0, bucket.sharePct, "share must be an explicit 0.0, never NaN, for a zero-duration window")
+            assertTrue(!bucket.sharePct.isNaN())
+        }
+    }
+
+    @Test
     fun `type-null (isolated-projects) rows still classify — reason taxonomy is execution-time, not type-keyed`() {
         val rows = listOf(row("b1", 1000, reasons = listOf("No history is available."), type = null))
         val rollup = RerunCauseRollupCalculator.compute(rows)
@@ -111,6 +128,19 @@ class RerunCauseRollupCalculatorTest {
         val rows = listOf(
             row("b1", 200, reasons = listOf("Class path of task ':x' has changed from 'a' to 'b'.")),
             row("b1", 800, reasons = listOf("Value of input property 'y' has changed.")),
+        )
+        val rollup = RerunCauseRollupCalculator.compute(rows)
+        assertNull(rollup.buildLogicStormCandidate)
+    }
+
+    @Test
+    fun `the storm-candidate threshold is exclusive — exactly 30pct does not surface the candidate`() {
+        // Mirrors the cascade detector's exactly-50pct boundary test: 30% IMPL_CLASSPATH coverage sits
+        // exactly on BUILD_LOGIC_STORM_SHARE_THRESHOLD, and the compute() check is a strict '>', so this
+        // must NOT surface the candidate.
+        val rows = listOf(
+            row("b1", 300, reasons = listOf("Class path of task ':x' has changed from 'a' to 'b'.")),
+            row("b1", 700, reasons = listOf("Value of input property 'y' has changed.")),
         )
         val rollup = RerunCauseRollupCalculator.compute(rows)
         assertNull(rollup.buildLogicStormCandidate)

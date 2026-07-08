@@ -21,12 +21,17 @@ enum class RerunCause { SOURCE, IMPL_CLASSPATH, UPSTREAM_OUTPUT, OUTPUT_MISSING,
  * `PropertyChanges`/`DefaultFileChange`, `NeverUpToDateStep`, `DefaultTaskExecutionMode` — see
  * `RerunCauseClassifierTest` for the exact strings and which are golden-fixture-confirmed vs.
  * template-reconstructed). Matching stays case-insensitive substrings with an explicit fallback so a
- * future Gradle rewording only inflates [RerunCause.UNCLASSIFIED] — it never throws and never
- * misattributes to a bucket it didn't earn.
+ * future Gradle rewording only inflates [RerunCause.UNCLASSIFIED] — it never throws. Cross-bucket
+ * collisions (a message that happens to mention more than one bucket's keywords) are resolved
+ * deterministically by the fixed check order below, not left to chance; [RerunCauseClassifierTest]'s
+ * adversarial near-miss cases pin that order for the ambiguous bucket pairs identified so far. That is
+ * the tested claim — not a guarantee that *every* unforeseen wording is misattribution-proof.
  *
  * Match order matters: the more specific buckets (FORCED, CACHING_DISABLED, IMPL_CLASSPATH) are checked
  * before the broader OUTPUT_MISSING / UPSTREAM_OUTPUT / SOURCE catch-alls, so a message that happens to
- * mention more than one keyword never lands in the wrong (earlier-alphabetical or more-generic) bucket.
+ * mention more than one bucket's keywords always resolves to the earlier (more-specific) bucket in this
+ * order, never the later (more-generic) one it also matches — see [RerunCauseClassifierTest]'s
+ * `has changed from` string, which is input-property-shaped yet correctly resolves to IMPL_CLASSPATH.
  */
 object RerunCauseClassifier {
 
@@ -36,8 +41,12 @@ object RerunCauseClassifier {
             r.isBlank() -> RerunCause.UNCLASSIFIED
 
             // "Executed with '--rerun-tasks'." / "Task.upToDateWhen is false." — both verified exact
-            // strings from DefaultTaskExecutionMode (a task explicitly forced to always rerun).
-            "rerun-tasks" in r || "rerun tasks" in r || "uptodatewhen is false" in r || "forced" in r ->
+            // strings from DefaultTaskExecutionMode (a task explicitly forced to always rerun). No bare
+            // "forced" catch here: that substring was checked against the decompiled gradle-9.6.1
+            // gradle-execution/gradle-core jars and does not appear in any rebuild-reason message
+            // template — the only "forced"-shaped hits in the whole distribution are unrelated
+            // dependency-resolution ("force = true") / EnforcedPlatformDependencyModifier classes.
+            "rerun-tasks" in r || "rerun tasks" in r || "uptodatewhen is false" in r ->
                 RerunCause.FORCED
 
             // "Build cache is disabled" (verified exact, AbstractResolveCachingStateStep) / "Caching
@@ -180,7 +189,11 @@ object RerunCauseRollupCalculator {
                 cause = bucket.name,
                 taskCount = count,
                 durationMs = durationSum,
-                sharePct = roundTo6(durationSum.toDouble() / totalMs),
+                // Guard mirrors the cascade loop's buildTotalMs <= 0L check below: an all-zero-duration
+                // EXECUTED window (every task recorded 0ms) would otherwise divide 0.0/0.0 into NaN,
+                // silently rounded to 0.0 by Math.round's NaN-handling — explicit here so the 0.0 is an
+                // intentional "no measurable share," not an accident of that rounding behavior.
+                sharePct = if (totalMs <= 0L) 0.0 else roundTo6(durationSum.toDouble() / totalMs),
             )
         }.sortedWith(compareByDescending<RerunCauseBucketRow> { it.durationMs }.thenBy { it.cause })
 

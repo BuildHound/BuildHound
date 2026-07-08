@@ -108,4 +108,66 @@ class RerunCauseClassifierTest {
     fun `classification is case-insensitive`() {
         assertEquals(RerunCause.FORCED, RerunCauseClassifier.classify("EXECUTED WITH '--RERUN-TASKS'."))
     }
+
+    @Test
+    fun `no bare 'forced' catch — the word alone does not classify as FORCED`() {
+        // Regression pin for the removed unverified "forced" substring (plan-061 review finding): no
+        // real Gradle 9.6.1 rebuild-reason template contains "forced" (checked against the decompiled
+        // gradle-execution/gradle-core jars — only unrelated dependency-resolution "force"/"enforced"
+        // strings exist elsewhere in the distribution). A message that merely says "forced" without one
+        // of the two verified FORCED trigger phrases must fall through to UNCLASSIFIED, not FORCED.
+        assertEquals(
+            RerunCause.UNCLASSIFIED,
+            RerunCauseClassifier.classify("Task was forced to rerun for an unspecified reason."),
+        )
+    }
+
+    // --- Adversarial cross-bucket near-misses: prove the when-chain's fixed check order resolves
+    // collisions deterministically rather than by accident (plan-061 review finding). ---
+
+    @Test
+    fun `an OUTPUT_MISSING-shaped string that also mentions 'changed' still lands in OUTPUT_MISSING`() {
+        // Contains "output", "does not exist" (OUTPUT_MISSING's trigger) AND "changed" (an
+        // UPSTREAM_OUTPUT trigger). OUTPUT_MISSING is checked first in the when-chain, so it must win.
+        assertEquals(
+            RerunCause.OUTPUT_MISSING,
+            RerunCauseClassifier.classify(
+                "Output file 'state.bin' does not exist; it may have changed since the last recorded run.",
+            ),
+        )
+    }
+
+    @Test
+    fun `an UPSTREAM_OUTPUT-shaped string without 'does not exist' is never caught by the OUTPUT_MISSING branch`() {
+        // Companion sanity check: "output" + "changed" but no "does not exist" and no "no history" —
+        // must fall through OUTPUT_MISSING's guard and land in UPSTREAM_OUTPUT as its shape actually earns.
+        assertEquals(
+            RerunCause.UPSTREAM_OUTPUT,
+            RerunCauseClassifier.classify("Output property 'reportDir' file report.html has changed."),
+        )
+    }
+
+    @Test
+    fun `a SOURCE-shaped 'input' string that also says 'has changed from' lands in IMPL_CLASSPATH`() {
+        // Contains "input" + "changed" (SOURCE's trigger) AND "has changed from" (an IMPL_CLASSPATH
+        // trigger), with none of IMPL_CLASSPATH's other keywords ("classpath"/"additional action"/
+        // "implementation") present — isolates that "has changed from" alone is what tips this. Since
+        // IMPL_CLASSPATH is checked before SOURCE in the when-chain, it must win even though the message
+        // is otherwise input-property-shaped.
+        assertEquals(
+            RerunCause.IMPL_CLASSPATH,
+            RerunCauseClassifier.classify("Input property 'threshold' has changed from '1' to '2'."),
+        )
+    }
+
+    @Test
+    fun `a genuine SOURCE string without the 'from' shape stays SOURCE, not IMPL_CLASSPATH`() {
+        // Companion sanity check: "input" + "has changed." but no "has changed from" / "classpath" /
+        // "additional action" / "implementation" — must fall through IMPL_CLASSPATH's guard and land in
+        // SOURCE as its shape actually earns.
+        assertEquals(
+            RerunCause.SOURCE,
+            RerunCauseClassifier.classify("Input property 'options' has changed."),
+        )
+    }
 }
