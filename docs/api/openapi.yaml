@@ -105,6 +105,20 @@ paths:
         "404": { description: One or both builds are absent for this tenant. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/builds/{buildId}/diagnosis:
+    get:
+      summary: Agent-facing synthesis of dominant phase, hit-rate-vs-target, top hotspots, and deltas (plan 071).
+      description: >
+        Pure serialization over already-collected signals (config-vs-execution split, cache hit rate vs
+        the v1 constant target, top EXECUTED-task hotspots, and headline-metric deltas vs the stored
+        verdict's comparable baseline) — no new collection. Every analytic field is independently
+        nullable and degrades honestly rather than fabricating a signal.
+      parameters: [{ name: buildId, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: The synthesized diagnosis. }
+        "404": { description: No such build for this tenant. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
   /v1/trends:
     get:
       summary: Fleet duration/cache trend points over a window.

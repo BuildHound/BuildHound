@@ -19,6 +19,7 @@ deliberately not a Gradle module.
 | `overhead/bin/loopback-sink.py` | do-nothing HTTP sink (202s + discards) for the upload cell — no BuildHound server needed |
 | `overhead/fixture/` | synthetic 3-module Kotlin/JVM project (no Android) with the `buildhound.overhead.plugin` toggle |
 | `sharding/shard-matrix-examples.md` | GitHub Actions + Azure DevOps shard-matrix snippets for the `dev.buildhound.test-sharding` addon (`BUILDHOUND_SHARD_INDEX`/`_TOTAL`/`_REFERENCE`), plan 040 |
+| `agent-skill/SKILL.md` | First-party agent skill: diagnose a build privately from the HTML report / query API / `buildhound-mcp` tools, no `scans.gradle.com` upload, plan 071 |
 
 ## Metric CLI
 

@@ -62,6 +62,20 @@ object Tools {
             if (buildId.contains('/')) throw McpToolException("buildId must not contain '/'")
             "/v1/builds/${enc(buildId)}"
         },
+        McpTool(
+            name = "diagnose",
+            description = "Synthesize one build's already-collected signals into a single agent-consumable " +
+                "diagnosis: dominant phase (config vs execution), cache-hit-rate vs target, top hotspots, " +
+                "and deltas vs the comparable baseline. The privacy-preserving alternative to a `--scan` upload.",
+            inputSchema = objectSchema(required = listOf("buildId")) {
+                put("buildId", stringProp("The build id (a UUID)."))
+            },
+        ) { args ->
+            val buildId = strArg(args, "buildId") ?: throw McpToolException("buildId is required")
+            // Same guard as get_build: a '/' would repoint the request, so it's rejected then encoded.
+            if (buildId.contains('/')) throw McpToolException("buildId must not contain '/'")
+            "/v1/builds/${enc(buildId)}/diagnosis"
+        },
         daysTool("trends", "Fleet build duration/cache trend points over the last N days.", "/v1/trends"),
         daysTool("project_cost", "Per-module build-cost rollup over the last N days.", "/v1/rollups/project-cost"),
         daysTool("task_duration", "Task-duration rollup (by name/type) over the last N days.", "/v1/rollups/task-duration"),

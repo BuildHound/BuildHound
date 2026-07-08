@@ -418,6 +418,23 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
                 ?: call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
         }
 
+        // Agent-facing diagnosis synthesis (plan 071, research F21): dominant phase, hit-rate-vs-target,
+        // top hotspots, and deltas vs the comparable baseline — one call over already-collected signals,
+        // no new store method. Tenant-scoped like /verdict and /compare: a foreign/unknown build reads
+        // as 404, never a cross-tenant peek. A build with no evaluated verdict still 200s with deltas null.
+        get("/builds/{buildId}/diagnosis") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val buildId = call.parameters.getOrFail("buildId")
+            val result = call.runQuery {
+                val payload = store.findById(project.id, buildId) ?: return@runQuery null
+                val verdict = verdicts.find(project.id, buildId)
+                BuildDiagnoser.diagnose(payload, verdict)
+            } ?: return@get
+            result.value
+                ?.let { call.respond(it) }
+                ?: call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
+        }
+
         get("/trends") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val filter = call.buildFilterOrNull()
