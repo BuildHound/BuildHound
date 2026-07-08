@@ -37,12 +37,13 @@ class ProjectEvaluationFunctionalTest {
         output.lineSequence().single { it.startsWith("[buildhound] build ") }
 
     /** `:a` sleeps at configuration time so it reliably evaluates slower than `:b` (and the root). */
-    private fun setUpMultiProject() {
+    private fun setUpMultiProject(settingsDsl: String = "") {
         File(projectDir, "settings.gradle.kts").writeText(
             """
             plugins { id("dev.buildhound") }
             rootProject.name = "project-eval-fixture"
             include(":a", ":b")
+            $settingsDsl
             """.trimIndent(),
         )
         File(projectDir, "a").mkdirs()
@@ -127,6 +128,40 @@ class ProjectEvaluationFunctionalTest {
         assertFalse(
             narrowEvaluations.any { it.path == ":b" },
             "the narrow build must not inherit :b's leftover file from the broad build: $narrowEvaluations",
+        )
+    }
+
+    @Test
+    fun `a dsl-disabled broad build leaves no stale entries for a later enabled narrow build`() {
+        // configureOnDemand so the enabled second invocation configures ONLY :a's subtree (see the
+        // narrower-invocation test above for why the :b assertion is vacuous without it).
+        File(projectDir, "gradle.properties").writeText("org.gradle.configureondemand=true\n")
+
+        // Broad build, disabled via the settings-script DSL: the apply-time master switch is still on,
+        // so the beforeProject/afterProject collector writes :a and :b timing files regardless — a
+        // `buildhound { enabled = false }` DSL value cannot reach the already-registered
+        // IsolatedActions (plan 052's named limitation). Before the 052 review fix the finalizer's
+        // disabled early-return also skipped read-then-clear, so the enabled narrow build below picked
+        // up :b's stale file and misattributed the disabled build's timing to itself.
+        setUpMultiProject(settingsDsl = "buildhound { enabled = false }")
+        val broad = runner(":a:work", ":b:work").build()
+        assertEquals(TaskOutcome.SUCCESS, broad.task(":b:work")?.outcome)
+        assertFalse(broad.output.contains("[buildhound] build "), "a DSL-disabled build must not finalize a payload")
+        assertEquals(
+            emptyList(),
+            File(projectDir, ".gradle/buildhound/config-timings").listFiles()?.toList().orEmpty(),
+            "the disabled build's finalizer must still clear the sidecar its collector could not be stopped from writing",
+        )
+
+        // Enabled narrow build touching only :a — :b must never appear in its payload.
+        setUpMultiProject()
+        val narrow = runner(":a:work").build()
+        assertEquals(TaskOutcome.SUCCESS, narrow.task(":a:work")?.outcome)
+        val evaluations = readPayload().projectEvaluations ?: error("expected :a on the enabled narrow build")
+        assertTrue(evaluations.any { it.path == ":a" }, "expected :a itself: $evaluations")
+        assertFalse(
+            evaluations.any { it.path == ":b" },
+            "the enabled narrow build must not inherit :b from the DSL-disabled broad build: $evaluations",
         )
     }
 

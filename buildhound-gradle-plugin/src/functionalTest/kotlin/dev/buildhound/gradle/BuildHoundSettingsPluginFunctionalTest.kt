@@ -486,7 +486,9 @@ class BuildHoundSettingsPluginFunctionalTest {
         // reach an already-registered `beforeProject`/`afterProject` reaction (an `IsolatedAction` can't
         // capture the extension to re-check it — architecture §7 2026-07-03 row). So a DSL-disabled build
         // still writes sibling per-project timing files under `.gradle/buildhound/config-timings/`; the
-        // finalizer simply never reads them (mode DISABLED returns before that point).
+        // finalizer drains (clears) them unconditionally before its DISABLED short-circuit without ever
+        // reporting them (052 review fix), so they cannot leak into a later enabled build's payload —
+        // pinned by ProjectEvaluationFunctionalTest's dsl-disabled-broad-then-enabled-narrow case.
         assertFalse(File(projectDir, ".gradle/buildhound/identity.salt").isFile, "disabled mode must not create a salt")
     }
 
@@ -521,7 +523,8 @@ class BuildHoundSettingsPluginFunctionalTest {
         // See the identical note on `mode disabled writes no payload` (plan 052): DSL `enabled = false`
         // is a finalizer-time check (the identity salt is never created), but it cannot retroactively
         // un-register the apply-time `masterEnabled`-gated beforeProject/afterProject collectors — this
-        // fixture still writes sibling per-project timing files under `.gradle/buildhound/config-timings/`.
+        // fixture still writes sibling per-project timing files under `.gradle/buildhound/config-timings/`,
+        // which the finalizer drains unconditionally (052 review fix) so they never reach a later payload.
         assertFalse(
             File(projectDir, ".gradle/buildhound/identity.salt").isFile,
             "enabled=false must not touch the identity salt",
