@@ -46,7 +46,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         extension.kotlinReports.bundle.convention(true)
         extension.tests.collect.convention(true)
         extension.processProbe.enabled.convention(overrides.bool("processProbe.enabled") ?: true)
-        // internalAdapters {} (plan 051): bundled internal-Gradle-API capture, every toggle off by
+        // internalAdapters {} (plan 074): bundled internal-Gradle-API capture, every toggle off by
         // default. Read at whenReady (post-DSL) and handed to the module's wiring; all-off touches no
         // internal API. Standard override precedence (like htmlReport.enabled/processProbe.enabled):
         // explicit DSL value > buildhound.internalAdapters.* override > false.
@@ -178,7 +178,7 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             }.onFailure {
                 logger.warn("[buildhound] toolchain detection failed (build unaffected): {}", it.message)
             }
-            // Internal-adapters capture (plan 051): driven from here, post-DSL, so the toggles are set.
+            // Internal-adapters capture (plan 074): driven from here, post-DSL, so the toggles are set.
             // The wiring is fully guarded and no-ops when every effective toggle is off — the point where
             // "applied the plugin" stops short of "consented to internal Gradle APIs". Registering the
             // daemon listeners here (not at apply) mirrors the WARN-log listener's original site; on a CC

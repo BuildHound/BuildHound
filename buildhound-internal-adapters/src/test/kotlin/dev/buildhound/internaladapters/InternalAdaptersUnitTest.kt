@@ -144,7 +144,7 @@ class InternalAdaptersUnitTest {
             collectCacheOrigins = true,
         )
         assertTrue(InternalAdaptersState.collectCacheOrigins(), "configure() turns it on")
-        // Independent of the warning toggles — this gates only the cache data paths (plan 051).
+        // Independent of the warning toggles — this gates only the cache data paths (plan 074).
         assertFalse(InternalAdaptersState.collectDeprecations())
         assertFalse(InternalAdaptersState.collectLogWarnings())
         InternalAdaptersState.resetForTest()

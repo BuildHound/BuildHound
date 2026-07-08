@@ -1,11 +1,11 @@
-# 052 — internal-adapters: re-establish toggle intent on a configuration-cache hit
+# 075 — internal-adapters: re-establish toggle intent on a configuration-cache hit
 
 ## 1. Source
 
-§3.2 security/privacy review of plan 051 (folding internal-adapters behind the central
+§3.2 security/privacy review of plan 074 (folding internal-adapters behind the central
 `buildhound { internalAdapters { } }` block). The review confirmed the consent model holds on the
 configuration-cache **miss** path, but found one **MEDIUM** consent-model gap on the CC-**hit** path
-that plan 051 accepted-with-note and deferred here. Touches spec §3.1 and the architecture decision log.
+that plan 074 accepted-with-note and deferred here. Touches spec §3.1 and the architecture decision log.
 
 ## 2. The problem
 
@@ -27,12 +27,12 @@ daemon-static toggles keep the **previous build's** values. Reachable sequence i
 
 Captured text is still scrubbed (no raw secret/PII leak), so this is a **consent-model** edge, not a
 data-exposure bug. It pre-existed for the warning catchers (plan 044's daemon-static toggles) and plan
-051 **widened** it: bundling means the victim build only needs `dev.buildhound` applied (not a second
+074 **widened** it: bundling means the victim build only needs `dev.buildhound` applied (not a second
 plugin), and it now also covers the new `collectCacheOrigins`.
 
 Pinned by the `@Disabled` functional test
 `InternalAdaptersCaptureFunctionalTest.an all-off CC-hit build after a toggle-on build in the same
-daemon must not capture (plan 052)` — this plan's acceptance criterion (remove `@Disabled`, it passes).
+daemon must not capture (plan 075)` — this plan's acceptance criterion (remove `@Disabled`, it passes).
 
 ## 3. Why it is not a one-line fix
 

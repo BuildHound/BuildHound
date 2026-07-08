@@ -13,7 +13,7 @@ fully standalone HTML report artifact. Apache-2.0. Home: [buildhound.dev](https:
 | `buildhound-gradle-plugin/` | Settings plugin (`dev.buildhound`): collectors (BuildService), Flow-API finalizer, `buildhound {}` DSL, uploader |
 | `buildhound-server/` | Ktor ingestion + query service (`POST /v1/builds`, rollups, regression engine, CI connectors, dashboard), shipped as an OCI image |
 | `buildhound-report/` | Standalone HTML build-report artifact (zero network access, enforced by test) |
-| `buildhound-internal-adapters/` | Bundled-with-core module — the one quarantined use of internal Gradle APIs (cache origin/keys + critical-path/avoided-time, deprecation + WARN-log warnings). Dormant until a `buildhound { internalAdapters { } }` toggle is set (plan 051) |
+| `buildhound-internal-adapters/` | Bundled-with-core module — the one quarantined use of internal Gradle APIs (cache origin/keys + critical-path/avoided-time, deprecation + WARN-log warnings). Dormant until a `buildhound { internalAdapters { } }` toggle is set (plan 074) |
 | `buildhound-addon-test-sharding/` | Opt-in addon (`dev.buildhound.test-sharding`): server-balanced test sharding across CI shards |
 | `buildhound-mcp/` | Opt-in read-only MCP server exposing the query API over stdio JSON-RPC (agent tooling) |
 | `buildhound-ci-assets/` | JVM-free CI assets: GitHub Action, GitLab + Azure Pipelines templates, metric CLI, overhead/profiler harnesses |
@@ -134,9 +134,9 @@ over an override, which wins over the built-in default (plan 027).
 > daemon where no build has enabled a toggle, no internal API is touched. Flipping one is the per-feature
 > consent; the plugin then logs a one-time notice that a Gradle upgrade may silently stop that signal.
 > Capture never fails the build (every path is reflection-guarded). See
-> [architecture §7](docs/architecture.md#7-decision-log) (plan 051) for why this is quarantined in its
+> [architecture §7](docs/architecture.md#7-decision-log) (plan 074) for why this is quarantined in its
 > own module rather than living in core — including the one known limitation (a configuration-cache-hit
-> warm-daemon edge, deferred to plan 052) where a later all-off build in a daemon that already opted in
+> warm-daemon edge, deferred to plan 075) where a later all-off build in a daemon that already opted in
 > can still capture until the next CC miss.
 
 ### Local development credentials

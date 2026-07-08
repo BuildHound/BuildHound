@@ -66,7 +66,7 @@ class BuildOperationAdapter(private val rootDir: java.io.File) : BuildOperationL
     }
 
     override fun finished(descriptor: BuildOperationDescriptor, event: OperationFinishEvent) {
-        // Cache origin/key accumulation is gated on its own toggle (plan 051): deprecations ride the
+        // Cache origin/key accumulation is gated on its own toggle (plan 074): deprecations ride the
         // progress() path above, so a deprecations-only build must not collect cache telemetry here.
         if (!state.collectCacheOrigins()) return
         runCatching {
