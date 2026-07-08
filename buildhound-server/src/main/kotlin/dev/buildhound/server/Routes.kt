@@ -537,6 +537,17 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             call.respondQuery { store.warnings(project.id, period, System.currentTimeMillis()) }
         }
 
+        // Cache-miss diagnostics (plan 068, research F18): non-relocatable-task candidates (self-gated
+        // on the plan-038 origin enum; silent when the window never observed a REMOTE_HIT) plus
+        // per-salt-stream fingerprint volatility scoring (plan 022) with credential/timestamp/run-id
+        // name-pattern notes. Read-scope, tenant-scoped, days clamped like /trends; benchmark builds
+        // excluded (the bottlenecks/toolchain/rerun-causes/warnings fleet-view convention).
+        get("/rollups/cache-miss-diagnostics") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.cacheMissDiagnostics(project.id, days, System.currentTimeMillis()) }
+        }
+
         // Flaky-test detection (plan 036, spec §5): two-signal per-(module, class) records over the
         // window, ranked by flake rate. Read-scope, tenant-scoped, days clamped like /trends.
         get("/flaky") {

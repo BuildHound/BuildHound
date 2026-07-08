@@ -8,6 +8,7 @@ import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.CiInfo
 import dev.buildhound.commons.payload.DerivedMetrics
 import dev.buildhound.commons.payload.EnvironmentInfo
+import dev.buildhound.commons.payload.FingerprintInfo
 import dev.buildhound.commons.payload.InvocationInfo
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
@@ -17,6 +18,10 @@ import dev.buildhound.commons.payload.TestClassResult
 import dev.buildhound.commons.payload.TestTaskResult
 import dev.buildhound.commons.payload.ToolchainInfo
 import dev.buildhound.commons.payload.VcsInfo
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 
 /** Builds schema-v1 [BuildPayload]s for server tests without hand-writing JSON each time. */
 object TestPayloads {
@@ -43,6 +48,12 @@ object TestPayloads {
         sha: String? = null,
         tests: List<TestTaskResult> = emptyList(),
         tags: Map<String, String> = emptyMap(),
+        /** Build-level identity hash (plan 022/068 fixtures); the single-salt-stream grouping key. */
+        hostnameHash: String? = null,
+        /** Salted input fingerprints (plan 022/068 fixtures); null means "uncaptured", not "empty". */
+        fingerprints: FingerprintInfo? = null,
+        /** Opaque addon sections (plan 039/068 fixtures), e.g. `internalAdapters` (plan 038). */
+        extensions: Map<String, JsonElement> = emptyMap(),
     ): BuildPayload = BuildPayload(
         buildId = buildId,
         startedAt = startedAt,
@@ -53,13 +64,19 @@ object TestPayloads {
         vcs = if (branch != null || sha != null) VcsInfo(branch = branch, sha = sha) else null,
         ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl) },
         derived = if (hitRate != null || avoidedMs != null) DerivedMetrics(cacheableHitRate = hitRate, avoidedMs = avoidedMs) else null,
-        environment = if (userId != null || invocation != null) EnvironmentInfo(userId = userId, invocation = invocation) else null,
+        environment = if (userId != null || invocation != null || hostnameHash != null) {
+            EnvironmentInfo(userId = userId, invocation = invocation, hostnameHash = hostnameHash)
+        } else {
+            null
+        },
         benchmark = benchmark,
         artifacts = artifacts,
         toolchain = toolchain,
         tasks = tasks,
         tests = tests,
         tags = tags,
+        fingerprints = fingerprints,
+        extensions = extensions,
     )
 
     /** A test-task result for flaky fixtures (plan 036): one class + optional fail-then-pass retries. */
@@ -99,4 +116,30 @@ object TestPayloads {
         executionReasons = executionReasons,
         incremental = incremental,
     )
+
+    /**
+     * A minimal `extensions["internalAdapters"]` block (plan 038/068 fixtures) carrying only what
+     * [RelocatabilityDetector] reads (`tasks[].path`/`.origin`) — a shape-subset of the real
+     * `InternalAdaptersPayload`, deliberately hand-built here rather than depending on
+     * `buildhound-internal-adapters` (server keeps no dependency on that module, plan 039).
+     */
+    fun internalAdapters(taskOrigins: List<Pair<String, String>>): Map<String, JsonElement> = mapOf(
+        "internalAdapters" to buildJsonObject {
+            put("schemaVersion", 1)
+            put("gradleVersion", "9.6.1")
+            putJsonArray("tasks") {
+                taskOrigins.forEach { (path, origin) ->
+                    add(
+                        buildJsonObject {
+                            put("path", path)
+                            put("origin", origin)
+                        },
+                    )
+                }
+            }
+        },
+    )
+
+    /** A `fingerprints.build` map (plan 022/068 fixtures) from raw key/hash pairs, no plugin dependency. */
+    fun fingerprints(build: Map<String, String>): FingerprintInfo = FingerprintInfo(build = build)
 }

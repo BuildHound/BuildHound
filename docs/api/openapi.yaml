@@ -237,6 +237,22 @@ paths:
         "200": { description: Ranked warning candidates for the window. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/cache-miss-diagnostics:
+    get:
+      summary: Cache-miss diagnostics rollup (plan 068, research F18).
+      description: >
+        Non-relocatable-task candidates (self-gated on the plan-038 internal-adapters origin enum;
+        `remoteCacheObserved=false` when the window never observed a `REMOTE_HIT`, an honest empty state
+        rather than a false "relocatable" verdict) plus per-salt-stream fingerprint volatility scoring
+        (plan 022), with credential/timestamp/run-id name-pattern notes over the allowlisted fingerprint
+        key names only — never a matched value. Benchmark builds excluded, like `/v1/rollups/bottlenecks`.
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
+      responses:
+        "200": { description: The cache-miss diagnostics rollup for the window. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
   /v1/settings:
     get:
       summary: Read this project's regression settings (plan 025).

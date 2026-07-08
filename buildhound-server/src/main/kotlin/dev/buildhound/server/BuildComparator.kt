@@ -134,6 +134,14 @@ object BuildComparator {
         }
     }
 
+    /**
+     * Cross-referenced by [FingerprintVolatilityDetector] (plan 068) for its fallback note on a
+     * volatile built-in key (e.g. `jdk.home`) that doesn't match its own credential/timestamp/run-id
+     * name patterns — reuse, not extraction: this shipped, tested plan-022 catalog stays put, and
+     * plan 068 only reads it through this accessor.
+     */
+    internal fun explanatoryNote(key: String): String? = NOTES[key]
+
     /** Static known-volatile-input catalog (research §4/§5); explanations, keeping the plugin dumb. */
     private val NOTES: Map<String, String> = mapOf(
         "jdk.home" to "JDK install path differs — Gradle keys the cache on the JDK major only, so a different home (even same major) can miss (android-cache-fix JdkImageWorkaround).",

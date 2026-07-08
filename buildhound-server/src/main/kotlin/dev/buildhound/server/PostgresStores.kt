@@ -931,6 +931,50 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             }
         }
 
+    /**
+     * Cache-miss diagnostics (plan 068, research F18): `origin`/`fingerprints` live only in the payload
+     * jsonb, never in `task_executions` (plan 026's normalized table predates plan 038/022's fields on
+     * it), so this reads the whole `payload` column — gated to builds carrying either block, most-recent
+     * first, capped at [RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS] with a `(started_at, build_id)`
+     * tie-break identical to the in-memory store's sort — and hands each decoded [BuildPayload] to the
+     * exact same [relocatabilityRowsOf]/[fingerprintStreamRowOf] flattening functions in-memory uses, so
+     * both stores agree byte-for-byte by construction (the plan-026/032/036 parity discipline) without
+     * hand-writing jsonb-path SQL for the nested `internalAdapters.tasks[]` array. Every bound value is a
+     * parameter, never interpolated (architecture §6) — task paths and fingerprint keys are user-
+     * controlled build data.
+     */
+    override fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long): CacheMissDiagnostics =
+        dataSource.connection.use { connection ->
+            val windowed = connection.prepareStatement(
+                """
+                SELECT payload FROM builds
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                  AND (payload -> 'extensions' -> 'internalAdapters' IS NOT NULL OR payload -> 'fingerprints' IS NOT NULL)
+                ORDER BY started_at DESC, build_id DESC
+                LIMIT ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.setObject(3, atMs(nowMs))
+                statement.setInt(4, RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS)
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")))
+                        }
+                    }
+                }
+            }
+            val relocatabilityRows = windowed.flatMap { relocatabilityRowsOf(it) }
+            val streamRows = windowed.mapNotNull { fingerprintStreamRowOf(it) }
+            CacheMissDiagnostics(
+                remoteCacheObserved = RelocatabilityDetector.remoteCacheObserved(relocatabilityRows),
+                nonRelocatable = RelocatabilityDetector.detect(relocatabilityRows),
+                volatileInputs = FingerprintVolatilityDetector.detect(streamRows),
+            )
+        }
+
     override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> =
         dataSource.connection.use { connection ->
             // Read the narrow per-class outcome table (indexed on (project, sha, module, class)) and

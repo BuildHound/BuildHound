@@ -10,6 +10,10 @@ import java.time.ZoneOffset
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /** The tenant a request acts as — resolved from its token, never from the payload. */
 data class ProjectRef(val id: String, val key: String)
@@ -69,6 +73,60 @@ internal fun classTimingsOf(payload: BuildPayload): List<Pair<String, Long>> =
     payload.tests.flatMap { task ->
         task.classes.map { cls -> TestUnitKey.of(task.module, cls.className) to cls.durationMs }
     }
+
+/** The addon id under which plan 038 contributes its opaque `extensions` section (plan 039). */
+private const val INTERNAL_ADAPTERS_EXTENSION_KEY = "internalAdapters"
+
+/**
+ * Flatten one payload's `extensions["internalAdapters"].tasks[]` (plan 038) — origin only — joined by
+ * path to the core `tasks[]` (module/cacheable/durationMs) for [RelocatabilityDetector] (plan 068). The
+ * whole navigation is `runCatching`-guarded: server keeps **no** dependency on `buildhound-internal-
+ * adapters` (plan 039 decoupling invariant — it treats `extensions` as opaque `JsonElement`), so a
+ * shape the server doesn't expect (a future schema bump, or outright malformed JSON) degrades to an
+ * empty list for this build rather than a crash — never fatal to the whole rollup.
+ */
+internal fun relocatabilityRowsOf(payload: BuildPayload): List<RelocatabilityRow> {
+    val hostnameHash = payload.environment?.hostnameHash
+    val tasksByPath = payload.tasks.associateBy { it.path }
+    val originsByPath: List<Pair<String, String>> = runCatching {
+        val element = payload.extensions[INTERNAL_ADAPTERS_EXTENSION_KEY]
+            ?: return@runCatching emptyList<Pair<String, String>>()
+        element.jsonObject["tasks"]?.jsonArray.orEmpty().mapNotNull { taskElement ->
+            val obj = taskElement.jsonObject
+            val path = obj["path"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val origin = obj["origin"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            path to origin
+        }
+    }.getOrElse { emptyList() }
+
+    return originsByPath.mapNotNull { (path, origin) ->
+        val task = tasksByPath[path] ?: return@mapNotNull null
+        RelocatabilityRow(
+            taskPath = path,
+            module = task.module,
+            hostnameHash = hostnameHash,
+            origin = origin,
+            cacheable = task.cacheable,
+            durationMs = task.durationMs,
+        )
+    }
+}
+
+/**
+ * One payload's fingerprint-stream row for [FingerprintVolatilityDetector] (plan 068, plan 022); null
+ * when either half of the join is absent — no `hostnameHash` (no salt-stream key to group by, `strict`
+ * mode or a legacy payload) or no `fingerprints` block at all (uncaptured — distinct from "captured but
+ * empty," which still participates so a key that vanished mid-stream reads as a real transition).
+ */
+internal fun fingerprintStreamRowOf(payload: BuildPayload): FingerprintStreamRow? {
+    val hostnameHash = payload.environment?.hostnameHash ?: return null
+    val fingerprints = payload.fingerprints ?: return null
+    return FingerprintStreamRow(hostnameHash = hostnameHash, startedAt = payload.startedAt, buildId = payload.buildId, fingerprints = fingerprints.build)
+}
+
+/** True when a payload could feed either cache-miss-diagnostics detector (plan 068's "gated to builds carrying the block"). */
+internal fun carriesCacheMissDiagnosticsBlock(payload: BuildPayload): Boolean =
+    payload.extensions.containsKey(INTERNAL_ADAPTERS_EXTENSION_KEY) || payload.fingerprints != null
 
 /** Query-API filters (plan 010); values are validated at the route, bound in SQL. */
 data class BuildFilter(
@@ -321,6 +379,20 @@ interface BuildStore {
      * [WarningCalculator], so in-memory and Postgres agree byte-for-byte.
      */
     fun warnings(projectId: String, period: Int, nowMs: Long): WarningsRollup
+
+    /**
+     * Cache-miss diagnostics over the last [days] (plan 068, research F18): non-relocatable-task
+     * candidates (self-gated on the plan-038 origin enum — silent when the window never observed a
+     * `REMOTE_HIT`) plus per-salt-stream fingerprint volatility scoring (plan 022). Both stores read the
+     * same windowed builds — gated to those carrying either the opaque `internalAdapters` extension or a
+     * `fingerprints` block, most-recent-first, capped at [RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS] —
+     * flatten to [RelocatabilityRow]/[FingerprintStreamRow] via guarded JsonElement navigation, and defer
+     * to the two pure detectors, so in-memory and Postgres agree byte-for-byte (the plan-026/032/036
+     * parity discipline). Benchmark builds are excluded (the bottlenecks/toolchain/rerun-causes/warnings
+     * fleet-view convention — a repeated same-scenario benchmark build on a fixed runner would otherwise
+     * inflate both the cross-host count and the fingerprint-volatility signal).
+     */
+    fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long): CacheMissDiagnostics
 
     /** Every project id with stored data (retention sweep, plan 042); default empty for a store that has none. */
     fun allProjectIds(): List<String> = emptyList()
@@ -682,6 +754,24 @@ class InMemoryBuildStore : BuildStore {
         // behavior, so repeated same-scenario benchmark reruns must not skew the fleet share.
         val windowed = payloadsBetween(projectId, nowMs - period.toLong() * 86_400_000, nowMs)
         return WarningCalculator.compute(windowed.flatMap { taskRowsOf(it) }, period)
+    }
+
+    override fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long): CacheMissDiagnostics {
+        // Same fleet-view window as bottlenecks/toolchainAdoption/rerunCauses/warnings (benchmark
+        // excluded), further gated to builds carrying either block and capped/tie-broken identically to
+        // the Postgres store's `ORDER BY started_at DESC, build_id DESC LIMIT` so the two agree
+        // byte-for-byte even above the cap (plan 068).
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+            .filter { carriesCacheMissDiagnosticsBlock(it) }
+            .sortedWith(compareByDescending<BuildPayload> { it.startedAt }.thenByDescending { it.buildId })
+            .take(RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS)
+        val relocatabilityRows = windowed.flatMap { relocatabilityRowsOf(it) }
+        val streamRows = windowed.mapNotNull { fingerprintStreamRowOf(it) }
+        return CacheMissDiagnostics(
+            remoteCacheObserved = RelocatabilityDetector.remoteCacheObserved(relocatabilityRows),
+            nonRelocatable = RelocatabilityDetector.detect(relocatabilityRows),
+            volatileInputs = FingerprintVolatilityDetector.detect(streamRows),
+        )
     }
 
     override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> {
