@@ -50,7 +50,11 @@ data class CfrRow(
  * firstFailed.finishedAt`. A **CI-recovery proxy, not production MTTR** (no incident data): the DTO,
  * the dashboard caption, and the plan's exit criteria all say so. [openEpisode] flags a cohort still
  * red at window end — counted separately, never folded into the recovery stats as a fake recovery.
- * [medianRecoveryMs]/[p90RecoveryMs] are null when no episode closed inside the window.
+ * [medianRecoveryMs]/[p90RecoveryMs] are null when no episode closed inside the window. Symmetric
+ * window-start caveat: when a cohort's true first failure predates the window, its episode instead
+ * opens on the first FAILED build **visible in the window** — later than the real failure — so a
+ * recovery that closes on that episode understates the true red duration; [medianRecoveryMs]/
+ * [p90RecoveryMs] are therefore lower bounds too, not just a window-end truncation.
  */
 @Serializable
 data class RecoveryRow(
@@ -90,16 +94,14 @@ data class LeadTimeRow(
 /** One (buildId, Gradle wall ms) enrichment sample carried transiently on [LeadTimeRow]/[RetryTaxSummary]. */
 data class DeliverySample(val buildId: String, val durationMs: Long)
 
-/** Which signal identified a rerun build (plan 059): authoritative GHA attempt counter vs. the heuristic. */
-enum class RerunSignal { RUN_ATTEMPT, SAME_KEY_CANDIDATE }
-
 /**
  * The retry tax (plan 059, research F9 — Parry et al. 2022: "rerun the failing build" is the most
  * common flakiness response). [wastedCiMinutesLowerBound] is Σ rerun-build duration — a **lower
  * bound**: Gradle wall-clock only (checkout/setup excluded) until the route upgrades enriched builds
  * to pipeline wall-clock from `ci_runs`. [runAttemptReruns] (authoritative, `runAttempt > 1` — GHA)
  * vs [sameKeyCandidates] (heuristic, labeled **candidate** — never a confirmed rerun) is the signal
- * split. [rerunBuildIds] is oldest-first, capped at [DeliveryHealthCalculator.MAX_RERUN_BUILD_IDS].
+ * split. [rerunBuildIds] is most-recent-first, capped at [DeliveryHealthCalculator.MAX_RERUN_BUILD_IDS]
+ * (the wasted-minutes total is still summed over the uncapped set).
  */
 @Serializable
 data class RetryTaxSummary(
@@ -152,12 +154,14 @@ data class DeliveryHealthRollup(
  * the bottlenecks/toolchain fleet-view convention — and fold them through this). Rows are sorted
  * internally with a `(startedAt, buildId)` tie-break, so output never depends on arrival order.
  *
- * Retry-tax detection: `runAttempt > 1` ⇒ [RerunSignal.RUN_ATTEMPT] (authoritative — GHA populates
- * the attribute). The all-provider heuristic ([RerunSignal.SAME_KEY_CANDIDATE]) groups by
- * `(projectKey, sha, requestedTasksSig)` and flags a build only when a **prior same-key build is
- * FAILED and this build started strictly after that one finished** (sequential, non-overlapping) —
- * concurrent JDK-matrix legs and PR-vs-push builds on one sha overlap in time and are therefore
- * never miscounted as reruns (the plan's false-positive guard, adversarially pinned in tests).
+ * Retry-tax detection: `runAttempt > 1` ⇒ an authoritative RUN_ATTEMPT rerun (GHA populates the
+ * attribute). The all-provider heuristic (SAME_KEY_CANDIDATE) groups by `(projectKey, sha,
+ * requestedTasksSig)` and flags a build only when the same-key build that **most recently
+ * finished before this build started** was FAILED (sequential, non-overlapping) — concurrent
+ * JDK-matrix legs and PR-vs-push builds on one sha overlap in time and are therefore never
+ * miscounted as reruns, and a SUCCESS that recovers the key stops an earlier FAILED from
+ * poisoning every later build in the group (the plan's false-positive guard, adversarially
+ * pinned in tests).
  */
 object DeliveryHealthCalculator {
 
@@ -277,12 +281,17 @@ object DeliveryHealthCalculator {
         sorted.filter { it.sha != null }
             .groupBy { Triple(it.projectKey, it.sha, it.requestedTasksSig) }
             .forEach { (chainKey, group) ->
-                for (i in group.indices) {
-                    val build = group[i]
-                    chainKeyByBuild[build.buildId] = "${chainKey.first} ${chainKey.second} ${chainKey.third}"
-                    // Candidate only when a PRIOR same-key build FAILED and this one started strictly
-                    // after it finished — overlapping (concurrent matrix/PR-vs-push) legs never count.
-                    if (group.subList(0, i).any { prior -> prior.outcome == "FAILED" && build.startedAtMs > prior.finishedAtMs }) {
+                for (build in group) {
+                    chainKeyByBuild[build.buildId] = "${chainKey.first}\u0000${chainKey.second}\u0000${chainKey.third}"
+                    // Candidate only when the same-key build that most recently FINISHED before this
+                    // one STARTED was FAILED — not "any prior FAILED exists", which would let one early
+                    // failure poison every later non-overlapping build forever, even past an
+                    // intervening SUCCESS that recovered the key. Overlapping (concurrent matrix/PR-vs-
+                    // push) legs never count because a build can't finish before its own start.
+                    val mostRecentFinishedBefore = group
+                        .filter { other -> other.buildId != build.buildId && other.finishedAtMs < build.startedAtMs }
+                        .maxWithOrNull(compareBy<DeliveryBuildRow> { it.finishedAtMs }.thenBy { it.buildId })
+                    if (mostRecentFinishedBefore?.outcome == "FAILED") {
                         sameKeyRerunIds.add(build.buildId)
                     }
                 }
@@ -295,9 +304,13 @@ object DeliveryHealthCalculator {
         val reruns = sorted.filter { it.buildId in runAttemptIds || it.buildId in sameKeyOnly }
         // A chain = one same-key group with ≥1 rerun; a rerun with no sha (RUN_ATTEMPT only) is its
         // own chain — deterministic either way.
-        val chainCount = reruns.map { chainKeyByBuild[it.buildId] ?: "solo ${it.buildId}" }.distinct().size
+        val chainCount = reruns.map { chainKeyByBuild[it.buildId] ?: "solo\u0000${it.buildId}" }.distinct().size
         val wastedMs = reruns.sumOf { (it.finishedAtMs - it.startedAtMs).coerceAtLeast(0) }
-        val capped = reruns.take(MAX_RERUN_BUILD_IDS)
+        // Most recent first, deterministic tie-break (the lead-time sampler convention, lines 261-264)
+        // — when the uncapped set exceeds MAX_RERUN_BUILD_IDS, keep the freshest reruns, not the oldest.
+        val capped = reruns
+            .sortedWith(compareByDescending<DeliveryBuildRow> { it.startedAtMs }.thenByDescending { it.buildId })
+            .take(MAX_RERUN_BUILD_IDS)
 
         return RetryTaxSummary(
             chainCount = chainCount,
