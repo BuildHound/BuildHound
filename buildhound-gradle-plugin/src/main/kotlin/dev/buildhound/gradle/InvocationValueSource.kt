@@ -5,6 +5,7 @@ import java.io.File
 import java.io.Serializable
 import java.util.Properties
 import org.gradle.api.logging.Logging
+import org.gradle.api.provider.MapProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.ValueSource
 import org.gradle.api.provider.ValueSourceParameters
@@ -41,12 +42,17 @@ data class CollectedInvocation(
  * during the configuration phase is a CC fingerprint input, so only the two file *locations* are
  * captured in `apply()` — reading them here means the allowlist block re-freshens on a CC hit.
  *
- * The seven `StartParameter` scalars are the opposite shape on purpose: they are read directly in
- * `apply()` (same as the existing `parallel`/`maxWorkerCount` fingerprint scalars) and ride in as
- * baked [Parameters], so on a CC hit they replay the *store-time* command line rather than the
- * hit's actual one — a stated limitation (plan 051 Risks), not a bug: `--offline` is part of the
- * CC key itself, and `--rerun-tasks`/`--refresh-dependencies` force a miss, so the three flags the
- * baseline-hygiene filter reads can never actually be stale.
+ * The seven `StartParameter` scalars — and, for the same reason, [Parameters.cliProjectProperties]
+ * (`StartParameter.projectProperties`, the `-P` map) — are the opposite shape on purpose: they are
+ * read directly in `apply()` (same as the existing `parallel`/`maxWorkerCount` fingerprint scalars)
+ * and ride in as baked [Parameters], so on a CC hit they replay the *store-time* command line
+ * rather than the hit's actual one — a stated limitation (plan 051 Risks), not a bug: `--offline`
+ * is part of the CC key itself, and `--rerun-tasks`/`--refresh-dependencies` force a miss, so the
+ * three flags the baseline-hygiene filter reads can never actually be stale. `cliProjectProperties`
+ * carries the same baked-on-a-CC-hit limitation as the scalars — unlike the two `gradle.properties`
+ * *paths* below, `StartParameter.projectProperties` has no on-disk location to re-read at
+ * `obtain()`, so the `-P` channel of `android.*` provenance can go stale on a hit exactly like the
+ * scalars do; the `gradle.properties`-file channels (GUH/project) still re-freshen.
  */
 abstract class InvocationValueSource : ValueSource<CollectedInvocation, InvocationValueSource.Parameters> {
 
@@ -68,6 +74,14 @@ abstract class InvocationValueSource : ValueSource<CollectedInvocation, Invocati
 
         /** Absolute path of the Gradle User Home `gradle.properties` (location only). */
         val gradleUserHomePropertiesPath: Property<String>
+
+        /**
+         * `StartParameter.projectProperties` (the `-P` command-line map), baked at apply() like the
+         * scalars above (same CC narrowing #3: a CC hit replays the store-time `-P` set). This is the
+         * `android.*` family's actual override channel — AGP reads these keys as project properties,
+         * never as a raw `-D` system property (see [GradlePropertyProvenance]).
+         */
+        val cliProjectProperties: MapProperty<String, String>
     }
 
     override fun obtain(): CollectedInvocation {
@@ -93,6 +107,7 @@ abstract class InvocationValueSource : ValueSource<CollectedInvocation, Invocati
             guhProps = guhProps,
             sysProps = sysProps,
             env = env,
+            cliProjectProperties = parameters.cliProjectProperties.getOrElse(emptyMap()),
         )
 
         return CollectedInvocation(

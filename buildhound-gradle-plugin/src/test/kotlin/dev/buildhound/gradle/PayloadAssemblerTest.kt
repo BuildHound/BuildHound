@@ -3,10 +3,11 @@ package dev.buildhound.gradle
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.ConfigurationCacheState
+import dev.buildhound.commons.payload.PayloadCaps
+import dev.buildhound.commons.payload.PropertyOrigin
 import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
-import dev.buildhound.commons.payload.PayloadCaps
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -452,7 +453,7 @@ class PayloadAssemblerTest {
             fileEncoding = "UTF-8",
             locale = "en-US",
             properties = listOf(
-                CollectedPropertyPosture("org.gradle.caching", "true", dev.buildhound.commons.payload.PropertyOrigin.GRADLE_USER_HOME),
+                CollectedPropertyPosture("org.gradle.caching", "true", PropertyOrigin.GRADLE_USER_HOME),
             ),
         )
         val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), invocation = invocation)
@@ -466,7 +467,7 @@ class PayloadAssemblerTest {
         val posture = info.properties.single()
         assertEquals("org.gradle.caching", posture.key)
         assertEquals("true", posture.value)
-        assertEquals(dev.buildhound.commons.payload.PropertyOrigin.GRADLE_USER_HOME, posture.origin)
+        assertEquals(PropertyOrigin.GRADLE_USER_HOME, posture.origin)
     }
 
     @Test

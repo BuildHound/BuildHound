@@ -58,6 +58,7 @@ Settings plugin: `plugins { id("dev.buildhound") version "x" }` in `settings.gra
 - **EnvironmentCollector**: ValueSources for git (branch, sha, dirty), hostname, user (hashed per §3.7), OS/arch/cores/RAM, toolchain versions (Gradle, JDK; AGP/KGP/KSP read from plugin classpaths where applied), daemon reuse.
 - **Finalizer**: `FlowAction` on `FlowProviders.buildWorkResult` — assembles the payload from the service, computes derived metrics (hit rate, avoidance estimate, critical path, parallel utilization), writes HTML artifact, invokes uploader. Never fails the build: all errors log at `warn` and write a failure marker file.
 - **Config-cache state** recorded as `HIT | MISS_STORED | DISABLED | INCOMPATIBLE` (from start parameters + heuristics; refined later).
+- **Invocation posture** (plan 051): `environment.invocation` ships genuinely-new plaintext `fileEncoding`/`locale` plus the fixed 5-key `gradle.properties` allowlist (`org.gradle.caching`, `org.gradle.parallel`, `org.gradle.vfs.watch`, `android.enableJetifier`, `android.nonTransitiveRClass`), each with its declaring layer — alongside, never replacing, the salted `FingerprintInfo` hashes (§3.7).
 
 ### 3.3 CI provider SPI (plugin side) — per your modularity requirement
 

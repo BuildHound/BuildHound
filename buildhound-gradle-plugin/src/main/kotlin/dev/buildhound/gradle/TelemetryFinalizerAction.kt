@@ -80,9 +80,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Input
         val environment: Property<CollectedEnvironment>
 
-        /** Invocation-switch & performance-flag posture (plan 051); optional/absent when disabled. */
+        /**
+         * Invocation-switch & performance-flag posture (plan 051). Always set, like [environment]/
+         * [vcs]: [InvocationValueSource.obtain] returns an empty (not absent) [CollectedInvocation]
+         * when disabled, so this is never actually optional.
+         */
         @get:Input
-        @get:Optional
         val invocation: Property<CollectedInvocation>
 
         @get:Input

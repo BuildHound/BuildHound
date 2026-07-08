@@ -296,10 +296,11 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.maxWorkers.set(settings.startParameter.maxWorkerCount)
         }
 
-        // Invocation-switch & performance-flag posture (plan 051). The seven StartParameter scalars
-        // are baked config-time params (same narrowing as the fingerprints parallel/maxWorkers above);
-        // only the two gradle.properties *locations* are captured here — reading them is deferred to
-        // the ValueSource's obtain() (execution time), so the allowlist block re-freshens on a CC hit.
+        // Invocation-switch & performance-flag posture (plan 051). The seven StartParameter scalars,
+        // plus the -P project-properties map (also only reachable at apply()-time), are baked
+        // config-time params (same narrowing as the fingerprints parallel/maxWorkers above); only the
+        // two gradle.properties *locations* are captured here — reading them is deferred to the
+        // ValueSource's obtain() (execution time), so the allowlist block re-freshens on a CC hit.
         val invocation = settings.providers.of(InvocationValueSource::class.java) { spec ->
             spec.parameters.enabled.set(extension.enabled)
             spec.parameters.buildCacheEnabled.set(settings.startParameter.isBuildCacheEnabled)
@@ -313,6 +314,11 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.gradleUserHomePropertiesPath.set(
                 File(settings.startParameter.gradleUserHomeDir, "gradle.properties").absolutePath,
             )
+            // android.* keys are AGP-read project properties, not Gradle properties: their real
+            // command-line override channel is -P (StartParameter.projectProperties), not -D. Baked
+            // here alongside the scalars above (StartParameter is only reachable at apply()-time);
+            // GradlePropertyProvenance picks this vs. the -D sysprop channel per key family (051 review).
+            spec.parameters.cliProjectProperties.set(settings.startParameter.projectProperties)
         }
 
         // Flow API is the CC-safe "build finished" hook (spec §3.2). The finalizer

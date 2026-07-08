@@ -220,6 +220,9 @@ class GoldenPayloadTest {
         assertEquals(PropertyOrigin.GRADLE_USER_HOME, caching.origin, "GUH silently wins over the project file")
         val parallelProp = invocation.properties.first { it.key == "org.gradle.parallel" }
         assertEquals(PropertyOrigin.PROJECT, parallelProp.origin)
+        // android.* keys are AGP-read project properties, so their real override channel is -P
+        // (StartParameter.projectProperties) or ORG_GRADLE_PROJECT_* env — never -D (plan-051 review
+        // fix, GradlePropertyProvenance). This wire fixture is representative of a real -P override.
         val nonTransitive = invocation.properties.first { it.key == "android.nonTransitiveRClass" }
         assertEquals(PropertyOrigin.OVERRIDE, nonTransitive.origin)
     }

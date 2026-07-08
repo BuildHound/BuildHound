@@ -83,8 +83,10 @@ golden), `buildhound-server` (baseline filter). Payload `schemaVersion` stays **
     (`-P`/`ORG_GRADLE_PROJECT_*`); valid sources are confirmed per-key against how each key is read,
     never assumed uniform. Where a layer cannot be confirmed as the effective source, attribute
     `UNKNOWN` rather than guess — a confident-but-wrong "developer overrode this locally" defeats the
-    feature. The effective **value** is resolved here too (same files/env/`-D`), so the allowlist
-    block stays CC-hit-fresh; only the StartParameter scalars remain baked (see Risks).
+    feature. The effective **value** is resolved here too for the two `gradle.properties` files and
+    the `-D`/env channels, so that part of the allowlist block stays CC-hit-fresh; the seven
+    StartParameter scalars *and* the `android.*` family's `-P` override channel
+    (`StartParameter.projectProperties`, only reachable at `apply()`-time) remain baked (see Risks).
 - **Server — baseline hygiene.** `baselineWindow`
   ([PostgresStores.kt:241](../../buildhound-server/src/main/kotlin/dev/buildhound/server/PostgresStores.kt))
   gains two jsonb guards —
@@ -101,14 +103,23 @@ golden), `buildhound-server` (baseline filter). Payload `schemaVersion` stays **
   scalars, plaintext encoding/locale, and a per-key `GradlePropertyPosture`; round-trip lossless;
   a payload with `invocation = null` still parses (additive default); existing goldens unchanged.
 - **Plugin unit (Gradle-type-free):** the provenance attributor as a pure function over
-  (allowlist, project-props map, GUH-props map, sysprops, env) — GUH-declares-and-wins ⇒
-  `GRADLE_USER_HOME`; project-only ⇒ `PROJECT`; `-D` present ⇒ `OVERRIDE`; absent ⇒ `UNKNOWN`;
-  value-equal-across-layers still attributes GUH (the presence-not-equality guard).
+  (allowlist, project-props map, GUH-props map, sysprops, env, cli-project-properties map, i.e.
+  `StartParameter.projectProperties`/`-P`) — GUH-declares-and-wins ⇒ `GRADLE_USER_HOME`;
+  project-only ⇒ `PROJECT`; value-equal-across-layers still attributes GUH (the
+  presence-not-equality guard). **Precedence is per key family, confirmed per-key rather than
+  assumed uniform** (review fix, initial implementation wrongly applied one uniform precedence to
+  every key): `org.gradle.*` keys attribute a `-D<key>` system property ⇒ `OVERRIDE`, and a value
+  resolvable only via env ⇒ `UNKNOWN` (never guessed); `android.*` keys are AGP-read project
+  properties whose real command-line/env override channel is `-P`/`ORG_GRADLE_PROJECT_*` ⇒
+  `OVERRIDE` — a bare `-D` on an `android.*` key is not a confirmed channel and is ignored rather
+  than guessed as an override. Absent from every channel valid for the key's family ⇒ omitted.
 - **Plugin functionalTest (TestKit):** a project `gradle.properties` with `org.gradle.caching=false`
   overridden by a GUH `gradle.properties` (via an isolated `-g` home) with `org.gradle.caching=true`
   ⇒ payload `origin=GRADLE_USER_HOME`, `value=true`; `--offline --max-workers=2` populates the
-  scalars; a CC store→hit pair keeps the block present (baked scalars) and re-freshes the allowlist.
-  Guard the GUH-file path against Windows backslash mangling (`invariantSeparatorsPath`, memory).
+  scalars; a CC store→hit pair keeps the block present (baked scalars) and re-freshes the allowlist;
+  `-Dorg.gradle.caching=false` together with `-Pandroid.nonTransitiveRClass=true` on one real
+  invocation ⇒ both attributed `OVERRIDE`, proving the per-family channels end to end. Guard the
+  GUH-file path against Windows backslash mangling (`invariantSeparatorsPath`, memory).
 - **Server:** `RegressionEngine`/`baselineWindow` unit + Testcontainers — a seeded baseline window
   containing a `rerunTasks=true` build excludes it; in-memory and Postgres agree byte-for-byte
   (plan-025 parity oracle). No route test change (no new/altered endpoint).
@@ -119,10 +130,13 @@ golden), `buildhound-server` (baseline filter). Payload `schemaVersion` stays **
   booleans/ints are captured at configuration and baked into the CC entry, so toggling
   `--build-cache`/`--parallel`/`--max-workers` on a CC **hit** reports store-time values — the
   same limitation plan-022 fingerprints already carry (`parallel`/`maxWorkers`); documented, block
-  still emitted. The allowlist values + provenance are resolved in `obtain()` so they re-freshen on
-  reuse. **Payoff:** the baseline-hygiene exclusion is safe *precisely because* `--offline` is part
-  of the CC key and `--rerun-tasks`/`--refresh-dependencies` force a CC rebuild — those three flags
-  can never be stale even though the cache/parallel/worker toggles can.
+  still emitted. The allowlist's `gradle.properties`-file and `-D`/env channels are resolved in
+  `obtain()` so they re-freshen on reuse; the `android.*` family's `-P` override channel
+  (`StartParameter.projectProperties`) is itself a `StartParameter` read and so shares this same
+  narrowing — a CC hit replays the store-time `-P` set, not the hit's actual command line. **Payoff:**
+  the baseline-hygiene exclusion is safe *precisely because* `--offline` is part of the CC key and
+  `--rerun-tasks`/`--refresh-dependencies` force a CC rebuild — those three flags can never be stale
+  even though the cache/parallel/worker toggles (and the `-P` override channel) can.
 - **Privacy — GUH `gradle.properties` routinely holds credentials (§3.7, dedicated review).** The
   ValueSource reads `~/.gradle/gradle.properties` for provenance but **extracts only the fixed
   allowlist keys** and emits only those keys + their (non-secret boolean/enum) values + the origin
