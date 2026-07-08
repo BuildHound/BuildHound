@@ -48,10 +48,13 @@ subprojects {
         mavenCentral()
     }
 
+    // Compile for Java 21 (the plugin's floor, asserted in settings.gradle.kts) using whatever
+    // JDK 21+ is already running Gradle. Deliberately NOT a `toolchain {}` pin: this build has no
+    // toolchain-download resolver, so pinning an exact language version would fail for anyone on a
+    // JDK newer than 21 who doesn't also have a JDK 21 installed.
     java {
-        toolchain {
-            languageVersion = JavaLanguageVersion.of(21)
-        }
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     dependencyManagement {

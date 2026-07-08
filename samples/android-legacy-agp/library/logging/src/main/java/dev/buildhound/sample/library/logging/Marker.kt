@@ -1,7 +1,8 @@
 package dev.buildhound.sample.library.logging
 
-/** Generated module marker — :library:logging. Referencing a dependency's type below makes the
- *  `implementation(project(...))` edge a real compile-time dependency for the build graph. */
+/** Generated module marker — :library:logging. A leaf module (no project dependencies); other
+ *  modules reference this type to make their `implementation(project(...))` edge a real
+ *  compile-time dependency for the build graph. */
 object Marker {
     const val PATH = ":library:logging"
 

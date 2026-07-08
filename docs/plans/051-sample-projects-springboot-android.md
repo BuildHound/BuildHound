@@ -31,16 +31,34 @@ Supporting context:
    - `settings.gradle.kts` (applies `dev.buildhound`); **Groovy** `build.gradle` module files (a
      realistic legacy mix; keeps the suboptimal flavour, dodges Groovy-extension DSL risk).
    - Suboptimal, BuildHound-observable traits: config cache **off**, build cache **off**,
-     `org.gradle.parallel=false`, `org.gradle.configureondemand=true`, a root `subprojects {}`
-     cross-project-configuration block (blocks CC, inflates config time), hardcoded dependency
-     versions (no catalog), per-subproject `repositories { mavenCentral() }` (needs a relaxed
-     `repositoriesMode` — itself part of the anti-pattern), and a small `-Xmx`.
+     `org.gradle.parallel=false`, a root `subprojects {}` cross-project-configuration block (blocks
+     CC, inflates config time), the plain `java` plugin (no `java-library` api/implementation split —
+     itself a legacy smell), hardcoded dependency versions (no catalog), per-subproject
+     `repositories { mavenCentral() }` (needs a relaxed `repositoriesMode` — itself part of the
+     anti-pattern), and a small `-Xmx`.
+
+   > **Divergences from this plan (reconciled during implementation):**
+   > - *`configureondemand`:* the plan proposed `org.gradle.configureondemand=true`, but combined with
+   >   the cross-project `subprojects {}` block it **corrupts the task graph** (dependency modules are
+   >   never built → app compiles fail). That is a correctness bug, not just a slow build, so the
+   >   sample ships it **off** and keeps the other "slow but valid" anti-patterns. Documented inline
+   >   in `gradle.properties`.
+   > - *`java` vs `java-library`:* the plan said non-app modules would be `java-library`; they ship as
+   >   plain `java` instead. Using `java` (no api/implementation separation) is a more authentic legacy
+   >   anti-pattern and keeps every module's project dependency on the consumer's compile classpath,
+   >   which the inter-module DAG relies on.
+   > - Repeated leaf module names (`api`/`domain`/`persistence`/`web` across 10 services) forced two
+   >   disambiguations in the root build that the plan did not anticipate: a path-qualified `group`
+   >   (so identical coordinates don't collapse under conflict resolution) and a path-qualified
+   >   `archivesName` (so app `bootJar`s don't hit duplicate `web-1.0.0.jar` entries). Both are
+   >   documented inline.
    - 50 modules with 2–3 levels of nesting and a **real inter-module DAG**
      (`apps → services:<svc>:{api,domain,persistence,web} → libs:*`) so the timeline / critical-path
      telemetry is non-trivial: 6 `libs`, 10 `services` × 4 submodules (= 40), 4 `apps`.
    - Each module carries 1–2 trivial Java classes that reference a type from a dependency module,
      so compilation does real, ordered work. The 4 `apps` apply the Spring Boot plugin
-     (`@SpringBootApplication` + `bootJar`); everything else is `java-library`.
+     (`@SpringBootApplication` + `bootJar`); everything else is a plain `java` module (see the
+     divergence note below).
 
 2. `samples/android-legacy-agp/` — a multi-module Android build on **older AGP**:
    - Gradle **8.14.5** (the only line that satisfies *both* the plugin floor 8.14+ **and** AGP 8.5's
