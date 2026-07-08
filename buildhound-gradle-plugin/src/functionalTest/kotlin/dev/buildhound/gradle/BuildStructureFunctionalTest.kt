@@ -49,8 +49,10 @@ class BuildStructureFunctionalTest {
             includeBuild("included-lib")
             """.trimIndent(),
         )
-        // No build file of its own — so root itself is not a spurious empty-intermediate candidate.
-        File(projectDir, "build.gradle.kts").writeText("")
+        // Deliberately no root build.gradle.kts — an idiomatic settings-only repo. Root (":") must
+        // never appear in emptyIntermediateCandidates regardless (asserted below and in the
+        // dedicated no-root-build-file regression test), so this fixture no longer dodges the case
+        // with a placeholder file (plan 069 review).
 
         File(projectDir, "app").mkdirs()
         File(projectDir, "app/build.gradle.kts").writeText(
@@ -95,8 +97,40 @@ class BuildStructureFunctionalTest {
             ":libs:legacy:foo" in structure.emptyIntermediateCandidates,
             "a leaf with its own build file must not be a candidate",
         )
+        // Root (":") has children and, in this fixture, deliberately no build file of its own — the
+        // exact shape that used to false-positive as an "empty intermediate" candidate (plan 069
+        // review): root is definitionally not an intermediate project, regardless of whether it has
+        // a build file.
+        assertFalse(":" in structure.emptyIntermediateCandidates, "root must never be an empty-intermediate candidate")
         // Sorted for determinism.
         assertEquals(structure.emptyIntermediateCandidates.sorted(), structure.emptyIntermediateCandidates)
+    }
+
+    @Test
+    fun `a flat single-project build reports zero depth, no included builds, and no candidates`() {
+        File(projectDir, "settings.gradle.kts").writeText(
+            """
+            plugins { id("dev.buildhound") }
+            rootProject.name = "flat-fixture"
+            """.trimIndent(),
+        )
+        File(projectDir, "build.gradle.kts").writeText(
+            """tasks.register("work") { doLast { println("root work") } }""",
+        )
+
+        val result = runner(":work").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":work")?.outcome)
+        val structure = readPayload().buildStructure ?: error("expected a buildStructure block")
+        assertEquals(1, structure.projectCount, "only the root project is declared")
+        assertEquals(0, structure.maxDepth, "root itself is depth 0")
+        assertEquals(0, structure.includedBuildCount)
+        assertEquals(false, structure.buildSrcPresent)
+        assertEquals(false, structure.sourcesInRoot)
+        assertTrue(
+            structure.emptyIntermediateCandidates.isEmpty(),
+            "a single leafless project has no children, so no candidates: ${structure.emptyIntermediateCandidates}",
+        )
     }
 
     @Test

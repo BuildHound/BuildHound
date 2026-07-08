@@ -128,7 +128,7 @@ data class ProjectEvaluation(
  * ordering of plan 022 → its comparison endpoint).
  *
  * [projectCount]/[maxDepth]/[includedBuildCount] come from a config-time walk of the declared
- * `ProjectDescriptor` tree (`settingsEvaluated`, settings-level metadata — IP-legal, unlike the
+ * `ProjectDescriptor` tree (`projectsLoaded`, settings-level metadata — IP-legal, unlike the
  * plan-016 task dictionary); [buildSrcPresent]/[sourcesInRoot]/[emptyIntermediateCandidates] are
  * resolved by execution-time filesystem probes so no config-phase file read becomes a CC fingerprint
  * input (architecture §2 rule 9). Every field is nullable — a build where the walk/probes never ran
@@ -386,6 +386,15 @@ data class CapsSummary(
     val droppedExtensions: Int = 0,
     /** `projectEvaluations` entries dropped past the per-payload cap (plan 052), fastest-first. */
     val droppedProjectEvaluations: Int = 0,
+    /**
+     * `buildStructure.emptyIntermediateCandidates` entries dropped past the collecting
+     * `BuildStructureValueSource`'s own MAX_EMPTY_INTERMEDIATE_CANDIDATES cap (plan 069 review):
+     * that cap is enforced at collection time (execution phase, inside the ValueSource itself —
+     * not by [PayloadCapper]), so this count is threaded in from the plugin's
+     * `CollectedBuildStructure` DTO via `PayloadAssembler` rather than computed here, unlike
+     * every other field in this class.
+     */
+    val droppedEmptyIntermediateCandidates: Int = 0,
 )
 
 /**

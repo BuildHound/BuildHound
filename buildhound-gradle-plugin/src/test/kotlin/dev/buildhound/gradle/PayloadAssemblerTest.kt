@@ -412,6 +412,42 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `assemble folds a build-structure ValueSource-side drop count into the caps summary`() {
+        // The MAX_EMPTY_INTERMEDIATE_CANDIDATES cap is enforced inside BuildStructureValueSource
+        // itself, at collection time — not by PayloadCapper — so its overflow count arrives here
+        // pre-computed on the collected DTO (plan 069 review) rather than being derived from an
+        // over-long emptyIntermediateCandidates list.
+        val structure = CollectedBuildStructure(
+            projectCount = 600,
+            maxDepth = 1,
+            includedBuildCount = 0,
+            buildSrcPresent = false,
+            sourcesInRoot = false,
+            emptyIntermediateCandidates = listOf(":libs:legacy"),
+            droppedEmptyIntermediateCandidates = 37,
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), buildStructure = structure)
+
+        assertEquals(37, payload.caps?.droppedEmptyIntermediateCandidates)
+        // The candidate list itself is untouched here — BuildStructureValueSource already truncated
+        // it before assembly; PayloadAssembler only surfaces the count it was told about.
+        assertEquals(listOf(":libs:legacy"), payload.buildStructure?.emptyIntermediateCandidates)
+    }
+
+    @Test
+    fun `assemble leaves caps null when the build-structure drop count is zero`() {
+        val structure = CollectedBuildStructure(
+            projectCount = 2,
+            maxDepth = 1,
+            includedBuildCount = 0,
+            emptyIntermediateCandidates = listOf(":libs"),
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), buildStructure = structure)
+
+        assertNull(payload.caps, "nothing was dropped, so no caps summary should be attached")
+    }
+
+    @Test
     fun `assemble leaves buildStructure null when nothing was captured`() {
         assertNull(assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED))).buildStructure)
         // An all-null/empty capture (a guarded failure degraded every dimension) reports the same
