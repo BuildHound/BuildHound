@@ -28,7 +28,10 @@ enum class WarningCategory { ALWAYS_RUN, NON_INCREMENTAL_AP, DYNAMIC_DEBUG_VALUE
  * scrubbed a second time defensively at server ingest (`Routes.kt`'s
  * `PayloadCapper.cap(PayloadScrubber.scrub(payload, emptyList()))`) before it is ever stored. Not
  * a new exposure: `GET /v1/builds/{buildId}` already returns these same stored strings at the
- * same read scope.
+ * same read scope. This coverage claim is specific to `executionReasons` (and the other fields
+ * enumerated in `PayloadScrubber`'s class KDoc) — plan 076's ingest scrub does not cover every
+ * field on the payload; tag values, `ci.*`/`vcs.*`, links, `requestedTasks`, `environment.*`, and
+ * `extensions` are untouched by design (spec §3.7 scope) and reach storage/reads unscrubbed.
  */
 @Serializable
 data class WarningRow(
