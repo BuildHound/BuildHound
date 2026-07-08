@@ -8,6 +8,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -76,6 +77,20 @@ class GraphRoutesTest {
         val fx = fx(); appWith(fx)
         fx.stores.builds.save(fx.project.id, TestPayloads.build(buildId = "core-only", tasks = listOf(task(":app:a"))))
         assertEquals(HttpStatusCode.NotFound, graph("core-only").status)
+    }
+
+    @Test
+    fun `a malformed internalAdapters block 404s, never a 500 — see DependencyEdgesOfTest for the unit-level guard`() = testApplication {
+        val fx = fx(); appWith(fx)
+        fx.stores.builds.save(
+            fx.project.id,
+            TestPayloads.build(
+                buildId = "malformed",
+                tasks = listOf(task(":app:a")),
+                extensions = mapOf("internalAdapters" to JsonPrimitive("not-an-object")),
+            ),
+        )
+        assertEquals(HttpStatusCode.NotFound, graph("malformed").status)
     }
 
     @Test

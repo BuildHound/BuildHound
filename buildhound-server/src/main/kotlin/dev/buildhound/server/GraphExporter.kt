@@ -11,7 +11,10 @@ import dev.buildhound.commons.payload.TaskExecution
  * injection-surface note). Node identity uses a synthetic `n<index>` id (GEXF) so escaping is confined to
  * the human-readable `label`/`durationMs` attributes, never the id itself. Callers are expected to have
  * already checked `dependencyEdges.isNotEmpty()` (the route 404s before calling in); an empty map here
- * would just render an empty (still well-formed) graph.
+ * would just render an empty (still well-formed) graph. This exporter applies no size bound of its own:
+ * the plan-038 ≤2000-edge cap is client-side and does not constrain a hostile ingester; the real bound is
+ * `PayloadCapper`'s server-side `maxExtensionsBytes=256KiB` re-cap enforced at ingest, which limits the
+ * whole `internalAdapters` blob this exporter's input is read from (Routes.kt `POST /v1/builds`).
  */
 object GraphExporter {
 
@@ -82,7 +85,13 @@ object GraphExporter {
         return sb.toString()
     }
 
-    /** XML attribute-value escaping (order matters: `&` first, or later replacements would double-escape). */
+    /**
+     * XML attribute-value escaping (order matters: `&` first, or later replacements would double-escape).
+     * This is entity substitution only, not sanitization: an XML-1.0-illegal control character (e.g. a raw
+     * NUL or vertical-tab byte in a task path) passes through unescaped, which can only break this export
+     * for whatever downstream tool consumes it — never an injection into this server, which never parses
+     * its own output back.
+     */
     private fun xmlEscape(text: String): String = text
         .replace("&", "&amp;")
         .replace("<", "&lt;")

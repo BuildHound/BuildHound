@@ -8,6 +8,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -104,6 +105,25 @@ class ParallelismRoutesTest {
         )
 
         val body = parallelism("ip-build").bodyAsText()
+        assertTrue(body.contains("\"centralityAvailable\":false"), body)
+        assertFalse(body.contains("\"centrality\":"), body)
+    }
+
+    @Test
+    fun `a malformed internalAdapters block degrades centrality to null, never a 500 — see DependencyEdgesOfTest for the unit-level guard`() = testApplication {
+        val fx = fx(); appWith(fx)
+        fx.stores.builds.save(
+            fx.project.id,
+            TestPayloads.build(
+                buildId = "malformed",
+                tasks = gatingTasks(),
+                extensions = mapOf("internalAdapters" to JsonPrimitive("not-an-object")),
+            ),
+        )
+
+        val response = parallelism("malformed")
+        assertEquals(HttpStatusCode.OK, response.status)
+        val body = response.bodyAsText()
         assertTrue(body.contains("\"centralityAvailable\":false"), body)
         assertFalse(body.contains("\"centrality\":"), body)
     }
