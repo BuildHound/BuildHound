@@ -47,6 +47,10 @@ dependencies {
     // Report template + renderer; the publishing chunk decides shading vs. resource
     // embedding (plan 006) — a module dependency is correct for now.
     implementation(projects.buildhoundReport)
+    // Internal-adapters capture, bundled and driven by this plugin (plan 051): one plugin, one
+    // config block. The module keeps ALL internal-Gradle-API code quarantined; it is dormant until
+    // a `buildhound { internalAdapters { } }` toggle is set, so bundling grants no blanket consent.
+    implementation(projects.buildhoundInternalAdapters)
 
     // AGP Variant API for the Android artifact-size collector (plan 031). compileOnly: the plugin
     // must apply cleanly to non-Android builds, and no AGP jar ships with it — the collector is

@@ -1,5 +1,6 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.internaladapters.InternalAdaptersWiring
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import javax.inject.Inject
@@ -45,6 +46,13 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         extension.kotlinReports.bundle.convention(true)
         extension.tests.collect.convention(true)
         extension.processProbe.enabled.convention(overrides.bool("processProbe.enabled") ?: true)
+        // internalAdapters {} (plan 051): bundled internal-Gradle-API capture, every toggle off by
+        // default. Read at whenReady (post-DSL) and handed to the module's wiring; all-off touches no
+        // internal API. server.token-style precedence: explicit DSL > override > false.
+        extension.internalAdapters.collectCacheOrigins.convention(overrides.bool("internalAdapters.collectCacheOrigins") ?: false)
+        extension.internalAdapters.collectDeprecations.convention(overrides.bool("internalAdapters.collectDeprecations") ?: false)
+        extension.internalAdapters.collectLogWarnings.convention(overrides.bool("internalAdapters.collectLogWarnings") ?: false)
+        extension.internalAdapters.perFileHashes.convention(overrides.bool("internalAdapters.perFileHashes") ?: false)
 
         // In a composite, only the root build observes: task events from included builds
         // already reach the root's listener, and a second flow action would consume the
@@ -168,6 +176,23 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
                 )
             }.onFailure {
                 logger.warn("[buildhound] toolchain detection failed (build unaffected): {}", it.message)
+            }
+            // Internal-adapters capture (plan 051): driven from here, post-DSL, so the toggles are set.
+            // The wiring is fully guarded and no-ops when every toggle is off — the point where "applied
+            // the plugin" stops short of "consented to internal Gradle APIs". Registering the daemon
+            // listeners here (not at apply) mirrors the WARN-log listener's original site; on a CC hit
+            // whenReady is skipped and capture rides the daemon-static listener from the first miss.
+            runCatching {
+                InternalAdaptersWiring.install(
+                    settings = settings,
+                    graph = graph,
+                    collectCacheOrigins = extension.internalAdapters.collectCacheOrigins.get(),
+                    collectDeprecations = extension.internalAdapters.collectDeprecations.get(),
+                    collectLogWarnings = extension.internalAdapters.collectLogWarnings.get(),
+                    perFileHashes = extension.internalAdapters.perFileHashes.get(),
+                )
+            }.onFailure {
+                logger.warn("[buildhound] internal-adapters wiring failed (build unaffected): {}", it.message)
             }
         }
 

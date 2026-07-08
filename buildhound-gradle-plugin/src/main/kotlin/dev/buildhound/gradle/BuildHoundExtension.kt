@@ -55,6 +55,36 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     val processProbe: ProcessProbeSpec = objects.newInstance(ProcessProbeSpec::class.java)
 
     fun processProbe(action: Action<ProcessProbeSpec>) = action.execute(processProbe)
+
+    val internalAdapters: InternalAdaptersSpec = objects.newInstance(InternalAdaptersSpec::class.java)
+
+    fun internalAdapters(action: Action<InternalAdaptersSpec>) = action.execute(internalAdapters)
+}
+
+/**
+ * `internalAdapters { ... }` (spec §3.4, plans 038/044/051): capture that reads **internal Gradle
+ * APIs** (build-operation types, `LoggingOutputInternal`) that carry no compatibility guarantee. It
+ * ships bundled with the core plugin but every toggle is **off by default and dormant** — no internal
+ * API is touched until you enable a specific one. Flipping a toggle here *is* the per-feature consent
+ * (plan 051 replaced the old "apply a second `dev.buildhound.internal-adapters` plugin" consent). When
+ * a toggle is on the plugin logs a one-time notice that a Gradle upgrade may silently stop that signal;
+ * capture never fails the build (every path is reflection-guarded).
+ */
+abstract class InternalAdaptersSpec {
+    /**
+     * Capture per-task cache origin/keys + the critical-path / cache-avoided-time derived metrics
+     * (plan 038), via build-operation listeners. Off by default.
+     */
+    abstract val collectCacheOrigins: Property<Boolean>
+
+    /** Capture Gradle deprecation warnings (summary + advice, never the stack trace, plan 044). Off by default. */
+    abstract val collectDeprecations: Property<Boolean>
+
+    /** Capture `WARN`-level log lines (`logger.warn`, some compiler output, plan 044). Off by default. */
+    abstract val collectLogWarnings: Property<Boolean>
+
+    /** Reserved for a v1.x per-input-file hash follow-up (plan 038); no effect yet, warns if set. */
+    abstract val perFileHashes: Property<Boolean>
 }
 
 /**

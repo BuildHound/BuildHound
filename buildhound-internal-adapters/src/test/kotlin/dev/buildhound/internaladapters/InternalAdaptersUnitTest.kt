@@ -136,6 +136,22 @@ class InternalAdaptersUnitTest {
     }
 
     @Test
+    fun `collectCacheOrigins toggle is set by configure and cleared by reset`() {
+        InternalAdaptersState.resetForTest()
+        assertFalse(InternalAdaptersState.collectCacheOrigins(), "off by default")
+        InternalAdaptersState.configure(
+            perFile = false, gradle = "9.6.1", root = "/proj", edges = emptyMap(),
+            collectCacheOrigins = true,
+        )
+        assertTrue(InternalAdaptersState.collectCacheOrigins(), "configure() turns it on")
+        // Independent of the warning toggles — this gates only the cache data paths (plan 051).
+        assertFalse(InternalAdaptersState.collectDeprecations())
+        assertFalse(InternalAdaptersState.collectLogWarnings())
+        InternalAdaptersState.resetForTest()
+        assertFalse(InternalAdaptersState.collectCacheOrigins(), "reset clears it")
+    }
+
+    @Test
     fun `the collector scrubs and emits captured warnings`() {
         InternalAdaptersState.resetForTest()
         val root = "/home/ci/agent/work/project"
