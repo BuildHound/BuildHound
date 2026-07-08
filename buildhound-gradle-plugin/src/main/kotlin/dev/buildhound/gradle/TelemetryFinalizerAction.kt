@@ -347,9 +347,10 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
             // JVM archive sizes (plan 072, research F22): cross-reference each config-time archive
             // location against this build's task outcomes and measure File.length() only for archive
-            // tasks that actually produced output — applying org.springframework.boot disables the
-            // plain `jar` task, so a naive stat of the declared `-plain.jar` path would report a
-            // stale/absent artifact; the produced-output-outcome + File.exists() filter prevents it.
+            // tasks that actually produced output. Boot builds both `jar` (plain classifier) and
+            // `bootJar` by default (Boot 2.5+), so a default Boot module contributes two rows here; the
+            // produced-output-outcome + File.exists() filter also correctly handles a user-disabled
+            // `jar`, whose declared path would otherwise report a stale/absent artifact.
             // Runs inside the finalizer's outer runCatching → warn + marker, never a failed build.
             val jvmArtifacts = readJvmArtifacts(
                 parameters.jvmArtifacts.getOrElse(emptyList()),
@@ -630,27 +631,6 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
     }
 
     /**
-     * Measures each config-time JVM archive [location] (plan 072, research F22): the size is read only
-     * when the location's [JvmArtifactLocation.taskPath] resolved to a produced-output outcome
-     * (EXECUTED/UP_TO_DATE/FROM_CACHE — never SKIPPED/NO_SOURCE/FAILED, nor an absent join) **and** the
-     * archive file exists on disk. This is the load-bearing "measure-only-what-ran": applying
-     * `org.springframework.boot` disables the plain `jar` task, so its declared `-plain.jar` path would
-     * otherwise report a stale/absent artifact. `File.length()` runs here at execution time (no
-     * config-phase read → no CC fingerprint input); the absolute [JvmArtifactLocation.archivePath]
-     * never enters the returned [JvmArtifactSize] (spec §3.7 — only size + module + kind ship).
-     */
-    private fun readJvmArtifacts(
-        locations: List<JvmArtifactLocation>,
-        taskOutcomes: Map<String, TaskOutcome>,
-    ): List<JvmArtifactSize> =
-        locations.mapNotNull { location ->
-            if (taskOutcomes[location.taskPath] !in PRODUCED_OUTPUT_OUTCOMES) return@mapNotNull null
-            val file = File(location.archivePath)
-            if (!file.exists()) return@mapNotNull null
-            JvmArtifactSize(module = location.module, kind = location.kind, sizeBytes = file.length())
-        }
-
-    /**
      * Reads (then clears) the `beforeProject`/`afterProject` sidecar under
      * `<root>/.gradle/buildhound/config-timings` (plan 052). Called unconditionally at the top of
      * [execute] — the drain must run even on a DSL-disabled or CC-hit build (052 review fix), so the
@@ -680,15 +660,36 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
 
         /** Wire format stays [BuildHoundJson.payload]; pretty printing is for the local file only. */
         val prettyJson = Json(from = BuildHoundJson.payload) { prettyPrint = true }
-
-        /**
-         * Outcomes for which a JVM archive task actually produced its output (plan 072) — the
-         * only-what-ran gate. SKIPPED/NO_SOURCE/FAILED (and an absent join) leave the artifact
-         * unmeasured, so a disabled `-plain.jar` never contributes a stale size.
-         */
-        val PRODUCED_OUTPUT_OUTCOMES = setOf(TaskOutcome.EXECUTED, TaskOutcome.UP_TO_DATE, TaskOutcome.FROM_CACHE)
     }
 }
+
+/**
+ * Outcomes for which a JVM archive task actually produced its output (plan 072) — the
+ * only-what-ran gate. SKIPPED/NO_SOURCE/FAILED (and an absent join) leave the artifact unmeasured.
+ */
+private val PRODUCED_OUTPUT_OUTCOMES = setOf(TaskOutcome.EXECUTED, TaskOutcome.UP_TO_DATE, TaskOutcome.FROM_CACHE)
+
+/**
+ * Measures each config-time JVM archive [location] (plan 072, research F22): the size is read only
+ * when the location's [JvmArtifactLocation.taskPath] resolved to a produced-output outcome
+ * (EXECUTED/UP_TO_DATE/FROM_CACHE — never SKIPPED/NO_SOURCE/FAILED, nor an absent join) **and** the
+ * archive file exists on disk. This is the load-bearing "measure-only-what-ran": Boot builds both
+ * `jar` (plain classifier) and `bootJar` by default (Boot 2.5+), so a default Boot module yields two
+ * rows out of this function; the gate also correctly handles a user-disabled `jar`, whose declared
+ * path would otherwise report a stale/absent artifact. `File.length()` runs here at execution time
+ * (no config-phase read → no CC fingerprint input); the absolute [JvmArtifactLocation.archivePath]
+ * never enters the returned [JvmArtifactSize] (spec §3.7 — only size + module + kind ship).
+ */
+internal fun readJvmArtifacts(
+    locations: List<JvmArtifactLocation>,
+    taskOutcomes: Map<String, TaskOutcome>,
+): List<JvmArtifactSize> =
+    locations.mapNotNull { location ->
+        if (taskOutcomes[location.taskPath] !in PRODUCED_OUTPUT_OUTCOMES) return@mapNotNull null
+        val file = File(location.archivePath)
+        if (!file.exists()) return@mapNotNull null
+        JvmArtifactSize(module = location.module, kind = location.kind, sizeBytes = file.length())
+    }
 
 /**
  * Joins the task path → static type/cacheable/nonCacheableReason dictionary (plan 016) onto the

@@ -76,9 +76,10 @@ ListProperty<JvmArtifactLocation>`. In `execute`, after `tasks = collector.snaps
 `jvmSizes` by cross-referencing each location's `taskPath` against `tasks.associate { it.path to
 it.outcome }`: **measure only when the task's recorded outcome produced output** (skip
 `SKIPPED`/`NO_SOURCE`/`FAILED`) *and* `File(archivePath).exists()`, then `File.length()`. This is the
-load-bearing "measure-only-what-ran": applying `org.springframework.boot` **disables the plain `jar`
-task** (bootJar is the deliverable), so a naive stat of the declared `-plain.jar` path would report a
-stale/absent artifact — the outcome+exists filter prevents it. The read sits inside the finalizer's
+load-bearing "measure-only-what-ran": Boot builds **both** `jar` (plain classifier) and `bootJar` by
+default (Boot 2.5+), so a default Boot module contributes two rows; the outcome+exists filter also
+correctly handles a user-disabled `jar`, whose declared `-plain.jar` path would otherwise report a
+stale/absent artifact. The read sits inside the finalizer's
 outer `runCatching` (→ warn + marker, never a failed build). `PayloadAssembler.assemble` gains
 `jvmArtifacts: List<JvmArtifactSize> = emptyList()`; it emits `ArtifactSizes(android = …, jvm = …)`
 whenever *either* list is non-empty (today: `artifacts.takeIf …` at `:183`), capping `jvm` largest-first
@@ -133,8 +134,9 @@ the explicitly deferred slice under Scope "Out").
   proper jar manifests, so the version resolves in the common case; known limitation: an all-unversioned
   fleet shows the dimension as "not collected". A distinct presence field is out of scope (deferred).
 - **Only-what-ran (narrowing b).** Capture is filtered to `graph.allTasks` at config time and gated at
-  Flow time on produced-output outcome + file existence, precisely because `org.springframework.boot`
-  disables the plain `jar` task (see Design). Prevents stale/absent-artifact rows.
+  Flow time on produced-output outcome + file existence (see Design): Boot builds both `jar` and
+  `bootJar` by default, so a default Boot module correctly yields two rows, while the same gate
+  prevents a stale/absent row for a user-disabled `jar`.
 - **CC safety.** Config time captures **locations only** (`archiveFile.orNull?.asFile?.absolutePath` — no
   read → no CC fingerprint input); state rides an `AtomicReference` mailbox → finalizer param (resolved
   after config, replayed on a hit — the plan-046 channel verbatim); `File.length()` runs in the Flow
@@ -174,5 +176,8 @@ the explicitly deferred slice under Scope "Out").
 - New `build-payload-v1-jvm.json` golden added, existing goldens unedited, `SCHEMA_VERSION` still `1`;
   architecture decision-log rows added (core-archive-type capture vs the plan-031 AGP path; additive
   `springBoot`/`artifacts.jvm` at v1).
+- Manual validation against a real Boot build (`samples/springboot-legacy`, CI-skipped like the
+  plan-031 AGP fixture — see `JvmArtifactSizeFunctionalTest`'s `@Disabled` test) is outstanding;
+  track it as a follow-up rather than a store-blocking gap.
 - Both §3 reviews pass (`kotlin-gradle-reviewer` + the mandatory §3.2 security & privacy review), findings
   addressed; `./gradlew build` green.

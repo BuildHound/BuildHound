@@ -111,8 +111,10 @@ enum class JvmArtifactKind { BOOT_JAR, BOOT_WAR, JAR, WAR }
  * One measured JVM archive (plan 072, research F22 — the server-service analogue of the plan-031
  * Android APK). Byte size only — no path, no contents (§3.7). [module] is a project-internal Gradle
  * path (`:app`, `:` for the root), not PII. Measured only for the archive tasks that actually ran
- * this invocation (finalizer-side outcome + `File.exists()` gate), so applying
- * `org.springframework.boot` — which disables the plain `jar` task — never yields a stale/absent row.
+ * this invocation (finalizer-side outcome + `File.exists()` gate): Boot builds both `jar` (plain
+ * classifier) and `bootJar` by default (Boot 2.5+), so a default Boot module emits two rows (JAR +
+ * BOOT_JAR); the outcome+exists gate also correctly handles a user-disabled `jar`, never yielding a
+ * stale/absent row for it.
  */
 @Serializable
 data class JvmArtifactSize(
