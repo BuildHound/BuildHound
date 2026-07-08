@@ -8,6 +8,7 @@ import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.BuildStructureInfo
+import dev.buildhound.commons.payload.CapsSummary
 import dev.buildhound.commons.payload.CiInfo
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
@@ -236,7 +237,16 @@ internal object PayloadAssembler {
         // the complete string, never a truncated slice), then enforce the payload budgets.
         // One capped, scrubbed payload everywhere — local file, artifact, upload.
         val scrubbed = PayloadScrubber.scrub(payload, projectRoots)
-        return PayloadCapper.cap(scrubbed, caps)
+        val capped = PayloadCapper.cap(scrubbed, caps)
+        // Build-structure candidates are already capped upstream, inside BuildStructureValueSource
+        // itself (plan 069 review) — PayloadCapper never sees the overflow, so its drop count is
+        // folded into the CapsSummary here rather than inside PayloadCapper.cap().
+        val droppedCandidates = buildStructure?.droppedEmptyIntermediateCandidates ?: 0
+        return if (droppedCandidates > 0) {
+            capped.copy(caps = (capped.caps ?: CapsSummary()).copy(droppedEmptyIntermediateCandidates = droppedCandidates))
+        } else {
+            capped
+        }
     }
 
     /** Cardinality guardrail (plan 031): a pathological flavor matrix keeps only the largest N. */

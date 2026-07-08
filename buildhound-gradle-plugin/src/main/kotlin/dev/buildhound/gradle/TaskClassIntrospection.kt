@@ -5,8 +5,9 @@ import java.io.Serializable
 /**
  * Static, per-build-invariant facts about a task class (spec §3.2 / §4): the grouping
  * `type`, whether it is statically `cacheable`, and the free-text `nonCacheableReason`.
- * Serializable so it rides in the [TaskEventCollector] service parameter map like
- * [CollectedCi] rides into the FlowAction (plan 016).
+ * Serializable so it rides in the finalizer `FlowAction`'s `taskMetadata` parameter
+ * (`TelemetryFinalizerAction.Parameters`, plan 056) like [CollectedCi] rides into the
+ * FlowAction (plan 016).
  */
 data class TaskMetadata(
     val type: String?,

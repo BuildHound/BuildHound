@@ -41,6 +41,8 @@ data class CollectedBuildStructure(
     val buildSrcPresent: Boolean? = null,
     val sourcesInRoot: Boolean? = null,
     val emptyIntermediateCandidates: List<String> = emptyList(),
+    /** How many candidates [BuildStructureValueSource.obtain] dropped past its own cap (plan 069 review). */
+    val droppedEmptyIntermediateCandidates: Int = 0,
 ) : Serializable
 
 /**
@@ -107,7 +109,10 @@ internal object BuildStructureWalker {
  * fact (spec §3.7: Gradle paths, never a judgment or a filesystem path). Sorted for determinism and
  * capped so a pathological monorepo can't blow the payload budget — no `PayloadCapper`/`PayloadScrubber`
  * change (there is no free text here to bound; the cap lives in the collecting `ValueSource` itself,
- * per the plan's design).
+ * per the plan's design). The overflow doesn't stay silent, though: [CollectedBuildStructure
+ * .droppedEmptyIntermediateCandidates] carries the drop count out of this cap so `PayloadAssembler`
+ * can fold it into the shipped `CapsSummary` (plan 069 review) — the only `CapsSummary` field whose
+ * count is decided here rather than inside `PayloadCapper`.
  */
 abstract class BuildStructureValueSource : ValueSource<CollectedBuildStructure, BuildStructureValueSource.Parameters> {
 
@@ -139,19 +144,26 @@ abstract class BuildStructureValueSource : ValueSource<CollectedBuildStructure, 
 
         val candidates = descriptors.entries
             .asSequence()
-            .filter { (_, info) -> info.hasChildren && !File(info.buildFilePath).exists() }
+            // Root (":") is definitionally not an "intermediate" project — an idiomatic
+            // no-root-build-file repo (settings.gradle.kts only) would otherwise flag it on
+            // every build (plan 069 review: a near-universal false positive).
+            .filter { (path, info) -> path != ":" && info.hasChildren && !File(info.buildFilePath).exists() }
             .map { it.key }
             .sorted()
             .toList()
-        val cappedCandidates = if (candidates.size > MAX_EMPTY_INTERMEDIATE_CANDIDATES) {
+        val cappedCandidates: List<String>
+        val droppedCandidates: Int
+        if (candidates.size > MAX_EMPTY_INTERMEDIATE_CANDIDATES) {
             logger.info(
                 "[buildhound] {} empty-intermediate candidates found; capped to {}",
                 candidates.size,
                 MAX_EMPTY_INTERMEDIATE_CANDIDATES,
             )
-            candidates.take(MAX_EMPTY_INTERMEDIATE_CANDIDATES)
+            cappedCandidates = candidates.take(MAX_EMPTY_INTERMEDIATE_CANDIDATES)
+            droppedCandidates = candidates.size - cappedCandidates.size
         } else {
-            candidates
+            cappedCandidates = candidates
+            droppedCandidates = 0
         }
 
         return CollectedBuildStructure(
@@ -161,6 +173,7 @@ abstract class BuildStructureValueSource : ValueSource<CollectedBuildStructure, 
             buildSrcPresent = File(rootDir, "buildSrc").exists(),
             sourcesInRoot = File(rootDir, "src").exists(),
             emptyIntermediateCandidates = cappedCandidates,
+            droppedEmptyIntermediateCandidates = droppedCandidates,
         )
     }
 

@@ -133,6 +133,31 @@ Modules: `buildhound-gradle-plugin` (collection), `buildhound-commons` (schema +
   the walk's own success signal — a failed/skipped walk degrades the *whole* block to null rather than
   shipping `buildSrcPresent`/`sourcesInRoot` alone (found by the forced-failure functional test).
 
+## Post-landing review notes
+
+- **Root false positive.** `BuildStructureValueSource.obtain()`'s candidate filter now excludes
+  `":"` explicitly — root has no parent, so it is definitionally not an "intermediate" project even
+  when a repo has no root `build.gradle(.kts)` (an idiomatic settings-only layout), which used to
+  false-positive on every such build. `BuildStructureFunctionalTest`'s fixture no longer plants a
+  placeholder root build file to dodge the case; it now asserts `":"` is absent from
+  `emptyIntermediateCandidates` against an honest no-root-build-file fixture.
+- **Silent cap visibility.** `MAX_EMPTY_INTERMEDIATE_CANDIDATES` (500) was enforced inside the
+  `ValueSource` with only a `logger.info` line — invisible in the shipped payload. Added
+  `CapsSummary.droppedEmptyIntermediateCandidates` (additive, default 0): `obtain()` now returns
+  the drop count on `CollectedBuildStructure`, and `PayloadAssembler.assemble` folds it into the
+  final `caps` block after `PayloadCapper.cap` runs — this is the one `CapsSummary` count decided
+  at collection time rather than inside `PayloadCapper` itself, since the cap already happened
+  before assembly ever sees the list.
+- **IP-test placement (accepted).** The positive `isolatedProjects`/`buildStructure`-under-IP
+  assertion lives in `IsolatedProjectsFunctionalTest`, which only runs in the non-blocking
+  `isolatedProjectsTest` task/CI job (the existing repo-wide convention for IP-only assertions, not
+  specific to this plan) rather than the default `functionalTest` suite. Accepted as-is; no test move.
+- **Nested-composite build coverage.** Not added — `BuildStructureFunctionalTest` covers one
+  `includeBuild` only. A composite nested inside another included build would mostly re-exercise
+  `Gradle.includedBuilds` (already covered) without adding signal about the descriptor walk itself
+  (included builds' own project trees are out of scope for `settings.rootProject`'s descriptor tree
+  regardless of nesting depth); accepted as a gap rather than added for its own sake.
+
 ## Exit criteria
 
 - `BuildStructureInfo` + `EnvironmentInfo.isolatedProjects` ship additively; `schemaVersion == 1`; the
