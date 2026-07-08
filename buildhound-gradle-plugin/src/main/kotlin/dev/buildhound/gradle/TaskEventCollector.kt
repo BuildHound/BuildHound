@@ -46,17 +46,19 @@ data class MarkerContext(
  * Registered from settings via `BuildEventsListenerRegistry.onTaskCompletion`, which is
  * configuration-cache safe and replays on cache hits.
  *
- * [Params.taskMetadata] carries the configuration-time task dictionary (path → static
- * type/cacheable/reason, plan 016); [Params.testResultLocations] carries the JUnit XML output
- * directory of each `Test` task (path → dir/module, plan 024). Both are the shared home for
- * per-task config-time data. Each provider is replayed verbatim on a config-cache hit, so the
- * data survives when the `whenReady` callback that built it never runs.
+ * [Params.testResultLocations] carries the JUnit XML output directory of each `Test` task (path →
+ * dir/module, plan 024) — the shared home for per-task config-time data still read on this service's
+ * own params. The task `type`/`cacheable`/`nonCacheableReason` dictionary (plan 016) used to live
+ * here too (`Params.taskMetadata`), joined per event in [onFinish]; it moved to a finalizer-only
+ * Flow-action parameter (`TelemetryFinalizerAction.Parameters.taskMetadata`, plan 056) because this
+ * service's params are the ones a composite build's included-build task-finish events freeze
+ * *before* the root's `whenReady` fills the mailbox (plan 044) — a hazard a Flow-action param
+ * (resolved after configuration) does not share. Each remaining provider here is replayed verbatim
+ * on a config-cache hit, so the data survives when the `whenReady` callback that built it never runs.
  */
 abstract class TaskEventCollector : BuildService<TaskEventCollector.Params>, OperationCompletionListener {
 
     interface Params : BuildServiceParameters {
-        val taskMetadata: MapProperty<String, TaskMetadata>
-
         /** Test-task path → JUnit XML output location (plan 024); empty under isolated projects. */
         val testResultLocations: MapProperty<String, TestResultLocations>
 
@@ -77,9 +79,6 @@ abstract class TaskEventCollector : BuildService<TaskEventCollector.Params>, Ope
 
     private val markerWritten = AtomicBoolean(false)
 
-    // Read once, lazily, off the event thread's hot path; empty under isolated projects.
-    private val metadata: Map<String, TaskMetadata> by lazy { parameters.taskMetadata.getOrElse(emptyMap()) }
-
     override fun onFinish(event: FinishEvent) {
         if (event !is TaskFinishEvent) return
         val result = event.result
@@ -92,16 +91,15 @@ abstract class TaskEventCollector : BuildService<TaskEventCollector.Params>, Ope
                 .onFailure { logger.info("[buildhound] start-marker not written (build unaffected): {}", it.message) }
         }
         val path = event.descriptor.taskPath
-        val meta = metadata[path]
+        // type/cacheable/nonCacheableReason are left null here (plan 056): the dictionary join
+        // moved to the finalizer, the mechanism's sole reader, via a Flow-action parameter — see
+        // TelemetryFinalizerAction.execute. This hot path no longer does the per-event lookup.
         tasks += TaskExecution(
             path = path,
             module = path.substringBeforeLast(':').ifEmpty { ":" },
-            type = meta?.type,
             startMs = result.startTime,
             durationMs = result.endTime - result.startTime,
             outcome = result.toOutcome(),
-            cacheable = meta?.cacheable,
-            nonCacheableReason = meta?.nonCacheableReason,
             incremental = (result as? TaskExecutionResult)?.isIncremental ?: false,
             executionReasons = (result as? TaskExecutionResult)?.executionReasons.orEmpty(),
         )
@@ -126,7 +124,7 @@ abstract class TaskEventCollector : BuildService<TaskEventCollector.Params>, Ope
     /**
      * Test-task JUnit XML locations captured at configuration time (plan 024). Consumed once in
      * the finalizer (not per task-finish event), so it is read directly from the parameter rather
-     * than cached like [metadata]. Empty under isolated projects or when test collection is off.
+     * than cached. Empty under isolated projects or when test collection is off.
      */
     fun snapshotLocations(): Map<String, TestResultLocations> = parameters.testResultLocations.getOrElse(emptyMap())
 

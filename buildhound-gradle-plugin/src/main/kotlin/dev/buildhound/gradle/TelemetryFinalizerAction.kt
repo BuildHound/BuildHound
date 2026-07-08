@@ -65,6 +65,19 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Optional
         val toolchain: Property<DetectedToolchain>
 
+        /**
+         * Task path → static type/cacheable/nonCacheableReason dictionary (plan 016), delivered as a
+         * finalizer parameter rather than a collector-service parameter (plan 056, closes plan 045).
+         * The finalizer is the dictionary's sole reader, so — exactly like [toolchain] (plan 046) —
+         * it rides a Flow-action parameter, resolved after configuration, immune to the
+         * composite-build hazard where an included build's task-finish event instantiates the
+         * collector *service* (freezing its params) before the root's `whenReady` fills the mailbox
+         * (plan 044). Missing keys (isolated projects, a capture failure) join to null — a total
+         * lookup, never a partial one.
+         */
+        @get:Input
+        val taskMetadata: MapProperty<String, TaskMetadata>
+
         @get:Input
         @get:Optional
         val fingerprints: Property<CollectedFingerprints>
@@ -198,7 +211,17 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             val mode = PayloadAssembler.resolveMode(configuredMode, ci, benchmark) ?: return@runCatching
 
             val collector = parameters.collector.get()
-            val tasks = collector.snapshot()
+            // Task type/cacheable/nonCacheableReason dictionary (plan 016) joined here, not in the
+            // collector's onFinish (plan 056, closes plan 045): the finalizer is now the dictionary's
+            // sole reader, so it rides the same after-configuration Flow-action channel as toolchain
+            // (plan 046) and is immune to the composite-build service-param freeze (plan 044). A
+            // total lookup — a task with no dictionary entry (isolated projects, capture failure)
+            // simply keeps its already-null fields, never a partial join.
+            val taskMetadata = parameters.taskMetadata.getOrElse(emptyMap())
+            val tasks = collector.snapshot().map { task ->
+                val meta = taskMetadata[task.path] ?: return@map task
+                task.copy(type = meta.type, cacheable = meta.cacheable, nonCacheableReason = meta.nonCacheableReason)
+            }
             // AGP/KGP/KSP versions detected at config time (plan 046); replayed on a CC hit.
             val toolchain = parameters.toolchain.getOrElse(DetectedToolchain())
             // Lost-build reconciliation (plan 033): before this build's own payload, delete this

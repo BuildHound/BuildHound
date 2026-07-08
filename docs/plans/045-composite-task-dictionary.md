@@ -1,6 +1,13 @@
 # Plan 045 — task type/cacheable dictionary lost in composite builds
 
-**Status: deferred** · 2026-07-06
+**Status: closed** · 2026-07-08 — superseded/closed by
+[056](056-composite-build-logic-dictionary-priority.md), which un-deferred this plan (research
+finding F6: the gap hits the classpath-applied `build-logic` composite path, not just
+`includeBuild`) and implemented its option (b), refined to ride a Flow-action parameter
+(`TelemetryFinalizerAction.Parameters.taskMetadata`, the plan-046 channel) rather than a sidecar.
+All exit criteria in §4 below are met. Original deferred status/content preserved below for history.
+
+**Status (original): deferred** · 2026-07-06
 
 ## 1. Source
 

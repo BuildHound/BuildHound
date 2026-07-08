@@ -6,6 +6,7 @@ import dev.buildhound.commons.payload.BuildPayload
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.gradle.testkit.runner.GradleRunner
 import org.junit.jupiter.api.io.TempDir
@@ -17,6 +18,12 @@ import org.junit.jupiter.api.io.TempDir
  * plan-016/024 mailbox — freezing the service param empty, so test telemetry was silently dropped
  * (`tests: []`). The durable sidecar file (`TestLocationSidecar`) is the fix; without it these tests
  * fail on `main`.
+ *
+ * Also the regression gate for plan 056 (closes plan 045): the *same* composite freeze left every
+ * `tasks[].type`/`cacheable` null and `derived.cacheableHitRate` null, because the type/cacheable
+ * dictionary was joined on the collector's hot `onFinish` path — reading the same frozen service
+ * param. Moving the join to a finalizer Flow-action parameter (the plan-046 channel) fixes this on
+ * both the store and the CC-reuse run; the assertions below were confirmed **red on `main`**.
  */
 class CompositeBuildTestCollectionFunctionalTest {
 
@@ -128,6 +135,17 @@ class CompositeBuildTestCollectionFunctionalTest {
             "the failed test rides the payload: ${testTask.failedOrRetried}",
         )
         assertTrue(result.output.contains("[buildhound] build"), "the summary line still prints")
+
+        // Plan 056 (closes plan 045): the type/cacheable dictionary must join on the classpath path
+        // even though a build-logic composite is applied — the same freeze plan 044 fixed for test
+        // telemetry also hit this dictionary, since both used to read the same frozen service param.
+        val compileJava = payload.tasks.single { it.path == ":compileJava" }
+        assertNotNull(compileJava.type, "task type must be captured in a composite build (plan 056)")
+        assertNotNull(compileJava.cacheable, "cacheable must be captured in a composite build (plan 056)")
+        assertNotNull(
+            payload.derived?.cacheableHitRate,
+            "cacheableHitRate must be non-null (a fresh all-EXECUTED run may legitimately be 0.0)",
+        )
     }
 
     @Test
@@ -135,12 +153,28 @@ class CompositeBuildTestCollectionFunctionalTest {
         setUpComposite()
 
         runner("test", "--configuration-cache").buildAndFail()
-        assertTrue(readPayload().tests.isNotEmpty(), "populated on the store run")
+        val stored = readPayload()
+        assertTrue(stored.tests.isNotEmpty(), "populated on the store run")
+        // Plan 056 (closes plan 045): the dictionary join now rides the finalizer's Flow-action
+        // parameter, so it is populated on the store run exactly like the sidecar-delivered test
+        // locations above.
+        val storedCompileJava = stored.tasks.single { it.path == ":compileJava" }
+        assertNotNull(storedCompileJava.type, "task type must be captured on the store run (plan 056)")
+        assertNotNull(storedCompileJava.cacheable, "cacheable must be captured on the store run (plan 056)")
+        assertNotNull(stored.derived?.cacheableHitRate, "cacheableHitRate must be non-null on the store run")
 
         // Reuse run: whenReady never fires, so the mailbox holder is empty — the .gradle sidecar
         // persisted from the store run is what keeps the tests present (the CC-hit gap).
         val reuse = runner("test", "--configuration-cache").buildAndFail()
         assertTrue(reuse.output.contains("Reusing configuration cache"), reuse.output)
-        assertTrue(readPayload().tests.single().classes.isNotEmpty(), "populated again on the reuse run")
+        val reusedPayload = readPayload()
+        assertTrue(reusedPayload.tests.single().classes.isNotEmpty(), "populated again on the reuse run")
+        // Plan 056: the Flow-action parameter is baked into the CC entry at store time and replays
+        // on the hit (the same argument plan 046 validated for the toolchain channel) — proving the
+        // dictionary rides the CC entry, not just the store build.
+        val reusedCompileJava = reusedPayload.tasks.single { it.path == ":compileJava" }
+        assertNotNull(reusedCompileJava.type, "task type must replay from the CC entry on reuse (plan 056)")
+        assertNotNull(reusedCompileJava.cacheable, "cacheable must replay from the CC entry on reuse (plan 056)")
+        assertNotNull(reusedPayload.derived?.cacheableHitRate, "cacheableHitRate must be non-null on the reuse run")
     }
 }
