@@ -3,11 +3,13 @@ package dev.buildhound.gradle
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.ConfigurationCacheState
+import dev.buildhound.commons.payload.GuhWarmth
 import dev.buildhound.commons.payload.PayloadCaps
 import dev.buildhound.commons.payload.PropertyOrigin
 import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
+import dev.buildhound.commons.payload.WrapperDistributionType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -422,6 +424,82 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `assemble maps a collected wrapper onto WrapperInfo with COLD warmth when the dist was unpacked around this daemon's own start`() {
+        val wrapper = CollectedWrapper(
+            variant = WrapperDistributionType.BIN,
+            distributionSha256Pinned = true,
+            wrapperJarSha256 = "a".repeat(64),
+            distMtimeMs = 1_000_500,
+            jarMtimeMs = 100,
+            distPresent = true,
+            jvmStartMs = 1_000_000,
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), wrapper = wrapper)
+
+        val info = payload.wrapper ?: error("expected a wrapper block")
+        assertEquals(WrapperDistributionType.BIN, info.distributionVariant)
+        assertEquals(true, info.distributionSha256Pinned)
+        assertEquals("a".repeat(64), info.wrapperJarSha256)
+        assertEquals(GuhWarmth.COLD, info.guhWarmth)
+    }
+
+    @Test
+    fun `assemble reports WARM when the dist predates this daemon's own JVM start by more than the fresh window`() {
+        val wrapper = CollectedWrapper(
+            variant = WrapperDistributionType.ALL,
+            distPresent = true,
+            distMtimeMs = 0,
+            jvmStartMs = GuhWarmth.FRESH_WINDOW_MS + 1_000,
+        )
+        val payload = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), wrapper = wrapper)
+
+        assertEquals(GuhWarmth.WARM, payload.wrapper?.guhWarmth)
+    }
+
+    @Test
+    fun `assemble reports UNKNOWN warmth but still ships variant and pinned when the dist is absent`() {
+        // System/IDE Gradle (no wrapper dist under GUH): variant/pinned still describe the
+        // committed wrapper config; warmth is honestly UNKNOWN, never guessed.
+        val wrapper = CollectedWrapper(
+            variant = WrapperDistributionType.CUSTOM,
+            distributionSha256Pinned = false,
+            distPresent = false,
+        )
+        val payload = assemble(tasks = listOf(task(":a", 500, 1, TaskOutcome.EXECUTED)), wrapper = wrapper)
+
+        val info = payload.wrapper ?: error("expected a wrapper block")
+        assertEquals(WrapperDistributionType.CUSTOM, info.distributionVariant)
+        assertEquals(false, info.distributionSha256Pinned)
+        assertEquals(GuhWarmth.UNKNOWN, info.guhWarmth)
+    }
+
+    @Test
+    fun `assemble still classifies warmth on a task-less build (the anchor is JVM start, not task timing)`() {
+        // Superseding an earlier design draft that compared the dist mtime against the first
+        // task's startMs: the wrapper's bootstrap unpacks the dist before this JVM launches, before
+        // configuration, before any task — so no in-build task timestamp can ever observe COLD, and
+        // a task-less build is no longer a special case at all once the anchor is this daemon's own
+        // JVM start (always available, independent of tasks).
+        val wrapper = CollectedWrapper(
+            variant = WrapperDistributionType.BIN,
+            distPresent = true,
+            distMtimeMs = 1_000,
+            jvmStartMs = 1_200,
+        )
+        val payload = assemble(tasks = emptyList(), wrapper = wrapper)
+
+        assertEquals(GuhWarmth.COLD, payload.wrapper?.guhWarmth)
+    }
+
+    @Test
+    fun `assemble leaves wrapper null when nothing was captured`() {
+        assertNull(assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED))).wrapper)
+        // An all-null/unknown capture (every probe degraded) reports the same as "uncaptured".
+        val degraded = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), wrapper = CollectedWrapper())
+        assertNull(degraded.wrapper)
+    }
+
+    @Test
     fun `assemble maps isolatedProjects onto the environment block, defaulting to null when uncaptured`() {
         val active = assemble(tasks = listOf(task(":a", 0, 1, TaskOutcome.EXECUTED)), isolatedProjects = true)
         assertEquals(true, active.environment?.isolatedProjects)
@@ -598,6 +676,7 @@ class PayloadAssemblerTest {
         projectEvaluations: List<dev.buildhound.commons.payload.ProjectEvaluation> = emptyList(),
         buildStructure: CollectedBuildStructure? = null,
         isolatedProjects: Boolean? = null,
+        wrapper: CollectedWrapper? = null,
         environment: CollectedEnvironment = CollectedEnvironment(
             os = "Linux", arch = "amd64", cores = 8, ramMb = 16_000,
             hostnameHash = "h_0123456789ab", userId = "u_0123456789ab",
@@ -642,6 +721,7 @@ class PayloadAssemblerTest {
         ksp = ksp,
         buildStructure = buildStructure,
         isolatedProjects = isolatedProjects,
+        wrapper = wrapper,
     )
 
     private fun task(

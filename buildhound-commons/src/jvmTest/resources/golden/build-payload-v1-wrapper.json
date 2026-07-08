@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "buildId": "f7a8b9c0-d1e2-4f3a-9b4c-5d6e7f8a9b0c",
+  "projectKey": "pilot-android",
+  "startedAt": 1751800000000,
+  "finishedAt": 1751800012000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["assembleDebug"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:assembleDebug",
+      "module": ":app",
+      "startMs": 1751800001000,
+      "durationMs": 11000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "wrapper": {
+    "distributionVariant": "BIN",
+    "distributionSha256Pinned": true,
+    "wrapperJarSha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "guhWarmth": "COLD"
+  }
+}

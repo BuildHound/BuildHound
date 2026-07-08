@@ -55,8 +55,11 @@ nullable payload blocks; hash/size-only, no-path privacy), [016](implemented/016
   - *Jar hash*: SHA-256 of the `gradle-wrapper.jar` bytes as full hex — the jar is distribution-independent
     (identical for `-bin`/`-all`) and public, and full hex is exactly what the deferred cross-check needs.
   - *Warmth signals*: resolve this build's unpacked dist under
-    `<gradleUserHome>/wrapper/dists/gradle-<GradleVersion.current()>-<variant>/…` and record its + the
-    wrapper jar's mtime; a missing dist dir (system/IDE Gradle, not the wrapper) → `distPresent=false`.
+    `<gradleUserHome>/wrapper/dists/gradle-<GradleVersion.current()>-<variant>/…` and record its mtime,
+    the wrapper jar's mtime, **and this daemon's own JVM start time**
+    (`ManagementFactory.getRuntimeMXBean().startTime`) — see the corrected `PayloadAssembler` bullet below
+    for why the JVM start time, not a build-timing value, is the anchor. A missing dist dir (system/IDE
+    Gradle, not the wrapper) → `distPresent=false`.
   - Each probe is `runCatching`-guarded (class-name-only logging, like `EnvironmentValueSource.guarded`);
     any failure degrades that field to null / the whole DTO to `wrapper=null`. No subprocess here (pure
     file I/O + hash), so `BoundedExec` does not apply — the guard is `runCatching`, not a timeout.
@@ -67,13 +70,17 @@ nullable payload blocks; hash/size-only, no-path privacy), [016](implemented/016
   distributionSha256Pinned: Boolean? = null, wrapperJarSha256: String? = null, guhWarmth: GuhWarmth? = null)`;
   `enum WrapperDistributionType { BIN, ALL, CUSTOM }`; `enum GuhWarmth { COLD, WARM, UNKNOWN }`; new nullable
   `wrapper: WrapperInfo? = null` on `BuildPayload`. `SCHEMA_VERSION` stays `1`.
-- **`PayloadAssembler`**: a pure, unit-testable `GuhWarmth.classify(distMtimeMs, jarMtimeMs, distPresent,
-  startedAtMs)` — `COLD` when the dist mtime ≥ `startedAt` (created/re-downloaded during this build,
-  explaining the Docker-image re-download cost); `WARM` when older; `UNKNOWN` when `distPresent=false`
-  **or** `tasks` is empty (a task-less build makes `startedAt` fall back to `nowMs` — `PayloadAssembler:115`
-  — and the comparison is meaningless). `variant`/`pinned` are reported even when warmth is `UNKNOWN`
-  (system/IDE Gradle): they describe the *committed* wrapper config, which is still the drift/unpinned
-  signal — a deliberate decision, not an accident.
+- **`PayloadAssembler`**: a pure, unit-testable `GuhWarmth.classify(distMtimeMs, distPresent, jvmStartMs)`
+  — **anchored on this daemon's own JVM start time, not `startedAt`** (an implementation-time correction
+  to this plan's original draft; see the Implementation-notes addendum below for the full rationale: the
+  wrapper's bootstrap unpacks the distribution *before* launching the daemon JVM, which is before
+  configuration, which is before any task — so comparing against any task-derived timestamp can **never**
+  observe `COLD`, cold build or not). `COLD` when the dist mtime sits within a 5-minute fresh window of
+  `jvmStartMs` (unpacked at/around this daemon's own bootstrap); `WARM` when meaningfully older; `UNKNOWN`
+  when `distPresent` isn't `true` or either timestamp is unavailable (a guarded probe/introspection
+  failure). `variant`/`pinned` are reported even when warmth is `UNKNOWN` (system/IDE Gradle): they
+  describe the *committed* wrapper config, which is still the drift/unpinned signal — a deliberate
+  decision, not an accident.
 - **ci-assets** (`azure-pipelines/buildhound-gradle-steps.yml`): a new `validateWrapper: off|warn|fail`
   parameter driving a pre-`./gradlew` shell step that greps `gradle/wrapper/gradle-wrapper.properties` for
   `distributionSha256Sum=` and warns/fails when absent (enforce pinning); when the caller passes an
@@ -83,7 +90,9 @@ nullable payload blocks; hash/size-only, no-path privacy), [016](implemented/016
 
 - **Unit (commons):** `GoldenPayloadTest` gains a `build-payload-v1-wrapper.json` deserialize+field-pin
   case (new golden, existing untouched — the additive contract). `GuhWarmth.classify` table test
-  (cold/warm/absent-dist/empty-tasks → correct enum).
+  (cold/warm/absent-dist/missing-timestamp → correct enum; see the Implementation-notes addendum for
+  why the anchor is this daemon's own JVM start time, not `startedAt`, and why "empty tasks" is no
+  longer a distinct case).
 - **Unit (plugin):** `WrapperValueSourceTest` over a temp dir — `-all`/`-bin`/custom URLs → variant;
   present/absent `distributionSha256Sum` → pinned bool; a known jar file → stable full-hex SHA-256;
   missing properties/jar/GUH → null fields, never throws.
@@ -122,11 +131,67 @@ nullable payload blocks; hash/size-only, no-path privacy), [016](implemented/016
 
 - A wrapper-launched build populates `payload.wrapper` with variant, `distributionSha256Pinned`,
   full-hex `wrapperJarSha256`, and a `guhWarmth` of `COLD`/`WARM`; a re-run is a CC hit.
-- A system/IDE-Gradle (no wrapper dir) or task-less build reports `guhWarmth=UNKNOWN` with variant/pinned
-  still populated; a probe failure degrades to `wrapper=null` and never fails the build.
+- A system/IDE-Gradle (no wrapper dist under the resolved Gradle User Home) reports `guhWarmth=UNKNOWN`
+  with variant/pinned still populated; a probe failure degrades to `wrapper=null` and never fails the
+  build. (Superseding the original draft: a **task-less** build is no longer forced to `UNKNOWN` — see
+  the Implementation-notes addendum — since the corrected JVM-start anchor needs no task at all.)
 - The `-all` vs `-bin` variant + `COLD` warmth are visible in the payload, giving the startup-cost signal
   the finding calls for; the raw `distributionUrl` never appears anywhere in the payload.
 - New `build-payload-v1-wrapper.json` golden deserializes; all existing goldens unchanged.
 - The Azure template's `validateWrapper: fail` step fails a pipeline on an unpinned wrapper before Gradle
   runs; `off` is a no-op.
 - `./gradlew build` green.
+
+## Implementation notes (post-implementation addendum)
+
+Implemented as designed, with a few clarifications where this plan's prose left the exact shape
+underspecified:
+
+- **`distributionUrl` privacy decision — followed exactly as designed, no divergence.** This plan
+  already resolved the raw-URL question ("The raw URL is **discarded**… only the enum survives"):
+  `WrapperInfo` carries only `WrapperDistributionType` (`BIN|ALL|CUSTOM`) — no version string, no
+  host, no URL fragment anywhere in the schema. `WrapperParsing.classifyVariant` never returns or
+  logs the input URL.
+- **`GuhWarmth.classify`'s anchor was changed from `startedAt` to this daemon's own JVM start time —
+  a correctness fix, not a stylistic one (caught in review before commit).** The original draft's
+  formula (`COLD` when `distMtimeMs >= startedAt`, `startedAt` = the first task's `startMs`) is
+  **structurally unable to ever return `COLD`**: the wrapper's bootstrap process unpacks the
+  distribution and *then* launches the daemon JVM, which runs configuration, which precedes every
+  task — so `distMtimeMs` (the unpack) is *always* causally earlier than `startedAt` (the first
+  task), cold build or not. The inequality `mtime >= startedAt` can therefore never hold, making
+  `COLD` dead code for any real invocation — silently defeating the whole finding (the "startup-cost
+  signal the finding calls for" exit criterion above). Green tests didn't catch it because the unit
+  tests fed hand-picked mtimes chosen to satisfy the inequality, and every functional test only ever
+  reached `UNKNOWN` (TestKit never populates the GUH dist under an explicit `-g`), so nothing
+  exercised a genuine end-to-end COLD/WARM decision.
+
+  The fix: `classify(distMtimeMs, distPresent, jvmStartMs)` compares the dist's mtime against
+  `ManagementFactory.getRuntimeMXBean().startTime` for *this daemon's own JVM* (captured in
+  `WrapperValueSource.obtain()`), within a `GuhWarmth.FRESH_WINDOW_MS` (5 minutes) tolerance — the
+  daemon JVM launches moments after the wrapper bootstrap unpacks the distribution, so this is the
+  tightest anchor available without hooking the bootstrap process itself (which has already exited
+  by the time our plugin's JVM runs). `jarMtimeMs` is no longer part of the decision (it was only
+  ever a stopgap fallback in the broken formula) but is still collected on the DTO per this plan's
+  original design intent, for potential future refinement. **Consequence for the task-less-build
+  exit criterion**: since the new anchor doesn't need `startedAt` (or any task) at all, the
+  `tasksEmpty → UNKNOWN` special case was removed — a task-less build (e.g. `gradle projects`) now
+  gets a genuine classification instead of being forced to `UNKNOWN` for a reason that no longer
+  applies. **Known accepted limitation of the fix** (documented in the enum's KDoc): a long-lived,
+  *reused* daemon keeps the same `jvmStartMs` across every build it serves, so `COLD` can stay
+  pinned on subsequent builds after the one that actually paid the download cost — cross-reference
+  `environment.daemonReused` downstream to disambiguate. Ephemeral CI (finding F16's primary target)
+  typically launches a fresh daemon per job, where this limitation does not apply.
+- **Plugin unit-test coverage lives in `WrapperParsingTest.kt`**, not a class literally named
+  `WrapperValueSourceTest` — matching this codebase's existing convention (`VcsValueSource` /
+  `VcsParsingTest`, `InvocationValueSource` / `GradlePropertyProvenanceTest`): the pure
+  parsing/hashing/probing logic is factored into an `internal object WrapperParsing`, unit-tested
+  directly over temp files/dirs; `WrapperValueSource` itself (an abstract Gradle-managed
+  `ValueSource`) is exercised only through TestKit (`WrapperFunctionalTest.kt` +  a wrapper case
+  added to `IsolatedProjectsFunctionalTest.kt`), since Gradle's own decoration is required to
+  instantiate it and no test in this repo instantiates a `ValueSource` directly.
+- **ci-assets test lives in a new sibling `test/wrapper-integrity-test.sh`**, not an extension of
+  `metric-cli-test.sh` (that file harnesses the unrelated `bin/buildhound-metric` CLI). The new
+  script's `check_wrapper` function is a hand-synced mirror of the Azure template's inline shell
+  step (the template stays fully self-contained — no external script dependency — matching the
+  existing `verdictGate` step's style, since a template consumer only guarantees the template file
+  itself, not a checkout of this repo's `bin/`); both are commented as needing to be kept in sync.

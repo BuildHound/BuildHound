@@ -135,6 +135,14 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Input
         val isolatedProjectsActive: Property<Boolean>
 
+        /**
+         * Wrapper & startup-phase telemetry (plan 066, research F16); optional/absent when uncaptured
+         * (master switch off at apply time, or every probe degraded).
+         */
+        @get:Input
+        @get:Optional
+        val wrapper: Property<CollectedWrapper>
+
         @get:Input
         val configurationCacheRequested: Property<Boolean>
 
@@ -376,6 +384,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 // unknown), the latter rides in environment.isolatedProjects.
                 buildStructure = parameters.buildStructure.orNull,
                 isolatedProjects = parameters.isolatedProjectsActive.getOrElse(false),
+                wrapper = parameters.wrapper.orNull,
                 projectEvaluations = projectEvaluations.orEmpty(),
                 extensions = extensions,
                 avoidedMs = avoidedMs,

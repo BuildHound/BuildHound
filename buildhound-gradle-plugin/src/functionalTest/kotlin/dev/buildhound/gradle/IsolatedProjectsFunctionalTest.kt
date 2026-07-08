@@ -141,4 +141,33 @@ class IsolatedProjectsFunctionalTest {
         assertTrue((structure.projectCount ?: 0) > 0, "expected projectCount > 0 under IP: ${structure.projectCount}")
         assertEquals(true, payload.environment?.isolatedProjects)
     }
+
+    /**
+     * Wrapper & startup-phase telemetry (plan 066, exit criteria): the `WrapperValueSource` walk is
+     * pure file I/O over settings-level locations (no `taskGraph`/project-graph access), so — like
+     * `invocation`/`buildStructure` above — it must stay fully populated under isolated projects.
+     * Task *timings* also still flow under IP (only plan-016's type dictionary goes empty), so
+     * `startedAt` is available and `guhWarmth` classifies normally rather than degrading.
+     */
+    @Test
+    fun `wrapper block populates under isolated projects`() {
+        setUpMultiProject()
+        File(projectDir, "gradle/wrapper").mkdirs()
+        File(projectDir, "gradle/wrapper/gradle-wrapper.properties").writeText(
+            "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14-bin.zip\n" +
+                "distributionSha256Sum=deadbeef00000000000000000000000000000000000000000000000000000\n",
+        )
+        File(projectDir, "gradle/wrapper/gradle-wrapper.jar").writeBytes("ip fixture wrapper jar".toByteArray())
+
+        val result = runner(":a:work", ":b:work", ipFlag).build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":a:work")?.outcome, "IP build must succeed")
+        assertFalse(
+            result.output.lineSequence().any { it.startsWith("[buildhound]") && it.contains("failed") },
+            "no BuildHound warn/failure under isolated projects:\n${result.output}",
+        )
+        val wrapper = readPayload().wrapper ?: error("expected a populated wrapper block under IP")
+        assertEquals(dev.buildhound.commons.payload.WrapperDistributionType.BIN, wrapper.distributionVariant)
+        assertEquals(true, wrapper.distributionSha256Pinned)
+    }
 }
