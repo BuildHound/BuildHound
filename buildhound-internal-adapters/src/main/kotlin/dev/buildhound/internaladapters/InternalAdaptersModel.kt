@@ -28,10 +28,13 @@ data class InternalTaskDetail(
     /**
      * Cache-transfer timings (plan 067, research F17 — the specced-then-dropped plan-038 tail): bytes
      * moved to/from the build cache for this task, and the wall time its load / store build-operations
-     * took. Read reflectively from the `BuildCache{Local,Remote}{Load,Store}` op results — a getter a
-     * Gradle version doesn't expose degrades to null, never throws (spec §3.1). Byte counts + durations
-     * only; no path, no URL. Null when this task moved no bytes (a genuine miss with no store) or the
-     * getter was unavailable — an honest null (plan 005), never a fabricated zero.
+     * took. Read reflectively off each op's own type — the load ops' `Result` (`getArchiveSize`) and the
+     * store ops' `Details` (the store `Result` types expose only a bare `isStored` boolean on every
+     * Gradle version checked — 8.14.5/9.4.0/9.4.1/9.6.1, verified via javap). A getter a Gradle version
+     * doesn't expose degrades to null, never throws (spec §3.1); a load-miss byte-count sentinel (Gradle's
+     * own, not this code's — `-1` local, `0` remote) is dropped rather than corrupted into the total.
+     * Byte counts + durations only; no path, no URL. Null when this task moved no bytes (a genuine miss
+     * with no store) or the getter was unavailable — an honest null (plan 005), never a fabricated zero.
      */
     val transferBytes: Long? = null,
     val loadMs: Long? = null,

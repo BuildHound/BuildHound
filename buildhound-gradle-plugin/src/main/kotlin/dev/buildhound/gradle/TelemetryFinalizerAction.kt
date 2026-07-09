@@ -64,9 +64,11 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
          * an included build's task can instantiate the collector service (freezing its parameters)
          * during the root's configuration, before `whenReady`. The finalizer's parameters are resolved
          * after configuration, so the mailbox is populated by then; the value is replayed on a CC hit.
+         * Always set, like [environment]/[invocation]/[buildStructure]/[wrapper]: the mailbox is seeded
+         * with an empty `DetectedToolchain()` and the provider always returns it (or the detected
+         * values), so this is never actually optional — no `@get:Optional`.
          */
         @get:Input
-        @get:Optional
         val toolchain: Property<DetectedToolchain>
 
         /**
@@ -171,10 +173,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
          * Committed build-cache config snapshot (plan 067, research F17), delivered on the same
          * after-configuration Flow-action channel as [toolchain] — resolved after `settingsEvaluated`
          * fills the mailbox, baked into the CC entry, replayed on a hit (cache config is stable across
-         * builds). Optional/empty when uncaptured (a guarded `settingsEvaluated` read failure).
+         * builds). Always set, like [toolchain]: the mailbox is seeded with an empty
+         * `BuildCacheConfigSnapshot()` and the provider always returns it (or the snapshotted values, or
+         * the still-empty default when a guarded `settingsEvaluated` read failed) — never actually
+         * optional, so no `@get:Optional`.
          */
         @get:Input
-        @get:Optional
         val buildCache: Property<BuildCacheConfigSnapshot>
 
         @get:Input

@@ -1,6 +1,7 @@
 package dev.buildhound.server
 
 import dev.buildhound.commons.payload.BuildCacheConfigInfo
+import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.TaskOutcome
@@ -58,6 +59,32 @@ class CacheRoiStoresIntegrationTest {
         }
     }
 
+    /**
+     * A malformed `internalAdapters` block (068's `malformedInternalAdaptersPayload` precedent, from
+     * `CacheMissDiagnosticsStoresIntegrationTest`) with a well-formed `environment.buildCache` alongside
+     * it: [cacheRoiRowsOf]'s `runCatching` must guard-skip the origin rows for this build (never fatal to
+     * the whole rollup) while [cacheConfigRowOf] — an independent read of `environment.buildCache` — still
+     * counts it, exactly like the two-detector independence `CacheMissDiagnosticsStoresIntegrationTest`
+     * proves for fingerprints alongside a broken `internalAdapters` block.
+     */
+    private fun malformedInternalAdaptersPayload(buildId: String, startedAt: Long): BuildPayload =
+        BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            """
+            {
+              "schemaVersion": 1,
+              "buildId": "$buildId",
+              "startedAt": $startedAt,
+              "finishedAt": ${startedAt + 100},
+              "outcome": "SUCCESS",
+              "mode": "ci",
+              "environment": {"buildCache": {"localEnabled": true, "remoteEnabled": true, "remotePush": true, "remoteType": "HttpBuildCache"}},
+              "tasks": [{"path": ":app:compileJava", "module": ":app", "startMs": 0, "durationMs": 100, "outcome": "EXECUTED", "cacheable": true}],
+              "extensions": {"internalAdapters": "not-an-object"}
+            }
+            """.trimIndent(),
+        )
+
     private fun fixtures(): List<BuildPayload> = buildList {
         // A CI fleet with a configured remote that rarely reuses it: 60 misses + 1 remote hit.
         for (i in 0 until 60) {
@@ -103,6 +130,10 @@ class CacheRoiStoresIntegrationTest {
                 extensions = TestPayloads.internalAdapters(listOf(":app:compileJava" to "REMOTE_HIT")),
             ),
         )
+        // A malformed internalAdapters block (a JSON string, not an object) — must be skipped for the
+        // origin rows, never fatal to the whole rollup; its own well-formed buildCache config snapshot
+        // still counts toward buildsWithConfig (the two reads are independent, see the KDoc above).
+        add(malformedInternalAdaptersPayload("malformed-1", recent + 400))
     }
 
     @Test
@@ -112,14 +143,28 @@ class CacheRoiStoresIntegrationTest {
         assertEquals(mem, pg, "cacheRoi must agree byte-for-byte between stores")
 
         assertEquals(true, pg.remoteHitRateAvailable)
-        assertEquals(62, pg.buildsWithConfig, "60 CI misses + ci-hit + local-1 — never the excluded benchmark/old builds")
+        assertEquals(63, pg.buildsWithConfig, "60 CI misses + ci-hit + local-1 + malformed-1's own config snapshot — never the excluded benchmark/old builds")
         val ci = pg.perMode.single { it.mode == "CI" }
-        assertEquals(61, ci.consideredExecutions, "the benchmark build's MISS must not inflate the CI denominator")
+        assertEquals(61, ci.consideredExecutions, "the benchmark build's MISS must not inflate the CI denominator; malformed-1 contributes no origin row at all")
         assertEquals(1, ci.remoteHits)
         val local = pg.perMode.single { it.mode == "LOCAL" }
         assertEquals(1, local.consideredExecutions, "the STORED task is excluded from the denominator")
         val candidate = pg.ciReuseCandidate ?: error("expected a near-zero CI reuse candidate")
         assertTrue(candidate.note.contains("investigate", ignoreCase = true), candidate.note)
+    }
+
+    @Test
+    fun `a malformed internalAdapters block is skipped for origin rows, not fatal — its own buildCache config still counts`() {
+        val pg = postgresStore.cacheRoi(projectId, days, now)
+        assertEquals(inMemory.cacheRoi(projectId, days, now), pg, "parity holds with the malformed fixture in the window")
+        // malformed-1 contributes no CacheRoiRow (cacheRoiRowsOf's runCatching guard-skips the "not-an-object"
+        // block), so it does not appear in any perMode count — proven by the CI numbers matching the main
+        // test exactly even though malformed-1 is itself a CI-mode build within the window.
+        val ci = pg.perMode.single { it.mode == "CI" }
+        assertEquals(61, ci.consideredExecutions, "malformed-1 must not contribute a phantom origin row")
+        // Its environment.buildCache read is independent (cacheConfigRowOf never touches extensions), so
+        // it still counts toward the config-snapshot summary.
+        assertEquals(63, pg.buildsWithConfig, "malformed-1's own well-formed buildCache block must still count")
     }
 
     @Test
