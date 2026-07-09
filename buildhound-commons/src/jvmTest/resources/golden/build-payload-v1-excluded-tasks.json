@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "buildId": "b4c5d6e7-f8a9-4b0c-9d1e-2f3a4b5c6d7e",
+  "projectKey": "pilot-android",
+  "startedAt": 1751700000000,
+  "finishedAt": 1751700009000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["assembleDebug"],
+  "excludedTaskNames": [":app:lint", ":app:test"],
+  "mode": "local",
+  "environment": {
+    "configurationCache": "DISABLED"
+  },
+  "toolchain": {
+    "gradle": "8.14.3",
+    "jdk": "17.0.11"
+  },
+  "vcs": { "branch": "feature/checkout", "sha": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0" },
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileDebugKotlin",
+      "module": ":app",
+      "type": "org.jetbrains.kotlin.gradle.tasks.KotlinCompile",
+      "startMs": 1751700002000,
+      "durationMs": 3000,
+      "outcome": "EXECUTED",
+      "cacheable": true,
+      "incremental": false,
+      "executionReasons": []
+    },
+    {
+      "path": ":app:kaptDebugKotlin",
+      "module": ":app",
+      "type": "org.jetbrains.kotlin.gradle.internal.KaptWithoutKotlincTask",
+      "startMs": 1751700005000,
+      "durationMs": 4000,
+      "outcome": "EXECUTED",
+      "cacheable": true,
+      "incremental": false,
+      "executionReasons": []
+    }
+  ]
+}

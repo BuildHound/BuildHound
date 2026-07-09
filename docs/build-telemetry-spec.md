@@ -55,6 +55,7 @@ Settings plugin: `plugins { id("dev.buildhound") version "x" }` in `settings.gra
 ### 3.2 Collection pipeline
 
 - **TaskEventCollector**: `BuildEventsListenerRegistry.onTaskCompletion(BuildService)`. Per `TaskFinishEvent`: path, module (derived), start/end ms, result → outcome enum `EXECUTED | UP_TO_DATE | FROM_CACHE | SKIPPED | NO_SOURCE | FAILED`, incremental flag, execution reasons (when present). Task type/class captured at configuration time into the service parameter map (provider-lazy, CC-safe).
+- **Excluded task names** (plan 054, F4): `settings.startParameter.excludedTaskNames`, sorted, into a finalizer param parallel to `requestedTasks` — part of the CC key, replayed verbatim on a hit. Feeds the server's rule-based recommendations engine (a wasted-work rule: the habitual `-x test`-on-CI smell) via `GET /v1/rollups/recommendations` and `GET /v1/builds/{id}/recommendations`.
 - **EnvironmentCollector**: ValueSources for git (branch, sha, dirty), hostname, user (hashed per §3.7), OS/arch/cores/RAM, toolchain versions (Gradle, JDK; AGP/KGP/KSP read from plugin classpaths where applied), daemon reuse.
 - **Finalizer**: `FlowAction` on `FlowProviders.buildWorkResult` — assembles the payload from the service, computes derived metrics (hit rate, avoidance estimate, critical path, parallel utilization), writes HTML artifact, invokes uploader. Never fails the build: all errors log at `warn` and write a failure marker file.
 - **Config-cache state** recorded as `HIT | MISS_STORED | DISABLED | INCOMPATIBLE` (from start parameters + heuristics; refined later). **CC economics (plan 064, F14):** additionally `environment.configurationCacheParallel` (the `org.gradle.configuration-cache.parallel` flag), `derived.ccEntrySizeBytes` (finalizer-time byte sum of the newest CC entry dir — a count, no path §3.7), and `derived.ccLoadMs` (a labelled entry-load proxy on a HIT; a distinct field from `configurationMs`, which stays 0 on a HIT). Server-side: extracted `cc_state` column (V14) → per-day `/trends` CC counters, and `GET /v1/rollups/cc-economics` (advisory CI-reuse class + store/load/entry-size p50s + flip-flop findings over salted `fingerprints.build` within one machine's salt stream).
@@ -177,7 +178,11 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
   "startedAt": 0, "finishedAt": 0, "outcome": "SUCCESS|FAILED|INTERRUPTED",
   "failure": { "taskPath": "...", "exceptionClass": "...", "messageHash": "...",
                "message": "scrubbed+truncated", "stackTrace": "scrubbed+truncated" },
-  "requestedTasks": ["assembleDebug"], "mode": "ci|local|benchmark",
+  "requestedTasks": ["assembleDebug"], "excludedTaskNames": [], "mode": "ci|local|benchmark",
+    // ^ excludedTaskNames (plan 054, F4): the -x/--exclude-task names from the public CC-safe
+    //   StartParameter.excludedTaskNames, sorted; part of the CC key like requestedTasks, replayed
+    //   verbatim on a hit. Feeds the server's wasted-work recommendation rule (the habitual `-x test`
+    //   on-CI smell). Task-name shape only, same exposure class as requestedTasks (§3.7).
   "environment": { "os": "...", "arch": "...", "cores": 0, "ramMb": 0,
                    "hostnameHash": "...", "userId": "...", "daemonReused": true,
                    "configurationCache": "HIT|MISS_STORED|DISABLED|INCOMPATIBLE",

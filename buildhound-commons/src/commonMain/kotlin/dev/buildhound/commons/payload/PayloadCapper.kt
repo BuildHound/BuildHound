@@ -23,6 +23,8 @@ data class PayloadCaps(
     val maxXmlDisabledTasks: Int = 500,
     /** `changedModules.modules` entries retained per payload (plan 063); a monorepo's changed-module count can exceed this. */
     val maxChangedModules: Int = 500,
+    /** `excludedTaskNames` entries retained per payload (plan 054); a hostile ingest could POST an unbounded list. */
+    val maxExcludedTaskNames: Int = 500,
     /** Total byte budget for all addon `extensions` entries (plan 039); largest dropped first. */
     val maxExtensionsBytes: Int = 256 * 1024,
     val maxPayloadBytes: Int = 20 * 1024 * 1024,
@@ -164,6 +166,19 @@ object PayloadCapper {
             }
         }
 
+        // Excluded task names (plan 054): the plugin already emits this sorted (from StartParameter),
+        // but a hostile/foreign ingest can POST an unbounded array — keep the first N alphabetically
+        // (deterministic, same ordering the plugin already uses), drop + count the rest. Same rationale
+        // as changedModules/xmlDisabledTasks/projectEvaluations/artifacts above.
+        var droppedExcludedTaskNames = 0
+        val cappedExcludedTaskNames = if (payload.excludedTaskNames.size <= caps.maxExcludedTaskNames) {
+            payload.excludedTaskNames
+        } else {
+            val kept = payload.excludedTaskNames.sorted().take(caps.maxExcludedTaskNames)
+            droppedExcludedTaskNames = payload.excludedTaskNames.size - kept.size
+            kept
+        }
+
         // Addon extensions (plan 039): opaque, addon-authored JSON that core does not scrub. It must
         // not balloon the payload, so bound the whole map to its own byte budget by dropping the
         // largest entries first (they carry the most abuse potential) until it fits. Runs on both the
@@ -195,7 +210,7 @@ object PayloadCapper {
             tags = tags.map, values = values.map, tasks = tasks,
             benchmark = cappedBenchmark, artifacts = cappedArtifacts, extensions = cappedExtensions,
             projectEvaluations = cappedProjectEvaluations, testTelemetry = cappedTestTelemetry,
-            changedModules = cappedChangedModules, caps = null,
+            changedModules = cappedChangedModules, excludedTaskNames = cappedExcludedTaskNames, caps = null,
         )
 
         // Byte budget (spec §3.9 stages), only walked when the payload is actually oversized.
@@ -235,6 +250,7 @@ object PayloadCapper {
             droppedProjectEvaluations = droppedProjectEvaluations,
             droppedXmlDisabledTasks = droppedXmlDisabledTasks,
             droppedChangedModules = droppedChangedModules,
+            droppedExcludedTaskNames = droppedExcludedTaskNames,
         )
 
         // Nothing countable to record and nothing was previously recorded → the input is compliant,
@@ -284,7 +300,8 @@ object PayloadCapper {
         droppedTags == 0 && droppedValues == 0 && truncatedValues == 0 &&
             droppedExecutionReasons == 0 && truncatedExecutionReasons == 0 && truncatedNonCacheableReasons == 0 &&
             droppedTasks == 0 && droppedTaskOutcomes.isEmpty() && droppedArtifacts == 0 && droppedExtensions == 0 &&
-            droppedProjectEvaluations == 0 && droppedXmlDisabledTasks == 0 && droppedChangedModules == 0
+            droppedProjectEvaluations == 0 && droppedXmlDisabledTasks == 0 && droppedChangedModules == 0 &&
+            droppedExcludedTaskNames == 0
 
     private fun merge(existing: CapsSummary?, fresh: CapsSummary): CapsSummary {
         if (existing == null) return fresh
@@ -304,6 +321,7 @@ object PayloadCapper {
             droppedProjectEvaluations = existing.droppedProjectEvaluations + fresh.droppedProjectEvaluations,
             droppedXmlDisabledTasks = existing.droppedXmlDisabledTasks + fresh.droppedXmlDisabledTasks,
             droppedChangedModules = existing.droppedChangedModules + fresh.droppedChangedModules,
+            droppedExcludedTaskNames = existing.droppedExcludedTaskNames + fresh.droppedExcludedTaskNames,
         )
     }
 }

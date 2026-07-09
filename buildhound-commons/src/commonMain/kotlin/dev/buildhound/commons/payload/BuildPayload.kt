@@ -19,6 +19,15 @@ data class BuildPayload(
     val outcome: BuildOutcome,
     val failure: FailureInfo? = null,
     val requestedTasks: List<String> = emptyList(),
+    /**
+     * The task names excluded from this invocation via `-x`/`--exclude-task` (plan 054, research F4).
+     * Read from the public CC-safe `StartParameter.excludedTaskNames` and **sorted** for determinism,
+     * parallel to [requestedTasks] (part of the configuration-cache key, replayed verbatim on a hit).
+     * Feeds the server's wasted-work recommendation rule (the habitual `-x test`-on-CI smell); empty
+     * when nothing was excluded (the common case) or uncaptured. Task-name shape only — the same
+     * exposure class as [requestedTasks], never a filesystem path (spec §3.7).
+     */
+    val excludedTaskNames: List<String> = emptyList(),
     val mode: BuildMode = BuildMode.CI,
     val environment: EnvironmentInfo? = null,
     val toolchain: ToolchainInfo? = null,
@@ -493,6 +502,8 @@ data class CapsSummary(
     val droppedXmlDisabledTasks: Int = 0,
     /** `changedModules.modules` entries dropped past the per-payload cap (plan 063), kept first-N alphabetically. */
     val droppedChangedModules: Int = 0,
+    /** `excludedTaskNames` entries dropped past the per-payload cap (plan 054), kept first-N alphabetically. */
+    val droppedExcludedTaskNames: Int = 0,
     /**
      * `buildStructure.emptyIntermediateCandidates` entries dropped past the collecting
      * `BuildStructureValueSource`'s own MAX_EMPTY_INTERMEDIATE_CANDIDATES cap (plan 069 review):

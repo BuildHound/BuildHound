@@ -1235,6 +1235,42 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             CcEconomicsCalculator.compute(windowed.map { ccBuildRowOf(it) })
         }
 
+    /**
+     * Whole-payload window for the recommendations engine (plan 054, research F4): the engine needs
+     * `processes[]`, `environment.configurationCache`, a per-build `jdk∧ksp` join, `excludedTaskNames`,
+     * and `extensions` that no normalized rollup column carries, so this reads the whole `payload` jsonb
+     * — benchmark excluded (fleet-view convention), most-recent-first, capped at [cap] with a
+     * `(started_at, build_id)` tie-break identical to the in-memory store's sort, so both stores return
+     * the identical bounded set and the pure engine agrees byte-for-byte (the plan-026/032/067 parity
+     * discipline). Every bound value is a parameter, never interpolated (architecture §6). A row whose
+     * `payload` fails to decode is skipped (never fatal), exactly like [cacheRoi]/[ccEconomics].
+     */
+    override fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long): List<BuildPayload> =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                SELECT payload FROM builds
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                ORDER BY started_at DESC, build_id DESC
+                LIMIT ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.setObject(3, atMs(nowMs))
+                statement.setInt(4, cap)
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            runCatching { BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")) }
+                                .getOrNull()
+                                ?.let(::add)
+                        }
+                    }
+                }
+            }
+        }
+
     override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> =
         dataSource.connection.use { connection ->
             // Read the narrow per-class outcome table (indexed on (project, sha, module, class)) and

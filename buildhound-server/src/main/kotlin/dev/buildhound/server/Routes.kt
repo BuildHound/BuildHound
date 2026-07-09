@@ -504,6 +504,24 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             }
         }
 
+        // Per-build recommendations (plan 054, research F4): the same pure RecommendationEngine the fleet
+        // rollup runs, over a one-element list (this build only). Tenant-scoped like /diagnosis and
+        // /verdict: a foreign/unknown build reads as 404, never a cross-tenant peek. Always 200 with a
+        // (possibly empty) ranked list on a known build — a clean build simply trips no rule.
+        get("/builds/{buildId}/recommendations") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val buildId = call.parameters.getOrFail("buildId")
+            val result = call.runQuery { store.findById(project.id, buildId) } ?: return@get
+            val payload = result.value ?: return@get call.respond(HttpStatusCode.NotFound, ApiError("unknown build"))
+            call.respond(
+                RecommendationsRollup(
+                    period = 0, // no window — a single build
+                    buildsAnalyzed = 1,
+                    recommendations = RecommendationEngine.compute(listOf(payload)),
+                ),
+            )
+        }
+
         get("/trends") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val filter = call.buildFilterOrNull()
@@ -650,6 +668,25 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val days = call.daysParam()
             call.respondQuery { store.ccEconomics(project.id, days, System.currentTimeMillis()) }
+        }
+
+        // Fleet recommendations (plan 054, research F4): five rule-based families (hygiene/threshold, KAPT
+        // tax, Best-Practices conformance, Gradle-10 readiness, wasted work) over the window's whole
+        // payloads — the store fetches, the route feeds the pure RecommendationEngine (the RegressionEngine
+        // discipline). Read-scope, tenant-scoped, days clamped like /trends; benchmark builds excluded (the
+        // fleet-view convention, via windowPayloads). Empty (never an error) on no data; MEASURED vs
+        // ESTIMATED origins keep the hedged blog/JDK-floor numbers honest.
+        get("/rollups/recommendations") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery {
+                val payloads = store.windowPayloads(project.id, days, MAX_RECOMMENDATION_ROWS, System.currentTimeMillis())
+                RecommendationsRollup(
+                    period = days,
+                    buildsAnalyzed = payloads.size,
+                    recommendations = RecommendationEngine.compute(payloads),
+                )
+            }
         }
 
         // Delivery-health proxies (plan 059, research F9): CFR per (branch, pipeline), time-to-green

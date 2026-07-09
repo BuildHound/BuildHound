@@ -87,6 +87,8 @@ internal object PayloadAssembler {
         buildFailed: Boolean,
         failure: CollectedFailure? = null,
         requestedTasks: List<String>,
+        // Excluded task names (plan 054), sorted at collection; empty when nothing was excluded.
+        excludedTaskNames: List<String> = emptyList(),
         tasks: List<TaskExecution>,
         environment: CollectedEnvironment?,
         invocation: CollectedInvocation? = null,
@@ -174,6 +176,7 @@ internal object PayloadAssembler {
                 )
             },
             requestedTasks = requestedTasks,
+            excludedTaskNames = excludedTaskNames,
             mode = mode,
             environment = environment?.let {
                 EnvironmentInfo(
