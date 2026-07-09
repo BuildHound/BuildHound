@@ -120,3 +120,39 @@ reuse"; store 270 MB → 65 MB after dedup). Spec §3.2 (start-parameters + heur
   `/trends` carries per-day CC counters with in-memory/Postgres parity green.
 - `docs/architecture.md` decision log notes the ccLoadMs proxy-vs-internal-op choice.
 - `./gradlew build` green.
+
+## Divergences (recorded at implementation)
+
+1. **Migration number V14, not V7.** The plan text's `V7` (§Design "V7 migration") was stale — the
+   051–073 batch had since claimed V7..V13. Resolved to `V14__build_cc_state.sql`, the next free integer
+   after V13, the 061/063 unpinned-`V{n}` renumber precedent.
+
+2. **`ccLoadMs` anchor is `System.currentTimeMillis()`, not the plan's `System.nanoTime()`.** The proxy is
+   measured against a task's `TaskFinishEvent.result.startTime`, which Gradle reports in **epoch
+   milliseconds**; a monotonic `nanoTime` reading is not comparable to an epoch timestamp, so the anchor
+   must be the same wall-clock scale to subtract (the same monotonic-vs-wallclock tradeoff the plan-066
+   `jvmStartMs` anchor accepts). Clamped to null on a negative/out-of-order interval.
+
+3. **`configurationCacheParallel` source.** Wired via `settings.providers.gradleProperty(
+   "org.gradle.configuration-cache.parallel")` exactly as §Design specifies — noting for the record that
+   the public `BuildFeatures.configurationCache` surfaces only `.requested`/`.active`, never the parallel
+   flag, so the gradle-property provider is the only CC-safe source.
+
+4. **`ccLoadMs` is empirically null on the always-on core path** (probed with a temporarily-strict
+   functionalTest assertion, then reverted to lenient `null || >= 0`). Gradle instantiates the
+   `onTaskCompletion` build service **lazily at the first task-*finish***, which lands *after* the
+   earliest task start, so the anchor→first-task-start interval degrades to honest-null. This matches the
+   plan's §Out framing ("the core proxy is the faithful v1; the field is null-capable for the later
+   timer") — the field, plumbing, and server p50 are the ready slot for the deferred internal-adapters
+   `ConfigurationCache*` `BuildOperationType` timer. Documented in `DerivedMetrics.ccLoadMs`'s KDoc and the
+   §7 decision-log row.
+
+5. **Flip-flop detector: the prior build must itself be CC-requesting** (HIT/MISS_STORED), a narrowing
+   over the plan text's bare "a `MISS_STORED` whose `fingerprints.build` equals a strictly-earlier
+   build's". A DISABLED prior stored no CC entry, so a later `MISS_STORED` on identical inputs is the
+   *first* store, not a flip-flop — including it would mint false positives.
+
+6. **`ccEntrySizeBytes` gated to CC-on builds.** Measured only when `ccState` is HIT or MISS_STORED (CC
+   actually active this build), so a stale sibling entry left by an earlier CC run is never reported for a
+   DISABLED build. `derived.ccLoadMs`/`ccEntrySizeBytes` are scalar pass-throughs (no `PayloadCapper`
+   change — scalars are never capped).

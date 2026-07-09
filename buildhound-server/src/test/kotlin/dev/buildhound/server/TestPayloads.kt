@@ -8,6 +8,7 @@ import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.ChangedModulesInfo
 import dev.buildhound.commons.payload.CiInfo
+import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.DerivedMetrics
 import dev.buildhound.commons.payload.EnvironmentInfo
 import dev.buildhound.commons.payload.FingerprintInfo
@@ -59,6 +60,14 @@ object TestPayloads {
         hostnameHash: String? = null,
         /** Plaintext workers.max (plan 065 fixtures); the benchmarkSeries slicing dimension. */
         workersMax: Int? = null,
+        /** Configuration-cache state (plan 064 fixtures); drives the /trends CC counters + cc-economics reuse class. */
+        configurationCache: ConfigurationCacheState? = null,
+        /** Configuration (store) cost (plan 064 fixtures); the cc-economics store-cost p50 on MISS_STORED. */
+        configurationMs: Long? = null,
+        /** CC entry-load proxy (plan 064 fixtures); the cc-economics load p50 on HIT. */
+        ccLoadMs: Long? = null,
+        /** CC entry byte size (plan 064 fixtures); the cc-economics entry-size p50 on a CC-requesting build. */
+        ccEntrySizeBytes: Long? = null,
         /** Salted input fingerprints (plan 022/068 fixtures); null means "uncaptured", not "empty". */
         fingerprints: FingerprintInfo? = null,
         /** Committed build-cache config snapshot (plan 067 fixtures); null means the pre-067 "uncaptured". */
@@ -77,14 +86,25 @@ object TestPayloads {
         requestedTasks = requestedTasks,
         vcs = if (branch != null || sha != null) VcsInfo(branch = branch, sha = sha) else null,
         ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl, attributes = ciAttributes) },
-        derived = if (hitRate != null || avoidedMs != null) DerivedMetrics(cacheableHitRate = hitRate, avoidedMs = avoidedMs) else null,
-        environment = if (userId != null || invocation != null || hostnameHash != null || workersMax != null || buildCache != null) {
+        derived = if (hitRate != null || avoidedMs != null || configurationMs != null || ccLoadMs != null || ccEntrySizeBytes != null) {
+            DerivedMetrics(
+                cacheableHitRate = hitRate,
+                avoidedMs = avoidedMs,
+                configurationMs = configurationMs,
+                ccLoadMs = ccLoadMs,
+                ccEntrySizeBytes = ccEntrySizeBytes,
+            )
+        } else {
+            null
+        },
+        environment = if (userId != null || invocation != null || hostnameHash != null || workersMax != null || buildCache != null || configurationCache != null) {
             EnvironmentInfo(
                 userId = userId,
                 invocation = invocation,
                 hostnameHash = hostnameHash,
                 workersMax = workersMax,
                 buildCache = buildCache,
+                configurationCache = configurationCache,
             )
         } else {
             null

@@ -641,6 +641,17 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             call.respondQuery { store.cacheRoi(project.id, days, System.currentTimeMillis()) }
         }
 
+        // CC economics + reuse diagnostics (plan 064, research F14): the advisory CI-reuse class (an
+        // annotation, never a "turn CC off" fix), store/load/entry-size p50s, and flip-flop findings
+        // (a MISS_STORED whose salted inputs match an earlier build in the same machine's salt stream).
+        // Read-scope, tenant-scoped, days clamped like /trends; benchmark builds excluded (the fleet-view
+        // convention). The per-day CC counters ride on /trends' TrendPoints; this is the window rollup.
+        get("/rollups/cc-economics") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.ccEconomics(project.id, days, System.currentTimeMillis()) }
+        }
+
         // Delivery-health proxies (plan 059, research F9): CFR per (branch, pipeline), time-to-green
         // (a CI-recovery proxy — never claimed as production MTTR), build-only lead time, and the
         // retry tax — all over already-ingested build rows (zero new collection; the spec-§1 Git/DORA

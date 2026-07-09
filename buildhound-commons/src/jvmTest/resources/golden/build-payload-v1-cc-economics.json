@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "buildId": "c0ffee00-1234-4a5b-8c9d-0e1f2a3b4c5d",
+  "projectKey": "pilot-server",
+  "startedAt": 1751460000000,
+  "finishedAt": 1751460007000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["build"],
+  "mode": "ci",
+  "environment": {
+    "os": "Linux",
+    "arch": "amd64",
+    "cores": 16,
+    "ramMb": 65536,
+    "hostnameHash": "h_7c3d1a90",
+    "userId": "u_1a2b3c4d",
+    "daemonReused": true,
+    "configurationCache": "HIT",
+    "configurationCacheParallel": true
+  },
+  "toolchain": {
+    "gradle": "9.0.0",
+    "jdk": "21.0.10"
+  },
+  "vcs": {
+    "branch": "main",
+    "sha": "aabbccddeeff00112233445566778899aabbccdd",
+    "dirty": false
+  },
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileJava",
+      "module": ":app",
+      "type": "JavaCompile",
+      "startMs": 1751460001000,
+      "durationMs": 6000,
+      "outcome": "FROM_CACHE",
+      "cacheable": true,
+      "incremental": false,
+      "worker": 2,
+      "executionReasons": []
+    }
+  ],
+  "derived": {
+    "cacheableHitRate": 1.0,
+    "configurationMs": 0,
+    "ccEntrySizeBytes": 68157440,
+    "ccLoadMs": 42
+  }
+}

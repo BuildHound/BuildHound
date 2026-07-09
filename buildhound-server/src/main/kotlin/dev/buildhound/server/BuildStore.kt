@@ -3,6 +3,7 @@ package dev.buildhound.server
 import dev.buildhound.commons.payload.BenchmarkSeriesCalculator
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
 import dev.buildhound.commons.payload.TestUnitKey
 import java.time.Instant
@@ -172,6 +173,9 @@ internal fun carriesCacheRoiBlock(payload: BuildPayload): Boolean =
 /** Defensive ceiling on builds scanned for one `/rollups/cache-roi` query (plan 067), mirroring [RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS]. */
 internal const val MAX_CACHE_ROI_ROWS: Int = 20_000
 
+/** Defensive ceiling on builds scanned for one `/rollups/cc-economics` query (plan 064), mirroring [MAX_CACHE_ROI_ROWS]. */
+internal const val MAX_CC_ECONOMICS_ROWS: Int = 20_000
+
 /**
  * Server-local minimal view of `extensions["internalAdapters"]` (plan 062) carrying only
  * [dependencyEdges] — the plan-039 decoupling principle applied to a second reader: the server decodes
@@ -276,6 +280,17 @@ data class TrendPoint(
      * (`finishedAt == startedAt`), so folding it in would skew baselines.
      */
     val interrupted: Int = 0,
+    /**
+     * Per-day configuration-cache reuse counters (plan 064, research F14), all three null on a day
+     * where **no** build carried a CC state at all (every build pre-064 or environment-less) — an
+     * honest gap, not a synthetic 0 (plan 005), so a `null` reads as "no CC data" while `0` reads as
+     * "observed, none stored". [ccRequested] = HIT + MISS_STORED (the reuse-rate denominator); a
+     * DISABLED build is CC-observed but not requested. Both stores compute these identically
+     * (Testcontainers parity).
+     */
+    val ccMissStored: Int? = null,
+    val ccHit: Int? = null,
+    val ccRequested: Int? = null,
 )
 
 /** The columns that key a rolling baseline (spec §5, plan 025). */
@@ -494,6 +509,19 @@ interface BuildStore {
     fun cacheRoi(projectId: String, days: Int, nowMs: Long): CacheRoiRollup
 
     /**
+     * Configuration-cache economics + reuse diagnostics over the last [days] (plan 064, research F14):
+     * the advisory [CiReuseClass], store/load/entry-size p50s, and [CcFlipFlopDetector] findings. Both
+     * stores read the same windowed builds — the fleet-view convention (benchmark excluded, like
+     * bottlenecks/cacheMissDiagnostics/cacheRoi: a repeated same-scenario benchmark on a fixed runner
+     * would skew the reuse rate and manufacture false flip-flops), most-recent-first, capped at
+     * [MAX_CC_ECONOMICS_ROWS] with a `(startedAt, buildId)` tie-break identical to the SQL `ORDER BY …
+     * LIMIT` — flatten via [ccBuildRowOf] and defer to the pure [CcEconomicsCalculator], so in-memory and
+     * Postgres agree byte-for-byte. Not gated to a carried block: the reuse classification needs every
+     * windowed build's CC posture (a DISABLED-only window is a real [CiReuseClass.DISABLED] verdict).
+     */
+    fun ccEconomics(projectId: String, days: Int, nowMs: Long): CcEconomicsReport
+
+    /**
      * Delivery-health **proxies** over the last [days] (plan 059, research F9): change-failure rate
      * per (branch, pipeline), time-to-green (a CI-recovery proxy, not production MTTR), build-only
      * lead time, and the retry tax — all from build rows already ingested, zero new collection (the
@@ -700,6 +728,9 @@ class InMemoryBuildStore : BuildStore {
                 val finished = dayBuilds.filter { it.outcome.name == "SUCCESS" || it.outcome.name == "FAILED" }
                 val durations = finished.map { it.finishedAt - it.startedAt }
                 val hitRates = finished.mapNotNull { it.derived?.cacheableHitRate }
+                // Per-day CC counters (plan 064): honest-null on a day with no CC-carrying build at all,
+                // mirroring the Postgres store's `count(*) FILTER (WHERE cc_state IS NOT NULL) = 0` guard.
+                val ccObserved = dayBuilds.count { it.environment?.configurationCache != null }
                 TrendPoint(
                     day = day.toString(),
                     builds = dayBuilds.size,
@@ -708,6 +739,16 @@ class InMemoryBuildStore : BuildStore {
                     maxDurationMs = durations.maxOrNull() ?: 0,
                     avgHitRate = hitRates.takeIf { it.isNotEmpty() }?.average(),
                     interrupted = dayBuilds.count { it.outcome.name == "INTERRUPTED" },
+                    ccMissStored = if (ccObserved == 0) null else dayBuilds.count { it.environment?.configurationCache == ConfigurationCacheState.MISS_STORED },
+                    ccHit = if (ccObserved == 0) null else dayBuilds.count { it.environment?.configurationCache == ConfigurationCacheState.HIT },
+                    ccRequested = if (ccObserved == 0) {
+                        null
+                    } else {
+                        dayBuilds.count {
+                            it.environment?.configurationCache == ConfigurationCacheState.HIT ||
+                                it.environment?.configurationCache == ConfigurationCacheState.MISS_STORED
+                        }
+                    },
                 )
             }
     }
@@ -946,6 +987,18 @@ class InMemoryBuildStore : BuildStore {
         // (payloadsBetween) — CFR refines plan-032's fleet successRate, so it inherits its population.
         val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
         return DeliveryHealthCalculator.compute(windowed.map { deliveryRowOf(it) }, days)
+    }
+
+    override fun ccEconomics(projectId: String, days: Int, nowMs: Long): CcEconomicsReport {
+        // Same fleet-view window as bottlenecks/cacheMissDiagnostics/cacheRoi (benchmark excluded),
+        // capped/tie-broken identically to the Postgres store's `ORDER BY started_at DESC, build_id DESC
+        // LIMIT` so the two agree byte-for-byte even above the cap (plan 064). NOT gated to a carried
+        // block — the reuse classification needs every windowed build's CC posture (a DISABLED-only
+        // window is a real verdict, not an empty one).
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+            .sortedWith(compareByDescending<BuildPayload> { it.startedAt }.thenByDescending { it.buildId })
+            .take(MAX_CC_ECONOMICS_ROWS)
+        return CcEconomicsCalculator.compute(windowed.map { ccBuildRowOf(it) })
     }
 
     /** Flatten one payload into the plan-059 delivery row — the exact shape the Postgres SQL mirrors. */

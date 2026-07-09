@@ -57,7 +57,7 @@ Settings plugin: `plugins { id("dev.buildhound") version "x" }` in `settings.gra
 - **TaskEventCollector**: `BuildEventsListenerRegistry.onTaskCompletion(BuildService)`. Per `TaskFinishEvent`: path, module (derived), start/end ms, result → outcome enum `EXECUTED | UP_TO_DATE | FROM_CACHE | SKIPPED | NO_SOURCE | FAILED`, incremental flag, execution reasons (when present). Task type/class captured at configuration time into the service parameter map (provider-lazy, CC-safe).
 - **EnvironmentCollector**: ValueSources for git (branch, sha, dirty), hostname, user (hashed per §3.7), OS/arch/cores/RAM, toolchain versions (Gradle, JDK; AGP/KGP/KSP read from plugin classpaths where applied), daemon reuse.
 - **Finalizer**: `FlowAction` on `FlowProviders.buildWorkResult` — assembles the payload from the service, computes derived metrics (hit rate, avoidance estimate, critical path, parallel utilization), writes HTML artifact, invokes uploader. Never fails the build: all errors log at `warn` and write a failure marker file.
-- **Config-cache state** recorded as `HIT | MISS_STORED | DISABLED | INCOMPATIBLE` (from start parameters + heuristics; refined later).
+- **Config-cache state** recorded as `HIT | MISS_STORED | DISABLED | INCOMPATIBLE` (from start parameters + heuristics; refined later). **CC economics (plan 064, F14):** additionally `environment.configurationCacheParallel` (the `org.gradle.configuration-cache.parallel` flag), `derived.ccEntrySizeBytes` (finalizer-time byte sum of the newest CC entry dir — a count, no path §3.7), and `derived.ccLoadMs` (a labelled entry-load proxy on a HIT; a distinct field from `configurationMs`, which stays 0 on a HIT). Server-side: extracted `cc_state` column (V14) → per-day `/trends` CC counters, and `GET /v1/rollups/cc-economics` (advisory CI-reuse class + store/load/entry-size p50s + flip-flop findings over salted `fingerprints.build` within one machine's salt stream).
 - **Invocation posture** (plan 051): `environment.invocation` ships genuinely-new plaintext `fileEncoding`/`locale` plus the fixed 5-key `gradle.properties` allowlist (`org.gradle.caching`, `org.gradle.parallel`, `org.gradle.vfs.watch`, `android.enableJetifier`, `android.nonTransitiveRClass`), each with its declaring layer — alongside, never replacing, the salted `FingerprintInfo` hashes (§3.7).
 
 ### 3.3 CI provider SPI (plugin side) — per your modularity requirement
@@ -181,7 +181,10 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
   "environment": { "os": "...", "arch": "...", "cores": 0, "ramMb": 0,
                    "hostnameHash": "...", "userId": "...", "daemonReused": true,
                    "configurationCache": "HIT|MISS_STORED|DISABLED|INCOMPATIBLE",
+                   "configurationCacheParallel": true,
                    "ide": "...", "ideVersion": "...", "ideSync": false, "aiAgent": "...",
+    // ^ configurationCacheParallel (plan 064, F14): the org.gradle.configuration-cache.parallel flag,
+    //   a provider read (tracked CC input, replayed on a hit); null when unset. Boolean only — no path.
                    "buildCache": { "localEnabled": true, "remoteEnabled": true, "remotePush": true,
                                    "remoteType": "HttpBuildCache" } },
     // ^ ide/ideVersion/ideSync/aiAgent are additive (plan 027); aiAgent is positive-only attribution
@@ -205,7 +208,13 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
                "nonCacheableReason": null, "incremental": false, "worker": 3,
                "executionReasons": ["..."] } ],
   "derived": { "cacheableHitRate": 0.0, "avoidedMs": 0, "criticalPathMs": 0,
-               "parallelUtilization": 0.0, "configurationMs": 0 },
+               "parallelUtilization": 0.0, "configurationMs": 0,
+               "ccEntrySizeBytes": 68157440, "ccLoadMs": 42 },
+    // ^ ccEntrySizeBytes/ccLoadMs (plan 064, F14): additive nullable. ccEntrySizeBytes = finalizer-time
+    //   byte sum of the newest .gradle/configuration-cache/<hash> entry dir (a count, no path §3.7), on a
+    //   HIT/MISS_STORED build. ccLoadMs = a labelled CC entry-load proxy on a HIT only (configurationMs
+    //   stays 0 — a distinct field); currently null on the core path (the onTaskCompletion service
+    //   instantiates after the first task start), the null-capable slot for a later internal-adapters timer.
   "caps": { "droppedTags": 0, "droppedValues": 0, "truncatedValues": 0,
             "droppedExecutionReasons": 0, "truncatedExecutionReasons": 0,
             "truncatedNonCacheableReasons": 0, "droppedTasks": 0, "droppedTaskOutcomes": {},

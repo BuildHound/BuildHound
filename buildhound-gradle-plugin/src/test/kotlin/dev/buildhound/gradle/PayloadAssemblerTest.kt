@@ -198,6 +198,29 @@ class PayloadAssemblerTest {
     }
 
     @Test
+    fun `CC economics fields ride onto environment and derived (plan 064)`() {
+        val payload = assemble(
+            tasks = listOf(task(":a", 0, 1_000, TaskOutcome.EXECUTED, cacheable = true)),
+            configurationCacheParallel = true,
+            ccEntrySizeBytes = 68_157_440,
+            ccLoadMs = 42,
+        )
+
+        assertEquals(true, payload.environment?.configurationCacheParallel)
+        assertEquals(68_157_440, payload.derived?.ccEntrySizeBytes)
+        assertEquals(42, payload.derived?.ccLoadMs)
+    }
+
+    @Test
+    fun `CC economics fields default null when uncaptured (plan 064)`() {
+        val payload = assemble(tasks = listOf(task(":a", 0, 1_000, TaskOutcome.EXECUTED, cacheable = true)))
+
+        assertNull(payload.environment?.configurationCacheParallel)
+        assertNull(payload.derived?.ccEntrySizeBytes)
+        assertNull(payload.derived?.ccLoadMs)
+    }
+
+    @Test
     fun `detected AGP KGP KSP versions join gradle and jdk in the toolchain block`() {
         val payload = assemble(
             tasks = listOf(task(":a", 0, 1_000, TaskOutcome.EXECUTED)),
@@ -828,6 +851,9 @@ class PayloadAssemblerTest {
         failure: CollectedFailure? = null,
         nowMs: Long = 0,
         configurationMs: Long? = null,
+        configurationCacheParallel: Boolean? = null,
+        ccEntrySizeBytes: Long? = null,
+        ccLoadMs: Long? = null,
         tags: Map<String, String> = mapOf("team" to "mobile"),
         caps: dev.buildhound.commons.payload.PayloadCaps = dev.buildhound.commons.payload.PayloadCaps.DEFAULT,
         fingerprints: dev.buildhound.commons.payload.FingerprintInfo? = null,
@@ -868,11 +894,14 @@ class PayloadAssemblerTest {
         vcs = vcs,
         ci = ci,
         configurationCache = ConfigurationCacheState.HIT,
+        configurationCacheParallel = configurationCacheParallel,
         daemonReused = true,
         tags = tags,
         nowMs = nowMs,
         projectRoots = emptyList(),
         configurationMs = configurationMs,
+        ccEntrySizeBytes = ccEntrySizeBytes,
+        ccLoadMs = ccLoadMs,
         caps = caps,
         fingerprints = fingerprints,
         kotlin = kotlin,

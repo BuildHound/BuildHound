@@ -66,6 +66,15 @@ abstract class TaskEventCollector : BuildService<TaskEventCollector.Params>, Ope
         val markerContext: Property<MarkerContext>
     }
 
+    init {
+        // CC entry-load proxy anchor (plan 064): the build service is instantiated once per build at
+        // the start of the execution phase — the first plugin-controlled instant on a CC hit, right
+        // after the CC entry is deserialized (configuration is skipped, so nothing plugin-side runs
+        // earlier). The finalizer measures ccLoadMs from here to the earliest task start. Guarded so a
+        // stamping failure can never fail service construction (never-fail, architecture §2 rule 3).
+        runCatching { DaemonState.executionStarted() }
+    }
+
     private val tasks = ConcurrentLinkedQueue<TaskExecution>()
 
     /**

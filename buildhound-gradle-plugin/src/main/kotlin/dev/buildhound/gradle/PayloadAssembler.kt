@@ -93,11 +93,17 @@ internal object PayloadAssembler {
         vcs: CollectedVcs?,
         ci: CollectedCi?,
         configurationCache: ConfigurationCacheState,
+        // org.gradle.configuration-cache.parallel flag (plan 064); null when unset/uncaptured.
+        configurationCacheParallel: Boolean? = null,
         daemonReused: Boolean,
         tags: Map<String, String>,
         nowMs: Long,
         projectRoots: List<String>,
         configurationMs: Long? = null,
+        // CC entry byte size (plan 064): finalizer-measured; null when CC not requested or the probe degraded.
+        ccEntrySizeBytes: Long? = null,
+        // CC entry-load proxy (plan 064): finalizer-measured on a CC hit only; null otherwise.
+        ccLoadMs: Long? = null,
         caps: PayloadCaps = PayloadCaps.DEFAULT,
         fingerprints: FingerprintInfo? = null,
         kotlin: KotlinInfo? = null,
@@ -179,6 +185,9 @@ internal object PayloadAssembler {
                     userId = it.userId,
                     daemonReused = daemonReused,
                     configurationCache = configurationCache,
+                    // org.gradle.configuration-cache.parallel posture (plan 064); a tracked CC input
+                    // resolved after config, replayed on a hit — rides alongside configurationCache.
+                    configurationCacheParallel = configurationCacheParallel,
                     // IDE + AI-agent detection (plan 027).
                     ide = it.ide,
                     ideVersion = it.ideVersion,
@@ -217,7 +226,9 @@ internal object PayloadAssembler {
             // Derived metrics are computed over the FULL task list, before any cap drops
             // rows — hit rate/utilization must not shift when the payload is truncated. avoidedMs +
             // dependencyEdges are supplied by the opt-in internal-adapters module (plan 038), else null.
-            derived = DerivedMetricsCalculator.compute(tasks, environment?.cores, configurationMs, avoidedMs, dependencyEdges),
+            derived = DerivedMetricsCalculator.compute(
+                tasks, environment?.cores, configurationMs, avoidedMs, dependencyEdges, ccEntrySizeBytes, ccLoadMs,
+            ),
             // Salted input fingerprints (plan 022); null when uncaptured or unsaltable.
             fingerprints = fingerprints?.takeIf { it.build.isNotEmpty() || it.tasks.isNotEmpty() },
             // Bundled Kotlin build report (plan 023); null when unwired/unobservable.
