@@ -25,6 +25,13 @@ data class PayloadCaps(
     val maxChangedModules: Int = 500,
     /** `excludedTaskNames` entries retained per payload (plan 054); a hostile ingest could POST an unbounded list. */
     val maxExcludedTaskNames: Int = 500,
+    /**
+     * `environment.invocation.properties` entries retained per payload (plan 051). Plugin-side this is a
+     * fixed 5-key allowlist, so 200 is far above any honest value; the bound exists only so a hostile
+     * ingest cannot POST an unbounded list (whole-branch review — the one plan-051 list field that
+     * shipped with no cap + no counter, unlike every sibling).
+     */
+    val maxInvocationProperties: Int = 200,
     /** Total byte budget for all addon `extensions` entries (plan 039); largest dropped first. */
     val maxExtensionsBytes: Int = 256 * 1024,
     val maxPayloadBytes: Int = 20 * 1024 * 1024,
@@ -179,6 +186,24 @@ object PayloadCapper {
             kept
         }
 
+        // Invocation gradle.properties posture (plan 051): the plugin emits a fixed 5-key allowlist, but a
+        // hostile/foreign ingest can POST an unbounded list — keep the first N (deterministic insertion
+        // order, the same order the plugin emits its allowlist in), drop + count the rest. Same rationale
+        // as excludedTaskNames/changedModules above; the one plan-051 list field that shipped without a
+        // bound (whole-branch review). Rebuilds the environment→invocation copy chain only when over-cap.
+        var droppedInvocationProperties = 0
+        val cappedEnvironment = payload.environment?.let { env ->
+            val invocation = env.invocation
+            val props = invocation?.properties
+            if (invocation == null || props == null || props.size <= caps.maxInvocationProperties) {
+                env
+            } else {
+                val kept = props.take(caps.maxInvocationProperties)
+                droppedInvocationProperties = props.size - kept.size
+                env.copy(invocation = invocation.copy(properties = kept))
+            }
+        }
+
         // Addon extensions (plan 039): opaque, addon-authored JSON that core does not scrub. It must
         // not balloon the payload, so bound the whole map to its own byte budget by dropping the
         // largest entries first (they carry the most abuse potential) until it fits. Runs on both the
@@ -210,7 +235,8 @@ object PayloadCapper {
             tags = tags.map, values = values.map, tasks = tasks,
             benchmark = cappedBenchmark, artifacts = cappedArtifacts, extensions = cappedExtensions,
             projectEvaluations = cappedProjectEvaluations, testTelemetry = cappedTestTelemetry,
-            changedModules = cappedChangedModules, excludedTaskNames = cappedExcludedTaskNames, caps = null,
+            changedModules = cappedChangedModules, excludedTaskNames = cappedExcludedTaskNames,
+            environment = cappedEnvironment, caps = null,
         )
 
         // Byte budget (spec §3.9 stages), only walked when the payload is actually oversized.
@@ -251,6 +277,7 @@ object PayloadCapper {
             droppedXmlDisabledTasks = droppedXmlDisabledTasks,
             droppedChangedModules = droppedChangedModules,
             droppedExcludedTaskNames = droppedExcludedTaskNames,
+            droppedInvocationProperties = droppedInvocationProperties,
         )
 
         // Nothing countable to record and nothing was previously recorded → the input is compliant,
@@ -301,7 +328,8 @@ object PayloadCapper {
             droppedExecutionReasons == 0 && truncatedExecutionReasons == 0 && truncatedNonCacheableReasons == 0 &&
             droppedTasks == 0 && droppedTaskOutcomes.isEmpty() && droppedArtifacts == 0 && droppedExtensions == 0 &&
             droppedProjectEvaluations == 0 && droppedXmlDisabledTasks == 0 && droppedChangedModules == 0 &&
-            droppedExcludedTaskNames == 0
+            droppedExcludedTaskNames == 0 && droppedInvocationProperties == 0 &&
+            droppedEmptyIntermediateCandidates == 0 && !scrubBudgetExceeded
 
     private fun merge(existing: CapsSummary?, fresh: CapsSummary): CapsSummary {
         if (existing == null) return fresh
@@ -322,6 +350,16 @@ object PayloadCapper {
             droppedXmlDisabledTasks = existing.droppedXmlDisabledTasks + fresh.droppedXmlDisabledTasks,
             droppedChangedModules = existing.droppedChangedModules + fresh.droppedChangedModules,
             droppedExcludedTaskNames = existing.droppedExcludedTaskNames + fresh.droppedExcludedTaskNames,
+            droppedInvocationProperties = existing.droppedInvocationProperties + fresh.droppedInvocationProperties,
+            // Threaded in from the plugin's PayloadAssembler after cap() (not computed here), so a server
+            // re-cap must carry it forward — merge() previously omitted it and the server's re-cap silently
+            // zeroed every ingested build-structure payload's counter (whole-branch review, HIGH). fresh's
+            // value is always 0 (cap() never sets it), so summing is correct and future-proof.
+            droppedEmptyIntermediateCandidates =
+                existing.droppedEmptyIntermediateCandidates + fresh.droppedEmptyIntermediateCandidates,
+            // Set by the server's timed ingest scrub (Routes.kt), not by cap(); OR the two so a re-cap of a
+            // once-timed-out payload keeps the honest-degradation flag rather than clearing it.
+            scrubBudgetExceeded = existing.scrubBudgetExceeded || fresh.scrubBudgetExceeded,
         )
     }
 }

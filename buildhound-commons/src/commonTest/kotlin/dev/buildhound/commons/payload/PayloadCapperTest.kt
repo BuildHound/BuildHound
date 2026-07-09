@@ -347,4 +347,55 @@ class PayloadCapperTest {
         val result = PayloadCapper.cap(input, PayloadCaps(maxTags = 0))
         assertEquals(0.5, result.derived?.cacheableHitRate)
     }
+
+    @Test
+    fun re_cap_preserves_every_caps_counter_including_ones_set_outside_cap() {
+        // The server re-caps every ingested payload (Routes.kt); merge() rebuilds CapsSummary field-by-field,
+        // so any counter it omits is silently ZEROED on the stored copy. Whole-branch review, HIGH: this hit
+        // droppedEmptyIntermediateCandidates (threaded in plugin-side by PayloadAssembler *after* cap(), so
+        // cap()'s own `fresh` never carries it — only merge() can preserve it). Every counter, including the
+        // two set outside cap() (droppedEmptyIntermediateCandidates, scrubBudgetExceeded), must survive a re-cap.
+        val existing = CapsSummary(
+            droppedTags = 1, droppedValues = 2, truncatedValues = 3,
+            droppedExecutionReasons = 4, truncatedExecutionReasons = 5, truncatedNonCacheableReasons = 6,
+            droppedTasks = 7, droppedTaskOutcomes = mapOf("EXECUTED" to 7, "FROM_CACHE" to 2),
+            droppedArtifacts = 8, droppedExtensions = 9, droppedProjectEvaluations = 10,
+            droppedXmlDisabledTasks = 11, droppedChangedModules = 12, droppedExcludedTaskNames = 13,
+            droppedInvocationProperties = 14, droppedEmptyIntermediateCandidates = 15,
+            scrubBudgetExceeded = true,
+        )
+        // Otherwise-compliant payload (nothing fresh to drop) → the re-cap merges an empty `fresh` into the
+        // existing summary, which must return every counter unchanged rather than zeroing the omitted ones.
+        val recapped = PayloadCapper.cap(payload(tags = mapOf("t" to "v"), caps = existing))
+        assertEquals(existing, recapped.caps)
+    }
+
+    @Test
+    fun over_cap_invocation_properties_are_dropped_first_n_and_counted() {
+        // Plan 051's properties list is the one plan-051 list field that shipped without a cap/counter; a
+        // hostile ingest can POST an unbounded list (whole-branch review, MED). 5 props, cap 3 → keep the
+        // first 3 (deterministic insertion order — the order the plugin emits its fixed allowlist in),
+        // drop 2, recorded in the caps summary.
+        val props = (1..5).map { GradlePropertyPosture(key = "k$it", value = "v$it", origin = PropertyOrigin.PROJECT) }
+        val env = EnvironmentInfo(invocation = InvocationInfo(properties = props))
+        val capped = PayloadCapper.cap(
+            payload().copy(environment = env),
+            PayloadCaps(maxInvocationProperties = 3),
+        )
+        val kept = capped.environment?.invocation?.properties ?: error("invocation must survive")
+        assertEquals(listOf("k1", "k2", "k3"), kept.map { it.key })
+        assertEquals(2, capped.caps?.droppedInvocationProperties)
+        assertEquals("b", capped.buildId) // envelope survives
+    }
+
+    @Test
+    fun invocation_properties_under_the_cap_leave_the_payload_compliant() {
+        val env = EnvironmentInfo(
+            invocation = InvocationInfo(
+                properties = listOf(GradlePropertyPosture(key = "org.gradle.caching", value = "true", origin = PropertyOrigin.PROJECT)),
+            ),
+        )
+        val input = payload().copy(environment = env)
+        assertSame(input, PayloadCapper.cap(input))
+    }
 }

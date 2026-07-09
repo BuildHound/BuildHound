@@ -504,6 +504,17 @@ data class CapsSummary(
     val droppedChangedModules: Int = 0,
     /** `excludedTaskNames` entries dropped past the per-payload cap (plan 054), kept first-N alphabetically. */
     val droppedExcludedTaskNames: Int = 0,
+    /** `environment.invocation.properties` entries dropped past the per-payload cap (plan 051), kept first-N. */
+    val droppedInvocationProperties: Int = 0,
+    /**
+     * True when the server's defensive ingest scrub (`Routes.kt`, plan 076) hit its wall-clock CPU budget
+     * and wholesale-redacted the remaining free-text fields to a sentinel rather than running the
+     * (super-linear) scrubber regexes on them — a hostile high-count payload's DoS backstop (whole-branch
+     * review, HIGH). Honest-degradation flag: a legitimate payload never trips it (it scrubs in well under
+     * the budget), so a `true` here means the stored payload's un-scrubbed free text was redacted, not
+     * scrubbed. Always false on a plugin-produced payload; set only server-side, after cap().
+     */
+    val scrubBudgetExceeded: Boolean = false,
     /**
      * `buildStructure.emptyIntermediateCandidates` entries dropped past the collecting
      * `BuildStructureValueSource`'s own MAX_EMPTY_INTERMEDIATE_CANDIDATES cap (plan 069 review):
