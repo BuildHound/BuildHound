@@ -205,9 +205,12 @@ const responses = {
     "/v1/rollups/project-cost?days=30": [
         { module: ":app", builds: 12, executedBuilds: 9, buildImpactedUsers: 3, serialTaskMs: 45000, buildAvgDurationMs: 60000, buildPercentage: 0.8, buildCostScalar: 4800000 },
     ],
-    // Costliest modules to change (plan 063): the card beside project cost.
+    // Costliest modules to change (plan 063): the card beside project cost. Includes a root-module
+    // (":") row — a non-nullable, always-truthy sentinel that must render as "(root)", not literal ":"
+    // (review fix: the `||` fallback used to be dead code for this specific field).
     "/v1/rollups/change-blast-radius?days=30": [
         { module: ":core:common", changeCount: 8, medianDownstreamMs: 42000, blastScore: 336000 },
+        { module: ":", changeCount: 2, medianDownstreamMs: 9000, blastScore: 18000 },
     ],
     "/v1/rollups/task-duration?days=30": {
         byName: [{ key: "compileKotlin", count: 40, totalMs: 800000, avgMs: 20000, minMs: 1000, maxMs: 50000 }],
@@ -647,6 +650,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!fetched.includes("/v1/rollups/change-blast-radius?days=30")) throw new Error("tasks view did not fetch change-blast-radius");
     if (!hasText(byId["app"], "Costliest modules to change")) throw new Error("change-blast-radius section missing");
     if (!hasText(byId["app"], ":core:common")) throw new Error("change-blast-radius row missing");
+    if (!hasText(byId["app"], "(root)")) throw new Error("change-blast-radius root-module row must render as (root), not literal ':'");
     if (!hasText(byId["app"], "compileKotlin")) throw new Error("task-duration by-name row missing");
     if (!hasText(byId["app"], "checkstyle")) throw new Error("negative-avoidance row missing");
     clickButton(byId["app"], "By type");

@@ -20,10 +20,12 @@ class PayloadCapperTest {
         extensions: Map<String, JsonElement> = emptyMap(),
         projectEvaluations: List<ProjectEvaluation>? = null,
         testTelemetry: TestTelemetryInfo? = null,
+        changedModules: ChangedModulesInfo? = null,
     ) = BuildPayload(
         buildId = "b", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
         tags = tags, values = values, tasks = tasks, caps = caps, benchmark = benchmark, artifacts = artifacts,
         extensions = extensions, projectEvaluations = projectEvaluations, testTelemetry = testTelemetry,
+        changedModules = changedModules,
     )
 
     @Test
@@ -148,6 +150,29 @@ class PayloadCapperTest {
     @Test
     fun xml_disabled_tasks_under_the_cap_leave_the_payload_compliant() {
         val input = payload(testTelemetry = TestTelemetryInfo(xmlDisabledTasks = listOf(":app:test")))
+        assertSame(input, PayloadCapper.cap(input))
+    }
+
+    @Test
+    fun over_cap_changed_modules_are_dropped_alphabetically_and_counted() {
+        // 5 changed modules, cap 3 → keep the first 3 alphabetically, drop 2, recorded in the
+        // caps summary (a hostile/foreign ingest, or a genuine monorepo, can exceed the cap).
+        val modules = listOf(":e", ":a", ":d", ":b", ":c")
+        val capped = PayloadCapper.cap(
+            payload(changedModules = ChangedModulesInfo(base = ChangeDiffBase.LAST_BUILT_SHA, modules = modules)),
+            PayloadCaps(maxChangedModules = 3),
+        )
+        val kept = capped.changedModules?.modules ?: error("changedModules must survive")
+        assertEquals(listOf(":a", ":b", ":c"), kept)
+        assertEquals(2, capped.caps?.droppedChangedModules)
+        assertEquals("b", capped.buildId) // envelope survives
+    }
+
+    @Test
+    fun changed_modules_under_the_cap_leave_the_payload_compliant() {
+        val input = payload(
+            changedModules = ChangedModulesInfo(base = ChangeDiffBase.LAST_BUILT_SHA, modules = listOf(":app")),
+        )
         assertSame(input, PayloadCapper.cap(input))
     }
 
