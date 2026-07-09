@@ -197,6 +197,12 @@ object CcFlipFlopDetector {
             .values
             .flatMap { stream ->
                 val ordered = stream.sortedWith(compareBy<CcBuildRow> { it.startedAt }.thenBy { it.buildId })
+                // O(n^2) worst case per stream — the subList().firstOrNull() below rescans the
+                // earlier-rows prefix for every row. Bounded by MAX_CC_ECONOMICS_ROWS (20k rows across the
+                // whole call), so a pathological single-stream worst case is on the order of a few hundred
+                // million small-map comparisons. Accepted at pilot scale; revisit with a fingerprint-map
+                // hash index (row -> prior-row-with-same-fingerprints) if per-tenant row volume grows
+                // enough to make this call latency-visible.
                 ordered.mapIndexedNotNull { index, row ->
                     if (row.ccState != ConfigurationCacheState.MISS_STORED) return@mapIndexedNotNull null
                     // The earliest strictly-earlier CC-requesting build in this stream with an identical

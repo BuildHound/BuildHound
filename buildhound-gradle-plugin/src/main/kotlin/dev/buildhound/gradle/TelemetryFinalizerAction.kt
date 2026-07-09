@@ -785,8 +785,9 @@ internal fun readJvmArtifacts(
  * The CC entry-load proxy (plan 064, research F14): the milliseconds from the [anchorMs] service-
  * instantiation instant to the [earliestTaskStartMs] first task start — a labelled best-effort proxy for
  * entry-load + task-graph readiness on a CC hit, not a raw deserialize timer. Returns null when either
- * endpoint is absent (no anchor stamped, or the build ran no task) or the interval is non-positive
- * (honest-null, plan 005 — an out-of-order anchor is degraded, never emitted as a nonsense value). Pure
+ * endpoint is absent (no anchor stamped, or the build ran no task) or the interval is negative
+ * (honest-null, plan 005 — an out-of-order anchor is degraded, never emitted as a nonsense value; a
+ * same-instant, zero-length interval is kept — it is a valid reading, not a degraded one). Pure
  * so it unit-tests without Gradle types.
  */
 internal fun ccLoadMs(anchorMs: Long?, earliestTaskStartMs: Long?): Long? {
