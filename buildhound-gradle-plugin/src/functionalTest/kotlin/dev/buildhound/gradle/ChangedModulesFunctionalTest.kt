@@ -26,8 +26,30 @@ class ChangedModulesFunctionalTest {
     @field:org.junit.jupiter.api.io.TempDir
     lateinit var projectDir: File
 
+    /**
+     * A stable Gradle User Home for the inner build (the [BuildCacheConfigFunctionalTest] pattern):
+     * [freshDaemon] rotates the TestKit dir per call, and without an explicit `-g` that rotating dir
+     * IS the GUH — so the store→hit pair in the CC test would run under two different GUHs and the
+     * hit build would find no configuration-cache entry. A stable `-g` keeps the CC entry findable.
+     */
+    @field:org.junit.jupiter.api.io.TempDir
+    lateinit var guhDir: File
+
+    /**
+     * Neutralize the CI environment for the inner build ([neutralCiEnv] + [freshDaemon]): on a CI
+     * runner the inner TestKit build would otherwise inherit `GITHUB_ACTIONS`/`GITHUB_BASE_REF`, so
+     * BuildHound's CI detection sets `ci.targetBranch`, and [ChangedModulesValueSource] takes its
+     * `origin/<target>...HEAD` CI-PR-base branch — which cannot resolve in these isolated single-repo
+     * fixtures (no `origin` remote), degrading the whole block to null. These tests deliberately
+     * exercise the `LAST_BUILT_SHA` base, so the inner build must look like a non-CI local build.
+     */
     private fun runner(vararg arguments: String): GradleRunner =
-        GradleRunner.create().withProjectDir(projectDir).withPluginClasspath().withArguments(*arguments)
+        GradleRunner.create()
+            .withProjectDir(projectDir)
+            .withPluginClasspath()
+            .freshDaemon()
+            .withEnvironment(neutralCiEnv())
+            .withArguments(*arguments, "-g", guhDir.absolutePath)
 
     private fun readPayload(): BuildPayload {
         val file = File(projectDir, "build/buildhound/build-payload.json")

@@ -1,5 +1,6 @@
 package dev.buildhound.gradle
 
+import dev.buildhound.commons.payload.BuildCacheConfigInfo
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
 import java.io.File
@@ -85,13 +86,30 @@ class BuildCacheConfigFunctionalTest {
         buildScript()
     }
 
-    /** Fails if the remote URL, its host, or a cache-location accessor leaked anywhere into the payload JSON. */
+    /**
+     * Fails if the remote URL, its host, or a cache-location accessor leaked anywhere into the
+     * payload JSON.
+     *
+     * CI-portability fix: the blanket `!raw.contains("://")` this used to run against the WHOLE
+     * raw payload false-positives on GitHub Actions CI, where `CiEnvironmentProviders` legitimately
+     * populates `environment.ci.buildUrl` with a real `https://github.com/.../actions/runs/...`
+     * URL (a separate, intended feature — CI provenance, not the build-cache config). That field
+     * doesn't exist on a local dev machine (no `GITHUB_*` env), which is why this passed there but
+     * failed on every CI runner. The distinctive host/port checks stay scoped to the whole raw
+     * payload (safe — `buildcache.internal.example`/`5071` cannot collide with real CI metadata);
+     * the generic `://` scheme check is rescoped to just the encoded [BuildCacheConfigInfo] block,
+     * which is spec'd (§3.7) to carry only booleans + a normalized type name and must never contain
+     * a URL scheme, regardless of what legitimately appears elsewhere in the payload.
+     */
     private fun assertNoUrlOrPathLeak() {
         val raw = payloadFile().readText()
         assertTrue(!raw.contains(remoteHost), "remote-cache host must never reach the payload (spec §3.7)")
-        assertTrue(!raw.contains("://"), "no remote-cache URL may reach the payload (spec §3.7)")
         assertTrue(!raw.contains("5071"), "no remote-cache port may reach the payload")
         assertTrue(!raw.contains("getUrl") && !raw.contains("getDirectory"), "no cache-location accessor output may leak")
+
+        val buildCache = readPayload().environment?.buildCache ?: error("expected environment.buildCache")
+        val buildCacheJson = BuildHoundJson.payload.encodeToString(BuildCacheConfigInfo.serializer(), buildCache)
+        assertTrue(!buildCacheJson.contains("://"), "no remote-cache URL may reach the buildCache payload block (spec §3.7)")
     }
 
     @Test
@@ -123,8 +141,11 @@ class BuildCacheConfigFunctionalTest {
         assertNull(buildCache.remotePush)
         assertNull(buildCache.remoteType)
         assertEquals(true, buildCache.localEnabled, "the local cache is enabled by default in Gradle")
-        val raw = payloadFile().readText()
-        assertTrue(!raw.contains("://"), "no URL may reach the payload even with no remote configured")
+        // Scoped to the buildCache block, not the whole raw payload — see assertNoUrlOrPathLeak's
+        // KDoc: a blanket whole-payload check false-positives on GitHub Actions CI, where
+        // environment.ci.buildUrl legitimately carries a real "https://github.com/..." URL.
+        val buildCacheJson = BuildHoundJson.payload.encodeToString(BuildCacheConfigInfo.serializer(), buildCache)
+        assertTrue(!buildCacheJson.contains("://"), "no URL may reach the buildCache payload block even with no remote configured")
     }
 
     @Test

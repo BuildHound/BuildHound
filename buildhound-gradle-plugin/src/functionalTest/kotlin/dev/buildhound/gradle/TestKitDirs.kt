@@ -31,3 +31,29 @@ private fun newTestKitDir(): File {
     root.mkdirs()
     return Files.createTempDirectory(root.toPath(), "testkit-").toFile()
 }
+
+/**
+ * The CI + AI-agent environment markers stripped by [neutralCiEnv] so an inner TestKit build's
+ * BuildHound CI/agent detection is steered only by what the test injects — never by the *outer*
+ * CI runner the suite happens to execute on. Mirrors the marker set proven in
+ * `CiEnvironmentBreadthFunctionalTest`; kept here so any test needing a CI-neutral inner build can
+ * share one authoritative list.
+ */
+internal val CI_ENV_MARKERS: Set<String> = setOf(
+    "CI", "GITHUB_ACTIONS", "TF_BUILD", "GITLAB_CI", "JENKINS_URL", "TEAMCITY_VERSION", "CIRCLECI",
+    "CIRCLE_BUILD_URL", "bamboo_resultsUrl", "TRAVIS_JOB_ID", "BITRISE_BUILD_URL", "GO_SERVER_URL",
+    "BUILDKITE", "CLAUDECODE", "CODEX_THREAD_ID", "CODEX_SANDBOX_NETWORK_DISABLED", "CURSOR_AGENT",
+    "OPENCODE", "GEMINI_CLI", "ANDROID_STUDIO_AGENT",
+)
+
+/**
+ * A copy of the current process environment with every CI/agent marker (and `BUILDHOUND_*` override)
+ * removed, for `GradleRunner.withEnvironment(...)`. Without this an inner TestKit build inherits the
+ * outer runner's `GITHUB_ACTIONS`/`GITHUB_BASE_REF`, which makes BuildHound's CI detection fire (e.g.
+ * `ci.targetBranch`), diverging inner-build behaviour between a local run and a CI run — a
+ * portability trap, not a real signal. Combine with [freshDaemon] so a fresh daemon actually reads
+ * the injected environment (TestKit daemon selection ignores env differences, so a reused daemon
+ * could otherwise serve the outer CI env).
+ */
+internal fun neutralCiEnv(): Map<String, String> =
+    System.getenv().filterKeys { it !in CI_ENV_MARKERS && !it.startsWith("BUILDHOUND_") }

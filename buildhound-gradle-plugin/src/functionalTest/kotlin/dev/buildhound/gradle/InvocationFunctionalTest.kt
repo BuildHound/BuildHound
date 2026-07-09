@@ -10,6 +10,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
+import org.gradle.util.GradleVersion
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.io.TempDir
 
 /**
@@ -136,6 +138,20 @@ class InvocationFunctionalTest {
         assertEquals(TaskOutcome.SUCCESS, first.task(":hello")?.outcome, first.output)
         val firstInvocation = readPayload().environment?.invocation ?: error("expected environment.invocation on the miss")
         assertEquals("true", firstInvocation.properties.first { it.key == "org.gradle.caching" }.value)
+
+        // The rest proves the allowlist re-freshens on a genuine CC *hit* (resolved in obtain() at
+        // execution, unlike the baked StartParameter scalars) by changing gradle.properties between
+        // builds and still hitting. That scenario is Gradle-unreachable on the 8.14 floor: 8.14
+        // treats any gradle.properties change as a configuration-cache invalidation ("configuration
+        // cache cannot be reused because file 'gradle.properties' has changed") → the second build is
+        // MISS_STORED, never a hit, so the baked-vs-fresh distinction cannot be observed. Gradle 9+
+        // keeps the entry across such a change, making the hit — and thus the proof — reachable. Skip
+        // the hit half below the 9.0 floor (like @DisabledOnOs); a MISS re-reads everything, so
+        // accepting a MISS here would silently destroy the very distinction this test exists to prove.
+        assumeTrue(
+            GradleVersion.current() >= GradleVersion.version("9.0"),
+            "a CC hit across a gradle.properties change is only reachable on Gradle 9+ (8.14 invalidates the entry)",
+        )
 
         // Change the project file between builds — a real CC-hit rerun must still re-read it: the
         // allowlist is resolved in obtain() (execution time), not baked like the StartParameter scalars.
