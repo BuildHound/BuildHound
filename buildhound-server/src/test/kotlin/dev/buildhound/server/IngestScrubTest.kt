@@ -242,5 +242,100 @@ class IngestScrubTest {
         assertEquals("java.lang.IllegalStateException", decoded.failure?.exceptionClass, "declared field untouched")
     }
 
+    /**
+     * DoS bound (whole-branch review, HIGH#2): a hostile high-*count* payload — thousands of pathological
+     * ~8 KiB strings whose shape drives [PayloadScrubber]'s super-linear regexes (a word-char run for
+     * `secretPair`; a `/` run for `longBlob`). Per-string cost is already clamped by 076's 8 KiB input
+     * clamp, but string COUNT is unbounded before [PayloadCapper]'s count caps (which run *after* scrub),
+     * so without [IngestScrub]'s wall-clock guard this pins one thread for minutes. Asserts the guard
+     * bounds the whole scrub under a hard wall-clock ceiling — it never hangs, whatever the machine. (Not
+     * asserted here: whether the guard *tripped* — that depends on the runner's regex speed, since a fast
+     * machine may scrub every string before the 3 s budget is spent; the deterministic trip + fail-closed
+     * behavior is proven in the `budgetMs = 0` test below, machine-independently.)
+     */
+    @Test
+    fun `timed ingest scrub keeps a max pathological payload under the DoS wall-clock bound`() {
+        val wordRun = "a".repeat(8192) // secretPair's word-char backtracking shape (no '='/':' to resolve)
+        val slashRun = "/".repeat(8192) // longBlob's shape (no digit for its lookahead)
+        val taskCount = 1000
+        val tasks = (0 until taskCount).map { i ->
+            TaskExecution(
+                path = ":m$i:t$i", startMs = 0, durationMs = 1, outcome = TaskOutcome.EXECUTED,
+                executionReasons = listOf(wordRun, slashRun),
+            )
+        }
+        val payload = BuildPayload(buildId = "dos-1", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS, tasks = tasks)
+
+        val startedAt = System.currentTimeMillis()
+        val result = IngestScrub.scrub(payload, emptyList())
+        val elapsedMs = System.currentTimeMillis() - startedAt
+
+        benchLogger.info(
+            "IngestScrub over {} pathological tasks ({} strings) took {} ms (budgetExceeded={})",
+            taskCount, taskCount * 2, elapsedMs, result.budgetExceeded,
+        )
+        // The guard caps total scrub CPU at ≈ budget (3 s) + one 8 KiB-clamped string worst-case; 10 s
+        // leaves ample CI margin. Without the guard this same payload runs for many minutes.
+        assertTrue(elapsedMs < 10_000, "timed scrub took ${elapsedMs}ms, expected < 10000ms (DoS bound)")
+        assertEquals(taskCount, result.payload.tasks.size, "the build envelope + every task survives")
+    }
+
+    /**
+     * Deterministic trip + fail-closed (whole-branch review, HIGH#2): a `budgetMs = 0` guard trips on the
+     * very first field regardless of machine speed, so every free-text field is wholesale-redacted to
+     * [IngestScrub.SENTINEL] rather than scrubbed. Proves (a) the [IngestScrub.Result.budgetExceeded] flag,
+     * (b) that a secret-shaped value in a redacted field does NOT survive (fail-closed — dropped whole, not
+     * stored raw), and (c) redaction replaces the field wholesale (never a char-split).
+     */
+    @Test
+    fun `a zero-budget ingest scrub trips immediately and wholesale-redacts every field fail-closed`() {
+        val secret = "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        val payload = BuildPayload(
+            buildId = "trip-1", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
+            tasks = listOf(
+                TaskExecution(
+                    path = ":app:compile", startMs = 0, durationMs = 1, outcome = TaskOutcome.EXECUTED,
+                    executionReasons = listOf("some benign reason", secret),
+                ),
+            ),
+        )
+
+        val result = IngestScrub.scrub(payload, emptyList(), budgetMs = 0)
+
+        assertTrue(result.budgetExceeded, "a zero budget must trip on the first field")
+        val reasons = result.payload.tasks.single().executionReasons
+        assertTrue(reasons.all { it == IngestScrub.SENTINEL }, "every field wholesale-redacted to the sentinel: $reasons")
+        assertFalse(reasons.any { it.contains("wJalrXUtnFEMI") }, "the secret must not survive a budget-exceeded redaction")
+    }
+
+    /**
+     * The other side of the bound: a legitimate payload scrubs in well under [IngestScrub.BUDGET_MS], so the
+     * timed guard must (a) never trip and (b) produce output byte-identical to the pure untimed scrubber —
+     * the wall-clock guard is invisible on every honest build (whole-branch review, HIGH#2).
+     */
+    @Test
+    fun `timed ingest scrub matches the untimed scrub on a legitimate payload and never trips`() {
+        val payload = BuildPayload(
+            buildId = "legit-1", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.FAILED,
+            tasks = (0 until 50).map { i ->
+                TaskExecution(
+                    path = ":m$i:compile", startMs = 0, durationMs = 1, outcome = TaskOutcome.EXECUTED,
+                    executionReasons = listOf("Input property 'x' file $root/src/main/File$i.kt has changed."),
+                )
+            },
+            failure = FailureInfo(
+                exceptionClass = "java.lang.IllegalStateException",
+                message = "Execution failed: token=abc123XYZ456def in $root/src/Main.kt",
+                stackTrace = "java.lang.IllegalStateException: boom at $root/src/Main.kt:10",
+            ),
+        )
+
+        val untimed = PayloadScrubber.scrub(payload, emptyList())
+        val result = IngestScrub.scrub(payload, emptyList())
+
+        assertFalse(result.budgetExceeded, "a legitimate payload must never trip the budget")
+        assertEquals(untimed, result.payload, "timed scrub is byte-identical to the untimed scrub on honest input")
+    }
+
     private val benchLogger = LoggerFactory.getLogger("dev.buildhound.server.IngestScrubBenchmark")
 }

@@ -4,9 +4,9 @@ import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.CapsSummary
 import dev.buildhound.commons.payload.PayloadCapper
 import dev.buildhound.commons.payload.PayloadCaps
-import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.server.connector.CiEvent
 import dev.buildhound.server.connector.CiRunView
 import dev.buildhound.server.connector.CiSpanStore
@@ -117,8 +117,23 @@ fun Route.ingestRoutes(
             // request loudly, not be caught here and silently fall through to storing the
             // *unscrubbed* payload. Fail-open stays scoped to `Exception` only — a narrower,
             // documented trade-off vs. blanket `Throwable` fail-open (see the plan's Risks section).
+            //
+            // Wrapped in [IngestScrub] (whole-branch review, HIGH): the scrubber runs per field under a
+            // wall-clock CPU budget so a hostile high-*count* payload (thousands of pathological ~8 KiB
+            // strings — bounded per-string by 076's clamp, but unbounded in count before PayloadCapper's
+            // count caps, which run *after* scrub) cannot pin this worker for minutes. On budget exhaustion
+            // the remaining free-text fields are wholesale-redacted (never char-split mid-secret; fail-closed).
+            var scrubBudgetExceeded = false
             val scrubbed = try {
-                PayloadScrubber.scrub(payload, emptyList())
+                val result = IngestScrub.scrub(payload, emptyList())
+                scrubBudgetExceeded = result.budgetExceeded
+                if (result.budgetExceeded) {
+                    ingestLogger.warn(
+                        "payload scrub for '{}' hit the {}ms CPU budget; remaining free-text redacted to sentinel (possible DoS)",
+                        project.key, IngestScrub.BUDGET_MS,
+                    )
+                }
+                result.payload
             } catch (e: Exception) {
                 ingestLogger.warn(
                     "payload scrub threw for '{}', storing capped-but-unscrubbed: {}",
@@ -130,7 +145,11 @@ fun Route.ingestRoutes(
             // Defensive clamp (plan 019): a compliant plugin makes this a no-op; a hostile or
             // buggy client is bounded, not rejected — the telemetry survives, and only counts
             // (never keys/values) log. The byte ceilings above stay the outer wall.
-            val capped = PayloadCapper.cap(scrubbed)
+            // If the timed scrub redacted anything, record the honest-degradation flag on the caps
+            // summary (set after cap() since cap() never touches it — see CapsSummary.scrubBudgetExceeded).
+            val capped = PayloadCapper.cap(scrubbed).let { c ->
+                if (scrubBudgetExceeded) c.copy(caps = (c.caps ?: CapsSummary()).copy(scrubBudgetExceeded = true)) else c
+            }
             if (capped.caps != payload.caps) {
                 ingestLogger.warn(
                     "clamped over-cap payload from '{}': post-cap totals {} tag(s), {} value(s), {} task(s) dropped",

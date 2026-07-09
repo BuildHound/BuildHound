@@ -29,17 +29,45 @@ package dev.buildhound.commons.payload
 object PayloadScrubber {
 
     /**
+     * A single free-text field's scrub operation, factored out so a caller can wrap it (plan 076
+     * whole-branch review, HIGH). The pure default [Direct] runs the full [scrubText] regex pipeline;
+     * the server injects a wall-clock-bounded variant at ingest so a hostile high-count payload cannot
+     * pin a thread in the (super-linear) regexes. **This module stays clock-free and KMP-pure** — all
+     * timing/non-determinism lives in the caller-supplied implementation (`Routes.kt`), never here.
+     */
+    fun interface FieldScrubber {
+        /** Scrub one free-text field; the returned string replaces the field. */
+        fun scrub(text: String, projectRoots: List<String>): String
+
+        companion object {
+            /** The pure, deterministic default: run the full regex pipeline on every field (== plain [scrub]). */
+            val Direct: FieldScrubber = FieldScrubber { text, roots -> PayloadScrubber.scrubText(text, roots) }
+        }
+    }
+
+    /**
      * Scrubs all free-text fields; everything else passes through unchanged.
      * [projectRoots] may carry both the plain and the canonical root (symlinked
      * checkouts) — the first matching root wins.
      */
     fun scrub(payload: BuildPayload, projectRoots: List<String>): BuildPayload =
+        scrub(payload, projectRoots, FieldScrubber.Direct)
+
+    /**
+     * The field walk of [scrub], with every free-text field routed through [fieldScrubber] instead of
+     * [scrubText] directly. With [FieldScrubber.Direct] (the plain [scrub] default) the output is
+     * byte-for-byte identical to the two-arg overload; the server passes a time-bounded scrubber that,
+     * once its CPU budget is spent, wholesale-redacts remaining fields to a sentinel (never char-splits
+     * a value mid-secret) — the DoS backstop. The scrub-then-truncate ordering and the length caps stay
+     * here so no caller has to duplicate them (whole-branch review).
+     */
+    fun scrub(payload: BuildPayload, projectRoots: List<String>, fieldScrubber: FieldScrubber): BuildPayload =
         payload.copy(
             tasks = payload.tasks.map { task ->
                 val reasons =
                     if (task.executionReasons.isEmpty()) task.executionReasons
-                    else task.executionReasons.map { scrubText(it, projectRoots) }
-                val nonCacheableReason = task.nonCacheableReason?.let { scrubText(it, projectRoots) }
+                    else task.executionReasons.map { fieldScrubber.scrub(it, projectRoots) }
+                val nonCacheableReason = task.nonCacheableReason?.let { fieldScrubber.scrub(it, projectRoots) }
                 if (reasons === task.executionReasons && nonCacheableReason == task.nonCacheableReason) task
                 else task.copy(executionReasons = reasons, nonCacheableReason = nonCacheableReason)
             },
@@ -47,8 +75,8 @@ object PayloadScrubber {
             // (deterministic, so cross-build key equality survives — plan 022).
             fingerprints = payload.fingerprints?.let { fp ->
                 FingerprintInfo(
-                    build = fp.build.mapKeys { scrubText(it.key, projectRoots) },
-                    tasks = fp.tasks.mapValues { (_, keys) -> keys.mapKeys { scrubText(it.key, projectRoots) } },
+                    build = fp.build.mapKeys { fieldScrubber.scrub(it.key, projectRoots) },
+                    tasks = fp.tasks.mapValues { (_, keys) -> keys.mapKeys { fieldScrubber.scrub(it.key, projectRoots) } },
                 )
             },
             // Every Kotlin string that originates in the (untrusted) KGP report file is scrubbed:
@@ -59,9 +87,9 @@ object PayloadScrubber {
                 k.copy(
                     perTask = k.perTask.map { report ->
                         report.copy(
-                            taskPath = scrubText(report.taskPath, projectRoots),
-                            nonIncrementalReasons = report.nonIncrementalReasons.map { scrubText(it, projectRoots) },
-                            compilerTimesMs = report.compilerTimesMs.mapKeys { scrubText(it.key, projectRoots) },
+                            taskPath = fieldScrubber.scrub(report.taskPath, projectRoots),
+                            nonIncrementalReasons = report.nonIncrementalReasons.map { fieldScrubber.scrub(it, projectRoots) },
+                            compilerTimesMs = report.compilerTimesMs.mapKeys { fieldScrubber.scrub(it.key, projectRoots) },
                         )
                     },
                 )
@@ -72,8 +100,8 @@ object PayloadScrubber {
             tests = payload.tests.map { task ->
                 if (task.failedOrRetried.isEmpty() && task.allCases.isEmpty()) task
                 else task.copy(
-                    failedOrRetried = task.failedOrRetried.map { it.scrubMessage(projectRoots) },
-                    allCases = task.allCases.map { it.scrubMessage(projectRoots) },
+                    failedOrRetried = task.failedOrRetried.map { it.scrubMessage(projectRoots, fieldScrubber) },
+                    allCases = task.allCases.map { it.scrubMessage(projectRoots, fieldScrubber) },
                 )
             },
             // Benchmark labels (plan 030): scenario/isolationMode are allowlist-validated plugin-side,
@@ -81,16 +109,16 @@ object PayloadScrubber {
             // or secret-shaped value, so route all three through the scrubber (defense-in-depth; §3.7).
             benchmark = payload.benchmark?.let { b ->
                 b.copy(
-                    scenario = scrubText(b.scenario, projectRoots),
-                    isolationMode = b.isolationMode?.let { scrubText(it, projectRoots) },
-                    seedRef = b.seedRef?.let { scrubText(it, projectRoots) },
+                    scenario = fieldScrubber.scrub(b.scenario, projectRoots),
+                    isolationMode = b.isolationMode?.let { fieldScrubber.scrub(it, projectRoots) },
+                    seedRef = b.seedRef?.let { fieldScrubber.scrub(it, projectRoots) },
                 )
             },
             // Build-failure message + stacktrace: routinely embed absolute paths (every stack frame
             // carries one) and can carry secret-shaped values from the failing command — the highest
             // PII surface in the payload, so scrub every character. `exceptionClass` is a declared
             // type name and `messageHash` is a digest of the raw text — neither is touched.
-            failure = payload.failure?.scrubFailure(projectRoots),
+            failure = payload.failure?.scrubFailure(projectRoots, fieldScrubber),
         )
 
     /**
@@ -100,10 +128,10 @@ object PayloadScrubber {
      * unaffected. The stacktrace cap is generous (~8 KiB) so the trace stays diagnostic; the local
      * HTML artifact may render a fuller (still-scrubbed) copy — see the finalizer.
      */
-    private fun FailureInfo.scrubFailure(projectRoots: List<String>): FailureInfo {
+    private fun FailureInfo.scrubFailure(projectRoots: List<String>, fieldScrubber: FieldScrubber): FailureInfo {
         if (message == null && stackTrace == null) return this
-        val scrubbedMessage = message?.let { scrubText(it, projectRoots).take(MAX_FAILURE_MESSAGE_CHARS) }
-        val scrubbedStack = stackTrace?.let { scrubText(it, projectRoots).take(MAX_FAILURE_STACKTRACE_CHARS) }
+        val scrubbedMessage = message?.let { fieldScrubber.scrub(it, projectRoots).take(MAX_FAILURE_MESSAGE_CHARS) }
+        val scrubbedStack = stackTrace?.let { fieldScrubber.scrub(it, projectRoots).take(MAX_FAILURE_STACKTRACE_CHARS) }
         return copy(message = scrubbedMessage, stackTrace = scrubbedStack)
     }
 
@@ -115,9 +143,9 @@ object PayloadScrubber {
      * secret straddling the char cap is redacted whole before slicing (the plan-019 scrub-then-cap
      * rule). `messageHash` is computed upstream over the raw text, so the flaky key is unaffected.
      */
-    private fun TestCaseDetail.scrubMessage(projectRoots: List<String>): TestCaseDetail {
+    private fun TestCaseDetail.scrubMessage(projectRoots: List<String>, fieldScrubber: FieldScrubber): TestCaseDetail {
         if (message == null) return this
-        val scrubbed = scrubText(message, projectRoots)
+        val scrubbed = fieldScrubber.scrub(message, projectRoots)
         return copy(message = if (scrubbed.length > MAX_TEST_MESSAGE_CHARS) scrubbed.substring(0, MAX_TEST_MESSAGE_CHARS) else scrubbed)
     }
 
