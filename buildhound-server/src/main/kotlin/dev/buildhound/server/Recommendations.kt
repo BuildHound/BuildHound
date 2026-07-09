@@ -1,5 +1,6 @@
 package dev.buildhound.server
 
+import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.ProcessInfo
@@ -451,7 +452,7 @@ object RecommendationEngine {
 
     /** Family 5: the habitual `-x test`-on-CI smell, over the new `excludedTaskNames` field. */
     private fun wasteCiExcludeTest(payloads: List<BuildPayload>, settings: RecommendationSettings): Recommendation? {
-        val ci = payloads.filter { it.mode.name == "CI" }
+        val ci = payloads.filter { it.mode == BuildMode.CI }
         if (ci.isEmpty()) return null
         val excludingTests = ci.filter { excludesTests(it.excludedTaskNames) }
         if (excludingTests.isEmpty()) return null
@@ -481,7 +482,7 @@ object RecommendationEngine {
      */
     private fun wasteLocalVerification(payloads: List<BuildPayload>, settings: RecommendationSettings): Recommendation? {
         val shares = payloads
-            .filter { it.mode.name == "LOCAL" }
+            .filter { it.mode == BuildMode.LOCAL }
             .mapNotNull { verificationShareOf(it.tasks) }
         if (shares.isEmpty()) return null
         val median = RegressionEngine.median(shares)

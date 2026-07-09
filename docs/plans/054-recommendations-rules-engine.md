@@ -2,13 +2,20 @@
 
 **Status: implemented** · 2026-07-09 — all five rule families, `excludedTaskNames`, and both routes
 landed as designed (`./gradlew :buildhound-commons:build :buildhound-gradle-plugin:build
-:buildhound-server:test` green). **Divergence from the Test strategy section:** only the pure-engine
-unit suite (`RecommendationEngineTest`, 17 cases) shipped in this pass. The Testcontainers store-parity
-suite (`RecommendationStoresIntegrationTest`), the route suite (`RecommendationRoutesTest` — tenant
-scoping, `allowsRead`, empty-not-500), and the plugin TestKit `-x test`+CC-hit case are not yet written;
-`windowPayloads`/the two routes are otherwise covered only indirectly (`OpenApiContractTest` confirms
-route/spec parity, existing functional tests confirm `excludedTaskNames` doesn't break the CC-hit path).
-Flagged as a follow-up rather than blocking this landing.
+:buildhound-server:test` green). **Test strategy status (review fixes, 2026-07-09):** all five suites
+named in the Test strategy section are now written. `RecommendationEngineTest` (pure engine, 17 cases)
+shipped with the original landing. The review's two REQUIRED server-side suites are now in place:
+`RecommendationRoutesTest` (Ktor `testApplication`, Docker-free — auth matrix on both routes, tenant
+isolation on the fleet rollup, per-build 404 parity between an unknown and a foreign-tenant build, `days`
+clamp, empty-not-500) and `RecommendationStoresIntegrationTest` (Testcontainers — `windowPayloads`
+byte-for-byte parity between `InMemoryBuildStore`/`PostgresBuildStore` incl. benchmark-mode exclusion,
+the `(started_at, build_id)` DESC cap tie-break above the cap, a malformed/undecodable `payload` row
+skipped rather than fatal, and an end-to-end `RecommendationEngine.compute` parity check). The plugin
+TestKit case originally flagged as an acceptable follow-up was cheap to close given the proven
+`requestedTasks` CC-replay precedent, and is now also written: `BuildHoundSettingsPluginFunctionalTest`'s
+`` `excludedTaskNames (-x test) rides the CC key and replays verbatim on a hit` `` asserts a `-x test`
+invocation's `excludedTaskNames` survives a MISS_STORED→HIT configuration-cache pair. No further
+follow-up remains from this plan's Test strategy section.
 
 ## Source
 
