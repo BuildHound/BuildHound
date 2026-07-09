@@ -170,6 +170,32 @@ class BuildHoundSettingsPluginFunctionalTest {
     }
 
     @Test
+    fun `excludedTaskNames (-x test) rides the CC key and replays verbatim on a hit`() {
+        setUpProject()
+        File(projectDir, "build.gradle.kts").writeText(
+            """
+            tasks.register("hello") {
+                doLast { println("hello from fixture") }
+            }
+            tasks.register("test") {
+                doLast { println("would run tests") }
+            }
+            """.trimIndent(),
+        )
+
+        // Store: excludedTaskNames (plan 054, part of the CC key like requestedTasks) is captured from
+        // the public CC-safe StartParameter.excludedTaskNames on the MISS_STORED run...
+        val firstRun = runnerExplicit("hello", "-x", "test", "--configuration-cache").build()
+        assertTrue(summaryLine(firstRun.output).contains("cc=MISS_STORED"), summaryLine(firstRun.output))
+        assertEquals(listOf("test"), readPayload().excludedTaskNames, "excludedTaskNames captured on the storing run")
+
+        // ...and replayed verbatim (no config-phase re-read) on the following HIT.
+        val secondRun = runnerExplicit("hello", "-x", "test", "--configuration-cache").build()
+        assertTrue(summaryLine(secondRun.output).contains("cc=HIT"), summaryLine(secondRun.output))
+        assertEquals(listOf("test"), readPayload().excludedTaskNames, "excludedTaskNames must replay verbatim on a CC hit")
+    }
+
+    @Test
     fun `the configuration-cache parallel flag surfaces from a gradle property`() {
         setUpProject()
         // A provider read of the Gradle property — a tracked CC input (plan 064); value carries no path,
