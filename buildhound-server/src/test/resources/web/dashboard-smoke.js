@@ -205,6 +205,10 @@ const responses = {
     "/v1/rollups/project-cost?days=30": [
         { module: ":app", builds: 12, executedBuilds: 9, buildImpactedUsers: 3, serialTaskMs: 45000, buildAvgDurationMs: 60000, buildPercentage: 0.8, buildCostScalar: 4800000 },
     ],
+    // Costliest modules to change (plan 063): the card beside project cost.
+    "/v1/rollups/change-blast-radius?days=30": [
+        { module: ":core:common", changeCount: 8, medianDownstreamMs: 42000, blastScore: 336000 },
+    ],
     "/v1/rollups/task-duration?days=30": {
         byName: [{ key: "compileKotlin", count: 40, totalMs: 800000, avgMs: 20000, minMs: 1000, maxMs: 50000 }],
         byType: [],
@@ -625,6 +629,10 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!fetched.includes("/v1/rollups/project-cost?days=30")) throw new Error("tasks view did not fetch project-cost");
     if (!hasText(byId["app"], "Project cost by module")) throw new Error("project-cost section missing");
     if (!hasText(byId["app"], ":app")) throw new Error("project-cost row missing");
+    // Costliest modules to change (plan 063): the card renders its heading + a module row.
+    if (!fetched.includes("/v1/rollups/change-blast-radius?days=30")) throw new Error("tasks view did not fetch change-blast-radius");
+    if (!hasText(byId["app"], "Costliest modules to change")) throw new Error("change-blast-radius section missing");
+    if (!hasText(byId["app"], ":core:common")) throw new Error("change-blast-radius row missing");
     if (!hasText(byId["app"], "compileKotlin")) throw new Error("task-duration by-name row missing");
     if (!hasText(byId["app"], "checkstyle")) throw new Error("negative-avoidance row missing");
     clickButton(byId["app"], "By type");

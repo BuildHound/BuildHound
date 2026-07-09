@@ -251,6 +251,23 @@ paths:
         "200": { description: Per-plugin task-time rows plus an honest availability flag. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/rollups/change-blast-radius:
+    get:
+      summary: Costliest-modules-to-change rollup (plan 063, research F13).
+      description: >
+        Ranks each changed Gradle module by the median downstream **executed** time it inflicts on
+        *other* modules (`sum(duration_ms WHERE outcome=EXECUTED AND module != this)`) scaled by how
+        often it changed — the cost-inflicted-on-others sibling of `/v1/rollups/project-cost` (which
+        ranks a module by its own cost). Days-window, benchmark-included, like `/v1/rollups/project-cost`;
+        top-25 by `blastScore`. An honest heuristic — a build changing several modules attributes the
+        whole build's downstream time to each (shared/over-counted), a ranking signal not causal
+        isolation. Empty when no windowed build carried a `changedModules` block.
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
+      responses:
+        "200": { description: Top-25 costliest-modules-to-change rows. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
   /v1/rollups/bottlenecks:
     get:
       summary: Bottlenecks rollup (plan 032).

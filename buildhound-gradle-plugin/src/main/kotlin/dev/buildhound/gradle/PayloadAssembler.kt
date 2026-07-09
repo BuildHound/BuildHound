@@ -10,6 +10,7 @@ import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
 import dev.buildhound.commons.payload.BuildStructureInfo
 import dev.buildhound.commons.payload.CapsSummary
+import dev.buildhound.commons.payload.ChangedModulesInfo
 import dev.buildhound.commons.payload.CiInfo
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.DerivedMetricsCalculator
@@ -133,6 +134,9 @@ internal object PayloadAssembler {
         // Committed build-cache config snapshot (plan 067, research F17); null when uncaptured (a guarded
         // settingsEvaluated read failure) — mapped into environment.buildCache below.
         buildCache: BuildCacheConfigSnapshot? = null,
+        // Change blast-radius attribution (plan 063, research F13); null when no diff base was resolvable
+        // (no CI target branch and no last-built-sha file, git absent/timeout/detached HEAD).
+        changedModules: CollectedChangedModules? = null,
     ): BuildPayload {
         // Mirror the benchmark keys into tags (spec's tag contract), but user tags win on clash.
         val mergedTags = if (benchmark == null) {
@@ -236,6 +240,11 @@ internal object PayloadAssembler {
             // guhWarmth is computed entirely from fields already inside CollectedWrapper (the dist
             // mtime vs. this daemon's own JVM start time) — no build-timing input needed here.
             wrapper = wrapperInfo(wrapper),
+            // Change blast-radius attribution (plan 063, research F13): the plugin-side DTO maps 1:1 to
+            // the wire block; null when no diff base resolved (the ValueSource returned null).
+            changedModules = changedModules?.let {
+                ChangedModulesInfo(base = it.base, modules = it.modules, unattributedChanges = it.unattributedChanges)
+            },
             // End-of-build JVM process snapshot (plan 029); empty when disabled/unobservable. Numeric
             // + typed-allowlist enum/bool only — nothing for the scrubber to touch (no path or
             // command line; the pid — carried since plan 065 — is an ephemeral host-local integer).

@@ -353,6 +353,18 @@ interface BuildStore {
     fun pluginCost(projectId: String, days: Int, nowMs: Long): PluginCostRollup
 
     /**
+     * Costliest-modules-to-change rollup over the last [days] (plan 063, research F13): ranks each
+     * changed Gradle module by the median downstream **executed** time it inflicts on *other* modules,
+     * scaled by how often it changed. The same days-window, **benchmark-included** convention as
+     * [projectCost]/[pluginCost] (this is projectCost's cost-inflicted-on-others sibling — F13's own
+     * framing), not the fleet-view benchmark-excluded convention. Both stores flatten the window to
+     * [ChangeBlastBuild]s (changed-module set × per-module executed durations) and defer to
+     * [RollupCalculator.changeBlastRadius], so in-memory and Postgres agree byte-for-byte (the plan-026
+     * parity discipline). Empty when no windowed build carried a `changedModules` block.
+     */
+    fun changeBlastRadius(projectId: String, days: Int, nowMs: Long): List<ChangeBlastRadiusRow>
+
+    /**
      * Benchmark series over the last [days] (plan 030): `mode=BENCHMARK` builds grouped by
      * (scenario, isolationMode), optionally narrowed by [scenario]/[isolationMode]/[branch]/
      * [workersMax] (plan 065 — an exact match on the plaintext `environment.workersMax`). Each
@@ -766,6 +778,33 @@ class InMemoryBuildStore : BuildStore {
 
     override fun pluginCost(projectId: String, days: Int, nowMs: Long): PluginCostRollup =
         RollupCalculator.pluginCost(taskRowsInWindow(projectId, days, nowMs))
+
+    override fun changeBlastRadius(projectId: String, days: Int, nowMs: Long): List<ChangeBlastRadiusRow> {
+        // Same days-window, benchmark-included convention as projectCost (started_at >= cutoff), gated
+        // to builds carrying a changedModules block. Both stores flatten to ChangeBlastBuild and defer
+        // to the one calculator, so in-memory and Postgres agree byte-for-byte.
+        val cutoff = nowMs - days.toLong() * 86_400_000
+        val builds = builds.entries
+            .filter { it.key.first == projectId }
+            .map { it.value }
+            .filter { it.startedAt >= cutoff }
+            .mapNotNull { changeBlastBuildOf(it) }
+        return RollupCalculator.changeBlastRadius(builds)
+    }
+
+    /** Flatten one payload into a [ChangeBlastBuild]; null when it carries no `changedModules` block (plan 063). */
+    private fun changeBlastBuildOf(payload: BuildPayload): ChangeBlastBuild? {
+        val changed = payload.changedModules ?: return null
+        val executedMsByModule = payload.tasks
+            .filter { it.outcome.name == "EXECUTED" }
+            .groupBy { it.module ?: ChangeBlastBuild.NULL_MODULE_KEY }
+            .mapValues { (_, tasks) -> tasks.sumOf { it.durationMs } }
+        return ChangeBlastBuild(
+            buildId = payload.buildId,
+            changedModules = changed.modules,
+            executedMsByModule = executedMsByModule,
+        )
+    }
 
     override fun benchmarkSeries(
         projectId: String,

@@ -119,6 +119,14 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Input
         val vcs: Property<CollectedVcs>
 
+        /**
+         * Change blast-radius attribution (plan 063, research F13); optional/absent when no diff base
+         * resolved (no CI target branch and no `last-built-sha` file, git absent/timeout/detached HEAD).
+         */
+        @get:Input
+        @get:Optional
+        val changedModules: Property<CollectedChangedModules>
+
         @get:Input
         @get:Optional
         val ci: Property<CollectedCi>
@@ -435,6 +443,9 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 // Committed build-cache config snapshot (plan 067): the assembler maps this plugin-side
                 // DTO into environment.buildCache (null when uncaptured / every field null).
                 buildCache = parameters.buildCache.orNull,
+                // Change blast-radius attribution (plan 063): plugin-side DTO → wire ChangedModulesInfo;
+                // null when no diff base resolved.
+                changedModules = parameters.changedModules.orNull,
                 projectEvaluations = projectEvaluations.orEmpty(),
                 extensions = extensions,
                 avoidedMs = avoidedMs,
@@ -444,6 +455,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 ksp = toolchain.ksp,
                 springBoot = toolchain.springBoot,
             )
+
+            // Record this build's HEAD sha as the diff base for the NEXT local iterative build (plan
+            // 063): under `.gradle` (not `build/`) so it survives `clean`, like the identity salt.
+            // Best-effort — a write failure degrades the *next* build's LAST_BUILT_SHA base to absent,
+            // never this build's outcome.
+            writeLastBuiltSha(parameters.rootDir.orNull, parameters.vcs.orNull?.sha)
 
             // Counts only — a misconfigured build could put a secret in a tag/reason, so
             // keys and values never reach the log (plan 019).
@@ -653,6 +670,22 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
      */
     private fun readProjectEvaluations(root: File): List<ProjectEvaluation> =
         ProjectEvalRecordIo.readAndClear(File(root, ".gradle/buildhound/config-timings"))
+
+    /**
+     * Records this build's HEAD [sha] as the diff base for the next iterative build (plan 063), at
+     * `<rootDir>/.gradle/buildhound/last-built-sha` — under `.gradle` (survives `clean`), the salt /
+     * config-timings precedent. Fully guarded: a null [rootDir]/[sha] (git absent, detached HEAD) or a
+     * write failure is swallowed — the base for the *next* build just degrades to absent, never a
+     * failed build. The sha is already-shipped `vcs` data — no new PII surface.
+     */
+    private fun writeLastBuiltSha(rootDir: String?, sha: String?) {
+        if (rootDir == null || sha == null) return
+        runCatching {
+            val file = File(rootDir, ".gradle/buildhound/last-built-sha")
+            file.parentFile?.mkdirs()
+            file.writeText(sha)
+        }.onFailure { logger.info("[buildhound] last-built-sha write skipped (build unaffected): {}", it.message) }
+    }
 
     private fun writePayload(payload: BuildPayload, outputDir: String): File {
         val dir = File(outputDir).apply { mkdirs() }

@@ -121,6 +121,28 @@ class GoldenPayloadTest {
         assertNull(payload.toolchain?.springBoot)
         // Additive guarantee (plan 067): an `environment` without a `buildCache` config block defaults null.
         assertNull(payload.environment?.buildCache)
+        // Additive guarantee (plan 063): a payload without a `changedModules` block defaults to null.
+        assertNull(payload.changedModules)
+    }
+
+    @Test
+    fun `schema v1 changed-modules golden file deserializes with a populated blast-radius block`() {
+        val payload = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            golden("build-payload-v1-changed-modules.json"),
+        )
+
+        assertEquals(1, payload.schemaVersion, "change blast-radius attribution is additive — the envelope stays schema v1")
+        val changed = payload.changedModules ?: error("expected a changedModules block")
+        assertEquals(ChangeDiffBase.CI_PR_BASE, changed.base)
+        // Gradle module paths only — never a filesystem path or a raw changed-file list (spec §3.7).
+        assertEquals(listOf(":app", ":core:common"), changed.modules)
+        assertEquals(false, changed.unattributedChanges)
+        // Every emitted module is a Gradle path (leading ':'), never a filesystem path or a changed
+        // file — the plugin's ChangedModuleMapper maps files to modules and drops the raw paths (§3.7).
+        assertTrue(changed.modules.all { it.startsWith(":") }, "changedModules carries Gradle paths only")
+        val wire = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
+        assertTrue(!wire.contains("src/") && !wire.contains(".kt"), "no changed-file path may leak into the payload")
     }
 
     @Test
@@ -602,6 +624,7 @@ class GoldenPayloadTest {
             "build-payload-v1-test-telemetry.json",
             "build-payload-v1-process-tuning.json",
             "build-payload-v1-buildcache.json",
+            "build-payload-v1-changed-modules.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

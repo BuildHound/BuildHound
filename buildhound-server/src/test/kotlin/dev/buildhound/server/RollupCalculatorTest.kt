@@ -87,4 +87,83 @@ class RollupCalculatorTest {
         val rollup = RollupCalculator.pluginCost(rows)
         rollup.plugins.forEach { assertEquals(0.0, it.sharePct) }
     }
+
+    // --- Change blast-radius (plan 063, research F13) ---
+
+    private fun blastBuild(id: String, changed: List<String>, executed: Map<String, Long>) =
+        ChangeBlastBuild(buildId = id, changedModules = changed, executedMsByModule = executed)
+
+    @Test
+    fun `downstream is the build's executed time in every OTHER module`() {
+        // One build: :app changed; :app executed 1000, :core executed 3000, root(null) executed 500.
+        // Downstream for :app = 3000 + 500 = 3500 (total 4500 minus :app's own 1000).
+        val builds = listOf(
+            blastBuild("b1", listOf(":app"), mapOf(":app" to 1000L, ":core" to 3000L, ChangeBlastBuild.NULL_MODULE_KEY to 500L)),
+        )
+        val row = RollupCalculator.changeBlastRadius(builds).single()
+        assertEquals(":app", row.module)
+        assertEquals(1, row.changeCount)
+        assertEquals(3500L, row.medianDownstreamMs)
+        assertEquals(3500L, row.blastScore)
+    }
+
+    @Test
+    fun `changeCount counts distinct builds and the median is over their downstream samples`() {
+        // :app changed in three builds with downstream 1000, 3000, 2000 → median 2000, changeCount 3.
+        val builds = listOf(
+            blastBuild("b1", listOf(":app"), mapOf(":app" to 100L, ":core" to 1000L)),
+            blastBuild("b2", listOf(":app"), mapOf(":app" to 100L, ":core" to 3000L)),
+            blastBuild("b3", listOf(":app"), mapOf(":app" to 100L, ":core" to 2000L)),
+        )
+        val row = RollupCalculator.changeBlastRadius(builds).single()
+        assertEquals(3, row.changeCount)
+        assertEquals(2000L, row.medianDownstreamMs)
+        assertEquals(6000L, row.blastScore, "median 2000 × changeCount 3")
+    }
+
+    @Test
+    fun `an even sample count medians the two middles (floor of their average)`() {
+        val builds = listOf(
+            blastBuild("b1", listOf(":app"), mapOf(":core" to 1000L)),
+            blastBuild("b2", listOf(":app"), mapOf(":core" to 2001L)),
+        )
+        val row = RollupCalculator.changeBlastRadius(builds).single()
+        assertEquals(1500L, row.medianDownstreamMs, "(1000 + 2001) / 2 floored")
+    }
+
+    @Test
+    fun `a build changing several modules attributes its downstream to each (shared, over-counted)`() {
+        // Honest heuristic: both :app and :core get the whole build's other-module downstream.
+        val builds = listOf(
+            blastBuild("b1", listOf(":app", ":core"), mapOf(":app" to 1000L, ":core" to 2000L, ":lib" to 500L)),
+        )
+        val rows = RollupCalculator.changeBlastRadius(builds).associateBy { it.module }
+        assertEquals(2500L, rows.getValue(":app").medianDownstreamMs, "total 3500 minus :app's own 1000")
+        assertEquals(1500L, rows.getValue(":core").medianDownstreamMs, "total 3500 minus :core's own 2000")
+    }
+
+    @Test
+    fun `rows are ranked by blast score descending with a module tiebreak`() {
+        val builds = listOf(
+            // :b and :c tie on blastScore (both 1000); the module name breaks the tie alphabetically.
+            blastBuild("b1", listOf(":a"), mapOf(":x" to 5000L)),
+            blastBuild("b2", listOf(":c"), mapOf(":x" to 1000L)),
+            blastBuild("b3", listOf(":b"), mapOf(":x" to 1000L)),
+        )
+        val ranked = RollupCalculator.changeBlastRadius(builds).map { it.module }
+        assertEquals(listOf(":a", ":b", ":c"), ranked)
+    }
+
+    @Test
+    fun `an empty window is honestly empty`() {
+        assertEquals(emptyList(), RollupCalculator.changeBlastRadius(emptyList()))
+    }
+
+    @Test
+    fun `a build with a changed module but no executed tasks contributes zero downstream`() {
+        val builds = listOf(blastBuild("b1", listOf(":app"), emptyMap()))
+        val row = RollupCalculator.changeBlastRadius(builds).single()
+        assertEquals(0L, row.medianDownstreamMs)
+        assertEquals(1, row.changeCount)
+    }
 }
