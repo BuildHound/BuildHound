@@ -184,6 +184,18 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Input
         val configurationCacheRequested: Property<Boolean>
 
+        /**
+         * The `org.gradle.configuration-cache.parallel` flag (plan 064, research F14), wired from
+         * `settings.providers.gradleProperty(...)` — a **provider read** (a tracked CC input resolved
+         * after configuration, baked into the CC entry, replayed on a hit), never `System.getProperty`.
+         * Optional/absent when the property is unset (Gradle's own default is off). Deliberately the
+         * plan's `providers.gradleProperty` source, not `BuildFeatures.configurationCache` — that public
+         * feature surfaces only `.requested`/`.active`, never the parallel flag (plan-064 divergence note).
+         */
+        @get:Input
+        @get:Optional
+        val configurationCacheParallel: Property<Boolean>
+
         @get:Input
         val projectKey: Property<String>
 
@@ -293,6 +305,25 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             // measured, so report 0 rather than the (absent) marks. Otherwise the marked
             // duration, or null when unmeasurable (plan 016).
             val configurationMs = if (ccState == ConfigurationCacheState.HIT) 0L else execution.configurationMs
+            // CC entry byte size (plan 064, research F14): measured only when CC is actually on this
+            // build (HIT/MISS_STORED), so a stale sibling entry left by an earlier CC run is never
+            // reported for a DISABLED build. Finalizer/execution-time read (the finalizer has rootDir)
+            // — never at config time, which would make the dir a CC fingerprint input (arch §2 rule 9).
+            // Degrades to null on any unrecognized layout / guarded probe failure.
+            val ccEntrySizeBytes = if (ccState == ConfigurationCacheState.HIT || ccState == ConfigurationCacheState.MISS_STORED) {
+                parameters.rootDir.orNull?.let { CcEntrySize.newestEntryBytes(File(it)) }
+            } else {
+                null
+            }
+            // CC entry-load proxy (plan 064): only on a HIT (configuration was skipped, so this measures
+            // entry-load + task-graph readiness), from the service-instantiation anchor to the earliest
+            // task start. Null on every non-HIT build and when unmeasurable (no anchor / no task / a
+            // non-positive interval) — a labelled best-effort proxy, distinct from configurationMs.
+            val ccLoadMs = if (ccState == ConfigurationCacheState.HIT) {
+                ccLoadMs(execution.executionStartedMs, tasks.minOfOrNull { it.startMs })
+            } else {
+                null
+            }
             // Per-project configuration-time attribution (plan 052): beforeProject/afterProject write
             // directly at configuration time, so on a CC hit configuration never ran this build and
             // whatever the unconditional drain above collected can only be a prior build's leftovers —
@@ -425,11 +456,15 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 vcs = parameters.vcs.orNull,
                 ci = ci,
                 configurationCache = ccState,
+                // org.gradle.configuration-cache.parallel posture (plan 064); null when unset/uncaptured.
+                configurationCacheParallel = parameters.configurationCacheParallel.orNull,
                 daemonReused = execution.daemonReused,
                 tags = parameters.tags.getOrElse(emptyMap()),
                 nowMs = System.currentTimeMillis(),
                 projectRoots = scrubRoots(parameters.rootDir.orNull),
                 configurationMs = configurationMs,
+                ccEntrySizeBytes = ccEntrySizeBytes,
+                ccLoadMs = ccLoadMs,
                 fingerprints = fingerprints,
                 kotlin = kotlin,
                 tests = tests,
@@ -740,6 +775,20 @@ internal fun readJvmArtifacts(
         if (!file.exists()) return@mapNotNull null
         JvmArtifactSize(module = location.module, kind = location.kind, sizeBytes = file.length())
     }
+
+/**
+ * The CC entry-load proxy (plan 064, research F14): the milliseconds from the [anchorMs] service-
+ * instantiation instant to the [earliestTaskStartMs] first task start — a labelled best-effort proxy for
+ * entry-load + task-graph readiness on a CC hit, not a raw deserialize timer. Returns null when either
+ * endpoint is absent (no anchor stamped, or the build ran no task) or the interval is non-positive
+ * (honest-null, plan 005 — an out-of-order anchor is degraded, never emitted as a nonsense value). Pure
+ * so it unit-tests without Gradle types.
+ */
+internal fun ccLoadMs(anchorMs: Long?, earliestTaskStartMs: Long?): Long? {
+    if (anchorMs == null || earliestTaskStartMs == null) return null
+    val delta = earliestTaskStartMs - anchorMs
+    return delta.takeIf { it >= 0 }
+}
 
 /**
  * Joins the task path → static type/cacheable/nonCacheableReason dictionary (plan 016) onto the

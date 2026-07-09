@@ -123,6 +123,11 @@ class GoldenPayloadTest {
         assertNull(payload.environment?.buildCache)
         // Additive guarantee (plan 063): a payload without a `changedModules` block defaults to null.
         assertNull(payload.changedModules)
+        // Additive guarantee (plan 064): an `environment` without `configurationCacheParallel` and a
+        // `derived` block without `ccEntrySizeBytes`/`ccLoadMs` all default to null.
+        assertNull(payload.environment?.configurationCacheParallel)
+        assertNull(payload.derived?.ccEntrySizeBytes)
+        assertNull(payload.derived?.ccLoadMs)
     }
 
     @Test
@@ -163,6 +168,27 @@ class GoldenPayloadTest {
         val wire = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
         assertTrue(!wire.contains("http://") && !wire.contains("://"), "no remote-cache URL may leak into the payload")
         assertTrue(!wire.contains("getUrl") && !wire.contains("getDirectory"), "no cache-location accessor output may leak")
+    }
+
+    @Test
+    fun `schema v1 cc-economics golden file deserializes with CC parallel, entry size, and load proxy`() {
+        val payload = BuildHoundJson.payload.decodeFromString(
+            BuildPayload.serializer(),
+            golden("build-payload-v1-cc-economics.json"),
+        )
+
+        assertEquals(1, payload.schemaVersion, "the CC-economics fields are additive — the envelope stays schema v1")
+        // The org.gradle.configuration-cache.parallel flag rides at the environment level (plan 064).
+        assertEquals(true, payload.environment?.configurationCacheParallel)
+        // A CC HIT: configurationMs is 0 (a distinct field), the ccLoadMs proxy is populated instead,
+        // and the loaded entry's byte size is carried alongside (plan 064, research F14).
+        assertEquals(ConfigurationCacheState.HIT, payload.environment?.configurationCache)
+        assertEquals(0, payload.derived?.configurationMs)
+        assertEquals(42, payload.derived?.ccLoadMs)
+        assertEquals(68157440, payload.derived?.ccEntrySizeBytes)
+        // Byte count + boolean only — no path or cache directory ever ships (spec §3.7).
+        val wire = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
+        assertTrue(!wire.contains("configuration-cache/") && !wire.contains(".gradle/"), "no CC-entry path may leak into the payload")
     }
 
     @Test
@@ -625,6 +651,7 @@ class GoldenPayloadTest {
             "build-payload-v1-process-tuning.json",
             "build-payload-v1-buildcache.json",
             "build-payload-v1-changed-modules.json",
+            "build-payload-v1-cc-economics.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

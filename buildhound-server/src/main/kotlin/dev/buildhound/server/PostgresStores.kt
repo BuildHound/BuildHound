@@ -121,8 +121,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             """
             INSERT INTO builds (project_id, build_id, started_at, finished_at, outcome,
                                 mode, branch, duration_ms, hit_rate, ci_provider, ci_run_id,
-                                pipeline_name, requested_tasks_sig, payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                pipeline_name, requested_tasks_sig, cc_state, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (project_id, build_id) DO NOTHING
             """.trimIndent(),
         ).use { statement ->
@@ -142,8 +142,11 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             statement.setString(11, payload.ci?.runId)
             statement.setString(12, payload.ci?.pipelineName)
             statement.setString(13, RegressionEngine.requestedTasksSignature(payload.requestedTasks))
+            // Extracted CC state for the /trends per-day counters (plan 064); null on a pre-064 /
+            // environment-less payload — historical rows already read null via the V14 additive column.
+            statement.setString(14, payload.environment?.configurationCache?.name)
             statement.setObject(
-                14,
+                15,
                 PGobject().apply {
                     type = "jsonb"
                     value = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
@@ -418,7 +421,13 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                        count(*) FILTER (WHERE outcome = 'INTERRUPTED') AS interrupted,
                        coalesce(avg(duration_ms) FILTER (WHERE outcome IN ('SUCCESS','FAILED')), 0)::bigint AS avg_duration,
                        coalesce(max(duration_ms) FILTER (WHERE outcome IN ('SUCCESS','FAILED')), 0) AS max_duration,
-                       avg(hit_rate) FILTER (WHERE outcome IN ('SUCCESS','FAILED')) AS avg_hit_rate
+                       avg(hit_rate) FILTER (WHERE outcome IN ('SUCCESS','FAILED')) AS avg_hit_rate,
+                       -- Per-day CC counters (plan 064): cc_observed gates the three to null on a day
+                       -- with no CC-carrying build at all, mirroring the in-memory store's honest-null.
+                       count(*) FILTER (WHERE cc_state IS NOT NULL) AS cc_observed,
+                       count(*) FILTER (WHERE cc_state = 'MISS_STORED') AS cc_miss_stored,
+                       count(*) FILTER (WHERE cc_state = 'HIT') AS cc_hit,
+                       count(*) FILTER (WHERE cc_state IN ('HIT','MISS_STORED')) AS cc_requested
                 FROM builds
                 WHERE project_id = ? AND started_at >= ?$clauses
                 GROUP BY day ORDER BY day
@@ -433,6 +442,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.executeQuery().use { rows ->
                     buildList {
                         while (rows.next()) {
+                            val ccObserved = rows.getInt("cc_observed")
                             add(
                                 TrendPoint(
                                     day = rows.getDate("day").toLocalDate().toString(),
@@ -442,6 +452,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                                     maxDurationMs = rows.getLong("max_duration"),
                                     avgHitRate = rows.getDouble("avg_hit_rate").takeUnless { rows.wasNull() },
                                     interrupted = rows.getInt("interrupted"),
+                                    ccMissStored = if (ccObserved == 0) null else rows.getInt("cc_miss_stored"),
+                                    ccHit = if (ccObserved == 0) null else rows.getInt("cc_hit"),
+                                    ccRequested = if (ccObserved == 0) null else rows.getInt("cc_requested"),
                                 ),
                             )
                         }
@@ -1182,6 +1195,44 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 originRows = windowed.flatMap { cacheRoiRowsOf(it) },
                 configRows = windowed.mapNotNull { cacheConfigRowOf(it) },
             )
+        }
+
+    /**
+     * CC economics + reuse diagnostics (plan 064, research F14): the CC state, `derived.configurationMs`/
+     * `ccLoadMs`/`ccEntrySizeBytes`, salt-stream identity, and `fingerprints.build` all live in the
+     * `payload` jsonb (only the `cc_state` extract is columnar, for the /trends counters), so this reads
+     * the whole `payload` — benchmark excluded, NOT gated to a carried block (the reuse classification
+     * needs every windowed build's CC posture), most-recent-first, capped at [MAX_CC_ECONOMICS_ROWS] with
+     * a `(started_at, build_id)` tie-break identical to the in-memory store's sort — and hands each decoded
+     * [BuildPayload] to the same [ccBuildRowOf] flattener + pure [CcEconomicsCalculator], so both stores
+     * agree byte-for-byte (the plan-026/032/067/068 parity discipline). Every bound value is a parameter,
+     * never interpolated (architecture §6). A row whose `payload` fails to decode is skipped, never fatal.
+     */
+    override fun ccEconomics(projectId: String, days: Int, nowMs: Long): CcEconomicsReport =
+        dataSource.connection.use { connection ->
+            val windowed = connection.prepareStatement(
+                """
+                SELECT payload FROM builds
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                ORDER BY started_at DESC, build_id DESC
+                LIMIT ?
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, cutoff(days, nowMs))
+                statement.setObject(3, atMs(nowMs))
+                statement.setInt(4, MAX_CC_ECONOMICS_ROWS)
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            runCatching { BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")) }
+                                .getOrNull()
+                                ?.let(::add)
+                        }
+                    }
+                }
+            }
+            CcEconomicsCalculator.compute(windowed.map { ccBuildRowOf(it) })
         }
 
     override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> =

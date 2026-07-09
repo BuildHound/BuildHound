@@ -513,6 +513,13 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             // stable across builds). Public Settings.buildCache read only; no URL/path ever captured.
             spec.parameters.buildCache.set(settings.providers.provider { buildCacheHolder.get() })
             spec.parameters.configurationCacheRequested.set(buildFeatures.configurationCache.requested.getOrElse(false))
+            // org.gradle.configuration-cache.parallel flag (plan 064, research F14): a provider read of
+            // the Gradle property — a tracked CC input, resolved after config and replayed on a hit —
+            // never System.getProperty. BuildFeatures surfaces only .requested/.active, so the flag has
+            // to come from the property (plan-064 divergence note). Unset → the Optional param stays absent.
+            spec.parameters.configurationCacheParallel.set(
+                settings.providers.gradleProperty("org.gradle.configuration-cache.parallel").map { it.toBoolean() },
+            )
             // Lazy: the settings script sets rootProject.name after apply() runs.
             spec.parameters.projectKey.set(settings.providers.provider { settings.rootProject.name })
             spec.parameters.requestedTasks.set(settings.startParameter.taskNames.toList())

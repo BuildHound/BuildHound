@@ -125,6 +125,25 @@ class DerivedMetricsCalculatorTest {
         assertNull(metrics.configurationMs)
     }
 
+    @Test
+    fun compute_passes_cc_entry_size_and_load_ms_through() {
+        val metrics = DerivedMetricsCalculator.compute(
+            listOf(task(TaskOutcome.FROM_CACHE, cacheable = true)),
+            cores = 2,
+            ccEntrySizeBytes = 68_157_440,
+            ccLoadMs = 42,
+        )!!
+        assertEquals(68_157_440, metrics.ccEntrySizeBytes)
+        assertEquals(42, metrics.ccLoadMs)
+    }
+
+    @Test
+    fun compute_leaves_cc_entry_size_and_load_ms_null_by_default() {
+        val metrics = DerivedMetricsCalculator.compute(listOf(task(TaskOutcome.EXECUTED, cacheable = true)), cores = 2)!!
+        assertNull(metrics.ccEntrySizeBytes)
+        assertNull(metrics.ccLoadMs)
+    }
+
     // --- criticalPathMs: DAG longest weighted path (plan 038) ---
 
     private fun node(path: String, durationMs: Long) =

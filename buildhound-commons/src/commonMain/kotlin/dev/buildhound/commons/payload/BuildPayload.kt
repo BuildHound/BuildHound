@@ -548,6 +548,14 @@ data class EnvironmentInfo(
     val userId: String? = null,
     val daemonReused: Boolean? = null,
     val configurationCache: ConfigurationCacheState? = null,
+    /**
+     * The `org.gradle.configuration-cache.parallel` flag (plan 064, research F14): whether the build
+     * requested parallel configuration-cache store/load. Read at apply time as a
+     * `providers.gradleProperty` — a tracked CC input, resolved after configuration and replayed on a
+     * CC hit, exactly like [configurationCache]/[daemonReused]. Null when the property is unset
+     * (Gradle's own default is off) or uncaptured — never a guessed value.
+     */
+    val configurationCacheParallel: Boolean? = null,
     /** Host IDE (plan 027): "Android Studio"/"IntelliJ IDEA"/"Eclipse"/"VS Code"; null = command line. */
     val ide: String? = null,
     val ideVersion: String? = null,
@@ -733,6 +741,36 @@ data class DerivedMetrics(
     val criticalPathMs: Long? = null,
     val parallelUtilization: Double? = null,
     val configurationMs: Long? = null,
+    /**
+     * Best-effort byte size of this build's active configuration-cache entry directory (plan 064,
+     * research F14): the sum of the file sizes under the newest-modified
+     * `<rootDir>/.gradle/configuration-cache/<hash>` subdir, read at **finalizer** (execution) time so
+     * no config-phase file read becomes a CC fingerprint input. A byte count only — no path (spec §3.7).
+     * Null when configuration cache was not requested (nothing to measure), or on any unrecognized
+     * layout / guarded probe failure (honest-null, plan 005). Carried on both a `MISS_STORED` (the entry
+     * just written) and a `HIT` (the entry that was loaded).
+     */
+    val ccEntrySizeBytes: Long? = null,
+    /**
+     * Best-effort **core proxy** for configuration-cache entry-load cost (plan 064, research F14),
+     * populated **only** on a CC `HIT`: the interval from the first plugin-controlled instant of the
+     * build (the `TaskEventCollector` service's instantiation — the earliest hook that runs once the CC
+     * entry is deserialized, since configuration is skipped) to the earliest task start. A labelled
+     * proxy for entry-load + task-graph readiness, **not** a raw deserialize timer — F14 concedes there
+     * is no public API for the precise store/load split; the precise per-op timer is deferred to
+     * internal-adapters (plan 064 §Out). [configurationMs] stays `0` on a HIT as a *distinct* field.
+     * Null on every non-HIT build, when there is no anchor or no task, or when the interval is
+     * non-positive (honest-null, plan 005).
+     *
+     * **Known limitation (plan 064, empirically confirmed):** on the always-on core path this is
+     * currently **null even on a HIT** — Gradle instantiates the `onTaskCompletion` build service
+     * lazily at the first task-*finish*, which lands *after* the earliest task start, so the anchor →
+     * first-task-start interval degrades to honest-null rather than a nonsense negative. The field, its
+     * plumbing, and the server-side p50 are the null-capable slot the precise internal-adapters timer
+     * (deferred, §Out) will populate; a future Gradle that instantiates the listener eagerly would also
+     * light it up with no schema change.
+     */
+    val ccLoadMs: Long? = null,
 )
 
 /**

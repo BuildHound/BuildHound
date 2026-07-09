@@ -19,6 +19,10 @@ object DerivedMetricsCalculator {
      *   when the internal-adapters module is not applied.
      * @param dependencyEdges task path → its dependency task paths (plan 038): drives
      *   [criticalPathMs]; null when the graph is unavailable (module absent, or isolated projects).
+     * @param ccEntrySizeBytes configuration-cache entry byte size (plan 064): finalizer-measured,
+     *   passed straight through; null when CC was not requested or the probe degraded.
+     * @param ccLoadMs configuration-cache entry-load proxy (plan 064): finalizer-measured on a CC hit
+     *   only, passed straight through; null on every non-hit build and when unmeasurable.
      */
     fun compute(
         tasks: List<TaskExecution>,
@@ -26,6 +30,8 @@ object DerivedMetricsCalculator {
         configurationMs: Long? = null,
         avoidedMs: Long? = null,
         dependencyEdges: Map<String, List<String>>? = null,
+        ccEntrySizeBytes: Long? = null,
+        ccLoadMs: Long? = null,
     ): DerivedMetrics? {
         if (tasks.isEmpty()) return null
         return DerivedMetrics(
@@ -34,6 +40,8 @@ object DerivedMetricsCalculator {
             criticalPathMs = criticalPathMs(tasks, dependencyEdges),
             parallelUtilization = parallelUtilization(tasks, cores),
             configurationMs = configurationMs,
+            ccEntrySizeBytes = ccEntrySizeBytes,
+            ccLoadMs = ccLoadMs,
         )
     }
 

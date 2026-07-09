@@ -1,0 +1,13 @@
+-- Configuration-cache state extract (plan 064, research F14): a nullable text column mirroring
+-- `payload.environment.configurationCache` (HIT | MISS_STORED | DISABLED | INCOMPATIBLE), populated at
+-- ingest so the `/trends` per-day CC counters (cc_miss_stored / cc_hit / cc_requested) can be a columnar
+-- `count(*) FILTER (WHERE cc_state = …)` instead of a jsonb scan. Additive, nullable, no backfill: every
+-- row ingested before this migration reads NULL, and the trends query treats a day with zero non-null
+-- cc_state as "no CC data" (honest null, not a synthetic 0). The `/rollups/cc-economics` rollup does NOT
+-- read this column — it decodes the whole payload jsonb for the fingerprint/identity fields the flip-flop
+-- detector needs — so this column exists solely for the indexed per-day trends aggregation.
+--
+-- Migration number: V13 (V13__build_changed_modules.sql, plan 063) was the last claimed; this is the
+-- next free integer. The plan-064 text's `V7` placeholder was stale at merge (the 051-073 batch had
+-- since claimed V7..V13) — resolved to V14 here, the 061/063 unpinned-`V{n}` renumber precedent.
+ALTER TABLE builds ADD COLUMN cc_state text;

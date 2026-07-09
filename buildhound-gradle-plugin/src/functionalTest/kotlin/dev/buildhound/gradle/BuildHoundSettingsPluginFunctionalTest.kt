@@ -144,6 +144,44 @@ class BuildHoundSettingsPluginFunctionalTest {
     }
 
     @Test
+    fun `cc economics fields ride and replay across a store then hit pair`() {
+        setUpProject()
+
+        val firstRun = runnerExplicit("hello", "--configuration-cache").build()
+        assertTrue(summaryLine(firstRun.output).contains("cc=MISS_STORED"), summaryLine(firstRun.output))
+        val stored = readPayload().derived
+        assertNotNull(stored?.ccEntrySizeBytes, "a MISS_STORED build measures the freshly-written CC entry size")
+        assertTrue(stored.ccEntrySizeBytes!! > 0, "a real CC entry is non-empty: ${stored.ccEntrySizeBytes}")
+        assertNull(stored.ccLoadMs, "ccLoadMs is HIT-only — configuration ran this build, so there is no load to time")
+
+        val secondRun = runnerExplicit("hello", "--configuration-cache").build()
+        assertTrue(summaryLine(secondRun.output).contains("cc=HIT"), summaryLine(secondRun.output))
+        val hit = readPayload().derived
+        assertEquals(0, hit?.configurationMs, "configurationMs stays 0 on a HIT — a field distinct from ccLoadMs")
+        assertNotNull(hit?.ccEntrySizeBytes, "the loaded entry is measured on a HIT too")
+        // ccLoadMs is a labelled best-effort proxy (plan 064 §Out — "the field is null-capable for the
+        // later timer"): populated only when the service-instantiation anchor precedes the first task
+        // start, else a clean null (never a negative nonsense value). Empirically it is **null** on the
+        // core path today — Gradle instantiates the onTaskCompletion build service lazily at the first
+        // task-*finish*, after the earliest task start, so the interval degrades to honest-null (the
+        // precise per-op timer is deferred to internal-adapters). Assert the slot survives CC replay in
+        // whichever honest state it lands, so a future Gradle that instantiates eagerly won't break this.
+        assertTrue(hit.ccLoadMs == null || hit.ccLoadMs!! >= 0, "ccLoadMs is null or a non-negative proxy: ${hit.ccLoadMs}")
+    }
+
+    @Test
+    fun `the configuration-cache parallel flag surfaces from a gradle property`() {
+        setUpProject()
+        // A provider read of the Gradle property — a tracked CC input (plan 064); value carries no path,
+        // so writing it into gradle.properties is Windows-safe (unlike an absolute path).
+        File(projectDir, "gradle.properties").writeText("org.gradle.configuration-cache.parallel=true\n")
+
+        runnerExplicit("hello", "--configuration-cache").build()
+
+        assertEquals(true, readPayload().environment?.configurationCacheParallel)
+    }
+
+    @Test
     fun `pseudonymized identity never leaks plaintext`() {
         setUpProject()
 

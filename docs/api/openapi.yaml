@@ -371,6 +371,28 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "503": { $ref: '#/components/responses/Unavailable' }
+  /v1/rollups/cc-economics:
+    get:
+      summary: Configuration-cache economics + reuse diagnostics rollup (plan 064, research F14).
+      description: >
+        An advisory CI-reuse classification (`EPHEMERAL_CI_EXPECTED_ZERO` / `REUSE_HEALTHY` /
+        `REUSE_DEGRADED` / `DISABLED` / `INSUFFICIENT_DATA`) — an annotation, never a "turn CC off" fix:
+        F14's own guidance is to enable CC on CI for parallelism + early breakage and not focus on reuse,
+        so a below-healthy reuse rate on a CI-dominant window reads as expected, not degraded. Plus p50
+        store cost (`derived.configurationMs` on `MISS_STORED`), p50 CC entry-load proxy
+        (`derived.ccLoadMs` on `HIT`), p50 CC entry size (`derived.ccEntrySizeBytes`), and flip-flop
+        findings — a `MISS_STORED` whose salted `fingerprints.build` matches a strictly-earlier
+        CC-requesting build within the same single-machine salt stream (the entry should have hit but was
+        re-stored). Per-day CC reuse counters ride on `/v1/trends` instead. Benchmark builds excluded,
+        like `/v1/rollups/bottlenecks`. A stored build row whose payload fails to decode is silently
+        skipped, so only a storage outage 503s.
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
+      responses:
+        "200": { description: The CC-economics rollup for the window. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
   /v1/settings:
     get:
       summary: Read this project's regression settings (plan 025).

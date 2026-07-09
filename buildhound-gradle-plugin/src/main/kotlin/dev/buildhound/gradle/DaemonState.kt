@@ -30,6 +30,7 @@ internal object DaemonState {
     private val configuredSinceLastExecution = AtomicBoolean(false)
     private val configStartNanos = AtomicLong(UNSET)
     private val configEndNanos = AtomicLong(UNSET)
+    private val executionStartedMs = AtomicLong(UNSET)
 
     fun configurationRan() {
         configuredSinceLastExecution.set(true)
@@ -43,15 +44,32 @@ internal object DaemonState {
         configEndNanos.set(System.nanoTime())
     }
 
+    /**
+     * Anchor for the CC entry-load proxy (plan 064): stamped from the [TaskEventCollector] service's
+     * own instantiation — the first plugin-controlled instant of execution, which on a CC **hit** is
+     * the moment right after the CC entry is deserialized (configuration is skipped, so no earlier hook
+     * runs). Recorded as `System.currentTimeMillis()` (not `nanoTime`) deliberately: the interval is
+     * measured against a task's `TaskFinishEvent` start time, which Gradle reports in epoch
+     * milliseconds — the two clocks must match to subtract, so the monotonic reading is unusable here
+     * (plan-064 divergence from its own `nanoTime` §Design note; same wall-clock tradeoff the plan-066
+     * `jvmStartMs` anchor accepts). The build service is fresh per build (like [TaskEventCollector.buildId]),
+     * so this is stamped once per build; [executionRan] reads and resets it.
+     */
+    fun executionStarted() {
+        executionStartedMs.set(System.currentTimeMillis())
+    }
+
     /** Called once per build from the finalizer; returns and resets the heuristic state. */
     fun executionRan(): Execution {
         val start = configStartNanos.getAndSet(UNSET)
         val end = configEndNanos.getAndSet(UNSET)
         val configurationMs = if (start != UNSET && end != UNSET && end >= start) (end - start) / 1_000_000 else null
+        val executionStarted = executionStartedMs.getAndSet(UNSET).takeUnless { it == UNSET }
         return Execution(
             daemonReused = executions.incrementAndGet() > 1,
             configuredThisBuild = configuredSinceLastExecution.getAndSet(false),
             configurationMs = configurationMs,
+            executionStartedMs = executionStarted,
         )
     }
 
@@ -59,5 +77,7 @@ internal object DaemonState {
         val daemonReused: Boolean,
         val configuredThisBuild: Boolean,
         val configurationMs: Long? = null,
+        /** Epoch-ms anchor for the CC entry-load proxy (plan 064); null when never stamped this build. */
+        val executionStartedMs: Long? = null,
     )
 }
