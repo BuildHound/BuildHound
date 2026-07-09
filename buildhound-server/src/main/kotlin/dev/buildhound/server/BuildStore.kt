@@ -176,6 +176,9 @@ internal const val MAX_CACHE_ROI_ROWS: Int = 20_000
 /** Defensive ceiling on builds scanned for one `/rollups/cc-economics` query (plan 064), mirroring [MAX_CACHE_ROI_ROWS]. */
 internal const val MAX_CC_ECONOMICS_ROWS: Int = 20_000
 
+/** Defensive ceiling on builds scanned for one `/rollups/recommendations` query (plan 054), mirroring [MAX_CACHE_ROI_ROWS]. */
+internal const val MAX_RECOMMENDATION_ROWS: Int = 20_000
+
 /**
  * Server-local minimal view of `extensions["internalAdapters"]` (plan 062) carrying only
  * [dependencyEdges] — the plan-039 decoupling principle applied to a second reader: the server decodes
@@ -534,6 +537,21 @@ interface BuildStore {
      * in any store constructor).
      */
     fun deliveryHealth(projectId: String, days: Int, nowMs: Long): DeliveryHealthRollup
+
+    /**
+     * The newest [cap] non-benchmark builds started in the last [days] as **whole** [BuildPayload]s
+     * (plan 054, research F4): the recommendations engine's data source. Unlike the rollup reads above,
+     * this returns full payloads and computes **nothing** — the route feeds the pure [RecommendationEngine]
+     * (the [RegressionEngine] discipline: store provides data, route runs the engine), so a per-build
+     * recommendation is the same engine over `listOf(findById(...))`. Benchmark builds are excluded (the
+     * fleet-view convention — a repeated same-scenario benchmark on a fixed runner would skew every
+     * fleet-share gate); most-recent-first with a `(startedAt, buildId)` tie-break identical to the SQL
+     * `ORDER BY … LIMIT`, so in-memory and Postgres return the identical bounded set (the plan-026/032/067
+     * parity discipline). Reads the whole `payload` jsonb — the engine needs `processes[]`,
+     * `configurationCache`, a per-build `jdk∧ksp` join, `excludedTaskNames`, and `extensions` that no
+     * normalized rollup column carries.
+     */
+    fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long): List<BuildPayload>
 
     /** Every project id with stored data (retention sweep, plan 042); default empty for a store that has none. */
     fun allProjectIds(): List<String> = emptyList()
@@ -1000,6 +1018,14 @@ class InMemoryBuildStore : BuildStore {
             .take(MAX_CC_ECONOMICS_ROWS)
         return CcEconomicsCalculator.compute(windowed.map { ccBuildRowOf(it) })
     }
+
+    override fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long): List<BuildPayload> =
+        // Same fleet-view window as bottlenecks/cacheRoi/ccEconomics (benchmark excluded via payloadsBetween),
+        // most-recent-first with the same (startedAt, buildId) tie-break + cap as the Postgres LIMIT so the
+        // two stores return the identical bounded set even above the cap (plan 054 parity discipline).
+        payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+            .sortedWith(compareByDescending<BuildPayload> { it.startedAt }.thenByDescending { it.buildId })
+            .take(cap)
 
     /** Flatten one payload into the plan-059 delivery row — the exact shape the Postgres SQL mirrors. */
     private fun deliveryRowOf(payload: BuildPayload): DeliveryBuildRow =

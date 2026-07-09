@@ -21,11 +21,12 @@ class PayloadCapperTest {
         projectEvaluations: List<ProjectEvaluation>? = null,
         testTelemetry: TestTelemetryInfo? = null,
         changedModules: ChangedModulesInfo? = null,
+        excludedTaskNames: List<String> = emptyList(),
     ) = BuildPayload(
         buildId = "b", startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
         tags = tags, values = values, tasks = tasks, caps = caps, benchmark = benchmark, artifacts = artifacts,
         extensions = extensions, projectEvaluations = projectEvaluations, testTelemetry = testTelemetry,
-        changedModules = changedModules,
+        changedModules = changedModules, excludedTaskNames = excludedTaskNames,
     )
 
     @Test
@@ -166,6 +167,26 @@ class PayloadCapperTest {
         assertEquals(listOf(":a", ":b", ":c"), kept)
         assertEquals(2, capped.caps?.droppedChangedModules)
         assertEquals("b", capped.buildId) // envelope survives
+    }
+
+    @Test
+    fun over_cap_excluded_task_names_are_dropped_alphabetically_and_counted() {
+        // 5 excluded task names, cap 3 → keep the first 3 alphabetically, drop 2, recorded in the caps
+        // summary (a hostile/foreign ingest can POST an unbounded list — plan 054).
+        val excluded = listOf(":e:test", ":a:test", ":d:test", ":b:test", ":c:test")
+        val capped = PayloadCapper.cap(
+            payload(excludedTaskNames = excluded),
+            PayloadCaps(maxExcludedTaskNames = 3),
+        )
+        assertEquals(listOf(":a:test", ":b:test", ":c:test"), capped.excludedTaskNames)
+        assertEquals(2, capped.caps?.droppedExcludedTaskNames)
+        assertEquals("b", capped.buildId) // envelope survives
+    }
+
+    @Test
+    fun excluded_task_names_under_the_cap_leave_the_payload_compliant() {
+        val input = payload(excludedTaskNames = listOf(":app:test", ":app:lint"))
+        assertSame(input, PayloadCapper.cap(input))
     }
 
     @Test

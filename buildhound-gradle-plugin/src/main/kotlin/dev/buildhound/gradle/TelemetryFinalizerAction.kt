@@ -202,6 +202,10 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         @get:Input
         val requestedTasks: ListProperty<String>
 
+        /** `-x`/`--exclude-task` names, sorted (plan 054); part of the CC key like [requestedTasks]. */
+        @get:Input
+        val excludedTaskNames: ListProperty<String>
+
         @get:Input
         val outputDir: Property<String>
 
@@ -450,6 +454,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 buildFailed = parameters.buildFailed.get(),
                 failure = parameters.failure.orNull,
                 requestedTasks = parameters.requestedTasks.getOrElse(emptyList()),
+                excludedTaskNames = parameters.excludedTaskNames.getOrElse(emptyList()),
                 tasks = tasks,
                 environment = parameters.environment.orNull,
                 invocation = parameters.invocation.orNull,

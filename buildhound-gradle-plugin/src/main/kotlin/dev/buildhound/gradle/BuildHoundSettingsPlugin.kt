@@ -523,6 +523,9 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             // Lazy: the settings script sets rootProject.name after apply() runs.
             spec.parameters.projectKey.set(settings.providers.provider { settings.rootProject.name })
             spec.parameters.requestedTasks.set(settings.startParameter.taskNames.toList())
+            // Excluded task names (plan 054): the public CC-safe StartParameter.excludedTaskNames (a Set),
+            // sorted for determinism — part of the CC key like requestedTasks, replayed verbatim on a hit.
+            spec.parameters.excludedTaskNames.set(settings.startParameter.excludedTaskNames.sorted())
             spec.parameters.outputDir.set(File(settings.rootDir, "build/buildhound").absolutePath)
             spec.parameters.htmlReportEnabled.set(extension.htmlReport.enabled)
             // KGP build-report bundling (plan 023): read-only capture of KGP's own report

@@ -13,6 +13,7 @@ import dev.buildhound.commons.payload.DerivedMetrics
 import dev.buildhound.commons.payload.EnvironmentInfo
 import dev.buildhound.commons.payload.FingerprintInfo
 import dev.buildhound.commons.payload.InvocationInfo
+import dev.buildhound.commons.payload.ProcessInfo
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
 import dev.buildhound.commons.payload.TestCaseDetail
@@ -76,6 +77,10 @@ object TestPayloads {
         extensions: Map<String, JsonElement> = emptyMap(),
         /** Change blast-radius attribution (plan 063 fixtures); null means "no resolvable diff base". */
         changedModules: ChangedModulesInfo? = null,
+        /** Excluded task names (plan 054 fixtures); the `-x test` CI smell for the wasted-work rule. */
+        excludedTaskNames: List<String> = emptyList(),
+        /** End-of-build JVM process snapshot (plan 029/065 fixtures); the GC-pressure recommendation input. */
+        processes: List<ProcessInfo> = emptyList(),
     ): BuildPayload = BuildPayload(
         buildId = buildId,
         projectKey = projectKey,
@@ -84,6 +89,7 @@ object TestPayloads {
         outcome = outcome,
         mode = mode,
         requestedTasks = requestedTasks,
+        excludedTaskNames = excludedTaskNames,
         vcs = if (branch != null || sha != null) VcsInfo(branch = branch, sha = sha) else null,
         ci = provider?.let { CiInfo(provider = it, runId = runId, pipelineName = pipelineName, buildUrl = buildUrl, attributes = ciAttributes) },
         derived = if (hitRate != null || avoidedMs != null || configurationMs != null || ccLoadMs != null || ccEntrySizeBytes != null) {
@@ -118,6 +124,7 @@ object TestPayloads {
         fingerprints = fingerprints,
         extensions = extensions,
         changedModules = changedModules,
+        processes = processes,
     )
 
     /** A test-task result for flaky fixtures (plan 036): one class + optional fail-then-pass retries. */

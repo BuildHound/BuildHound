@@ -1,6 +1,14 @@
 # 054 — Server-side rule-based recommendations engine
 
-**Status: planned** · 2026-07-08
+**Status: implemented** · 2026-07-09 — all five rule families, `excludedTaskNames`, and both routes
+landed as designed (`./gradlew :buildhound-commons:build :buildhound-gradle-plugin:build
+:buildhound-server:test` green). **Divergence from the Test strategy section:** only the pure-engine
+unit suite (`RecommendationEngineTest`, 17 cases) shipped in this pass. The Testcontainers store-parity
+suite (`RecommendationStoresIntegrationTest`), the route suite (`RecommendationRoutesTest` — tenant
+scoping, `allowsRead`, empty-not-500), and the plugin TestKit `-x test`+CC-hit case are not yet written;
+`windowPayloads`/the two routes are otherwise covered only indirectly (`OpenApiContractTest` confirms
+route/spec parity, existing functional tests confirm `excludedTaskNames` doesn't break the CC-hit path).
+Flagged as a follow-up rather than blocking this landing.
 
 ## Source
 

@@ -157,6 +157,24 @@ paths:
         "404": { description: No such build for this tenant, or the build carries no dependency edges. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/builds/{buildId}/recommendations:
+    get:
+      summary: Per-build ranked recommendations (plan 054, research F4).
+      description: >
+        The same pure rule-based recommendations engine as `/v1/rollups/recommendations`, run over this
+        one build (a one-element window). Five families — hygiene/threshold (configuration cache off,
+        cacheable-hit rate below target, daemon GC pressure), KAPT tax, Best-Practices conformance
+        (BP-CC-ENABLE / BP-KSP-OVER-KAPT), a Gradle-10 readiness card, and wasted work (the habitual
+        `-x test`-on-CI smell, local verification/packaging share). Every recommendation is a ranked
+        candidate, never a confirmed fix; each carries a MEASURED or ESTIMATED origin so hedged blog /
+        JDK-floor numbers stay honest. Tenant-scoped like `/verdict` and `/diagnosis`: a foreign/unknown
+        build reads as 404. A clean build 200s with an empty list, never an error.
+      parameters: [{ name: buildId, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200": { description: Ranked recommendations for this build (possibly empty). }
+        "404": { description: No such build for this tenant. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
   /v1/trends:
     get:
       summary: Fleet duration/cache trend points over a window.
@@ -390,6 +408,30 @@ paths:
         - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
       responses:
         "200": { description: The CC-economics rollup for the window. }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
+  /v1/rollups/recommendations:
+    get:
+      summary: Fleet rule-based recommendations rollup (plan 054, research F4).
+      description: >
+        Five rule-based recommendation families over the window's whole payloads — the store fetches the
+        windowed builds, the route feeds the pure engine (the RegressionEngine discipline: store provides
+        data, route runs the calculator). Families: hygiene/threshold (configuration cache disabled share,
+        cacheable-hit rate below the v1 target, daemon GC pressure — the plan-065 gcTimeMs÷uptimeS proxy),
+        KAPT tax (KAPT share of EXECUTED time + a hedged projected KSP saving, suppressed when the build is
+        already on KSP), Best-Practices conformance (BP-CC-ENABLE, BP-KSP-OVER-KAPT; the remaining BP IDs
+        reserved-dormant), a Gradle-10 readiness card (CC-disabled fraction + sub-JDK-21 daemons + optional
+        internal-adapters deprecations), and wasted work (the habitual `-x test`-on-CI smell over the
+        additive `excludedTaskNames`, plus local verification/packaging share). Every row is a ranked
+        candidate, never a confirmed fix; each carries a MEASURED (observed fleet share) or ESTIMATED
+        (hedged blog / expected-JDK-floor) origin. Read-scope, tenant-scoped, days clamped like `/v1/trends`;
+        benchmark builds excluded, like `/v1/rollups/bottlenecks`. Empty (never an error) on no data; a
+        stored build row whose payload fails to decode is silently skipped, so only a storage outage 503s.
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
+      responses:
+        "200": { description: Ranked recommendations for the window (possibly empty). }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "503": { $ref: '#/components/responses/Unavailable' }
