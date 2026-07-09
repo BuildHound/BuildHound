@@ -57,6 +57,10 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 }
                 // Per-class test outcomes for flaky detection (plan 036); projected in the same txn.
                 if (inserted && payload.tests.isNotEmpty()) insertTestClassOutcomes(connection, projectId, payload)
+                // Changed-module rows for the blast-radius rollup (plan 063); same new-build gate.
+                if (inserted && payload.changedModules?.modules?.isNotEmpty() == true) {
+                    insertChangedModuleRows(connection, projectId, payload)
+                }
                 connection.commit()
                 inserted
             } catch (e: Throwable) {
@@ -83,6 +87,10 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         // large purge never holds a long lock (autoCommit is on by default).
         dataSource.connection.use { connection ->
             val rawRows = batchedDeleteByStartedAt(connection, "task_executions", id, rawCutoffMs)
+            // Changed-module rows are raw per-build detail on the same raw window as task_executions
+            // (plan 063); purged here so the table can't grow unbounded. Not folded into `rawRows`,
+            // which is the task-row count the plan-042 retention contract reports.
+            batchedDeleteByStartedAt(connection, "build_changed_modules", id, rawCutoffMs)
             val builds = batchedDeleteByStartedAt(connection, "builds", id, buildCutoffMs)
             return RetentionPurge(builds = builds, rawRows = rawRows)
         }
@@ -91,7 +99,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
     /** Deletes `table` rows for [id] with `started_at` before the cutoff, [PURGE_BATCH] at a time. */
     private fun batchedDeleteByStartedAt(connection: java.sql.Connection, table: String, id: UUID, cutoffMs: Long): Long {
         val cutoff = OffsetDateTime.ofInstant(Instant.ofEpochMilli(cutoffMs), ZoneOffset.UTC)
-        // `table` is a compile-time literal ("builds"/"task_executions"), never user input — no injection.
+        // `table` is a compile-time literal ("builds"/"task_executions"/"build_changed_modules"), never
+        // user input — no injection.
         val sql = "DELETE FROM $table WHERE ctid IN " +
             "(SELECT ctid FROM $table WHERE project_id = ? AND started_at < ? LIMIT $PURGE_BATCH)"
         var total = 0L
@@ -221,6 +230,27 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.setInt(7, row.passed)
                 statement.setInt(8, row.failed)
                 statement.setInt(9, row.retryFlakyCases)
+                statement.addBatch()
+            }
+            statement.executeBatch()
+        }
+    }
+
+    /** Batch-insert the changed-module rows (plan 063), one per distinct module, denormalizing started_at. */
+    private fun insertChangedModuleRows(connection: java.sql.Connection, projectId: String, payload: BuildPayload) {
+        val modules = payload.changedModules?.modules ?: return
+        connection.prepareStatement(
+            """
+            INSERT INTO build_changed_modules (project_id, build_id, started_at, module)
+            VALUES (?, ?, ?, ?)
+            """.trimIndent(),
+        ).use { statement ->
+            val startedAt = OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC)
+            for (module in modules) {
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, payload.buildId)
+                statement.setObject(3, startedAt)
+                statement.setString(4, module)
                 statement.addBatch()
             }
             statement.executeBatch()
@@ -579,6 +609,62 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
     override fun pluginCost(projectId: String, days: Int, nowMs: Long): PluginCostRollup =
         dataSource.connection.use { connection ->
             RollupCalculator.pluginCost(taskRowsInDaysWindow(connection, projectId, days, nowMs))
+        }
+
+    /**
+     * Costliest-modules-to-change rollup (plan 063, research F13): reuses [taskRowsInDaysWindow] (the
+     * same days-window, benchmark-included population projectCost/pluginCost read) for the per-module
+     * executed durations, joins it to the windowed `build_changed_modules` set, and defers to
+     * [RollupCalculator.changeBlastRadius] the way [pluginCost] does — the median/downstream fold has no
+     * clean SQL equivalent (percentile + a NULL-safe `module != M`), so it folds in Kotlin on both sides
+     * (parity by construction, plan-026 discipline). One build_changed_modules row per (build, module).
+     */
+    override fun changeBlastRadius(projectId: String, days: Int, nowMs: Long): List<ChangeBlastRadiusRow> =
+        dataSource.connection.use { connection ->
+            val changedByBuild = changedModulesInDaysWindow(connection, projectId, days, nowMs)
+            if (changedByBuild.isEmpty()) return@use emptyList()
+            // Executed task durations per (build, module) over the same window — only the builds that
+            // carried a changedModules block need their executed totals, but the shared windowed fetch is
+            // cheap and keeps the parity population identical to projectCost/pluginCost.
+            val executedByBuild = LinkedHashMap<String, MutableMap<String, Long>>()
+            for (row in taskRowsInDaysWindow(connection, projectId, days, nowMs)) {
+                if (row.outcome != "EXECUTED") continue
+                val perModule = executedByBuild.getOrPut(row.buildId) { LinkedHashMap() }
+                val key = row.module ?: ChangeBlastBuild.NULL_MODULE_KEY
+                perModule[key] = (perModule[key] ?: 0L) + row.durationMs
+            }
+            val builds = changedByBuild.map { (buildId, modules) ->
+                ChangeBlastBuild(
+                    buildId = buildId,
+                    changedModules = modules,
+                    executedMsByModule = executedByBuild[buildId] ?: emptyMap(),
+                )
+            }
+            RollupCalculator.changeBlastRadius(builds)
+        }
+
+    /** buildId → its distinct changed Gradle module paths over the days-window (plan 063). */
+    private fun changedModulesInDaysWindow(
+        connection: java.sql.Connection,
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+    ): Map<String, List<String>> =
+        connection.prepareStatement(
+            """
+            SELECT build_id, module FROM build_changed_modules
+            WHERE project_id = ? AND started_at >= ?
+            """.trimIndent(),
+        ).use { statement ->
+            statement.setObject(1, UUID.fromString(projectId))
+            statement.setObject(2, cutoff(days, nowMs))
+            statement.executeQuery().use { rows ->
+                val byBuild = LinkedHashMap<String, MutableList<String>>()
+                while (rows.next()) {
+                    byBuild.getOrPut(rows.getString("build_id")) { mutableListOf() }.add(rows.getString("module"))
+                }
+                byBuild
+            }
         }
 
     /**

@@ -2,6 +2,8 @@ package dev.buildhound.server
 
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.ChangeDiffBase
+import dev.buildhound.commons.payload.ChangedModulesInfo
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
 import javax.sql.DataSource
@@ -52,6 +54,9 @@ class RollupStoresIntegrationTest {
                 TestPayloads.task(":app:test", TaskOutcome.EXECUTED, 3000, type = "Test"),
                 TestPayloads.task(":lib:compileKotlin", TaskOutcome.EXECUTED, 1000, type = "KotlinCompile"),
             ),
+            // Change blast-radius fixtures (plan 063): :app changes downstream :lib work; a multi-module
+            // change (f-2) attributes the whole build's other-module time to each changed module.
+            changedModules = ChangedModulesInfo(base = ChangeDiffBase.LAST_BUILT_SHA, modules = listOf(":app")),
         ),
         TestPayloads.build(
             buildId = "f-2", durationMs = 9_000, startedAt = recent + 1000, userId = "u_2",
@@ -59,10 +64,12 @@ class RollupStoresIntegrationTest {
                 TestPayloads.task(":app:compileKotlin", TaskOutcome.FROM_CACHE, 9000, type = "KotlinCompile"),
                 TestPayloads.task(":lib:test", TaskOutcome.UP_TO_DATE, 200, type = "Test"),
             ),
+            changedModules = ChangedModulesInfo(base = ChangeDiffBase.LAST_BUILT_SHA, modules = listOf(":app", ":lib")),
         ),
         TestPayloads.build(
             buildId = "f-3", durationMs = 12_000, startedAt = recent + 2000, userId = "u_1",
             tasks = listOf(TestPayloads.task(":app:compileKotlin", TaskOutcome.EXECUTED, 7000, type = "KotlinCompile")),
+            changedModules = ChangedModulesInfo(base = ChangeDiffBase.CI_PR_BASE, modules = listOf(":lib")),
         ),
         // Edge cases the tiebreakers/medians exist for: a null module, a null user, and an EVEN
         // executed count so the negative-avoidance median interpolates (1000,2000 → 1500.0).
@@ -108,6 +115,51 @@ class RollupStoresIntegrationTest {
         assertEquals(inMemory.taskDuration(project.id, 30, now), postgresStore.taskDuration(project.id, 30, now), "taskDuration")
         assertEquals(inMemory.negativeAvoidance(project.id, 30, now), postgresStore.negativeAvoidance(project.id, 30, now), "negativeAvoidance")
         assertEquals(inMemory.pluginCost(project.id, 30, now), postgresStore.pluginCost(project.id, 30, now), "pluginCost")
+        assertEquals(
+            inMemory.changeBlastRadius(project.id, 30, now),
+            postgresStore.changeBlastRadius(project.id, 30, now),
+            "changeBlastRadius",
+        )
+    }
+
+    private fun changedModuleRowCount(projectId: String, buildId: String): Int =
+        dataSource.connection.use { c ->
+            c.prepareStatement("SELECT count(*) FROM build_changed_modules WHERE project_id = ?::uuid AND build_id = ?").use { s ->
+                s.setString(1, projectId)
+                s.setString(2, buildId)
+                s.executeQuery().use { r -> r.next(); r.getInt(1) }
+            }
+        }
+
+    @Test
+    fun `save writes one changed-module row per module and none on a duplicate`() {
+        val project = tokens.ensureProjectWithToken("changed-modules-project", sha256Hex("cmp"))
+        val build = fixtures()[1] // f-2: two changed modules (:app, :lib)
+        assertEquals(true, postgresStore.save(project.id, build))
+        assertEquals(2, changedModuleRowCount(project.id, build.buildId), "one row per changed module")
+        assertEquals(false, postgresStore.save(project.id, build), "duplicate build")
+        assertEquals(2, changedModuleRowCount(project.id, build.buildId), "a duplicate build adds no changed-module rows")
+    }
+
+    @Test
+    fun `change blast-radius ranks a module by the downstream work its changes cause, with store parity`() {
+        val project = tokens.ensureProjectWithToken("blast-project", sha256Hex("bp"))
+        val inMemory = InMemoryBuildStore()
+        for (build in fixtures()) {
+            postgresStore.save(project.id, build)
+            inMemory.save(project.id, build)
+        }
+        val rows = postgresStore.changeBlastRadius(project.id, 30, now)
+        // Only EXECUTED task time counts as downstream (module != the changed one):
+        //   :app changed in f-1 (downstream = :lib's 1000 executed) and f-2 (nothing EXECUTED → 0);
+        //     samples {1000, 0} → median 500, changeCount 2, blastScore 1000.
+        //   :lib changed in f-2 (nothing EXECUTED → 0) and f-3 (:app's 7000 executed → 7000);
+        //     samples {0, 7000} → median 3500, changeCount 2, blastScore 7000.
+        // So :lib (7000) ranks above :app (1000).
+        assertTrue(rows.any { it.module == ":app" }, "expected :app in the rollup: $rows")
+        assertTrue(rows.any { it.module == ":lib" }, "expected :lib in the rollup: $rows")
+        assertEquals(":lib", rows.first().module, "the higher blast score ranks first: $rows")
+        assertEquals(rows, inMemory.changeBlastRadius(project.id, 30, now), "in-memory and Postgres agree byte-for-byte")
     }
 
     @Test

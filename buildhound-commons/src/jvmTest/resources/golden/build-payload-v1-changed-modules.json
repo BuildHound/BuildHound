@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "buildId": "e7f8a9b0-c1d2-4e3f-9a0b-1c2d3e4f5a6b",
+  "projectKey": "pilot-monorepo",
+  "startedAt": 1751600000000,
+  "finishedAt": 1751600018000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["build"],
+  "mode": "ci",
+  "vcs": { "branch": "feature/checkout", "sha": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0" },
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileDebugKotlin",
+      "module": ":app",
+      "startMs": 1751600004500,
+      "durationMs": 2500,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    },
+    {
+      "path": ":core:common:compileKotlin",
+      "module": ":core:common",
+      "startMs": 1751600002000,
+      "durationMs": 1200,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "changedModules": {
+    "base": "CI_PR_BASE",
+    "modules": [":app", ":core:common"],
+    "unattributedChanges": false
+  }
+}

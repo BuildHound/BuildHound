@@ -226,6 +226,13 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
   "benchmark": { "scenario": "clean", "iteration": 3, "isolationMode": "no_build_cache", "seedRef": "..." },
   "artifacts": { "android": [ { "variant": "release", "module": ":app", "type": "APK", "sizeBytes": 0 } ],
                 "jvm": [ { "module": ":service", "kind": "BOOT_JAR", "sizeBytes": 0 } ] },
+  "changedModules": { "base": "CI_PR_BASE|LAST_BUILT_SHA",
+                      "modules": [":app", ":core:common"], "unattributedChanges": false },
+    // ^ change blast-radius attribution (plan 063, F13): the set of Gradle MODULE PATHS that changed
+    //   since a resolvable diff base — never a file path or a changed-file list (§3.7); ":" for a
+    //   whole-build root change. Null/omitted when no base resolved (no CI target branch + no recorded
+    //   previous-build HEAD, git absent/timeout/detached HEAD). unattributedChanges flags a change that
+    //   mapped to no module (empty/partial descriptor index); the raw path is never emitted.
   "extensions": { "<addonId>": { "schemaVersion": 1, "…": "opaque addon-owned JSON" } }
 }
 ```
@@ -255,6 +262,17 @@ are **excluded from fleet trends/lists by default** at the query layer (opt in w
 or `includeBenchmark=true`) so a benchmark series never pollutes p50/p95; they have a dedicated
 per-`(scenario, isolationMode)` percentile series at `GET /v1/benchmark/series` + the `#/benchmark`
 dashboard view.
+
+The `changedModules` block (plan 063, research F13) records the set of Gradle **module paths** that
+changed since a resolvable diff base — a CI PR base ref (`CI_PR_BASE`, the PR's own changes vs its
+target branch's merge-base) or the recorded previous-build HEAD (`LAST_BUILT_SHA`, cumulative since the
+last local build). The plugin runs one bounded `git diff --name-only --relative` on the always-on VCS
+exec path (plans 004/015/050) and maps the changed files to modules **plugin-side** (the server has no
+`projectDir`→path index), emitting **only** the derived module set — file paths never ship (§3.7); `":"`
+denotes a whole-build-affecting root change (a root build file / version catalog), and
+`unattributedChanges` flags a change that mapped to no module (empty/partial descriptor index) without
+ever emitting the raw path. Null/omitted when no base resolved. Server-side it drives the
+costliest-modules-to-change rollup at `GET /v1/rollups/change-blast-radius`.
 
 ## 5. Ingestion service
 
@@ -290,6 +308,8 @@ interface CiConnector {
 *As built (plan 026):* the `tasks` hypertable is landed as the plain `task_executions` table (project_id, build_id, denormalized started_at + user_id, path, module, name, type, outcome, cacheable, duration_ms), written on ingest in the build's transaction (a duplicate build adds no task rows); TimescaleDB conversion + continuous aggregates stay deferred (on-read group-by until volume demands). Three read-scope, tenant-scoped rollups compute on read over it: `GET /v1/rollups/project-cost` (per-module eBay Project Cost family — builds, executedBuilds, `buildImpactedUsers` = `count(distinct)` over the hashed userId, serialTaskMs, buildAvgDurationMs, buildPercentage, `buildCostScalar` with eBay's int-truncated percentage), `GET /v1/rollups/task-duration` (top-25 by name and by type, `byTypeAvailable` false until task types populate), `GET /v1/rollups/negative-avoidance` (top-25 tasks/types where an avoided run beat its group's executed median). `days` clamps to `[1,365]`.
 
 *As built (plan 032):* two more read-scope, tenant-scoped rollups power the landing page. `GET /v1/rollups/bottlenecks?period=7` (period clamped `[1,90]`) compares this window to the prior equal window: headline KPI deltas (`buildCount`, `successRate`, `avgDurationMs`, `hitRate` each as `{current, prior, deltaPct}`) plus four ranked families — **regressed** (EXECUTED-only average, this-vs-prior; groups seen `< 2×` per window are flagged `isNew`/`isVanished` rather than shown as ∞/−100 %), **slowest work** (total wall over every outcome), **negative avoidance** (reuses the plan-026 signal), and **cache-miss hotspots** (cacheable tasks that still executed — `cacheDataAvailable:false` until the plugin's `cacheable` flag populates, plan 016, so the view degrades honestly). Benchmark builds are excluded (fleet view). `budgetBreaches`/`trendRegressions` are `null` until a verdict store is wired. `GET /v1/rollups/toolchain?days=30` returns, per dimension (gradle, jdk, agp, kgp, ksp), a version distribution (`builds`, `sharePct`, `distinctUsers` = `count(distinct)` over the hashed userId, `lastSeenMs`) + a "behind the latest observed" list; agp/kgp/ksp report `available:false` until the plugin collects them (never an empty chart read as consensus). Both stores fetch raw windowed rows and defer to a shared pure `BottleneckCalculator`/`ToolchainCalculator`, so in-memory and Postgres agree byte-for-byte (Testcontainers parity).
+
+*As built (plan 063, research F13):* `GET /v1/rollups/change-blast-radius?days=30` (read-scope, tenant-scoped, `days` clamped `[1,365]`, benchmark-**included** — projectCost's cost-inflicted-on-others sibling) ranks the costliest Gradle modules to change. The plugin's additive `changedModules` block is projected on ingest into a normalized `build_changed_modules(project_id, build_id, started_at, module)` table (migration `V13`, one row per changed module, written in the build's transaction only when the `builds` row was newly inserted — the plan-026 `task_executions` idempotency). Per changed module M: `changeCount` = distinct window builds where M changed; per build, its *downstream* cost is that build's executed task time in **every other** module (`sum(duration_ms WHERE outcome=EXECUTED AND module != M)`); the rollup ranks by `median(downstream) × changeCount` (top-25, deterministic module tiebreak). Both stores flatten the window (the changed-module set joined to `task_executions` executed durations) and defer to the shared pure `RollupCalculator.changeBlastRadius`, so in-memory and Postgres agree byte-for-byte (Testcontainers parity, the plan-058 fold-in-Kotlin posture — the median has no clean SQL equivalent). An honest heuristic: a build changing several modules attributes the whole build's downstream to each (shared/over-counted — a ranking signal, not causal isolation; true direct-dependents "depth" is deferred to F12/plan 038). The `#/tasks` page renders a "Costliest modules to change" card beside project cost, with an honest empty state when no window build carried the block.
 
 **Regression engine:** baseline key = (project, pipeline|scenario, requestedTasks-signature, branch class main|pr, mode). Rolling baseline = median + MAD over last N (default 20) matching builds on the default branch. Evaluations on ingest: PR-vs-baseline delta (duration, hit rate, APK size, non-incremental-Kotlin %), budget checks (absolute thresholds per key), trend alerts (7d degradation, Bitrise-style bottlenecks feed). Outputs: build annotations, alert dispatch (Slack/Teams incoming-webhook + generic webhook; email later), and a per-build verdict endpoint the CI template can poll to fail/warn a pipeline (`GET /v1/builds/{id}/verdict`).
 

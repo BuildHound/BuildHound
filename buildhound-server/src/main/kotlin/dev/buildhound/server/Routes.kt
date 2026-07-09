@@ -548,6 +548,17 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             call.respondQuery { store.pluginCost(project.id, days, System.currentTimeMillis()) }
         }
 
+        // Costliest modules to change (plan 063, research F13): ranks each changed Gradle module by the
+        // median downstream executed time it inflicts on *other* modules × how often it changed — the
+        // cost-inflicted-on-others sibling of /rollups/project-cost. Read-scope, tenant-scoped, days
+        // clamped like its projectCost/plugin-cost siblings (benchmark builds included). Empty when no
+        // windowed build carried a changedModules block.
+        get("/rollups/change-blast-radius") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val days = call.daysParam()
+            call.respondQuery { store.changeBlastRadius(project.id, days, System.currentTimeMillis()) }
+        }
+
         // Benchmark series (plan 030, spec §7): mode=BENCHMARK builds grouped by (scenario, isolation)
         // with percentiles. Read-scope, tenant-scoped; optional scenario/isolationMode/branch narrowing
         // plus workersMax slicing (plan 065 — a non-integer value is ignored, like an unknown string

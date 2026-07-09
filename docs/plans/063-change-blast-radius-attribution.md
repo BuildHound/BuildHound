@@ -152,3 +152,31 @@ card on `#/tasks` beside Project Cost, honest empty-state when no build carries 
   parity; `#/tasks` card renders with an honest empty state.
 - Spec §5 notes the new rollup; `docs/architecture.md` decision log records the settings-descriptor
   module-dir-index-holder pattern. `./gradlew build` green.
+
+## Implementation notes (as built)
+
+- **Migration number = `V13`.** `V12__execution_reasons.sql` (plan 061) was the last claimed migration
+  on this branch; `V13__build_changed_modules.sql` is the next free integer (the `V{n}` placeholder
+  above, the 061 precedent). Noted in the migration header too.
+- **Mapping semantics clarified (correct Gradle ownership, not a divergence).** Root (`""` → `":"`)
+  is the legitimate catch-all: Gradle's root project *owns* every path not under a subproject, so a
+  root-level file — a build file *or* any other non-subproject path — attributes to `":"` (whole-build
+  radius), never discarded and never fabricated onto a build-file allowlist. `unattributedChanges` is
+  therefore reframed as the **honest degraded flag**: it fires when a changed file matches **no** index
+  entry at all — i.e. the descriptor walk produced an empty/partial index (root absent) while `git diff`
+  still succeeded ("saw changes, couldn't attribute them"). Faithful to the plan's "path under no
+  module" intent and alive/testable, without a fragile root-build-file heuristic. The pure
+  `ChangedModuleMapper` uses **segment-safe** longest-prefix matching (`app` never captures `app-core`),
+  unit-pinned with adversarial + boundary cases.
+- **Window = benchmark-INCLUDED**, reusing the `taskRowsInDaysWindow` population projectCost/pluginCost
+  read (`started_at >= cutoff`, no `builds` join or mode exclusion) — this is projectCost's
+  cost-inflicted-on-others sibling (F13's own framing), not a fleet-view rollup. A benchmark rerun can
+  nudge change-frequency; accepted, the same posture projectCost lives with.
+- **Parity by fold-in-Kotlin** (the plan-058 `pluginCost` posture, not a projectCost-style SQL rollup):
+  both stores flatten the window to `ChangeBlastBuild`s and defer to a single pure
+  `RollupCalculator.changeBlastRadius`. The `median(downstream) × changeCount` fold has no clean SQL
+  equivalent and `module != M` under SQL NULL semantics is a trap, so folding in Kotlin on both sides
+  is what makes byte-for-byte parity automatic (Testcontainers-pinned).
+- **Hook = `settingsEvaluated`** for the module-dir-index holder, exactly as the plan specifies — safe
+  here because only `settings.rootProject`'s descriptor tree (path + `projectDir`) is read, never
+  `Gradle.includedBuilds` (the call that forced plan 069's walk to `projectsLoaded`).

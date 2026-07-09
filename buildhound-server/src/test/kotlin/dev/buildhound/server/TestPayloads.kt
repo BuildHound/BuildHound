@@ -6,6 +6,7 @@ import dev.buildhound.commons.payload.BuildCacheConfigInfo
 import dev.buildhound.commons.payload.BuildMode
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.ChangedModulesInfo
 import dev.buildhound.commons.payload.CiInfo
 import dev.buildhound.commons.payload.DerivedMetrics
 import dev.buildhound.commons.payload.EnvironmentInfo
@@ -64,6 +65,8 @@ object TestPayloads {
         buildCache: BuildCacheConfigInfo? = null,
         /** Opaque addon sections (plan 039/068 fixtures), e.g. `internalAdapters` (plan 038). */
         extensions: Map<String, JsonElement> = emptyMap(),
+        /** Change blast-radius attribution (plan 063 fixtures); null means "no resolvable diff base". */
+        changedModules: ChangedModulesInfo? = null,
     ): BuildPayload = BuildPayload(
         buildId = buildId,
         projectKey = projectKey,
@@ -94,6 +97,7 @@ object TestPayloads {
         tags = tags,
         fingerprints = fingerprints,
         extensions = extensions,
+        changedModules = changedModules,
     )
 
     /** A test-task result for flaky fixtures (plan 036): one class + optional fail-then-pass retries. */

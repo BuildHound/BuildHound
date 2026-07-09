@@ -73,6 +73,16 @@ data class BuildPayload(
      */
     val wrapper: WrapperInfo? = null,
     /**
+     * Change blast-radius attribution (plan 063, research F13): the set of Gradle **module paths**
+     * that changed since a resolvable diff base (a CI PR base ref, else the recorded previous-build
+     * HEAD). Null when no base was resolvable (no CI target branch and no `last-built-sha` file, git
+     * absent/timeout, detached HEAD) — the whole block degrades to absent, honest-null (plan 005).
+     * **File paths never ship** — only the derived module set (spec §3.7); the raw diff output dies
+     * inside the plugin's `ChangedModuleMapper`. Server-side this drives the costliest-modules-to-change
+     * rollup (`GET /v1/rollups/change-blast-radius`).
+     */
+    val changedModules: ChangedModulesInfo? = null,
+    /**
      * Addon-contributed payload sections (plan 039), keyed by addon id (e.g. `"testQuarantine"`).
      * The value is addon-owned JSON carrying its own `schemaVersion`, so core stays decoupled from
      * addon types and needs no schema bump when an addon evolves. Empty on a build with no addon
@@ -186,6 +196,37 @@ data class BuildStructureInfo(
      * (no `PayloadCapper` change — there is no free text here to bound).
      */
     val emptyIntermediateCandidates: List<String> = emptyList(),
+)
+
+/**
+ * Which base a change-blast diff (plan 063, research F13) was taken against — the honest provenance of
+ * the [ChangedModulesInfo.modules] set, so a consumer can tell a PR-scoped diff (`CI_PR_BASE`, changes
+ * vs the merge-base of the PR's target branch) from a cumulative local iterative diff (`LAST_BUILT_SHA`,
+ * changes since the previously recorded build HEAD). No sha itself rides in the payload — `vcs.sha`
+ * already ships the current HEAD, and a base ref/sha is not added (spec §3.7).
+ */
+@Serializable
+enum class ChangeDiffBase { CI_PR_BASE, LAST_BUILT_SHA }
+
+/**
+ * Change blast-radius attribution (plan 063, research F13). [modules] are project-internal Gradle
+ * **paths** (`":app"`, `":core:common"`, `":"` for a whole-build-affecting root change) — the same
+ * exposure class as [ArtifactSize.module]/`TaskExecution.module`, never a filesystem path or a raw
+ * changed-file list (spec §3.7). The mapping is deliberately module-level so the highest-radius change
+ * (a root build file, a version catalog) maps to `":"` rather than being discarded.
+ *
+ * [unattributedChanges] is the honest degraded flag (plan 005): true when at least one changed file
+ * could be attributed to **no** index entry — the descriptor walk produced an empty/partial module
+ * index while `git diff` still succeeded ("saw changes, couldn't attribute them"). The raw path is
+ * **never** emitted either way; the boolean is the only signal that leaves the plugin.
+ */
+@Serializable
+data class ChangedModulesInfo(
+    val base: ChangeDiffBase,
+    /** Distinct changed Gradle module paths, sorted; `":"` for a whole-build root change. Never a file path. */
+    val modules: List<String> = emptyList(),
+    /** ≥1 changed file mapped to no module (empty/partial descriptor index); the raw path is never emitted. */
+    val unattributedChanges: Boolean = false,
 )
 
 /**
@@ -450,6 +491,8 @@ data class CapsSummary(
     val droppedProjectEvaluations: Int = 0,
     /** `testTelemetry.xmlDisabledTasks` entries dropped past the per-payload cap (plan 053), kept first-N alphabetically. */
     val droppedXmlDisabledTasks: Int = 0,
+    /** `changedModules.modules` entries dropped past the per-payload cap (plan 063), kept first-N alphabetically. */
+    val droppedChangedModules: Int = 0,
     /**
      * `buildStructure.emptyIntermediateCandidates` entries dropped past the collecting
      * `BuildStructureValueSource`'s own MAX_EMPTY_INTERMEDIATE_CANDIDATES cap (plan 069 review):

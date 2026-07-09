@@ -1,5 +1,7 @@
 package dev.buildhound.server
 
+import dev.buildhound.commons.payload.ChangeDiffBase
+import dev.buildhound.commons.payload.ChangedModulesInfo
 import dev.buildhound.commons.payload.TaskOutcome
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -58,7 +60,7 @@ class RollupRoutesTest {
     @Test
     fun `each rollup route needs a read token`() = testApplication {
         val fx = fx(); appWith(fx)
-        for (path in listOf("/v1/rollups/project-cost", "/v1/rollups/task-duration", "/v1/rollups/negative-avoidance", "/v1/rollups/plugin-cost")) {
+        for (path in listOf("/v1/rollups/project-cost", "/v1/rollups/task-duration", "/v1/rollups/negative-avoidance", "/v1/rollups/plugin-cost", "/v1/rollups/change-blast-radius")) {
             assertEquals(HttpStatusCode.Unauthorized, client.get(path).status, path)
             assertEquals(HttpStatusCode.Forbidden, get(path, token = "ingest-token").status, "$path with ingest scope")
         }
@@ -165,6 +167,48 @@ class RollupRoutesTest {
     }
 
     @Test
+    fun `change blast-radius ranks a module by the downstream work its changes cause`() = testApplication {
+        val fx = fx(); appWith(fx)
+        // Two builds where :core changed; each ran :app work downstream (2000, 4000 → median 3000),
+        // so :core's blast score is 3000 × 2 = 6000. :app changed once with only its own executed time
+        // (no downstream) → blast score 0, ranked below :core.
+        fx.stores.builds.save(
+            fx.project.id,
+            TestPayloads.build(
+                buildId = "cb-1", startedAt = recent,
+                tasks = listOf(
+                    TestPayloads.task(":core:compileKotlin", TaskOutcome.EXECUTED, 100),
+                    TestPayloads.task(":app:test", TaskOutcome.EXECUTED, 2000),
+                ),
+                changedModules = ChangedModulesInfo(base = ChangeDiffBase.LAST_BUILT_SHA, modules = listOf(":core")),
+            ),
+        )
+        fx.stores.builds.save(
+            fx.project.id,
+            TestPayloads.build(
+                buildId = "cb-2", startedAt = recent + 1000,
+                tasks = listOf(
+                    TestPayloads.task(":core:compileKotlin", TaskOutcome.EXECUTED, 100),
+                    TestPayloads.task(":app:test", TaskOutcome.EXECUTED, 4000),
+                ),
+                changedModules = ChangedModulesInfo(base = ChangeDiffBase.LAST_BUILT_SHA, modules = listOf(":core")),
+            ),
+        )
+        val body = get("/v1/rollups/change-blast-radius").bodyAsText()
+        assertTrue(body.contains("\":core\""), body)
+        assertTrue(body.contains("\"changeCount\":2"), body)
+        assertTrue(body.contains("\"medianDownstreamMs\":3000"), body)
+        assertTrue(body.contains("\"blastScore\":6000"), body)
+    }
+
+    @Test
+    fun `change blast-radius is empty when no build carries a changedModules block`() = testApplication {
+        val fx = fx(); appWith(fx)
+        seedRollupFixture(fx) // seed builds without changedModules
+        assertEquals("[]", get("/v1/rollups/change-blast-radius").bodyAsText().trim())
+    }
+
+    @Test
     fun `rollups are tenant-scoped — another project's builds never appear`() = testApplication {
         val fx = fx(); appWith(fx)
         seedRollupFixture(fx)
@@ -184,5 +228,7 @@ class RollupRoutesTest {
         assertEquals(HttpStatusCode.OK, get("/v1/rollups/task-duration?days=99999").status)
         assertEquals(HttpStatusCode.OK, get("/v1/rollups/plugin-cost?days=0").status)
         assertEquals(HttpStatusCode.OK, get("/v1/rollups/plugin-cost?days=99999").status)
+        assertEquals(HttpStatusCode.OK, get("/v1/rollups/change-blast-radius?days=0").status)
+        assertEquals(HttpStatusCode.OK, get("/v1/rollups/change-blast-radius?days=99999").status)
     }
 }

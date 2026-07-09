@@ -105,6 +105,18 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             runCatching { buildCacheHolder.set(BuildCacheConfigReader.snapshot(s.buildCache)) }
                 .onFailure { logger.warn("[buildhound] build-cache config snapshot failed (build unaffected): {}", it.message) }
         }
+        // Sibling mailbox for the change blast-radius module-dir index (plan 063, research F13): the
+        // Gradle `path → projectDir-relative-to-root` map, filled at `settingsEvaluated` — the earliest
+        // hook where the descriptor tree is populated (post-`include()`) and reading it touches no
+        // `Gradle.includedBuilds` (the call that forced plan 069's walk off `settingsEvaluated`). Baked
+        // into the ChangedModulesValueSource params below (same channel as buildStructureHolder) and
+        // replayed on a CC hit — correct, since module structure is CC-keyed. Its own guard so a walk
+        // failure degrades the index to empty (→ honest `unattributedChanges`), never a failed build.
+        val moduleDirIndexHolder = AtomicReference<Map<String, String>>(emptyMap())
+        settings.gradle.settingsEvaluated { s ->
+            runCatching { moduleDirIndexHolder.set(ModuleDirIndexWalker.walk(s)) }
+                .onFailure { logger.warn("[buildhound] module-dir index walk failed (build unaffected): {}", it.message) }
+        }
         // Internal test seam (mirrors the other `buildhound.internal.*` failpoints): when any of
         // these is set, its value is reported verbatim instead of walking the project graph — lets
         // the TestKit suite exercise the whenReady→service→payload channel (and its CC replay)
@@ -293,6 +305,31 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.enabled.set(extension.enabled)
         }
 
+        // Change blast-radius attribution (plan 063, research F13): the module-dir index is baked from
+        // the `settingsEvaluated` walk above (CC-keyed module structure); every git call happens inside
+        // obtain() at execution time (the VcsValueSource CC rationale) so nothing here becomes a CC
+        // fingerprint input and the diff stays fresh across a CC hit. targetBranch is wired from the CI
+        // context's PR base ref (execution-time value source), the vcs.timeout/searchParents knobs are
+        // shared with VcsValueSource, and lastShaPath is the previous-build HEAD file the finalizer writes.
+        val changedModules = settings.providers.of(ChangedModulesValueSource::class.java) { spec ->
+            spec.parameters.enabled.set(extension.enabled)
+            spec.parameters.rootDir.set(settings.rootDir.absolutePath)
+            spec.parameters.timeoutMillis.set(
+                settings.providers.gradleProperty("buildhound.vcs.timeout.ms")
+                    .map { raw -> raw.toLongOrNull()?.takeIf { it > 0 } ?: GitExec.DEFAULT_TIMEOUT_MS },
+            )
+            spec.parameters.searchParents.set(
+                settings.providers.gradleProperty("buildhound.vcs.searchParents")
+                    .map { !it.trim().equals("false", ignoreCase = true) },
+            )
+            spec.parameters.lastShaPath.set(File(settings.rootDir, LAST_BUILT_SHA_PATH).absolutePath)
+            // CI PR base ref (plan 041): a merge-base diff scoped to the PR's own changes. An absent CI
+            // context, or a CI context with no target branch, both leave this unset (`.map` on an absent
+            // provider stays absent) → obtain() falls through to the last-built-sha base.
+            spec.parameters.targetBranch.set(ci.map { it.targetBranch })
+            spec.parameters.moduleDirIndex.set(settings.providers.provider { moduleDirIndexHolder.get() })
+        }
+
         // Benchmark activation (plan 030): reads BUILDHOUND_BENCHMARK_* at execution time (no CC input),
         // same discipline as CiValueSource. A present, valid scenario forces mode=benchmark.
         val benchmark = settings.providers.of(BenchmarkValueSource::class.java) { spec ->
@@ -457,6 +494,9 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.environment.set(environment)
             spec.parameters.invocation.set(invocation)
             spec.parameters.vcs.set(vcs)
+            // Change blast-radius attribution (plan 063): the ValueSource re-obtains on a CC hit like
+            // vcs (same replay caveat) — an absent (no base resolvable) value leaves the block off the payload.
+            spec.parameters.changedModules.set(changedModules)
             spec.parameters.ci.set(ci)
             spec.parameters.benchmark.set(benchmark)
             spec.parameters.processes.set(processes)
@@ -540,6 +580,9 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
 
     private companion object {
         const val SALT_PATH = ".gradle/buildhound/identity.salt"
+
+        /** Previous-build HEAD sha, the LAST_BUILT_SHA diff base (plan 063); under `.gradle` so it survives `clean`. */
+        const val LAST_BUILT_SHA_PATH = ".gradle/buildhound/last-built-sha"
         val logger = Logging.getLogger(BuildHoundSettingsPlugin::class.java)
 
         /**

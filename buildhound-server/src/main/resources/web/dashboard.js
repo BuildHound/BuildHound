@@ -1109,6 +1109,7 @@
     async function tasksRollupView() {
         const seq = ++renderSeq;
         const cost = await api("/v1/rollups/project-cost?days=30");
+        const blast = await api("/v1/rollups/change-blast-radius?days=30");
         const duration = await api("/v1/rollups/task-duration?days=30");
         const negative = await api("/v1/rollups/negative-avoidance?days=30");
         if (seq !== renderSeq) return;
@@ -1137,6 +1138,35 @@
                 row.append(el("td", ms(r.serialTaskMs), "num"));
                 row.append(el("td", ms(r.buildAvgDurationMs), "num"));
                 row.append(el("td", r.buildCostScalar, "num"));
+                table.append(row);
+            }
+            app.append(table);
+        }
+
+        // Costliest modules to change (plan 063): beside project cost, ranks a module by the cost it
+        // inflicts on OTHERS when changed (median downstream executed time × change frequency). Honest
+        // empty state when no build in the window carried a changedModules block (no resolvable diff
+        // base — CI without a fetched base ref, or a first local build with no last-built-sha yet).
+        app.append(el("h3", "Costliest modules to change"));
+        if (!blast.length) {
+            app.append(emptyState({
+                title: "No change blast-radius data yet",
+                lines: [
+                    "This ranks a module by the downstream work its changes cause in other modules.",
+                    "It needs builds carrying a changedModules block — a resolvable diff base (a CI PR base ref, or a recorded previous-build HEAD).",
+                ],
+            }));
+        } else {
+            const table = el("table");
+            const head = el("tr");
+            for (const columnName of ["Module", "Changes", "Median downstream", "Blast score"]) head.append(el("th", columnName));
+            table.append(head);
+            for (const r of blast) {
+                const row = el("tr");
+                row.append(el("td", r.module || "(root)"));
+                row.append(el("td", r.changeCount, "num"));
+                row.append(el("td", ms(r.medianDownstreamMs), "num"));
+                row.append(el("td", r.blastScore, "num"));
                 table.append(row);
             }
             app.append(table);
