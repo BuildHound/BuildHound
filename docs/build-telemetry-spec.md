@@ -60,6 +60,11 @@ Settings plugin: `plugins { id("dev.buildhound") version "x" }` in `settings.gra
 - **Finalizer**: `FlowAction` on `FlowProviders.buildWorkResult` — assembles the payload from the service, computes derived metrics (hit rate, avoidance estimate, critical path, parallel utilization), writes HTML artifact, invokes uploader. Never fails the build: all errors log at `warn` and write a failure marker file.
 - **Config-cache state** recorded as `HIT | MISS_STORED | DISABLED | INCOMPATIBLE` (from start parameters + heuristics; refined later). **CC economics (plan 064, F14):** additionally `environment.configurationCacheParallel` (the `org.gradle.configuration-cache.parallel` flag), `derived.ccEntrySizeBytes` (finalizer-time byte sum of the newest CC entry dir — a count, no path §3.7), and `derived.ccLoadMs` (a labelled entry-load proxy on a HIT; a distinct field from `configurationMs`, which stays 0 on a HIT). Server-side: extracted `cc_state` column (V14) → per-day `/trends` CC counters, and `GET /v1/rollups/cc-economics` (advisory CI-reuse class + store/load/entry-size p50s + flip-flop findings over salted `fingerprints.build` within one machine's salt stream).
 - **Invocation posture** (plan 051): `environment.invocation` ships genuinely-new plaintext `fileEncoding`/`locale` plus the fixed 5-key `gradle.properties` allowlist (`org.gradle.caching`, `org.gradle.parallel`, `org.gradle.vfs.watch`, `android.enableJetifier`, `android.nonTransitiveRClass`), each with its declaring layer — alongside, never replacing, the salted `FingerprintInfo` hashes (§3.7).
+- **Isolated-projects + worker posture** (plan 069/065, F19/F15): `environment.isolatedProjects` (`buildFeatures.isolatedProjects.active` at `whenReady`, computed since plan 021 but not shipped until now) and `environment.workersMax` (plaintext `startParameter.maxWorkerCount`, the same CC-safe scalar as the salted `gradle.maxWorkers` fingerprint and `InvocationInfo.maxWorkerCount` — this copy rides at the environment level as the `benchmarkSeries` slicing dimension).
+- **Project evaluation timing** (plan 052, F2): the settings plugin's `gradle.lifecycle.beforeProject`/`afterProject` hooks time each project's script evaluation + plugin application + `afterEvaluate`, ranked slowest-first into `projectEvaluations[]` — a "guilty module" top-N signal, **not** a decomposition of `derived.configurationMs` (settings/buildSrc/task-graph time falls outside the two hooks, and parallel/isolated-projects windows overlap wall-clock). Null on a configuration-cache **hit** (configuration did not run) and when nothing was captured.
+- **Test XML-disabled tracking** (plan 053, F3): `testTelemetry.xmlDisabledTasks` records the task paths of executed `Test` tasks whose `reports.junitXml.required` was `false` this build — flag-authoritative (the collector short-circuits before reading whatever XML happens to sit on disk), so a build following Gradle's own performance-guide advice to disable JUnit XML no longer silently reports zero test signal with no explanation.
+- **Build-structure inventory** (plan 069, F19): `buildStructure` combines a config-time walk of the declared `ProjectDescriptor` tree (`projectCount`/`maxDepth`/`includedBuildCount`) with execution-time filesystem probes (`buildSrcPresent`/`sourcesInRoot`/`emptyIntermediateCandidates` — Gradle paths of declared projects with children but no build file of their own, a ranked heuristic candidate list, not a verdict). Collection-only in v1; the modularization-ROI analysis that consumes it is a later plan.
+- **Wrapper & startup-phase telemetry** (plan 066, F16): a new `WrapperValueSource` reads `gradle/wrapper/gradle-wrapper.properties` and `gradle-wrapper.jar` at execution time into `wrapper` — distribution variant (`BIN|ALL|CUSTOM`, parsed from `distributionUrl` then the raw URL is discarded), `distributionSha256Sum` pinning posture, the wrapper jar's own SHA-256, and this build's Gradle-User-Home dist warmth (`COLD|WARM|UNKNOWN`, anchored on this daemon's own JVM start time — see the architecture decision log).
 
 ### 3.3 CI provider SPI (plugin side) — per your modularity requirement
 
@@ -151,6 +156,8 @@ Identity fields: `userId = "u_" + hex12(hmacSha256(projectSalt, "user:" + userna
 
 *Build warnings (plan 047, re-homed by plan 074):* two catchers in the bundled `buildhound-internal-adapters` module, each an explicit, independent `buildhound { internalAdapters { } }` toggle **off by default** — `collectDeprecations` (Gradle deprecation summaries via build-op progress) and `collectLogWarnings` (`WARN`-level log lines via `LoggingOutputInternal`). Both read internal Gradle APIs (barred from the always-on core path by architecture §2 rule 4), so they stay quarantined in the module and dormant until enabled; flipping a toggle is the consent (plan 074). Enabling either catcher logs a `warn` that it reads internal APIs with no compatibility guarantee, so a Gradle upgrade may silently stop capture (the build is never affected). Captured warnings are deduped, scrubbed (each message through the same scrubber), length- and count-capped, and ride `extensions.internalAdapters`. They cover the two named channels, **not** every compiler diagnostic — Gradle exposes no single "all warnings" stream.
 
+*Invocation posture residual (plan 051):* `environment.invocation.fileEncoding`/`.locale` are the one genuinely-new plaintext quasi-identifier this block adds — `parallel`/`maxWorkerCount`/`fileEncoding`/`locale` already exist as salted `FingerprintInfo` hashes, but these plaintext copies ride alongside so absolute-value rules can fire (e.g. "Cp1252 fleet → set UTF-8"). In a small org that can narrow further than the pseudonymized `userId` intends: "the one `nl-NL` developer", combined with a stable `userId` and working-hours build timestamps, can de-pseudonymize a build series even with `pseudonymize=true`. This is a documented residual, not a bug — the promised-but-unimplemented `pseudonymize=strict` mode (`IdentitySpec` in `BuildHoundExtension.kt:186`, "arrives with payload assembly, additively") should coarsen or suppress `locale`/`fileEncoding` alongside every other identity signal when it lands.
+
 Governance for the plan-027 source fields: `vcs.remoteUrl` is redacted for **every** scheme (userInfo stripped) and **fails closed** — when the value can't be confidently parsed (whitespace, or an ambiguous userInfo such as a raw `/` inside the password) it is dropped rather than emitted, so a credential never ships; the top-level `links` are host-gated (github/gitlab only) and always `https://`; `environment.aiAgent` is positive-only attribution (only a confirmed agent is named — a miss is silent). The `extensions` channel (plan 039) is opaque addon-owned JSON that core does **not** deep-scrub — each addon owns its own §3.7 bar; core only size-caps it (`caps.droppedExtensions`).
 
 ### 3.8 Standalone HTML artifact (locked: no CDN)
@@ -190,6 +197,21 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
                    "ide": "...", "ideVersion": "...", "ideSync": false, "aiAgent": "...",
     // ^ configurationCacheParallel (plan 064, F14): the org.gradle.configuration-cache.parallel flag,
     //   a provider read (tracked CC input, replayed on a hit); null when unset. Boolean only — no path.
+                   "invocation": { "buildCacheEnabled": true, "offline": false, "rerunTasks": false,
+                                   "refreshDependencies": false, "configureOnDemand": false,
+                                   "maxWorkerCount": 8, "parallel": true, "fileEncoding": "UTF-8",
+                                   "locale": "en-US",
+                                   "properties": [ { "key": "org.gradle.caching", "value": "true",
+                                                      "origin": "GRADLE_USER_HOME" } ] },
+    // ^ invocation (plan 051, F1): seven public StartParameter scalars baked at configuration (CC-hit
+    //   replay, like the plan-022 fingerprints) plus genuinely-new plaintext fileEncoding/locale, riding
+    //   alongside — never replacing — the salted FingerprintInfo hashes (§3.7). properties is the fixed
+    //   5-key gradle.properties allowlist, each attributed to its declaring layer (origin, presence-by-
+    //   precedence not value-matching). Null when uncaptured.
+                   "isolatedProjects": false, "workersMax": 8,
+    // ^ isolatedProjects (plan 069, F19): buildFeatures.isolatedProjects.active at whenReady. workersMax
+    //   (plan 065, F15 narrowing): plaintext org.gradle.workers.max posture, the benchmark-slicing
+    //   dimension alongside the salted gradle.maxWorkers fingerprint and invocation.maxWorkerCount.
                    "buildCache": { "localEnabled": true, "remoteEnabled": true, "remotePush": true,
                                    "remoteType": "HttpBuildCache" } },
     // ^ ide/ideVersion/ideSync/aiAgent are additive (plan 027); aiAgent is positive-only attribution
@@ -220,12 +242,24 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
     //   HIT/MISS_STORED build. ccLoadMs = a labelled CC entry-load proxy on a HIT only (configurationMs
     //   stays 0 — a distinct field); currently null on the core path (the onTaskCompletion service
     //   instantiates after the first task start), the null-capable slot for a later internal-adapters timer.
+  "projectEvaluations": [ { "path": ":app", "evaluationMs": 120 } ],
+    // ^ projectEvaluations (plan 052, F2): per-project beforeProject/afterProject timing, ranked
+    //   slowest-first — a top-N "guilty module" signal, NOT a decomposition of derived.configurationMs
+    //   (settings/buildSrc/task-graph time falls outside the two hooks, and parallel/isolated-projects
+    //   windows overlap wall-clock). Null on a configuration-cache HIT and when nothing was captured.
   "caps": { "droppedTags": 0, "droppedValues": 0, "truncatedValues": 0,
             "droppedExecutionReasons": 0, "truncatedExecutionReasons": 0,
             "truncatedNonCacheableReasons": 0, "droppedTasks": 0, "droppedTaskOutcomes": {},
-            "droppedArtifacts": 0, "droppedExtensions": 0 },
+            "droppedArtifacts": 0, "droppedExtensions": 0, "droppedProjectEvaluations": 0,
+            "droppedXmlDisabledTasks": 0, "droppedChangedModules": 0, "droppedExcludedTaskNames": 0,
+            "droppedEmptyIntermediateCandidates": 0 },
     // ^ present only when the caps enforcement dropped/truncated something (plan 019); omitted otherwise.
-    //   droppedArtifacts (plan 031) and droppedExtensions (plan 039) count overflow drops in those arrays
+    //   droppedArtifacts (plan 031) and droppedExtensions (plan 039) count overflow drops in those arrays.
+    //   droppedProjectEvaluations (052), droppedXmlDisabledTasks (053), droppedChangedModules (063), and
+    //   droppedExcludedTaskNames (054) are the same kept-first-N overflow pattern for their respective
+    //   arrays; droppedEmptyIntermediateCandidates (069) is enforced inside the collecting ValueSource
+    //   itself at execution time (not by PayloadCapper) and threaded in from there rather than computed
+    //   here, unlike every other field in this block.
   "fingerprints": { "build": { "jdk.home": "9f86d081884c7d65…", "env-CI": "18ac3e7343f01690…" },
                     "tasks": {} },
     // ^ salted 16-hex input hashes for cache-miss comparison (plan 022); `tasks` is reserved for
@@ -235,6 +269,11 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
                "classes": [ { "class": "...", "passed": 0, "failed": 0, "skipped": 0, "durationMs": 0 } ],
                "failedOrRetried": [ { "class": "...", "name": "...", "outcomes": ["FAILED","PASSED"],
                                       "durationMs": 0, "messageHash": "...", "message": "truncated" } ] } ],
+  "testTelemetry": { "xmlDisabledTasks": [":app:test"] },
+    // ^ testTelemetry (plan 053, F3): task paths of executed Test tasks whose reports.junitXml.required
+    //   was false this build — flag-authoritative (the collector short-circuits before reading whatever
+    //   XML happens to sit on disk), so an entry here and a `tests[]` entry for the same path never
+    //   coexist. Null when no such task ran this build.
   "processes": [ { "role": "KOTLIN_DAEMON", "heapUsedMb": 0, "heapCommittedMb": 0, "heapMaxMb": 0,
                    "configuredXmxMb": 0, "gcTimeMs": 0, "rssMb": 0, "uptimeS": 0 } ],
   "benchmark": { "scenario": "clean", "iteration": 3, "isolationMode": "no_build_cache", "seedRef": "..." },
@@ -247,6 +286,23 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
     //   whole-build root change. Null/omitted when no base resolved (no CI target branch + no recorded
     //   previous-build HEAD, git absent/timeout/detached HEAD). unattributedChanges flags a change that
     //   mapped to no module (empty/partial descriptor index); the raw path is never emitted.
+  "buildStructure": { "projectCount": 12, "maxDepth": 3, "includedBuildCount": 1,
+                      "buildSrcPresent": true, "sourcesInRoot": false,
+                      "emptyIntermediateCandidates": [":libs:legacy"] },
+    // ^ buildStructure (plan 069, F19): declared project-tree inventory — projectCount/maxDepth/
+    //   includedBuildCount from a config-time ProjectDescriptor walk (settings-level metadata, IP-legal);
+    //   buildSrcPresent/sourcesInRoot/emptyIntermediateCandidates from execution-time filesystem probes
+    //   (no config-phase file read). emptyIntermediateCandidates is a ranked heuristic candidate list of
+    //   Gradle paths — never a filesystem path — not a modularize/delete verdict. Collection-only in v1;
+    //   every field null when the walk/probes never ran (master switch off, a guarded failure).
+  "wrapper": { "distributionVariant": "BIN|ALL|CUSTOM", "distributionSha256Pinned": true,
+              "wrapperJarSha256": "...", "guhWarmth": "COLD|WARM|UNKNOWN" },
+    // ^ wrapper (plan 066, F16): distributionVariant/distributionSha256Pinned describe the *committed*
+    //   wrapper config and are reported even when guhWarmth is UNKNOWN — the drift/unpinned signal
+    //   regardless of how this particular build was invoked. wrapperJarSha256 is a full-hex SHA-256 of a
+    //   public, distribution-independent artifact (the raw distributionUrl never ships, §3.7). guhWarmth
+    //   is anchored on this daemon's own JVM start time, not any task timestamp (architecture §7 decision
+    //   log). Null on the whole block when uncaptured (master switch off, or every probe degraded).
   "extensions": { "<addonId>": { "schemaVersion": 1, "…": "opaque addon-owned JSON" } }
 }
 ```
