@@ -1,9 +1,11 @@
 package dev.buildhound.gradle
 
 import java.io.File
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.io.TempDir
 
 /**
@@ -30,11 +32,16 @@ class CcEconomicsPluginTest {
     @Test
     fun `sums only the newest-modified entry, ignoring stale retained siblings`() {
         // A stale sibling (older mtime) with a huge file must not inflate the count — the plan's
-        // 7-day-retention pollution guard (only the newest entry is this build's active one).
-        ccEntry("stale", mtimeMs = 1_000_000_000_000, files = mapOf("store.bin" to 9_000))
-        ccEntry("fresh", mtimeMs = 1_000_000_100_000, files = mapOf("store.bin" to 250, "work/graph.bin" to 150))
+        // 7-day-retention pollution guard (only the newest entry is this build's active one). Both are
+        // genuine entries (entry.bin present) so the mtime tie-break between them is what's under test.
+        ccEntry("stale", mtimeMs = 1_000_000_000_000, files = mapOf("entry.bin" to 4, "store.bin" to 9_000))
+        ccEntry(
+            "fresh",
+            mtimeMs = 1_000_000_100_000,
+            files = mapOf("entry.bin" to 0, "store.bin" to 250, "work/graph.bin" to 150),
+        )
 
-        assertEquals(400L, CcEntrySize.newestEntryBytes(rootDir), "only the newest entry's files (250+150) are summed")
+        assertEquals(400L, CcEntrySize.newestEntryBytes(rootDir), "only the newest entry's files (250+150+0) are summed")
     }
 
     @Test
@@ -49,11 +56,61 @@ class CcEconomicsPluginTest {
     }
 
     @Test
-    fun `a file count past the cap degrades to null rather than walking an unbounded tree`() {
-        ccEntry("fresh", mtimeMs = 1_000_000_100_000, files = (1..4).associate { "f$it.bin" to 10 })
-        // Below the cap it sums; a maxFiles of 3 against 4 files trips the guard → null.
+    fun `a newer non-entry sibling never wins over an older entry-bin-marked dir`() {
+        // Empirically the real layout (verified against this repo's own .gradle/configuration-cache): a
+        // genuine entry always carries entry.bin; an in-flight/orphaned candidate dir can be completely
+        // empty, and a short hash-like dir holds only candidates.bin — never entry.bin. Both decoys here
+        // are newer than the real entry (the mainstream trigger is a concurrent IDE tooling-API sync), so
+        // a pure newest-mtime pick would silently choose one of them and sum to 0 instead of the real 50.
+        ccEntry("real-entry", mtimeMs = 1_000_000_000_000, files = mapOf("entry.bin" to 20, "work.bin" to 30))
+        ccEntry("empty-decoy", mtimeMs = 1_000_000_200_000, files = emptyMap())
+        ccEntry("candidates-decoy", mtimeMs = 1_000_000_300_000, files = mapOf("candidates.bin" to 38))
+
+        assertEquals(50L, CcEntrySize.newestEntryBytes(rootDir), "the entry.bin-marked dir wins even though both decoys are newer")
+    }
+
+    @Test
+    fun `no entry-bin-marked dir anywhere degrades to null, never a decoy's size`() {
+        ccEntry("empty-decoy", mtimeMs = 1_000_000_000_000, files = emptyMap())
+        ccEntry("candidates-decoy", mtimeMs = 1_000_000_100_000, files = mapOf("candidates.bin" to 38))
+
+        assertNull(CcEntrySize.newestEntryBytes(rootDir), "no dir carries entry.bin → honest null, not 0 or a decoy's bytes")
+    }
+
+    @Test
+    fun `a node count past the cap degrades to null rather than walking an unbounded tree`() {
+        ccEntry("fresh", mtimeMs = 1_000_000_100_000, files = mapOf("entry.bin" to 0) + (1..4).associate { "f$it.bin" to 10 })
+        // 5 files total (entry.bin + f1..f4): below the cap it sums; a maxFiles of 3 trips the guard → null.
         assertEquals(40L, CcEntrySize.newestEntryBytes(rootDir, maxFiles = 10))
-        assertNull(CcEntrySize.newestEntryBytes(rootDir, maxFiles = 3), "over-cap file count → null")
+        assertNull(CcEntrySize.newestEntryBytes(rootDir, maxFiles = 3), "over-cap node count → null")
+    }
+
+    @Test
+    fun `deeply nested directories are bounded by total node count, not just file count`() {
+        // Only 2 real files (entry.bin, leaf.bin) but 5 nested directories in between. A file-only guard
+        // would let this through at maxFiles=3 (2 files ≤ 3); the fix counts directory pushes too, so the
+        // walk is still bounded even when the tree is deep rather than wide.
+        var dir = ccEntry("deep", mtimeMs = 1_000_000_000_000, files = mapOf("entry.bin" to 5))
+        repeat(5) { i -> dir = File(dir, "d$i").apply { mkdirs() } }
+        File(dir, "leaf.bin").writeBytes(ByteArray(10))
+
+        assertNull(CcEntrySize.newestEntryBytes(rootDir, maxFiles = 3), "directory pushes alone exceed a cap of 3")
+    }
+
+    @Test
+    fun `a symlink is never followed, so a cycle back into the tree cannot hang the walk`() {
+        val entryDir = ccEntry("cyclic", mtimeMs = 1_000_000_000_000, files = mapOf("entry.bin" to 5))
+        val supportsSymlinks = try {
+            Files.createSymbolicLink(File(entryDir, "loop").toPath(), entryDir.toPath())
+            true
+        } catch (_: Exception) {
+            false
+        }
+        Assumptions.assumeTrue(supportsSymlinks, "platform/filesystem does not support symlinks")
+
+        // The symlink points back at its own parent dir — an unbounded cycle if followed. NOFOLLOW_LINKS
+        // means it is skipped entirely, so the walk terminates and the count is exactly entry.bin's size.
+        assertEquals(5L, CcEntrySize.newestEntryBytes(rootDir), "the symlink cycle is skipped, not descended into")
     }
 
     // --- ccLoadMs proxy ---
