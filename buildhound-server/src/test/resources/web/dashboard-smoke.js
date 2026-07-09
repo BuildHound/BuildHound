@@ -347,6 +347,20 @@ const responses = {
         typeDataAvailable: true,
     },
     "/v1/rollups/warnings?period=14": { period: 14, warnings: [], typeDataAvailable: true },
+    // Remote-cache ROI (plan 067, research F17): a configured remote with near-zero CI reuse — the
+    // config-snapshot summary, the per-mode rate table, and the ranked investigate-candidate all fire.
+    "/v1/rollups/cache-roi?days=30": {
+        remoteHitRateAvailable: true,
+        buildsWithConfig: 10,
+        remoteConfiguredShare: 0.8,
+        perMode: [
+            { mode: "CI", remoteHitRate: 0.02, localHitRate: 0.4, consideredExecutions: 314, remoteHits: 6, localHits: 126 },
+        ],
+        ciReuseCandidate: {
+            mode: "CI", remoteHitRate: 0.02, consideredExecutions: 314,
+            note: "CI shows near-zero remote-cache reuse (2% over 314 cacheable task executions) despite a configured remote cache — investigate cache reachability and key stability.",
+        },
+    },
 };
 // X-Total-Count values by path; a path absent here → header missing (tolerance case).
 const totals = {
@@ -690,6 +704,13 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "behind the latest")) throw new Error("toolchain behind list missing");
     if (!hasText(byId["app"], "Not collected yet")) throw new Error("agp/kgp/ksp degraded panel missing");
     if (!hasText(byId["app"], "Spring Boot")) throw new Error("Spring Boot toolchain panel missing (plan 072)");
+    // Remote-cache ROI (plan 067, research F17): best-effort fetch alongside toolchain/warnings; the
+    // config-snapshot summary, the per-mode rate table, and the ranked investigate-candidate all render.
+    if (!fetched.includes("/v1/rollups/cache-roi?days=30")) throw new Error("bottlenecks did not fetch cache-roi");
+    if (!hasText(byId["app"], "Remote-cache ROI")) throw new Error("cache-roi section header missing");
+    if (!hasText(byId["app"], "80% of 10 builds")) throw new Error("cache-roi config summary sentence missing");
+    if (!hasExact(byId["app"], "314")) throw new Error("cache-roi per-mode table row missing");
+    if (!hasText(byId["app"], "investigate cache reachability")) throw new Error("cache-roi reuse-candidate note missing");
     // Verdict card omitted while budget/trend counts are null.
     if (hasText(byId["app"], "budget breaches")) throw new Error("verdict card must be omitted when counts are null");
 
@@ -734,6 +755,31 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
     if (!hasText(byId["app"], "Task types not collected yet")) throw new Error("top-plugins degraded notice missing");
     if (hasText(byId["app"], "(unattributed)")) throw new Error("top-plugins unattributed fold must not render as if it were real data");
+
+    // Remote-cache ROI: remoteHitRateAvailable=false → the opt-in notice, never a synthesized rate; the
+    // config-snapshot summary still renders independently (plan 067's two-tier design).
+    responses["/v1/rollups/cache-roi?days=30"] = {
+        remoteHitRateAvailable: false, buildsWithConfig: 10, remoteConfiguredShare: 0.8, perMode: [],
+    };
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "80% of 10 builds")) throw new Error("cache-roi config summary must still render when the rate is unavailable");
+    if (!hasText(byId["app"], "needs the opt-in cache-origin capture")) throw new Error("cache-roi opt-in notice missing");
+    if (hasText(byId["app"], "investigate cache reachability")) throw new Error("cache-roi candidate note must not render without an available rate");
+
+    // Remote-cache ROI: buildsWithConfig=0 → the honest "not collected yet" notice (pre-067 plugin fleet).
+    responses["/v1/rollups/cache-roi?days=30"] = { remoteHitRateAvailable: false, buildsWithConfig: 0, remoteConfiguredShare: 0.0, perMode: [] };
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "Build-cache config not collected yet")) throw new Error("cache-roi not-collected notice missing");
+
+    // Remote-cache ROI: a fetch failure is best-effort (like toolchain/warnings) — the whole section is
+    // omitted rather than blanking the rest of the bottlenecks page.
+    delete responses["/v1/rollups/cache-roi?days=30"];
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
+    if (hasText(byId["app"], "Remote-cache ROI")) throw new Error("cache-roi section must be omitted on a fetch failure, not throw");
+    if (!hasText(byId["app"], "Success rate")) throw new Error("a cache-roi fetch failure must not blank the rest of the bottlenecks page");
 
     // Flaky page (plan 036): renders the records with the allowlisted signal badge classes.
     context.location.hash = "#/flaky"; context._onhashchange(); await tick(); await tick();

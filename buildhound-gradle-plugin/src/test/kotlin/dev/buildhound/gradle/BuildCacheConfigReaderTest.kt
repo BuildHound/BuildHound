@@ -37,6 +37,14 @@ class BuildCacheConfigReaderTest {
     }
 
     @Test
+    fun `a legitimate single-dollar simpleName is preserved — only the double-dollar proxy marker is stripped`() {
+        // Not every '$' is Gradle's proxy marker (`…$$…`, per the class doc): a genuine simpleName that
+        // happens to contain exactly one (an obfuscated/framework-generated backend class) must survive,
+        // unlike the old substringBefore('$') which truncated it to "Foo".
+        assertEquals("Foo\$Bar", BuildCacheConfigReader.normalizeRemoteType("Foo\$Bar"))
+    }
+
+    @Test
     fun `null blank and strip-to-empty degrade to null, never a fabricated name`() {
         assertNull(BuildCacheConfigReader.normalizeRemoteType(null))
         assertNull(BuildCacheConfigReader.normalizeRemoteType(""))

@@ -193,8 +193,14 @@ class TaskAccum {
     @Volatile var loadMs: Long? = null
     @Volatile var storeMs: Long? = null
 
-    /** Accumulate a nullable Long into a running total, treating null-plus-value as value (never fabricating 0). */
-    fun addTransferBytes(bytes: Long?) { if (bytes != null) transferBytes = (transferBytes ?: 0L) + bytes }
+    /**
+     * Accumulate a nullable Long into a running total, treating null-plus-value as value (never
+     * fabricating 0). A negative reading is dropped rather than corrupting the total: Gradle's own
+     * cache-load-result implementations return a sentinel, not a thrown exception, when a load misses
+     * (`-1` on a local miss, `0` on a remote miss — verified via javap against Gradle 8.14.5/9.4.0/
+     * 9.4.1/9.6.1), so a plain unconditional `+=` would silently subtract from the total on every miss.
+     */
+    fun addTransferBytes(bytes: Long?) { if (bytes != null && bytes >= 0) transferBytes = (transferBytes ?: 0L) + bytes }
 
     fun addLoadMs(ms: Long?) { if (ms != null) loadMs = (loadMs ?: 0L) + ms }
 

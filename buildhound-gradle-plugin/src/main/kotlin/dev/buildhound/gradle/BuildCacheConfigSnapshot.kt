@@ -42,11 +42,14 @@ object BuildCacheConfigReader {
      * (e.g. `HttpBuildCache`). Pure — no Gradle types — so it unit-tests without a build. Gradle
      * instantiates DSL types through a decorating subclass (`…_Decorated`) that may be proxied
      * (`…$$…`); both are stripped so the wire value is the backend's own `simpleName`, never a
-     * generated-subclass artifact. A null/blank input (or one that strips to empty) returns null.
+     * generated-subclass artifact. Only the `$$` proxy marker is stripped, not every `$` — a legitimate
+     * `simpleName` that happens to contain a single dollar (review finding: an obfuscated or
+     * framework-generated backend class) survives untouched. A null/blank input (or one that strips to
+     * empty) returns null.
      */
     fun normalizeRemoteType(className: String?): String? {
         val raw = className?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        return raw.substringBefore('$').removeSuffix("_Decorated").takeIf { it.isNotEmpty() }
+        return raw.substringBefore("$$").removeSuffix("_Decorated").takeIf { it.isNotEmpty() }
     }
 
     /**

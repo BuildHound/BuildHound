@@ -105,13 +105,13 @@ class BuildOperationAdapter(private val rootDir: java.io.File) : BuildOperationL
                     acc.taskPathFor(opId)?.let { path ->
                         val t = acc.forPath(path)
                         t.stored = true
-                        recordStore(t, result, event)
+                        recordStore(t, descriptor, event)
                     }
                 result is BuildCacheRemoteStoreBuildOperationType.Result ->
                     acc.taskPathFor(opId)?.let { path ->
                         val t = acc.forPath(path)
                         t.stored = true
-                        recordStore(t, result, event)
+                        recordStore(t, descriptor, event)
                     }
             }
         }
@@ -128,20 +128,30 @@ class BuildOperationAdapter(private val rootDir: java.io.File) : BuildOperationL
 
     /**
      * Cache-transfer timings (plan 067): a load op's wall time (`event.endTime - event.startTime`) and
-     * the bytes it moved (`getArchiveSize`, read reflectively — absent on some Gradle versions / for a
-     * local load, degrading to a null that leaves [TaskAccum.transferBytes] untouched, never a fabricated
-     * zero). The op duration is recorded whether or not the load hit; the bytes only when the getter
-     * yields a value (a hit).
+     * the bytes it moved, read reflectively off the load op's own `Result` (`getArchiveSize`, present on
+     * every Gradle version checked — 8.14.5/9.4.0/9.4.1/9.6.1, verified via javap). The op duration is
+     * recorded whether or not the load hit; a miss still returns a value from the getter — a sentinel,
+     * not a real byte count (`-1` on a local miss, `0` on a remote miss, also verified via javap) — so
+     * [TaskAccum.addTransferBytes] drops a negative reading rather than corrupting the running total. A
+     * getter missing/renamed on some future Gradle version degrades to null through the usual reflection
+     * guard, never a fabricated zero.
      */
     private fun recordLoad(t: TaskAccum, result: Any, event: OperationFinishEvent) {
         t.addLoadMs(durationMsOf(event))
         t.addTransferBytes(callLong(result, "getArchiveSize"))
     }
 
-    /** Store analogue of [recordLoad]: the store op's wall time + the bytes written to the cache. */
-    private fun recordStore(t: TaskAccum, result: Any, event: OperationFinishEvent) {
+    /**
+     * Store analogue of [recordLoad]: the store op's wall time, plus the packed-archive byte count.
+     * Unlike load, the store op's own `Result` carries only a bare `isStored` boolean on every Gradle
+     * version checked (8.14.5/9.4.0/9.4.1/9.6.1, verified via javap) — `getArchiveSize` instead lives on
+     * the store op's `Details` (the size of the already-packed archive, known before the store attempt
+     * runs, same on every version checked), so this reads it off the paired [BuildOperationDescriptor]
+     * rather than the (byte-less) result.
+     */
+    private fun recordStore(t: TaskAccum, descriptor: BuildOperationDescriptor, event: OperationFinishEvent) {
         t.addStoreMs(durationMsOf(event))
-        t.addTransferBytes(callLong(result, "getArchiveSize"))
+        descriptor.details?.let { details -> t.addTransferBytes(callLong(details, "getArchiveSize")) }
     }
 
     /** Non-negative op wall time in ms, or null when the timestamps are unavailable/inconsistent. */

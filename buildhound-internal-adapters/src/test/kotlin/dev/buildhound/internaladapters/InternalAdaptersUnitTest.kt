@@ -131,6 +131,20 @@ class InternalAdaptersUnitTest {
     }
 
     @Test
+    fun `TaskAccum drops a negative transfer-bytes sentinel rather than corrupting the total`() {
+        // Gradle's own local-load-miss result returns getArchiveSize() == -1 (a sentinel, not a thrown
+        // exception — verified via javap), so a plain += would silently subtract 1 byte per miss.
+        val t = TaskAccum()
+        t.addTransferBytes(2048)
+        t.addTransferBytes(-1)
+        assertEquals(2048, t.transferBytes, "a negative reading must be dropped, not accumulated")
+        // A negative-only history stays an honest null, never a fabricated/negative total.
+        val negativeOnly = TaskAccum()
+        negativeOnly.addTransferBytes(-1)
+        assertNull(negativeOnly.transferBytes)
+    }
+
+    @Test
     fun `the collector maps accumulated transfer timings onto the task detail`() {
         InternalAdaptersState.resetForTest()
         InternalAdaptersState.accumulator().forPath(":app:compileJava").apply {

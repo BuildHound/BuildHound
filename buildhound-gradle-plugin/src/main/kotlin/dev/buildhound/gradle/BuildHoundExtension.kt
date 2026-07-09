@@ -73,7 +73,9 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
 abstract class InternalAdaptersSpec {
     /**
      * Capture per-task cache origin/keys + the critical-path / cache-avoided-time derived metrics
-     * (plan 038), via build-operation listeners. Off by default.
+     * (plan 038), via build-operation listeners. Also gates the plan-067 per-task cache-transfer byte
+     * counts and load/store wall time (`InternalTaskDetail.transferBytes`/`loadMs`/`storeMs`) — a single
+     * toggle for everything this listener touches, not a second one. Off by default.
      */
     abstract val collectCacheOrigins: Property<Boolean>
 
