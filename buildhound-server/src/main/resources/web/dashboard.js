@@ -1163,7 +1163,10 @@
             table.append(head);
             for (const r of blast) {
                 const row = el("tr");
-                row.append(el("td", r.module || "(root)"));
+                // r.module is a non-nullable ChangeBlastRadiusRow field; the root project ships as the
+                // truthy ":" sentinel (never null/empty), so a `||` fallback here is dead — map it
+                // explicitly to match the "(root)" convention the other module columns use.
+                row.append(el("td", r.module === ":" ? "(root)" : r.module));
                 row.append(el("td", r.changeCount, "num"));
                 row.append(el("td", ms(r.medianDownstreamMs), "num"));
                 row.append(el("td", r.blastScore, "num"));

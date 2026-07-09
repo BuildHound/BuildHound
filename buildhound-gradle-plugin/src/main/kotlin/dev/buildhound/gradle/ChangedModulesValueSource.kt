@@ -66,13 +66,21 @@ internal object ModuleDirIndexWalker {
  * invalidates it) while the git diff itself stays execution-time-fresh.
  *
  * Base resolution, in order (the whole block degrades to `null` — absent — if none resolves):
- * 1. [targetBranch] non-null (a CI PR base ref) → `git diff --name-only --relative origin/<target>...HEAD`
- *    (three-dot = merge-base, the PR's own changes); base [ChangeDiffBase.CI_PR_BASE]. A failure here
- *    (the base ref not fetched — the dominant CI-sparsity case) degrades to null; it does **not** fall
- *    back to the last-sha file (the plan's "in order": a present target branch commits to CI_PR_BASE).
+ * 1. [targetBranch] non-null (a CI PR base ref) → `git diff --name-only --relative --end-of-options
+ *    origin/<target>...HEAD` (three-dot = merge-base, the PR's own changes); base
+ *    [ChangeDiffBase.CI_PR_BASE]. A failure here (the base ref not fetched — the dominant CI-sparsity
+ *    case) degrades to null; it does **not** fall back to the last-sha file (the plan's "in order": a
+ *    present target branch commits to CI_PR_BASE).
  * 2. else the recorded [lastShaPath] file exists and parses to a sha → `git diff --name-only --relative
- *    <sha>` (cumulative since that recorded HEAD); base [ChangeDiffBase.LAST_BUILT_SHA].
+ *    --end-of-options <sha>` (cumulative since that recorded HEAD); base [ChangeDiffBase.LAST_BUILT_SHA].
  * 3. else → null.
+ *
+ * `--end-of-options` (git ≥ 2.24) sits immediately before the revspec in both cases: a shell-free
+ * `ProcessBuilder` already rules out shell-metacharacter injection, but a revspec that itself begins
+ * with `-` (a corrupted [lastShaPath] file, or `targetBranch` ever losing its `origin/` prefix) would
+ * otherwise still be open to *git option* injection — e.g. a crafted `--output=<path>` revspec makes
+ * git overwrite an arbitrary file. `--end-of-options` forces everything after it to be parsed as a
+ * revision, never an option, without reclassifying it as a pathspec the way a bare `--` would.
  *
  * Never fails the build: git absent/timeout/non-zero, a detached HEAD with no base, a descriptor-index
  * failure — all degrade to null (or an honest `unattributedChanges` flag). No changed-file path or diff
@@ -108,7 +116,7 @@ abstract class ChangedModulesValueSource : ValueSource<CollectedChangedModules, 
         val workDir = File(parameters.rootDir.orNull ?: return null)
         val timeoutMillis = parameters.timeoutMillis.getOrElse(GitExec.DEFAULT_TIMEOUT_MS)
         val searchParents = parameters.searchParents.getOrElse(true)
-        // The index is keyed relDir → gradlePath in the walk; invert to gradlePath-owning-relDir for the
+        // The index is keyed gradlePath → relDir in the walk; invert to relDir → gradlePath for the
         // mapper (relDir is the match key). Both stay Gradle paths / relative dirs — no absolute path.
         val moduleDirIndex = parameters.moduleDirIndex.getOrElse(emptyMap())
             .entries.associate { (gradlePath, relDir) -> relDir to gradlePath }
@@ -129,8 +137,9 @@ abstract class ChangedModulesValueSource : ValueSource<CollectedChangedModules, 
         val targetBranch = parameters.targetBranch.orNull?.trim()?.takeIf { it.isNotEmpty() }
         if (targetBranch != null) {
             // Three-dot = merge-base of origin/<target> and HEAD → the PR's own changes. The ref name is
-            // spec'd VCS data (a branch name), never a raw path; ProcessBuilder is shell-free so there is
-            // no arg-injection surface. A missing/un-fetched base ref → NonZeroExit → null (CI sparsity).
+            // spec'd VCS data (a branch name), never a raw path; ProcessBuilder is shell-free (no shell
+            // metacharacter surface) and runGit's `--end-of-options` guards the git-option-injection
+            // surface. A missing/un-fetched base ref → NonZeroExit → null (CI sparsity).
             val diff = runGit(workDir, timeoutMillis, searchParents, "origin/$targetBranch...HEAD") ?: return null
             return ChangeDiffBase.CI_PR_BASE to diff
         }
@@ -139,12 +148,17 @@ abstract class ChangedModulesValueSource : ValueSource<CollectedChangedModules, 
         return ChangeDiffBase.LAST_BUILT_SHA to diff
     }
 
-    /** `git diff --name-only --relative <revspec>`; null on a non-zero exit, a timeout, or a missing binary. */
+    /**
+     * `git diff --name-only --relative --end-of-options <revspec>`; null on a non-zero exit, a timeout,
+     * or a missing binary. `--end-of-options` (git ≥ 2.24) sits directly before [revspec] so a
+     * `-`-prefixed value is always parsed as a revision, never as a git option (belt-and-suspenders
+     * against option/flag injection — see the class doc).
+     */
     private fun runGit(workDir: File, timeoutMillis: Long, searchParents: Boolean, revspec: String): String? =
         when (val result = GitExec.run(
             workDir,
             timeoutMillis,
-            listOf("diff", "--name-only", "--relative", revspec),
+            listOf("diff", "--name-only", "--relative", "--end-of-options", revspec),
             searchParents = searchParents,
         )) {
             is BoundedExec.Result.Success -> result.stdout

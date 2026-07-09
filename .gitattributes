@@ -1,0 +1,16 @@
+# Force textual diffs for our source/text extensions regardless of content.
+#
+# Without this, a stray control byte (e.g. an accidentally-embedded raw NUL — this has
+# happened repeatedly to agent-generated Kotlin edits in this repo) makes git's content-based
+# binary heuristic misclassify the whole file as binary. `git diff`/`git show` then print
+# "Binary files ... differ" instead of a reviewable line-by-line diff, so the defect can slip
+# through `git diff`-based review invisibly. The `diff` attribute (not `text` — that also
+# triggers EOL renormalization, which we don't want) is display-only: it forces the internal
+# diff machinery to treat matching paths as text, making any embedded binary byte immediately
+# visible as a real diff hunk instead of vanishing into "Bin".
+*.kt diff
+*.kts diff
+*.md diff
+*.js diff
+*.json diff
+*.sql diff
