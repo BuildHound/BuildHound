@@ -1,0 +1,39 @@
+{
+  "$schema": "BuildHound color tokens — mirrors colors.css. Dark is the default theme.",
+  "dark": {
+    "char": "#15130f",
+    "ember": "#221d17",
+    "emberAlt": "#2c241b",
+    "bone": "#f2ebdf",
+    "boneDim": "#c9bfaf",
+    "slate": "#8a8177",
+    "line": "rgba(242, 235, 223, 0.13)",
+    "copper": "#dd8148",
+    "copperSoft": "#e9a878",
+    "copperDim": "#5a3a24",
+    "semantic": {
+      "ok": "#4abd8c",
+      "bad": "#e5646a",
+      "warn": "#f0b158",
+      "info": "#6fa8ff"
+    }
+  },
+  "light": {
+    "char": "#fbf7f1",
+    "ember": "#f1e8dc",
+    "emberAlt": "#e8dcc9",
+    "bone": "#211c15",
+    "boneDim": "#4a4137",
+    "slate": "#7a7266",
+    "line": "rgba(33, 28, 21, 0.12)",
+    "copper": "#b85a28",
+    "copperSoft": "#8f4419",
+    "copperDim": "#ecd2b8",
+    "semantic": {
+      "ok": "#1f8055",
+      "bad": "#c22e33",
+      "warn": "#a5680e",
+      "info": "#2a6fd1"
+    }
+  }
+}
