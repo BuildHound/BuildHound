@@ -21,6 +21,27 @@ New brand and product-design work starts there. The corresponding review impleme
 QA record, and exported assets live under v2/. The offline report page is a multi-file
 review fixture, not the production single-file `buildhound-report` artifact.
 
+## Required adoption
+
+Use V2 whenever creating or modifying:
+
+- the public or marketing site;
+- the hosted product dashboard or another web application surface;
+- the standalone HTML report interface.
+
+Begin with [DESIGN-V2.md](DESIGN-V2.md), reuse its tokens and assets, and follow its status
+semantics, typography, component, and responsive rules. The pages in [v2/](v2/) demonstrate
+those rules as static reference fixtures; they are not production components. Do not start
+an interface change from either historical exploration or introduce a second token, mark,
+or component system. If a product requirement needs a different decision, update
+`DESIGN-V2.md` first and record the rationale. Runtime adoption requires a separate plan.
+
+For `buildhound-report`, the report-safe V2 subset is the token values, layout and component
+rules, semantic colors, system-font fallbacks, and inline SVG path geometry. Do not copy the
+fixtures' `@font-face`, `<link>`, `<img>`, `url()`, `@import`, or relative asset references.
+The existing standalone-report test remains binding and must never be weakened to adopt the
+design.
+
 ## Historical explorations
 
 The earlier directions are intentionally preserved for decision history:

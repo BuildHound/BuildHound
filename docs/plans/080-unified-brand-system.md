@@ -91,3 +91,7 @@ the slow work.”; scent language is secondary editorial copy.
 - No project-wide browser dependency was added for this docs-only kit. The required render
   matrix was completed in a controlled browser and recorded in `docs/brand/v2/QA.md`;
   durable runtime browser/report tests remain part of the separate adoption work.
+- For the production report, “use V2” means translate token values, semantic rules,
+  system-font roles, and SVG path geometry into the existing URL-free inline artifact. The
+  fixture's webfont and asset references cannot be copied, and the zero-network test remains
+  binding.

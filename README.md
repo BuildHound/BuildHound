@@ -19,6 +19,24 @@ fully standalone HTML report artifact. Apache-2.0. Home: [buildhound.dev](https:
 | `buildhound-ci-assets/` | JVM-free CI assets: GitHub Action, GitLab + Azure Pipelines templates, metric CLI, overhead/profiler harnesses, a first-party agent skill (`agent-skill/SKILL.md`) |
 | `deploy/` | `compose.yaml`: server + TimescaleDB for local/self-host, plus a Grafana dashboard recipe for the Prometheus metrics endpoint |
 | `docs/` | Spec, roadmap, research, the living [architecture doc](docs/architecture.md), the [OpenAPI contract](docs/api/openapi.yaml), and [implementation plans](docs/plans/) |
+| `docs/brand/` | Canonical [V2 brand and product design system](docs/brand/DESIGN-V2.md), review fixtures, tokens, and exported assets |
+
+## Brand and UI design
+
+All work that creates or modifies a BuildHound public site, product dashboard, or HTML
+report interface must start from
+[`docs/brand/DESIGN-V2.md`](docs/brand/DESIGN-V2.md). Reuse the V2 tokens and assets, and
+follow its semantic status mapping, typography, component, and responsive rules as
+demonstrated by the static fixtures under [`docs/brand/v2/`](docs/brand/v2/).
+
+`docs/brand/DESIGN.md`, `docs/brand/DESIGN-GPT.md`, `docs/brand/site/`, and
+`docs/brand/gpt/` are historical explorations only. If a product requirement needs a
+different design decision, reconcile and document it in `docs/brand/DESIGN-V2.md` before
+implementing the interface. Production standalone reports must translate V2 token values,
+semantic rules, and vector geometry into URL-free inline CSS/SVG; they must not copy the
+fixture's font or asset URLs. Never weaken the existing single-file, zero-network test to
+adopt the design. Runtime components and adoption require their own implementation plan;
+the review fixtures are not production components.
 
 ## Quick start
 
