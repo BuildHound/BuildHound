@@ -205,23 +205,78 @@ internal fun dependencyEdgesOf(payload: BuildPayload): Map<String, List<String>>
         ?.takeIf { it.isNotEmpty() }
 }
 /**
- * Server-side bound on the payload's projectKey (plan 077). It feeds the btree-indexed
- * builds.project_key hot column; unbounded, a hostile ingest-token holder can exceed the
- * index tuple limit (SQLSTATE 54000) and turn one payload into a permanently retried poison
- * pill. Applied in BOTH stores' save() so the clamped payload IS the stored payload — hot
- * column, jsonb, and in-memory object agree by construction (PayloadCapper precedent: the
- * server stores the capped payload, not the wire bytes). Equals the query-param cap, so a
- * clamped key stays reachable by filter. take() counts UTF-16 units (never splitting a
- * surrogate pair); the V15 backfill's left(…,256) counts codepoints — divergence accepted,
- * see the V15 comment.
+ * Server-side bounds on every payload string that feeds a btree-indexed hot column (plan 078,
+ * generalizing 077's projectKey clamp). Unbounded, a hostile ingest-token holder can exceed the
+ * index tuple limit (SQLSTATE 54000) and turn one payload into a permanently retried poison pill.
+ * [boundForStorage] is applied in BOTH stores' save() so the clamped payload IS the stored payload —
+ * hot columns, jsonb, and the in-memory object agree by construction (PayloadCapper precedent: the
+ * server stores the capped payload, not the wire bytes) — and once at ingest, so verdict/flaky/
+ * enrichment keys are computed from the same clamped instance that was stored. [MAX_HOT_STRING_CHARS]
+ * equals the query-param caps, so a clamped value stays reachable by filter. Clamps count UTF-16
+ * units (never splitting a surrogate pair); the V15 backfill's left(…,256) counts codepoints —
+ * divergence accepted, see the V15 comment. `requested_tasks_sig` needs no clamp (always a 32-char
+ * md5 hex); `apk_sizes` strings are unindexed beyond buildId.
  */
-internal const val MAX_PROJECT_KEY_CHARS: Int = 256
+internal const val MAX_HOT_STRING_CHARS: Int = 256 // buildId, projectKey, branch, ci provider/runId/pipelineName, modules
 
-internal fun boundProjectKey(payload: BuildPayload): BuildPayload {
-    val key = payload.projectKey ?: return payload
-    if (key.length <= MAX_PROJECT_KEY_CHARS) return payload
-    val cut = key.take(MAX_PROJECT_KEY_CHARS)
-    return payload.copy(projectKey = if (cut.last().isHighSurrogate()) cut.dropLast(1) else cut)
+internal const val MAX_FQCN_CHARS: Int = 512 // task `type`, test class names — FQCNs run longer than names
+
+internal const val MAX_SHA_CHARS: Int = 64 // a full SHA-256 hex; git SHAs are 40
+
+/** Truncates to [max] UTF-16 units without ever splitting a surrogate pair; returns `this` when compliant. */
+private fun String.truncateSafely(max: Int): String {
+    if (length <= max) return this
+    val cut = take(max)
+    return if (cut.last().isHighSurrogate()) cut.dropLast(1) else cut
+}
+
+private fun String?.exceeds(max: Int): Boolean = this != null && length > max
+
+/**
+ * Clamps every index-feeding string of [payload] (see the plan-077 inventory). Allocation-free on
+ * the compliant path: each section is copied only when one of its values exceeds a bound.
+ * Idempotent — double application (ingest + save) is harmless.
+ */
+internal fun boundForStorage(payload: BuildPayload): BuildPayload {
+    val buildId = payload.buildId.truncateSafely(MAX_HOT_STRING_CHARS)
+    val projectKey = payload.projectKey?.truncateSafely(MAX_HOT_STRING_CHARS)
+    val vcs = payload.vcs?.let { v ->
+        val branch = v.branch?.truncateSafely(MAX_HOT_STRING_CHARS)
+        val sha = v.sha?.truncateSafely(MAX_SHA_CHARS)
+        if (branch === v.branch && sha === v.sha) v else v.copy(branch = branch, sha = sha)
+    }
+    val ci = payload.ci?.let { c ->
+        val provider = c.provider.truncateSafely(MAX_HOT_STRING_CHARS)
+        val runId = c.runId?.truncateSafely(MAX_HOT_STRING_CHARS)
+        val pipelineName = c.pipelineName?.truncateSafely(MAX_HOT_STRING_CHARS)
+        if (provider === c.provider && runId === c.runId && pipelineName === c.pipelineName) c
+        else c.copy(provider = provider, runId = runId, pipelineName = pipelineName)
+    }
+    val tasks =
+        if (payload.tasks.none { it.module.exceeds(MAX_HOT_STRING_CHARS) || it.type.exceeds(MAX_FQCN_CHARS) }) payload.tasks
+        else payload.tasks.map {
+            it.copy(module = it.module?.truncateSafely(MAX_HOT_STRING_CHARS), type = it.type?.truncateSafely(MAX_FQCN_CHARS))
+        }
+    val tests =
+        if (payload.tests.none { t ->
+                t.module.exceeds(MAX_HOT_STRING_CHARS) ||
+                    t.classes.any { it.className.length > MAX_FQCN_CHARS } ||
+                    t.failedOrRetried.any { it.className.length > MAX_FQCN_CHARS }
+            }
+        ) payload.tests
+        // failedOrRetried className is not stored, but it is classOutcomesOf's retry-join key against
+        // classes[].className — clamping both keeps the retry association intact post-clamp.
+        else payload.tests.map { t ->
+            t.copy(
+                module = t.module?.truncateSafely(MAX_HOT_STRING_CHARS),
+                classes = t.classes.map { it.copy(className = it.className.truncateSafely(MAX_FQCN_CHARS)) },
+                failedOrRetried = t.failedOrRetried.map { it.copy(className = it.className.truncateSafely(MAX_FQCN_CHARS)) },
+            )
+        }
+    return if (buildId === payload.buildId && projectKey === payload.projectKey && vcs === payload.vcs &&
+        ci === payload.ci && tasks === payload.tasks && tests === payload.tests
+    ) payload
+    else payload.copy(buildId = buildId, projectKey = projectKey, vcs = vcs, ci = ci, tasks = tasks, tests = tests)
 }
 
 /**
@@ -739,7 +794,7 @@ class InMemoryBuildStore : BuildStore {
     private val builds = ConcurrentHashMap<Pair<String, String>, BuildPayload>()
 
     override fun save(projectId: String, rawPayload: BuildPayload): Boolean {
-        val payload = boundProjectKey(rawPayload)
+        val payload = boundForStorage(rawPayload)
         return builds.putIfAbsent(projectId to payload.buildId, payload) == null
     }
 

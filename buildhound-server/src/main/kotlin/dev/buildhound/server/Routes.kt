@@ -96,7 +96,7 @@ fun Route.ingestRoutes(
 
             payload.projectKey?.takeIf { it != project.key }?.let {
                 // take() bounds the logged value — the raw key is attacker-sized (plan 077 log-flood guard).
-                ingestLogger.warn("payload projectKey '{}' differs from token project '{}'", it.take(MAX_PROJECT_KEY_CHARS), project.key)
+                ingestLogger.warn("payload projectKey '{}' differs from token project '{}'", it.take(MAX_HOT_STRING_CHARS), project.key)
             }
 
             // Defensive server-side scrub (plan 076): scrub BEFORE cap, mirroring the plugin's own
@@ -158,13 +158,18 @@ fun Route.ingestRoutes(
                 )
             }
 
+            // Hot-column string bounds (plan 077): clamp once here so the verdict/flaky/enrichment
+            // keys below are computed from the same clamped instance the store persists (save() also
+            // clamps — idempotent, so the double application is harmless).
+            val bounded = boundForStorage(capped)
+
             // Data-shaped failures (SQLSTATE 22xxx, e.g. \u0000 in jsonb) are permanent →
             // 400 so the plugin drops them; anything else is a storage outage → 503 so
             // the plugin spools and retries (its 4xx/5xx classification relies on this).
             // (54xxx program-limit-exceeded — e.g. an index tuple over the btree cap — is equally
             // data-shaped and deterministic: a retry can never succeed, so it is 400, never spooled.)
             val stored = try {
-                store.save(project.id, capped)
+                store.save(project.id, bounded)
             } catch (e: SQLException) {
                 val permanent = e.sqlState?.let { it.startsWith("22") || it.startsWith("54") } == true
                 return@post if (permanent) {
@@ -176,15 +181,15 @@ fun Route.ingestRoutes(
             }
             // Post-save regression evaluation (plan 025): only on a fresh store, wrapped so it can
             // never block or fail ingest (its own runCatching). The alert HTTP call inside is async.
-            if (stored) evaluator.evaluate(project.id, project.key, capped)
+            if (stored) evaluator.evaluate(project.id, project.key, bounded)
             // Flaky-alert hook (plan 036): edge-triggered, best-effort, never fails ingest.
-            if (stored) flakyAlerter.evaluate(project.id, project.key, capped)
+            if (stored) flakyAlerter.evaluate(project.id, project.key, bounded)
 
             // CI-connector enrichment (plan 028): fire-and-forget; no-ops unless a registered connector
             // handles ci.provider. buildUrl is the ingested (attacker-controlled) source parsed for the
             // collection/project — the connector's host allowlist is the SSRF guard, not this call.
             if (stored) {
-                enrichment.submit(project.id, capped.buildId, capped.ci?.provider, capped.ci?.runId, capped.ci?.buildUrl)
+                enrichment.submit(project.id, bounded.buildId, bounded.ci?.provider, bounded.ci?.runId, bounded.ci?.buildUrl)
             }
 
             call.respond(
@@ -221,6 +226,11 @@ fun Route.connectorHookRoutes(
                 ?: return@post call.respond(HttpStatusCode.BadRequest, ApiError("unrecognized hook body"))
             when (event) {
                 is CiEvent.RunCompleted -> {
+                    // The run id is hook-body free text (plan 077): bound it like every other correlation
+                    // key before it reaches queries or the expected-build path (real Azure ids are numeric).
+                    if (event.ref.runId.length > MAX_HOT_STRING_CHARS) {
+                        return@post call.respond(HttpStatusCode.BadRequest, ApiError("unrecognized hook body"))
+                    }
                     // Resolve the provider run id to OUR build id (tenant-scoped); reuse its buildUrl.
                     val resolved = call.runQuery {
                         val buildId = builds.resolveBuildId(project.id, event.ref.provider, event.ref.runId)
@@ -327,6 +337,11 @@ private fun validateMetric(s: MetricSubmission): String? = when {
     (s.unit?.length ?: 0) > MAX_METRIC_VALUE_CHARS -> "unit must be <= $MAX_METRIC_VALUE_CHARS chars"
     s.correlation.buildId == null && s.correlation.provider == null && s.correlation.runId == null ->
         "a correlation (buildId, or provider + runId) is required"
+    // Correlation keys feed the custom_metrics_uniq btree index (plan 077) — reject, don't clamp
+    // (a clamped key would silently correlate to the wrong run; the CLI is ours, so 422 loudly).
+    (s.correlation.buildId?.length ?: 0) > MAX_HOT_STRING_CHARS -> "correlation buildId must be <= $MAX_HOT_STRING_CHARS chars"
+    (s.correlation.provider?.length ?: 0) > MAX_HOT_STRING_CHARS -> "correlation provider must be <= $MAX_HOT_STRING_CHARS chars"
+    (s.correlation.runId?.length ?: 0) > MAX_HOT_STRING_CHARS -> "correlation runId must be <= $MAX_HOT_STRING_CHARS chars"
     else -> null
 }
 
@@ -1085,19 +1100,23 @@ private suspend fun ApplicationCall.authenticatedProject(
 /**
  * Filter values are allowlisted against the schema enum names — never free text. [projectKey] (plan
  * 077) is a pre-validated bound param supplied by the route via [projectKeyParamOrBadRequest].
+ * `branch` is free text but length-capped like `projectKey` (plan 078) — stored branches are clamped
+ * to the same bound, so a longer value can never match anything anyway.
  */
 private fun ApplicationCall.buildFilterOrNull(projectKey: String? = null): BuildFilter? {
     val mode = request.queryParameters["mode"]?.uppercase()
     if (mode != null && mode !in BuildMode.entries.map { it.name }) return null
     val outcome = request.queryParameters["outcome"]?.uppercase()
     if (outcome != null && outcome !in BuildOutcome.entries.map { it.name }) return null
+    val branch = request.queryParameters["branch"]
+    if (branch != null && branch.length > MAX_HOT_STRING_CHARS) return null
     // Benchmark builds pollute fleet p50/p95 trends (plan 030), so exclude them by default — unless
     // the caller explicitly asks for mode=benchmark or passes includeBenchmark=true.
     val includeBenchmark = request.queryParameters["includeBenchmark"].toBoolean()
     val excludeModes = if (mode == BuildMode.BENCHMARK.name || includeBenchmark) emptySet() else setOf(BuildMode.BENCHMARK.name)
     val tags = buildTagFilterOrNull() ?: return null
     return BuildFilter(
-        branch = request.queryParameters["branch"],
+        branch = branch,
         mode = mode,
         outcome = outcome,
         excludeModes = excludeModes,
@@ -1129,7 +1148,7 @@ private fun ApplicationCall.buildTagFilterOrNull(): Map<String, String>? {
 }
 
 /**
- * A validated optional `projectKey` query param (plan 077), capped at [MAX_PROJECT_KEY_CHARS] (the
+ * A validated optional `projectKey` query param (plan 077), capped at [MAX_HOT_STRING_CHARS] (the
  * same store-side ingest clamp, so a clamped key stays reachable). [value] may be null ("all projects" —
  * today's behavior). The wrapper is null only when the param was present but over-long and a 400 has
  * already been sent — mirroring [buildFilterOrNull]'s null-is-handled contract. The value is only ever
@@ -1139,8 +1158,8 @@ private class ProjectKeyParam(val value: String?)
 
 private suspend fun ApplicationCall.projectKeyParamOrBadRequest(): ProjectKeyParam? {
     val raw = request.queryParameters["projectKey"] ?: return ProjectKeyParam(null)
-    if (raw.length > MAX_PROJECT_KEY_CHARS) {
-        respond(HttpStatusCode.BadRequest, ApiError("projectKey must be at most $MAX_PROJECT_KEY_CHARS chars"))
+    if (raw.length > MAX_HOT_STRING_CHARS) {
+        respond(HttpStatusCode.BadRequest, ApiError("projectKey must be at most $MAX_HOT_STRING_CHARS chars"))
         return null
     }
     return ProjectKeyParam(raw)

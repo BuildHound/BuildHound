@@ -181,7 +181,7 @@ class ProjectKeyRoutesTest {
     @Test
     fun `an over-long payload projectKey is clamped at save and stays reachable`() = testApplication {
         val fx = fx(); appWith(fx)
-        // The store clamps to MAX_PROJECT_KEY_CHARS (btree-index poison-pill guard, plan 077) — the
+        // The store clamps to MAX_HOT_STRING_CHARS (btree-index poison-pill guard, plans 077/078) — the
         // clamped key must equal the query-param cap, so the build stays reachable by filter.
         fx.stores.builds.save(fx.project.id, TestPayloads.build(buildId = "long-1", projectKey = "k".repeat(3000)))
         val keys = get("/v1/project-keys").bodyAsText()
