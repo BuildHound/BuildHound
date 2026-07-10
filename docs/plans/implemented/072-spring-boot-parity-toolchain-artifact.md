@@ -1,5 +1,8 @@
 # 072 — Server-side JVM parity: `springBoot` toolchain + `bootJar`/`jar` artifact sizes
 
+**Status: implemented** · 2026-07-09 (commits `c938775`, `99cc5e5`, `b9e0176`); manual validation against
+a real Boot build tracked as a follow-up, not store-blocking — see Exit criteria.
+
 ## Source
 
 - Research finding **F22**, `docs/research/ingest-corpus-analysis.md` §5 ("Server-side JVM (Spring

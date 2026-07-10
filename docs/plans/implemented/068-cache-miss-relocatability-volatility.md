@@ -1,5 +1,11 @@
 # 068 — Cache-miss diagnostics: non-relocatable-task detector + fingerprint volatility scoring
 
+**Status: implemented** · 2026-07-08 — landed in `d3b7cf1` (server: cache-miss relocatability
++ fingerprint volatility diagnostics (068)) with review fixes in `9726992` (decode guard,
+origin enum, wastedMs scope, NUL cleanup). `RelocatabilityDetector`/`FingerprintVolatilityDetector`
++ `GET /v1/rollups/cache-miss-diagnostics` shipped as designed on both stores, byte-for-byte parity;
+no dashboard panel, as scoped Out.
+
 ## Source
 
 - **Research finding F18** (`new-insight`), [docs/research/ingest-corpus-analysis.md](../research/ingest-corpus-analysis.md)

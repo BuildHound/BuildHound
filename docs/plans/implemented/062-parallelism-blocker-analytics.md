@@ -1,5 +1,12 @@
 # 062 — Parallelism-blocker analytics: gating-task detection + graph centrality
 
+**Status: implemented** · 2026-07-08 — landed in `7a53dda` (server: parallelism-blocker
+analytics + graph export (062)) with review fixes in `5c9e12e` (malformed-block test, doc
+honesty). `GatingAnalyzer`/`GraphCentrality`/`GraphExporter` + `GET
+/v1/builds/{buildId}/parallelism` and `GET /v1/builds/{buildId}/graph?format=gexf|dot` all
+shipped as designed; fleet-wide "parallelism blockers" Bottlenecks family + persistence
+remains explicitly deferred (see Out/deferred below and the architecture.md decision log).
+
 ## Source
 
 - Research finding **F12** (`docs/research/ingest-corpus-analysis.md` §4): `parallelUtilization` is a

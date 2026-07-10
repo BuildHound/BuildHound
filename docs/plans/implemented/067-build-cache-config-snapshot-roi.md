@@ -1,5 +1,15 @@
 # 067 — Build-cache configuration snapshot + remote-cache ROI
 
+**Status: Implemented** — merged in `691b746` (config snapshot, opt-in transfer-timing
+fields, `/v1/rollups/cache-roi`, report badge + dashboard card) and `92352e8` (review
+fixes: honest store-byte reads off the *Details* type, transfer-byte miss-sentinel guard,
+consent-surface KDoc/spec updates, dashboard-smoke coverage). All exit criteria met,
+pinned by `BuildCacheConfigFunctionalTest`, `GoldenPayloadTest`, `CacheRoiCalculatorTest`,
+`CacheRoiRoutesTest`, and `CacheRoiStoresIntegrationTest`. The planned `enabled` field was
+dropped from `BuildCacheConfigInfo` per the divergence note below (superseded by plan
+051's `invocation.buildCacheEnabled`, which landed first); `schemaVersion` stayed 1
+throughout, as scoped.
+
 ## Source
 
 - Research finding **F17** (`docs/research/ingest-corpus-analysis.md`, §2 exec summary + §5,

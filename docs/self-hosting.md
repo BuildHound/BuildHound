@@ -3,7 +3,10 @@
 BuildHound ships as a single OCI image (`buildhound-server`) plus a Postgres/TimescaleDB database. This
 guide takes you from nothing to an ingesting, queryable instance an outside team can run (roadmap phase-4
 exit). Everything is configured through environment variables — no secret ever lives in an image layer,
-a config file, or a log (architecture §6).
+a config file, or a log (architecture §6). Ingested build payloads also get a defensive server-side scrub
+pass before they're stored — redacting absolute paths and secret-shaped strings even from a non-compliant
+client, on top of whatever the plugin already scrubbed (architecture §6); this runs unconditionally, no
+toggle needed.
 
 ## 1. Quick start (Docker Compose)
 
@@ -65,6 +68,7 @@ what a token can do:
 |---|---|
 | `ingest` | `POST /v1/builds`, `/v1/metrics`, connector hooks, the shard-plan endpoint. |
 | `read` | The query API (`GET /v1/builds`, `/v1/trends`, `/v1/rollups/*`, …) — what the dashboard and MCP server use. |
+| `metrics` | `GET /v1/metrics/prometheus` only — least-privilege scrape-only scope for a Prometheus target (also granted by `read`/`all`). |
 | `addon` | The `/v1/addons/*` namespace. |
 | `admin` | `/v1/admin/*` (retention config). |
 | `all` | Everything. |
@@ -119,6 +123,14 @@ raw rows on a schedule and does not require hypertables).
 - `GET /docs` + `GET /openapi.yaml` — the versioned API reference (zero external requests; the OpenAPI
   spec is kept in lockstep with the live routes by a contract test).
 - The dashboard (`/`) needs only a `read` token, entered in the browser tab and kept in `sessionStorage`.
+- `GET /v1/metrics/prometheus` — a per-project Prometheus text-exposition (`0.0.4`) endpoint for a
+  `metrics`/`read`/`all` token: build-duration p50/p95, cache-hit rate, success rate, builds by outcome,
+  flaky-test count, and avoided seconds, all as gauges (they're windowed, not monotonic — don't
+  `rate()`/`increase()` them). A KPI with no samples in the window is omitted rather than emitted as `0`;
+  a storage outage returns `503`, never a bare `500`, so a scrape target never reads "down". Shares the
+  query rate limit (`BUILDHOUND_QUERY_RPM`). A ready-made scrape config + Grafana dashboard live in
+  [`deploy/grafana/`](../deploy/grafana/README.md). This is pull/scrape only — OTLP push is not
+  implemented.
 
 ## 7. Optional: MCP query server
 

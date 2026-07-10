@@ -1,5 +1,9 @@
 # 060 — Build Analyzer warning taxonomy as server rules
 
+**Status: implemented** — landed in `2cf8b53` (server: build-analyzer warning taxonomy
+rules on bottlenecks (060)) with review fixes in `21f6e57`; see "Implementation notes"
+below for divergences from the original design.
+
 ## Source
 
 - Research finding **F10**, [`docs/research/ingest-corpus-analysis.md`](../research/ingest-corpus-analysis.md)

@@ -1,5 +1,10 @@
 # 064 — Configuration-cache economics & reuse diagnostics
 
+**Status: implemented** · 2026-07-09 — landed in `7aa3602` (plugin+commons+server: CC
+economics + reuse diagnostics + V14 (064)) with review fixes in `6cc94a9` (entry.bin
+marker for CC entry-size + safe walk); see "Divergences (recorded at implementation)"
+below for divergences from the original design.
+
 ## Source
 
 Research finding **F14 — Configuration-cache economics & reuse diagnostics**

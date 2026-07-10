@@ -1,5 +1,10 @@
 # 065 — Process-probe GC/JVM tuning signals + daemon-JDK candidates
 
+**Status: implemented** · 2026-07-08 — landed in `27b9420` (plugin+commons+server: process-probe
+GC/JVM tuning signals (065)) with review fixes in `4eba75c` (docs+web: spec §3.6 pid supersession +
+tuning-card smoke coverage (065 review fixes)); see "Implementation notes" below for how the
+"consumed by dashboard/artifact" design point and the pid-delta refinement actually landed.
+
 ## Source
 
 - **Research finding F15**, `docs/research/ingest-corpus-analysis.md`

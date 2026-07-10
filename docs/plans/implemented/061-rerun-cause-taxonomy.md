@@ -1,5 +1,11 @@
 # 061 — Rerun-cause taxonomy over `executionReasons`
 
+**Status: implemented** — landed in `e642373` (server: rerun-cause taxonomy + V12
+execution_reasons column (061)) with review fixes in `a81a79c`; see "Implementation note
+(renumber)" below for the migration renumber (V11 → V12). Review fixes also dropped the
+Design section's bare `"forced"` FORCED-matcher substring (unverified against decompiled
+Gradle 9.6.1 jars) in favor of `"rerun-tasks"/"rerun tasks"/"uptodatewhen is false"`.
+
 ## Implementation note (renumber)
 
 This plan's `V11` migration reference below was written before plan 057 (`V11__tag_index.sql`) landed

@@ -27,7 +27,7 @@ Postgres persistence + tenancy/token auth + rate limiting, query API + rollups, 
 `configurationMs` hardcoded null, bare `CI` env not honored for mode classification, no timeout
 on git execs, spec §3.9 upload text stale, no isolated-projects CI job, single-OS CI.
 
-## Phase 2 — Honest metrics, fingerprints, first intelligence (L)
+## Phase 2 — Honest metrics, fingerprints, first intelligence (L) ✅ shipped
 
 Two workstreams; the correctness one lands first because everything later trends on its numbers.
 
@@ -38,8 +38,8 @@ Two workstreams; the correctness one lands first because everything later trends
   ([research/repos/Talaiot.md](research/repos/Talaiot.md)) → fix `cacheableHitRate` to
   cacheable-only denominator; populate `configurationMs` from the existing configuration-phase
   observer; `avoidedMs`/`criticalPathMs` stay null until cache-origin/graph data exist (phase 4).
-- Mode classification: honor bare `CI` env (in flight as a spun-off task) · git exec timeout
-  (in flight) · tag/value cardinality + size caps in assembler/scrubber.
+- Mode classification: honor bare `CI` env (delivered plan 014) · git exec timeout (delivered
+  plan 015) · tag/value cardinality + size caps in assembler/scrubber.
 - Doc repairs: spec §3.9 rewritten to synchronous-with-spool reality; spec §1/§8 Gradle-floor
   drift fixed to 8.14; plan 003's CC-detection wording aligned with the shipped
   `DaemonState` observer.
@@ -73,7 +73,7 @@ flagged against baseline; two same-sha builds diffed on the comparisons page nam
 input; a CircleCI build ingests as `mode=ci`; timeline visible on build detail and in the HTML
 artifact; isolated-projects + macOS CI legs green.
 
-## Phase 3 — Context, process health, benchmark mode (M/L)
+## Phase 3 — Context, process health, benchmark mode (M/L) ✅ shipped
 
 - AzureDevOpsConnector (Timeline pull, optional service hooks) → CI span tree + queue time,
   "Gradle share of pipeline".
@@ -114,20 +114,32 @@ configured-vs-used memory; bottlenecks page answers "what got worse this week".
    `ExecuteWorkBuildOperationType` (execution reasons, caching-disabled reason, origin cache
    key ≥8.7), and the `BuildCache{Local,Remote}{Load,Store}` ops — feature-flagged per Gradle
    version, degrading to "unknown". Upgrades the comparison page to per-property cause ranking
-   and unlocks `avoidedMs`/`criticalPathMs`.
+   and unlocks `avoidedMs`/`criticalPathMs`. **Delivered plan 038** (folded behind the central
+   `buildhound { internalAdapters { } }` per-toggle consent gate in plan 074; a warm-daemon
+   CC-hit toggle-rehydration edge is tracked, still open, in plan 075).
 3. **Addon foundation + `dev.buildhound.test-sharding`**: reserved `extensions` payload map,
    `BuildHoundCollectorRegistry` in commons, `/v1/addons/<id>/…` namespace
    ([research/plugin-ecosystem-gap-analysis.md §6](research/plugin-ecosystem-gap-analysis.md));
    sharding addon per [research/test-distribution-addon.md](research/test-distribution-addon.md)
    (server LPT plan over 30-day p90 per-class timings, `BUILDHOUND_SHARD_INDEX` interface,
-   run-all-on-failure fallback, pinned `module/class` join key).
+   run-all-on-failure fallback, pinned `module/class` join key). **Delivered plans 039/040**
+   (`buildhound-addon-test-sharding` ships as a separate Gradle module — proof the addon
+   foundation works without forking core).
 4. **GitHub Actions + GitLab CI connectors**; composite action / CI includes; public
-   "write your own provider/connector" docs.
+   "write your own provider/connector" docs. **Delivered plan 041**
+   (`docs/extending-ci-provider.md`, `docs/extending-ci-connector.md`).
 5. OSS-launch hardening: self-host docs, API docs, optional MCP surface, retention config UI,
-   Marketplace extension for Azure if adoption warrants.
+   Marketplace extension for Azure if adoption warrants. Self-host docs
+   (`docs/self-hosting.md`), API docs (`docs/api/openapi.yaml`), and the retention config UI
+   (plan 042) are shipped; the **MCP surface landed plan 071** — a read-only `buildhound-mcp`
+   tool set (`list_builds`, `get_build`, `diagnose`, `trends`, `project_cost`, `task_duration`,
+   `negative_avoidance`) plus a first-party agent `SKILL.md` teaching no-egress diagnosis as the
+   alternative to `./gradlew --scan`. Azure Marketplace extension not pursued (adoption-gated).
 
 **Exit:** an outside team can self-host, connect an unsupported CI via the SPI, apply an addon
-without forking core, and explain a cache miss down to the changed input property.
+without forking core, and explain a cache miss down to the changed input property. **Met** —
+items 2–5 above are delivered; item 1's `test-quarantine` addon is the one piece still open,
+gated on the plan-037 pilot-precision validation.
 
 ## Cross-phase guardrails
 
@@ -142,9 +154,18 @@ same PR.
 
 ## Suggested next implementation steps
 
-1. Land the two in-flight fixes (bare-`CI` mode, git timeout).
-2. Plan 014: task type + cacheable capture + honest hit rate (unblocks most of 2b's rollups).
-3. Plan 015: timeline view (dashboard + HTML artifact) — highest UX value per effort, zero
-   schema work.
-4. Plan 016: fingerprints tier (a) + compare endpoint — the feature the research rates the
-   product's biggest near-term differentiator.
+Phases 0–3 are shipped. Phase 4's items 2–5 (internal-adapters, addon foundation + sharding, CI
+connectors, OSS-launch hardening) are delivered; item 1's flaky detection shipped too, but its
+`test-quarantine` addon is still gated. Two items remain genuinely open, both already planned:
+
+1. **Plan 037 — `dev.buildhound.test-quarantine` addon**: blocked, not a build task, on the
+   locked gate #3 human-in-the-loop step — validating flaky-detection precision (≥ 0.90 labelled)
+   against real pilot data. The addon foundation and its sibling sharding addon (plans 039/040)
+   are ready; this is the last piece of phase 4 item 1.
+2. **Plan 075 — internal-adapters CC-hit toggle rehydration**: a warm-daemon configuration-cache
+   hit can still replay an internal-adapters capture toggle enabled earlier in that daemon's
+   life, even when the current build's `buildhound { internalAdapters { } }` block has everything
+   off. Design and a `@Disabled` acceptance test already exist; the fix itself hasn't landed.
+
+Plan 055 (GitHub Actions job-summary + `cache-provider: basic` positioning) was drafted in the
+same batch as plans 051–076 but is not implemented and not currently in flight.

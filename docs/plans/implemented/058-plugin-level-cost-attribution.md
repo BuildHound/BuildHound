@@ -1,5 +1,14 @@
 # 058 — Plugin-level cost attribution (owning-plugin rollup)
 
+**Status: implemented** · 2026-07-08 — `PluginAttribution.owningPlugin` (with the
+`DefaultTask` carve-out into `"(unattributed)"`), `RollupCalculator.pluginCost` +
+`BuildStore.pluginCost` (in-memory/Postgres parity), `GET /v1/rollups/plugin-cost`
+(`openapi.yaml` documented), `BottleneckCalculator`'s `topPlugins`/`topPluginsAvailable`,
+and the dashboard's "By plugin" toggle + "Top plugins by time" card all landed as designed,
+plus two review-fix commits (`topPluginsAvailable` availability gate, a toggle-click race
+guard, and a benchmark-inclusion parity test). See `docs/architecture.md` decision log,
+2026-07-08 row. No commons/payload/golden change, as scoped; Layer 2 remains deferred.
+
 ## Source
 
 Research finding **F8** (`docs/research/ingest-corpus-analysis.md`), **Layer 1 only** — the

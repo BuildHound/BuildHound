@@ -1,5 +1,14 @@
 # 051 — Invocation-switch & performance-flag posture
 
+**Status: Implemented** — merged in `c1a0f90` (capture + baseline hygiene), `ddeb9fc`
+(isolated-projects exit criterion), `4b3e912` (per-key-family `-P`/`-D` provenance +
+review fixes). All exit criteria met: `environment.invocation` ships with the seven
+`StartParameter` scalars, plaintext `fileEncoding`/`locale`, and per-key
+`GradlePropertyPosture`/`PropertyOrigin`; verified present under isolated projects and on
+a config-cache hit; `baselineWindow` excludes `rerunTasks`/`refreshDependencies` builds in
+both the Postgres and in-memory stores. The `Out` deferrals (flags scorecard, `Test` fork
+counts, `excludedTasks`) remain undelivered elsewhere, as scoped.
+
 ## Source
 
 - Research finding **F1** — "Invocation-switch & performance-flag posture"

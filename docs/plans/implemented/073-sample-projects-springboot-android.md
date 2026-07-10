@@ -1,6 +1,8 @@
 # Plan 073 — two more dev-harness samples: suboptimal Spring Boot (50 modules) + legacy-AGP Android
 
-**Status: planned** · 2026-07-08
+**Status: implemented** · 2026-07-08 (landed: `samples/springboot-legacy/`, `samples/android-legacy-agp/`,
+`samples/README.md` updates — see "Divergences from this plan" below for the reconciled details;
+commits 926f7a4, 4640bc1, e0886a1, a3b255f)
 
 ## 1. Source
 
