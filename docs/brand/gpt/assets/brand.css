@@ -222,14 +222,17 @@ pre {
 }
 
 .product-nav a::before {
-    width: 7px;
-    height: 7px;
-    border-radius: 2px;
+    /* Three-signal motif. The green/amber dots are box-shadows, which take no
+       layout space — reserve their 14px span with margin so they never paint
+       under the label (a scaled 7px box previously overlapped the text). */
+    flex: none;
+    width: 5px;
+    height: 5px;
+    margin-right: 14px;
+    border-radius: 1.5px;
     background: var(--bh-blue);
-    box-shadow: 8px 0 0 var(--bh-green), 16px 0 0 var(--bh-amber);
+    box-shadow: 7px 0 0 var(--bh-green), 14px 0 0 var(--bh-amber);
     content: "";
-    transform: scale(0.65);
-    transform-origin: left center;
 }
 
 .product-nav a:hover,
