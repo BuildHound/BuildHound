@@ -1,5 +1,10 @@
 # 063 — Change blast-radius attribution: which changed module caused this build's work
 
+**Status: implemented** · 2026-07-09 — landed in `7e222d6` (plugin+commons+server: change
+blast-radius attribution + V13 (063)) with review fixes in `c452f24` (NUL escape + capper
+test + diff hardening); see "Implementation notes (as built)" below for divergences from
+the original design.
+
 ## Source
 
 - Research finding **F13**, [`docs/research/ingest-corpus-analysis.md`](../research/ingest-corpus-analysis.md)

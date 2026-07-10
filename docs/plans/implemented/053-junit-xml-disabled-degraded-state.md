@@ -1,5 +1,8 @@
 # 053 — Honest degraded state when JUnit XML is disabled
 
+**Status: implemented** · 2026-07-08 (`plugin+commons: honest degraded state for disabled
+JUnit XML (053)`, f8e75c0; capping/mixed-mode review fixes in d11e823)
+
 ## Source
 
 - Research finding **F3**, [`docs/research/ingest-corpus-analysis.md`](../research/ingest-corpus-analysis.md)

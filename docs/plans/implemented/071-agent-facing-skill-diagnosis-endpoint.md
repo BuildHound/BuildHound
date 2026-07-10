@@ -1,6 +1,6 @@
 # 071 — Agent-facing surface: first-party SKILL.md + machine-readable diagnosis endpoint
 
-**Status: planned** · 2026-07-08
+**Status: implemented** · 2026-07-08 (landed c48e2c5, review fixes d86c512)
 
 ## Source
 

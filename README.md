@@ -16,8 +16,8 @@ fully standalone HTML report artifact. Apache-2.0. Home: [buildhound.dev](https:
 | `buildhound-internal-adapters/` | Bundled-with-core module — the one quarantined use of internal Gradle APIs (cache origin/keys + critical-path/avoided-time, deprecation + WARN-log warnings). Dormant until a `buildhound { internalAdapters { } }` toggle is set (plan 074) |
 | `buildhound-addon-test-sharding/` | Opt-in addon (`dev.buildhound.test-sharding`): server-balanced test sharding across CI shards |
 | `buildhound-mcp/` | Opt-in read-only MCP server exposing the query API over stdio JSON-RPC (agent tooling) |
-| `buildhound-ci-assets/` | JVM-free CI assets: GitHub Action, GitLab + Azure Pipelines templates, metric CLI, overhead/profiler harnesses |
-| `deploy/` | `compose.yaml`: server + TimescaleDB for local/self-host |
+| `buildhound-ci-assets/` | JVM-free CI assets: GitHub Action, GitLab + Azure Pipelines templates, metric CLI, overhead/profiler harnesses, a first-party agent skill (`agent-skill/SKILL.md`) |
+| `deploy/` | `compose.yaml`: server + TimescaleDB for local/self-host, plus a Grafana dashboard recipe for the Prometheus metrics endpoint |
 | `docs/` | Spec, roadmap, research, the living [architecture doc](docs/architecture.md), the [OpenAPI contract](docs/api/openapi.yaml), and [implementation plans](docs/plans/) |
 
 ## Quick start
@@ -201,15 +201,22 @@ Roadmap phases 0–4 are implemented (see the [roadmap](docs/build-telemetry-roa
   broad CI/environment detection, and a measured overhead budget.
 - **Server** — Postgres + TimescaleDB persistence, multi-tenant with per-token + per-host rate
   limiting, eBay-style project/task rollups, a regression engine with baselines and alerts,
-  flaky-test detection, per-build comparison, CI connectors (Azure DevOps, GitHub Actions,
-  GitLab) that enrich builds with pipeline timelines, retention with an `admin` scope, an
-  OpenAPI-contracted API, and a zero-CDN dashboard + docs viewer.
+  flaky-test detection, per-build comparison, a rules-based recommendations engine, a growing
+  family of diagnostic rollups (delivery-health/DORA proxies, warnings, rerun causes,
+  parallelism/graph analytics, cache economics & miss diagnostics, tag-cohort comparison,
+  plugin-cost and change-blast-radius attribution), Prometheus metrics egress with a ready-made
+  Grafana dashboard, CI connectors (Azure DevOps, GitHub Actions, GitLab) that enrich builds with
+  pipeline timelines, retention with an `admin` scope, an OpenAPI-contracted API, and a zero-CDN
+  dashboard + docs viewer.
 - **Artifacts & extension points** — the standalone HTML report, an addon SPI with the
   test-sharding addon, the bundled internal-adapters capture (behind `internalAdapters {}`, off by
-  default), and an opt-in read-only MCP server.
+  default), an opt-in read-only MCP server, and a first-party agent skill (`SKILL.md`) paired with
+  a machine-readable per-build diagnosis endpoint — a no-egress alternative to agents defaulting to
+  `./gradlew --scan`.
 
-Two plans remain open, both blocked: [035](docs/plans/035-cc-miss-reason-capture.md) and
-[037](docs/plans/037-test-quarantine-addon.md).
+Three plans remain open: [035](docs/plans/035-cc-miss-reason-capture.md) and
+[037](docs/plans/037-test-quarantine-addon.md) are blocked; [055](docs/plans/055-github-actions-setup-buildhound-job-summary.md)
+(GitHub Actions job-summary + `cache-provider: basic` positioning) hasn't been started.
 
 > **Known gap:** Android artifact-size capture (plan 031) shipped but is non-functional under
 > AGP 9.x (a settings-plugin/AGP classloader boundary) and its test is disabled pending a

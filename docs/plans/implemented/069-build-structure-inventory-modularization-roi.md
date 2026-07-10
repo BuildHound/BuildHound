@@ -1,5 +1,17 @@
 # 069 — Build-structure inventory (declared project tree) + `isolatedProjects` flag
 
+**Status: Implemented** — landed in `4157a70` (build-structure inventory + `isolatedProjects`
+flag) and `f41f472` (review fixes: root-project false-positive exclusion, `CapsSummary
+.droppedEmptyIntermediateCandidates` counter). Collection-only scope fully shipped and pinned
+by `GoldenPayloadTest`/`PayloadAssemblerTest` (commons) and `BuildStructureFunctionalTest`/
+`IsolatedProjectsFunctionalTest` (plugin) — all exit criteria met. The `settingsEvaluated`
+→`projectsLoaded` hook divergence and the post-landing review notes below are the only
+deviations from the original design. Server persistence, `GET /v1/rollups/modularization`,
+and the sync-health page remain deferred to a follow-up plan as scoped in "Out" below (a
+subsequent whole-branch review also fixed a `PayloadCapper.merge()` gap that was silently
+zeroing `droppedEmptyIntermediateCandidates` server-side — see `docs/architecture.md`
+decision log, 2026-07-09).
+
 ## Source
 
 Research finding **F19** ("Build-structure inventory + modularization / IDE-sync ROI"),

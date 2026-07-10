@@ -1,5 +1,12 @@
 # 057 — Tag-cohort comparison: split a trend by a tag value
 
+**Status: implemented** · 2026-07-08 — `BuildFilter.tags` + `V11` GIN index, `GET
+/v1/trends/cohorts` (`CohortComparator`) and `GET /v1/tags` (`TagCohortCalculator`), and the
+`#/trends` split-by-tag picker all landed as designed, plus two review-fix commits (an
+order-dependent `avgHitRate` parity bug; a GIN-usable `?`-operator predicate, multi-tag/jsonb
+parity tests, and the `maxTags` cap on `tag.<key>` params). See `docs/architecture.md`
+decision log, 2026-07-08 row. No commons/payload/golden change, as scoped.
+
 ## Source
 
 - Research finding **F7** (`docs/research/ingest-corpus-analysis.md` §4 — "Tag-cohort

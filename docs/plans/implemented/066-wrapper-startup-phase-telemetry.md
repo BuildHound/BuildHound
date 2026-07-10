@@ -1,5 +1,11 @@
 # 066 — Wrapper & startup-phase telemetry (variant, SHA-pinning, GUH warmth)
 
+**Status: implemented** · landed in `49c7963` (plugin+commons: wrapper + startup-phase
+telemetry (066)), with infra hardening in `3b25990` (ci-assets: harden wrapper-integrity
+step) and review fixes in `271a20a` (Optional cleanup, warmth boundary, CUSTOM e2e); see
+"Implementation notes (post-implementation addendum)" below for the GuhWarmth anchor
+correction and other clarifications.
+
 ## Source
 
 Research finding **F16** ("Wrapper & startup-phase telemetry", `docs/research/ingest-corpus-analysis.md`

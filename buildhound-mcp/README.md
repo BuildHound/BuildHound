@@ -15,6 +15,7 @@ can read this tenant's build history but can never ingest, change retention, or 
 |---|---|
 | `list_builds` | `GET /v1/builds` (filter by `branch`/`mode`/`outcome`, paginate with `limit`/`offset`) |
 | `get_build` | `GET /v1/builds/{buildId}` |
+| `diagnose` | `GET /v1/builds/{buildId}/diagnosis` — dominant phase, cache-hit-rate vs target, top hotspots, and deltas vs baseline, synthesized into one agent-consumable payload (plan 071). The privacy-preserving alternative to a `--scan` upload. |
 | `trends` | `GET /v1/trends?days=N` |
 | `project_cost` | `GET /v1/rollups/project-cost?days=N` |
 | `task_duration` | `GET /v1/rollups/task-duration?days=N` |
@@ -62,7 +63,7 @@ Diagnostics go to **stderr** so they never corrupt the JSON-RPC stream on stdout
 
 The official [`io.modelcontextprotocol:kotlin-sdk`](https://github.com/modelcontextprotocol/kotlin-sdk)
 exists (0.14.0 at the time of writing) but is still pre-1.0 and pulls a Ktor/coroutines/kotlinx-io
-stack. For a surface this small — six read-only `GET` proxies — a minimal JSON-RPC-2.0-over-newline-
+stack. For a surface this small — seven read-only `GET` proxies — a minimal JSON-RPC-2.0-over-newline-
 delimited-stdio server (`McpServer`) is cheaper, has no 0.x API-churn coupling, and depends only on
 `kotlinx-serialization-json` (already in the version catalog) plus the JDK `HttpClient`. If the tool
 surface grows or the SDK reaches 1.0, revisit. This choice is recorded in the architecture decision log.

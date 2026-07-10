@@ -1,5 +1,9 @@
 # 052 — Per-project configuration-time attribution (public-API tier)
 
+**Status: implemented.** Landed in `d0c1218` (plugin+commons: per-project configuration-time
+attribution) with review fixes in `0dc23be` (collision-free sidecar names + unconditional timing
+clear); the Design/Risks sections below already reflect the as-shipped, post-review-fix behavior.
+
 ## Source
 
 Research finding **F2** (`docs/research/ingest-corpus-analysis.md`), sourced from the Android

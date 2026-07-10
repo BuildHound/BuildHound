@@ -160,6 +160,8 @@ Identity fields: `userId = "u_" + hex12(hmacSha256(projectSalt, "user:" + userna
 
 Governance for the plan-027 source fields: `vcs.remoteUrl` is redacted for **every** scheme (userInfo stripped) and **fails closed** — when the value can't be confidently parsed (whitespace, or an ambiguous userInfo such as a raw `/` inside the password) it is dropped rather than emitted, so a credential never ships; the top-level `links` are host-gated (github/gitlab only) and always `https://`; `environment.aiAgent` is positive-only attribution (only a confirmed agent is named — a miss is silent). The `extensions` channel (plan 039) is opaque addon-owned JSON that core does **not** deep-scrub — each addon owns its own §3.7 bar; core only size-caps it (`caps.droppedExtensions`).
 
+*Defensive ingest scrub (plan 076):* the plugin's scrubber is the primary defense, but `POST /v1/builds` re-runs the same shared-KMP `PayloadScrubber` server-side (a CPU-budget-guarded `IngestScrub` wrapper) over the enumerated free-text surface — `executionReasons`, `nonCacheableReason`, the Kotlin/test/benchmark/failure text fields, and fingerprint key names — **before** `PayloadCapper.cap`, so a non-compliant or bypassed client never lands unscrubbed secrets/paths in storage or on a read path. `PayloadScrubber.scrubText` now hard-clamps every input to 8192 chars before its regexes run (closing an ingest-side ReDoS surface opened by making the scrubber reachable on attacker-controlled text). If one ingest request's total scrub CPU exceeds a 3 s wall-clock budget, the remaining free text is wholesale-redacted to a `<redacted:scrub-timeout>` sentinel rather than partially scrubbed (`caps.scrubBudgetExceeded`, §4) — fail-closed, never a hung request. Tag values, `values`, `ci.*`, `vcs.*`, `links`, `requestedTasks`, `environment.*`, and `extensions` sit outside this enumerated surface (they're already governed by the redaction/allowlist rules above) and are untouched by this pass. Retroactive scrub of builds ingested before this landed is out of scope — old rows may still echo unscrubbed free text on read.
+
 ### 3.8 Standalone HTML artifact (locked: no CDN)
 
 Single self-contained `buildhound-report.html`: inlined CSS/JS (a small vendored chart lib or hand-rolled SVG — no external requests, so it renders inside Azure artifact viewers and email attachments). Content: header (build id, outcome, duration, env, toolchain), task timeline by concurrency lane (lanes computed greedily from per-task start/end overlaps — max observed parallelism — not the Gradle `worker` id, which stays unpopulated; plan 017), sortable task table with outcome/duration/type, cache summary donut + top cacheable misses, Kotlin panel (incremental %, rebuild reasons, slowest compilations), tests summary with failures, process snapshot, build-failure card (exception class + scrubbed message + stacktrace, plan 047) and a warnings panel (captured deprecations / `logger.warn` lines, shown only when the opt-in `internalAdapters` block is present, plan 048), link to the dashboard build page when server configured. Data embedded as one JSON blob → the artifact doubles as an offline payload copy.
@@ -252,14 +254,17 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
             "truncatedNonCacheableReasons": 0, "droppedTasks": 0, "droppedTaskOutcomes": {},
             "droppedArtifacts": 0, "droppedExtensions": 0, "droppedProjectEvaluations": 0,
             "droppedXmlDisabledTasks": 0, "droppedChangedModules": 0, "droppedExcludedTaskNames": 0,
-            "droppedEmptyIntermediateCandidates": 0 },
+            "droppedEmptyIntermediateCandidates": 0, "scrubBudgetExceeded": false },
     // ^ present only when the caps enforcement dropped/truncated something (plan 019); omitted otherwise.
     //   droppedArtifacts (plan 031) and droppedExtensions (plan 039) count overflow drops in those arrays.
     //   droppedProjectEvaluations (052), droppedXmlDisabledTasks (053), droppedChangedModules (063), and
     //   droppedExcludedTaskNames (054) are the same kept-first-N overflow pattern for their respective
     //   arrays; droppedEmptyIntermediateCandidates (069) is enforced inside the collecting ValueSource
     //   itself at execution time (not by PayloadCapper) and threaded in from there rather than computed
-    //   here, unlike every other field in this block.
+    //   here, unlike every other field in this block. scrubBudgetExceeded (076) is the one boolean, not a
+    //   count, and the one field set server-side rather than by the plugin's PayloadCapper — true only
+    //   when the ingest-time scrub CPU budget was exceeded and remaining free text was wholesale-redacted
+    //   rather than partially scrubbed (§3.7).
   "fingerprints": { "build": { "jdk.home": "9f86d081884c7d65…", "env-CI": "18ac3e7343f01690…" },
                     "tasks": {} },
     // ^ salted 16-hex input hashes for cache-miss comparison (plan 022); `tasks` is reserved for

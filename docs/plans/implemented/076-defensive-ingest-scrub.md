@@ -1,5 +1,13 @@
 # 076 — Defensive server-side scrub at ingest
 
+**Status: implemented.** Landed in `6931c10` (server: defensive scrub pass at ingest) plus
+review-fix commits `2411228` (ReDoS clamp, `Exception`-scoped fallback) and the whole-branch
+review `9b4600d`, which wrapped the scrub call in a wall-clock CPU-budget guard
+(`IngestScrub`/`TimedFieldScrubber`, `BUDGET_MS = 3000`) so an unbounded *count* of pathological
+strings can't pin ingest — see `IngestScrub.kt` and `IngestScrubTest.kt`. All exit criteria below
+are met; the idempotency case was also ported into `PayloadScrubberTest` (commons) per the
+Divergences follow-up.
+
 ## Source
 
 - **Plan [007](implemented/007-scrubber.md)'s own "Out" scope** deferred this explicitly:
@@ -54,7 +62,10 @@ boundary, not an oversight).
 - **Plugin-side changes.** `PayloadAssembler`/`TelemetryFinalizerAction` are untouched;
   client-side scrub-then-cap ordering and behavior are unaffected.
 - **Any new schema field, golden file, or DTO.** `PayloadScrubber.scrub` returns the same
-  `BuildPayload` shape; nothing new is serialized.
+  `BuildPayload` shape; nothing new is serialized. **No longer strictly true as of the
+  whole-branch review (`9b4600d`):** that review added `CapsSummary.scrubBudgetExceeded`
+  (additive v1 field, default `false`, goldens untouched) to record honest degradation from
+  this plan's ingest CPU-budget guard — see Status note above.
 
 ## Design
 

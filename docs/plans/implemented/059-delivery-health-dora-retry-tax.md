@@ -1,5 +1,12 @@
 # 059 — Delivery-health page: DORA proxies + the retry tax
 
+**Status: implemented.** Landed in `3e836b3` (`DeliveryHealthCalculator`, `BuildStore.deliveryHealth`,
+`GET /v1/rollups/delivery-health`, `#/delivery` dashboard page + nav link, calculator/route/
+Testcontainers tests, openapi.yaml + architecture.md decision-log entries) with review fixes in
+`5d9bfc5` (same-key rerun heuristic un-poisoning, NUL-byte escape fix, cap-on-most-recent-reruns
+direction, dead `RerunSignal` enum removal). All exit criteria met; the "Implementation notes" section
+below (already present) records the same-PR deltas from the original design.
+
 ## Source
 
 - Research finding **F9** (`docs/research/ingest-corpus-analysis.md` §4 — "Delivery-health

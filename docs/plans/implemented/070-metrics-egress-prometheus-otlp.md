@@ -1,5 +1,11 @@
 # 070 — Metrics egress: token-scoped Prometheus scrape + Grafana recipe
 
+**Status: implemented** (`0fba0f7`, review fixes `ad2fd75`) — `GET /v1/metrics/prometheus`,
+`TokenScope.METRICS`, `MetricsSnapshot`/`MetricsSnapshotCalculator`, `PrometheusExposition`, and the
+`deploy/grafana/` recipe are all landed and tested; see "Divergences from this plan" below for the two
+intentional deviations (server-local percentile, `gauge` typing) and the accepted `flakyTestCount`
+limitation.
+
 ## Source
 
 Research finding **F20** — *Metrics egress (Prometheus/OTLP + Grafana recipe) as the

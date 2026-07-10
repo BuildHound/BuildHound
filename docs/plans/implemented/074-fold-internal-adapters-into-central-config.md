@@ -1,5 +1,10 @@
 # 074 — One plugin, one config block: fold internal-adapters behind `buildhound { internalAdapters { } }`
 
+**Status: implemented.** Landed under this plan's original number, 051 (plan `050d2c3`, implementation
+`666f124`, review fixes `9484501`), before the file was renumbered 051→074 for a numbering collision
+(`f918fce`). The one known gap this plan accepted-with-note — toggle intent not re-established on a
+CC hit — is tracked, still open/deferred, in plan 075.
+
 ## 1. Source
 
 Owner request: *the internal-adapters capture (cache origin/keys + critical-path, Gradle
