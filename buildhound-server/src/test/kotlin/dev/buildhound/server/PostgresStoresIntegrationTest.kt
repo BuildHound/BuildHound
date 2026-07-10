@@ -3,8 +3,12 @@ package dev.buildhound.server
 import dev.buildhound.commons.payload.ArtifactSize
 import dev.buildhound.commons.payload.ArtifactSizes
 import dev.buildhound.commons.payload.ArtifactType
+import dev.buildhound.commons.payload.BuildCacheConfigInfo
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.ChangeDiffBase
+import dev.buildhound.commons.payload.ChangedModulesInfo
+import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
 import javax.sql.DataSource
@@ -374,5 +378,149 @@ class PostgresStoresIntegrationTest {
         val flake = builds.flaky(project.id, 30, now).single()
         assertEquals(512, flake.className.length, "the cross-run flake joined on the clamped className")
         assertEquals("T".repeat(512), builds.taskDuration(project.id, 30, now).byType.single().key)
+    }
+
+    @Test
+    fun `projectKey filters the post-077 rollup surfaces in lockstep with the in-memory store`() {
+        val project = tokens.ensureProjectWithToken("completion-project", sha256Hex("cp"))
+        val inMemory = InMemoryBuildStore()
+        val now = System.currentTimeMillis()
+        val recent = now - 3_600_000
+        val remote = BuildCacheConfigInfo(localEnabled = true, remoteEnabled = true, remotePush = true, remoteType = "HttpBuildCache")
+        // repo-a: older, rich (every plan-079 surface has data); repo-b: NEWER sibling noise with
+        // disjoint plugins/tags/modules so filtered reads have an unambiguous exclusion marker.
+        val fixtures = listOf(
+            TestPayloads.build(
+                buildId = "pa-1", startedAt = recent + 1000, projectKey = "repo-a", sha = "sha-pa",
+                tags = mapOf("team" to "alpha"),
+                changedModules = ChangedModulesInfo(base = ChangeDiffBase.LAST_BUILT_SHA, modules = listOf(":app")),
+                buildCache = remote, configurationCache = ConfigurationCacheState.HIT, ccLoadMs = 100,
+                extensions = TestPayloads.internalAdapters(listOf(":app:compileKotlin" to "REMOTE_HIT")),
+                tasks = listOf(
+                    TestPayloads.task(
+                        ":app:compileKotlin", TaskOutcome.EXECUTED, 5000,
+                        type = "org.jetbrains.kotlin.gradle.tasks.KotlinCompile", cacheable = true,
+                        executionReasons = listOf("Task has failed previously."),
+                    ),
+                ),
+            ),
+            TestPayloads.build(
+                buildId = "pa-2", startedAt = recent + 2000, projectKey = "repo-a",
+                outcome = dev.buildhound.commons.payload.BuildOutcome.FAILED, sha = "sha-pa2",
+            ),
+            TestPayloads.build(
+                buildId = "pb-1", startedAt = recent + 10_000, projectKey = "repo-b", sha = "sha-pb",
+                tags = mapOf("team" to "beta"),
+                changedModules = ChangedModulesInfo(base = ChangeDiffBase.LAST_BUILT_SHA, modules = listOf(":lib")),
+                buildCache = remote, configurationCache = ConfigurationCacheState.MISS_STORED, configurationMs = 900,
+                extensions = TestPayloads.internalAdapters(listOf(":lib:compileJava" to "MISS")),
+                tasks = listOf(
+                    TestPayloads.task(
+                        ":lib:compileJava", TaskOutcome.EXECUTED, 4000,
+                        type = "org.gradle.api.tasks.compile.JavaCompile", cacheable = true,
+                        executionReasons = listOf("No history is available."),
+                    ),
+                ),
+            ),
+            TestPayloads.build(buildId = "pb-2", startedAt = recent + 11_000, projectKey = "repo-b"),
+            TestPayloads.build(buildId = "pb-3", startedAt = recent + 12_000, projectKey = "repo-b"),
+        )
+        for (b in fixtures) {
+            builds.save(project.id, b)
+            inMemory.save(project.id, b)
+        }
+
+        // Every re-signed method agrees byte-for-byte, filtered AND unfiltered.
+        for (key in listOf<String?>(null, "repo-a")) {
+            val label = key ?: "fleet"
+            assertEquals(inMemory.pluginCost(project.id, 30, now, key), builds.pluginCost(project.id, 30, now, key), "pluginCost/$label")
+            assertEquals(inMemory.changeBlastRadius(project.id, 30, now, key), builds.changeBlastRadius(project.id, 30, now, key), "changeBlastRadius/$label")
+            assertEquals(inMemory.rerunCauses(project.id, 30, now, key), builds.rerunCauses(project.id, 30, now, key), "rerunCauses/$label")
+            assertEquals(inMemory.warnings(project.id, 30, now, key), builds.warnings(project.id, 30, now, key), "warnings/$label")
+            assertEquals(inMemory.cacheMissDiagnostics(project.id, 30, now, key), builds.cacheMissDiagnostics(project.id, 30, now, key), "cacheMissDiagnostics/$label")
+            assertEquals(inMemory.cacheRoi(project.id, 30, now, key), builds.cacheRoi(project.id, 30, now, key), "cacheRoi/$label")
+            assertEquals(inMemory.ccEconomics(project.id, 30, now, key), builds.ccEconomics(project.id, 30, now, key), "ccEconomics/$label")
+            assertEquals(inMemory.deliveryHealth(project.id, 30, now, key), builds.deliveryHealth(project.id, 30, now, key), "deliveryHealth/$label")
+            assertEquals(inMemory.windowPayloads(project.id, 30, 50, now, key), builds.windowPayloads(project.id, 30, 50, now, key), "windowPayloads/$label")
+            assertEquals(inMemory.tagKeys(project.id, 30, now, key), builds.tagKeys(project.id, 30, now, key), "tagKeys/$label")
+        }
+
+        // Non-vacuous: sibling-repo data exists and is genuinely excluded when filtered.
+        val filteredPlugins = builds.pluginCost(project.id, 30, now, "repo-a").plugins.map { it.plugin }
+        assertTrue(filteredPlugins.contains("Kotlin Gradle Plugin") && !filteredPlugins.contains("Gradle core"), "$filteredPlugins")
+        assertEquals(listOf(":app"), builds.changeBlastRadius(project.id, 30, now, "repo-a").map { it.module }, "repo-b's :lib excluded")
+        assertEquals(listOf("alpha"), builds.tagKeys(project.id, 30, now, "repo-a").single().values.map { it.value }, "repo-b's beta excluded")
+        assertEquals(1, builds.cacheRoi(project.id, 30, now, "repo-a").buildsWithConfig, "repo-b's snapshot excluded")
+        assertTrue(builds.windowPayloads(project.id, 30, 50, now, "repo-a").all { it.projectKey == "repo-a" })
+
+        // Cap starvation (the plan-079 trap): the 3 repo-b builds are NEWER, so a post-LIMIT filter
+        // at cap=2 would return nothing for repo-a; the pre-LIMIT clause keeps repo-a's builds.
+        assertEquals(
+            listOf("pa-2", "pa-1"),
+            builds.windowPayloads(project.id, 30, 2, now, "repo-a").map { it.buildId },
+            "the selected repo fills the cap despite newer siblings (filter is pre-LIMIT)",
+        )
+        assertEquals(listOf("pb-3", "pb-2"), builds.windowPayloads(project.id, 30, 2, now).map { it.buildId }, "fleet view unchanged")
+    }
+
+    @Test
+    fun `the three constant-capped rollups filter before their LIMIT against real Postgres`() {
+        // Per-method cap starvation (plan 079 review): the caps are constructor-injectable so each
+        // hand-written `ORDER BY … LIMIT ?` query's pre-LIMIT projectKey placement is testable at
+        // cap=2 — a refactor to fetch-then-post-filter fails all three. The sibling repo's builds
+        // pass every gate too (buildCache + internalAdapters), so in the broken shape they alone
+        // would fill the capped window.
+        val project = tokens.ensureProjectWithToken("cap-starve-project", sha256Hex("cs"))
+        val capped = PostgresBuildStore(dataSource, diagnosticRowCap = 2, cacheRoiRowCap = 2, ccEconomicsRowCap = 2)
+        val inMemory = InMemoryBuildStore(diagnosticRowCap = 2, cacheRoiRowCap = 2, ccEconomicsRowCap = 2)
+        val now = System.currentTimeMillis()
+        val recent = now - 3_600_000
+        val remote = BuildCacheConfigInfo(localEnabled = true, remoteEnabled = true, remotePush = true, remoteType = "HttpBuildCache")
+        val fixtures = buildList {
+            for (i in 1..2) {
+                add(
+                    TestPayloads.build(
+                        buildId = "gated-a-$i", startedAt = recent + i, projectKey = "repo-a",
+                        buildCache = remote, configurationCache = ConfigurationCacheState.HIT, ccLoadMs = 100,
+                        extensions = TestPayloads.internalAdapters(listOf(":app:x" to "REMOTE_HIT")),
+                        tasks = listOf(TestPayloads.task(":app:x", TaskOutcome.FROM_CACHE, 10, cacheable = true)),
+                    ),
+                )
+            }
+            for (i in 1..3) {
+                add(
+                    TestPayloads.build(
+                        buildId = "gated-b-$i", startedAt = recent + 10_000 + i, projectKey = "repo-b",
+                        buildCache = remote, configurationCache = ConfigurationCacheState.DISABLED,
+                        extensions = TestPayloads.internalAdapters(listOf(":lib:y" to "MISS")),
+                        tasks = listOf(TestPayloads.task(":lib:y", TaskOutcome.EXECUTED, 10, cacheable = true)),
+                    ),
+                )
+            }
+        }
+        for (b in fixtures) {
+            capped.save(project.id, b)
+            inMemory.save(project.id, b)
+        }
+
+        assertTrue(
+            capped.cacheMissDiagnostics(project.id, 30, now, "repo-a").remoteCacheObserved,
+            "repo-a's REMOTE_HIT rows fill the capped window despite newer gated siblings",
+        )
+        assertEquals(
+            2, capped.cacheRoi(project.id, 30, now, "repo-a").buildsWithConfig,
+            "repo-a's config snapshots fill the capped window despite newer gated siblings",
+        )
+        assertEquals(
+            2, capped.ccEconomics(project.id, 30, now, "repo-a").ccObservedBuilds,
+            "repo-a's CC posture fills the capped window despite newer siblings",
+        )
+        // Both stores agree at the injected cap, filtered and unfiltered — the same parity discipline.
+        for (key in listOf<String?>(null, "repo-a")) {
+            val label = key ?: "fleet"
+            assertEquals(inMemory.cacheMissDiagnostics(project.id, 30, now, key), capped.cacheMissDiagnostics(project.id, 30, now, key), "cacheMissDiagnostics/$label")
+            assertEquals(inMemory.cacheRoi(project.id, 30, now, key), capped.cacheRoi(project.id, 30, now, key), "cacheRoi/$label")
+            assertEquals(inMemory.ccEconomics(project.id, 30, now, key), capped.ccEconomics(project.id, 30, now, key), "ccEconomics/$label")
+        }
     }
 }

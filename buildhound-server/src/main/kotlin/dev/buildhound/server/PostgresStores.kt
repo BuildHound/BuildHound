@@ -40,7 +40,13 @@ fun migrate(dataSource: DataSource) {
 /** Retention purge batch size (plan 042): bounds per-statement lock time on a large delete. */
 private const val PURGE_BATCH: Int = 5000
 
-class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
+class PostgresBuildStore(
+    private val dataSource: DataSource,
+    // Injectable for cap-starvation tests (plan 079 review); production uses the default.
+    internal val diagnosticRowCap: Int = RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS,
+    internal val cacheRoiRowCap: Int = MAX_CACHE_ROI_ROWS,
+    internal val ccEconomicsRowCap: Int = MAX_CC_ECONOMICS_ROWS,
+) : BuildStore {
 
     override fun save(projectId: String, rawPayload: BuildPayload): Boolean {
         // Clamp every index-feeding string before anything is written (plan 078): the clamped payload
@@ -719,9 +725,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * [RollupCalculator.pluginCost] the way [rerunCauses] defers to its own calculator, since the
      * FQCN-prefix → plugin mapping has no SQL equivalent.
      */
-    override fun pluginCost(projectId: String, days: Int, nowMs: Long): PluginCostRollup =
+    override fun pluginCost(projectId: String, days: Int, nowMs: Long, projectKey: String?): PluginCostRollup =
         dataSource.connection.use { connection ->
-            RollupCalculator.pluginCost(taskRowsInDaysWindow(connection, projectId, days, nowMs))
+            RollupCalculator.pluginCost(taskRowsInDaysWindow(connection, projectId, days, nowMs, projectKey))
         }
 
     /**
@@ -732,15 +738,17 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * clean SQL equivalent (percentile + a NULL-safe `module != M`), so it folds in Kotlin on both sides
      * (parity by construction, plan-026 discipline). One build_changed_modules row per (build, module).
      */
-    override fun changeBlastRadius(projectId: String, days: Int, nowMs: Long): List<ChangeBlastRadiusRow> =
+    override fun changeBlastRadius(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<ChangeBlastRadiusRow> =
         dataSource.connection.use { connection ->
-            val changedByBuild = changedModulesInDaysWindow(connection, projectId, days, nowMs)
+            // Both reads take the projectKey filter (plan 079): a changed-modules row from a sibling repo
+            // must neither seed a ChangeBlastBuild nor contribute executed durations.
+            val changedByBuild = changedModulesInDaysWindow(connection, projectId, days, nowMs, projectKey)
             if (changedByBuild.isEmpty()) return@use emptyList()
             // Executed task durations per (build, module) over the same window — only the builds that
             // carried a changedModules block need their executed totals, but the shared windowed fetch is
             // cheap and keeps the parity population identical to projectCost/pluginCost.
             val executedByBuild = LinkedHashMap<String, MutableMap<String, Long>>()
-            for (row in taskRowsInDaysWindow(connection, projectId, days, nowMs)) {
+            for (row in taskRowsInDaysWindow(connection, projectId, days, nowMs, projectKey)) {
                 if (row.outcome != "EXECUTED") continue
                 val perModule = executedByBuild.getOrPut(row.buildId) { LinkedHashMap() }
                 val key = row.module ?: ChangeBlastBuild.NULL_MODULE_KEY
@@ -762,15 +770,26 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         projectId: String,
         days: Int,
         nowMs: Long,
-    ): Map<String, List<String>> =
-        connection.prepareStatement(
+        projectKey: String?,
+    ): Map<String, List<String>> {
+        // build_changed_modules carries no project_key, so a projectKey filter (plan 079) joins builds
+        // (unique on (project_id, build_id) → no fan-out); the unfiltered SQL stays byte-identical.
+        val sql = if (projectKey == null) {
             """
             SELECT build_id, module FROM build_changed_modules
             WHERE project_id = ? AND started_at >= ?
-            """.trimIndent(),
-        ).use { statement ->
+            """.trimIndent()
+        } else {
+            """
+            SELECT cm.build_id, cm.module FROM build_changed_modules cm
+            JOIN builds b ON b.project_id = cm.project_id AND b.build_id = cm.build_id
+            WHERE cm.project_id = ? AND cm.started_at >= ? AND b.project_key = ?
+            """.trimIndent()
+        }
+        return connection.prepareStatement(sql).use { statement ->
             statement.setObject(1, UUID.fromString(projectId))
             statement.setObject(2, cutoff(days, nowMs))
+            projectKey?.let { statement.setString(3, it) }
             statement.executeQuery().use { rows ->
                 val byBuild = LinkedHashMap<String, MutableList<String>>()
                 while (rows.next()) {
@@ -779,6 +798,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 byBuild
             }
         }
+    }
 
     /**
      * Flat task rows for the **days-window, benchmark-included** convention [taskDuration]/
@@ -788,15 +808,33 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * isn't fetched (no `builds` join here, and [RollupCalculator.pluginCost] never reads it) — set to
      * 0, a harmless placeholder no consumer reads.
      */
-    private fun taskRowsInDaysWindow(connection: java.sql.Connection, projectId: String, days: Int, nowMs: Long): List<TaskRow> =
-        connection.prepareStatement(
+    private fun taskRowsInDaysWindow(
+        connection: java.sql.Connection,
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): List<TaskRow> {
+        // task_executions carries no project_key, so a projectKey filter (plan 079) joins builds with
+        // columns qualified (taskDuration's two-branch pattern); the unfiltered SQL stays byte-identical.
+        val sql = if (projectKey == null) {
             """
             SELECT build_id, user_id, module, name, type, outcome, duration_ms, cacheable, execution_reasons
             FROM task_executions WHERE project_id = ? AND started_at >= ?
-            """.trimIndent(),
-        ).use { statement ->
+            """.trimIndent()
+        } else {
+            """
+            SELECT te.build_id, te.user_id, te.module, te.name, te.type, te.outcome, te.duration_ms,
+                   te.cacheable, te.execution_reasons
+            FROM task_executions te
+            JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
+            WHERE te.project_id = ? AND te.started_at >= ? AND b.project_key = ?
+            """.trimIndent()
+        }
+        return connection.prepareStatement(sql).use { statement ->
             statement.setObject(1, UUID.fromString(projectId))
             statement.setObject(2, cutoff(days, nowMs))
+            projectKey?.let { statement.setString(3, it) }
             statement.executeQuery().use { rows ->
                 buildList {
                     while (rows.next()) {
@@ -818,6 +856,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 }
             }
         }
+    }
 
     override fun benchmarkSeries(
         projectId: String,
@@ -1087,9 +1126,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * [cutoff, now) window + `mode <> 'BENCHMARK'` exclusion `bottlenecks` already applies — so both
      * stores fold an identical row population through [RerunCauseRollupCalculator] (parity discipline).
      */
-    override fun rerunCauses(projectId: String, days: Int, nowMs: Long): RerunCauseRollup =
+    override fun rerunCauses(projectId: String, days: Int, nowMs: Long, projectKey: String?): RerunCauseRollup =
         dataSource.connection.use { connection ->
-            RerunCauseRollupCalculator.compute(taskRowsBetween(connection, projectId, cutoff(days, nowMs), atMs(nowMs)))
+            RerunCauseRollupCalculator.compute(taskRowsBetween(connection, projectId, cutoff(days, nowMs), atMs(nowMs), projectKey))
         }
 
     /**
@@ -1103,8 +1142,11 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * practice — belt-and-braces against a hand-edited row, never a crash. `runAttempt` goes through
      * [DeliveryHealthCalculator.parseRunAttempt] (`toIntOrNull`) — a garbage attribute never throws.
      */
-    override fun deliveryHealth(projectId: String, days: Int, nowMs: Long): DeliveryHealthRollup =
+    override fun deliveryHealth(projectId: String, days: Int, nowMs: Long, projectKey: String?): DeliveryHealthRollup =
         dataSource.connection.use { connection ->
+            // The projectKey FILTER uses the indexed hot column (plan 079); the SELECT keeps reading the
+            // jsonb extract for the row field (pre-V15 rows have the payload key but a NULL column only
+            // when ingested before the backfill ran — the backfill makes them agree, so filter ≡ field).
             val rows = connection.prepareStatement(
                 """
                 SELECT build_id, branch, pipeline_name, ci_provider, outcome,
@@ -1115,12 +1157,13 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                        requested_tasks_sig,
                        payload -> 'ci' -> 'attributes' ->> 'runAttempt' AS run_attempt
                 FROM builds
-                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                 """.trimIndent(),
             ).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
                 statement.setObject(3, atMs(nowMs))
+                projectKey?.let { statement.setString(4, it) }
                 statement.executeQuery().use { resultSet ->
                     buildList {
                         while (resultSet.next()) {
@@ -1154,9 +1197,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * blind spot). Own dedicated scan so `/rollups/bottlenecks`/`/rollups/rerun-causes` stay on the
      * indexed table — the plan's accepted cost tradeoff (a heavier windowed scan for this one route).
      */
-    override fun warnings(projectId: String, period: Int, nowMs: Long): WarningsRollup =
+    override fun warnings(projectId: String, period: Int, nowMs: Long, projectKey: String?): WarningsRollup =
         dataSource.connection.use { connection ->
-            WarningCalculator.compute(taskRowsFromPayloadJsonb(connection, projectId, cutoff(period, nowMs), atMs(nowMs)), period)
+            WarningCalculator.compute(taskRowsFromPayloadJsonb(connection, projectId, cutoff(period, nowMs), atMs(nowMs), projectKey), period)
         }
 
     /**
@@ -1173,7 +1216,10 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         projectId: String,
         from: OffsetDateTime,
         to: OffsetDateTime,
+        projectKey: String?,
     ): List<TaskRow> =
+        // builds is already the FROM table of this lateral scan, so a projectKey filter (plan 079) is
+        // a direct hot-column predicate; the unfiltered SQL stays byte-identical.
         connection.prepareStatement(
             """
             SELECT b.build_id AS build_id,
@@ -1186,12 +1232,13 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                    COALESCE((t ->> 'incremental')::boolean, false) AS incremental,
                    ARRAY(SELECT jsonb_array_elements_text(COALESCE(t -> 'executionReasons', '[]'::jsonb))) AS execution_reasons
             FROM builds b, jsonb_array_elements(COALESCE(b.payload -> 'tasks', '[]'::jsonb)) AS t
-            WHERE b.project_id = ? AND b.mode <> 'BENCHMARK' AND b.started_at >= ? AND b.started_at < ?
+            WHERE b.project_id = ? AND b.mode <> 'BENCHMARK' AND b.started_at >= ? AND b.started_at < ?${projectKeyClause(projectKey, "b")}
             """.trimIndent(),
         ).use { statement ->
             statement.setObject(1, UUID.fromString(projectId))
             statement.setObject(2, from)
             statement.setObject(3, to)
+            projectKey?.let { statement.setString(4, it) }
             statement.executeQuery().use { rows ->
                 buildList {
                     while (rows.next()) {
@@ -1229,12 +1276,15 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * caught by the route-layer [runQuery]'s `SQLException`-only classifier) is skipped rather than
      * failing the whole rollup: one corrupt row must never turn a fleet-wide read into a 500.
      */
-    override fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long): CacheMissDiagnostics =
+    override fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long, projectKey: String?): CacheMissDiagnostics =
         dataSource.connection.use { connection ->
+            // projectKey filters in the WHERE, before ORDER BY/LIMIT (plan 079) — a busy sibling repo
+            // must never starve the selected repo's capped window. The conditional param shifts the
+            // positional LIMIT index (the flaky() limitIndex pattern).
             val windowed = connection.prepareStatement(
                 """
                 SELECT payload FROM builds
-                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                   AND (payload -> 'extensions' -> 'internalAdapters' IS NOT NULL OR payload -> 'fingerprints' IS NOT NULL)
                 ORDER BY started_at DESC, build_id DESC
                 LIMIT ?
@@ -1243,7 +1293,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
                 statement.setObject(3, atMs(nowMs))
-                statement.setInt(4, RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS)
+                val limitIndex = if (projectKey == null) 4 else { statement.setString(4, projectKey); 5 }
+                statement.setInt(limitIndex, diagnosticRowCap)
                 statement.executeQuery().use { rows ->
                     buildList {
                         while (rows.next()) {
@@ -1274,12 +1325,14 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * parameter, never interpolated (architecture §6). A row whose `payload` fails to decode is skipped
      * (never fatal), exactly like [cacheMissDiagnostics].
      */
-    override fun cacheRoi(projectId: String, days: Int, nowMs: Long): CacheRoiRollup =
+    override fun cacheRoi(projectId: String, days: Int, nowMs: Long, projectKey: String?): CacheRoiRollup =
         dataSource.connection.use { connection ->
+            // projectKey filters pre-LIMIT (plan 079, the cacheMissDiagnostics rationale); limitIndex
+            // pattern for the shifted positional bind.
             val windowed = connection.prepareStatement(
                 """
                 SELECT payload FROM builds
-                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                   AND (payload -> 'extensions' -> 'internalAdapters' IS NOT NULL
                        OR payload -> 'environment' -> 'buildCache' IS NOT NULL)
                 ORDER BY started_at DESC, build_id DESC
@@ -1289,7 +1342,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
                 statement.setObject(3, atMs(nowMs))
-                statement.setInt(4, MAX_CACHE_ROI_ROWS)
+                val limitIndex = if (projectKey == null) 4 else { statement.setString(4, projectKey); 5 }
+                statement.setInt(limitIndex, cacheRoiRowCap)
                 statement.executeQuery().use { rows ->
                     buildList {
                         while (rows.next()) {
@@ -1317,12 +1371,13 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * agree byte-for-byte (the plan-026/032/067/068 parity discipline). Every bound value is a parameter,
      * never interpolated (architecture §6). A row whose `payload` fails to decode is skipped, never fatal.
      */
-    override fun ccEconomics(projectId: String, days: Int, nowMs: Long): CcEconomicsReport =
+    override fun ccEconomics(projectId: String, days: Int, nowMs: Long, projectKey: String?): CcEconomicsReport =
         dataSource.connection.use { connection ->
+            // projectKey filters pre-LIMIT (plan 079); limitIndex pattern for the shifted bind.
             val windowed = connection.prepareStatement(
                 """
                 SELECT payload FROM builds
-                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                 ORDER BY started_at DESC, build_id DESC
                 LIMIT ?
                 """.trimIndent(),
@@ -1330,7 +1385,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
                 statement.setObject(3, atMs(nowMs))
-                statement.setInt(4, MAX_CC_ECONOMICS_ROWS)
+                val limitIndex = if (projectKey == null) 4 else { statement.setString(4, projectKey); 5 }
+                statement.setInt(limitIndex, ccEconomicsRowCap)
                 statement.executeQuery().use { rows ->
                     buildList {
                         while (rows.next()) {
@@ -1354,12 +1410,13 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
      * discipline). Every bound value is a parameter, never interpolated (architecture §6). A row whose
      * `payload` fails to decode is skipped (never fatal), exactly like [cacheRoi]/[ccEconomics].
      */
-    override fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long): List<BuildPayload> =
+    override fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long, projectKey: String?): List<BuildPayload> =
         dataSource.connection.use { connection ->
+            // projectKey filters pre-LIMIT (plan 079); limitIndex pattern for the shifted bind.
             connection.prepareStatement(
                 """
                 SELECT payload FROM builds
-                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                 ORDER BY started_at DESC, build_id DESC
                 LIMIT ?
                 """.trimIndent(),
@@ -1367,7 +1424,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
                 statement.setObject(3, atMs(nowMs))
-                statement.setInt(4, cap)
+                val limitIndex = if (projectKey == null) 4 else { statement.setString(4, projectKey); 5 }
+                statement.setInt(limitIndex, cap)
                 statement.executeQuery().use { rows ->
                     buildList {
                         while (rows.next()) {
@@ -1540,21 +1598,23 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             }
         }
 
-    override fun tagKeys(projectId: String, days: Int, nowMs: Long): List<TagKeySummary> =
+    override fun tagKeys(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<TagKeySummary> =
         dataSource.connection.use { connection ->
             // Only the `tags` sub-object (not the whole jsonb payload) over the fleet-view window
             // (benchmark excluded, same convention as toolchainAdoption/bottlenecks); decoded and
-            // ranked by the shared TagCohortCalculator so both stores agree.
+            // ranked by the shared TagCohortCalculator so both stores agree. projectKey is a direct
+            // hot-column predicate (plan 079).
             connection.prepareStatement(
                 """
                 SELECT payload->'tags' AS tags FROM builds
-                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                   AND payload->'tags' IS NOT NULL AND payload->'tags' <> '{}'::jsonb
                 """.trimIndent(),
             ).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
                 statement.setObject(3, atMs(nowMs))
+                projectKey?.let { statement.setString(4, it) }
                 statement.executeQuery().use { rows ->
                     val tagMaps = buildList {
                         while (rows.next()) {

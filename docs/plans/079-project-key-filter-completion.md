@@ -39,7 +39,18 @@ the project selection changes (a kept key may not exist in the new project's tag
 **Out:** per-build point reads (`/v1/builds/{id}`*, verdict, ci-run, compare, diagnosis,
 parallelism, graph, per-build recommendations); settings/admin/addons (tenant-scoped
 config, not build windows); `/v1/metrics/prometheus` (series identity is the tenant
-label); the tests/compare build pickers (077 decision stands); baseline/regression keying.
+label); baseline/regression keying.
+
+**Scope amendment (owner request, 2026-07-10)** — supersedes 077's picker decision:
+- The tests/compare **build pickers thread the selection** like every other view — with a
+  project selected, no picker lists another repo's builds.
+- The compare screen guarantees **same-project comparisons regardless of selection**:
+  under "All projects" the pickers label each build with its projectKey and choosing
+  build A narrows picker B to A's project; `comparisonView` refuses (clear notice, no
+  tables) when both builds carry non-null, differing `projectKey`s — null (pre-077)
+  builds stay comparable with anything, since their project is unknown. UI-level only;
+  the `/v1/builds/{a}/compare/{b}` API stays permissive (tenant-scoped, cross-repo via
+  hand-crafted URL is meaningless but harmless — the dashboard now refuses to render it).
 
 ## Design
 
@@ -94,3 +105,20 @@ label); the tests/compare build pickers (077 decision stands); baseline/regressi
   projects" and param-absent API calls are byte-identical to today.
 - `./gradlew :buildhound-server:test` green incl. Testcontainers + smoke; full build green.
 - openapi matches live routes; golden files and migrations untouched.
+
+## Review divergences (2026-07-10)
+
+- **Capped-read row caps made constructor-injectable** (`PostgresBuildStore`/`InMemoryBuildStore`:
+  `diagnosticRowCap`/`cacheRoiRowCap`/`ccEconomicsRowCap`, defaults = the production constants) so
+  the pre-LIMIT projectKey-filter invariant is testable **per method** at cap=2 — the 20k constants
+  are too large to seed, and without this only `windowPayloads` (per-call cap) had a fails-if-wrong
+  starvation test; a refactor to fetch-then-post-filter would have passed every other test. The
+  reviewer's alternative (one shared query builder across the four capped reads) was rejected to
+  keep each unfiltered SQL byte-identical to its pre-079 text.
+- **`CompareBuildRef.projectKey` added** (additive, null omitted from JSON via `explicitNulls=false`)
+  and populated from each side's payload — powers the dashboard's same-project comparison guard from
+  the scope amendment; without it the guard would be dead code against the real server.
+- **Observed/accepted reviewer nits:** `enrichDeliveryHealth`'s double `System.currentTimeMillis()`
+  (route + default param) is pre-existing and the skew is immaterial to a days-window; the in-memory
+  cap-starvation tests living in a route-test file (`ProjectKeyFilterRoutesTest`) is organizational,
+  kept next to the sibling starvation test.

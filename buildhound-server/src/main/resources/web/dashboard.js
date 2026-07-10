@@ -16,10 +16,17 @@
     const projectKey = () => sessionStorage.getItem(PROJECT_KEY_STORAGE) || "";
     const projectSelect = document.getElementById("project-select");
 
-    function resetProjectSelection() {
-        sessionStorage.setItem(PROJECT_KEY_STORAGE, "");
-        if (projectSelect) projectSelect.value = "";
+    // The single mutation point for the project selection (plan 079): storage, the visible
+    // select, AND cross-view state that is scoped to one project's data. A tag cohort picked
+    // under one project may not exist in another project's tag set, so any selection change
+    // resets the trends page's "split by tag" state.
+    function setProjectSelection(value) {
+        sessionStorage.setItem(PROJECT_KEY_STORAGE, value);
+        if (projectSelect) projectSelect.value = value;
+        selectedTagKey = ""; // declared below beside renderSeq; safe — only ever called from handlers, after script evaluation
     }
+
+    function resetProjectSelection() { setProjectSelection(""); }
 
     // Only the most recently started populate call may touch the selector — mirrors renderSeq.
     let projectSelectSeq = 0;
@@ -62,12 +69,12 @@
         const resolved = keys.some(k => k.projectKey === current) ? current : "";
         projectSelect.value = resolved;
         projectSelect.hidden = false;
-        if (resolved !== current) { sessionStorage.setItem(PROJECT_KEY_STORAGE, resolved); route(); }
+        if (resolved !== current) { setProjectSelection(resolved); route(); }
     }
 
     if (projectSelect) {
         projectSelect.addEventListener("change", () => {
-            sessionStorage.setItem(PROJECT_KEY_STORAGE, projectSelect.value);
+            setProjectSelection(projectSelect.value);
             route();
         });
     }
@@ -90,8 +97,9 @@
     let renderSeq = 0;
 
     // The trends page's "split by tag" picker (plan 057) persists across re-renders of that page
-    // (range toggle, filter apply) the same way the token/filter state does — reset only by
-    // reloading the page, not by every trendsView() call.
+    // (range toggle, filter apply) the same way the token/filter state does — reset by reloading
+    // the page or by a project-selection change (setProjectSelection, plan 079), never by an
+    // ordinary trendsView() call.
     let selectedTagKey = "";
 
     const el = (tag, text, className) => {
@@ -266,13 +274,14 @@
         return params;
     };
 
-    // Appends projectKey= to a hardcoded query string (rollup/flaky/benchmark/bottleneck views,
-    // plan 077) when a project is selected; byte-identical to the input otherwise so unfiltered
-    // requests never change shape. encodeURIComponent yields %20 for spaces where URLSearchParams
-    // yields "+" — the difference is accepted, Ktor decodes both identically.
+    // Appends projectKey= to a hardcoded path (rollup/flaky/benchmark/bottleneck/delivery views
+    // and the bare /v1/tags path, plans 077/079) when a project is selected; byte-identical to
+    // the input otherwise so unfiltered requests never change shape. encodeURIComponent yields
+    // %20 for spaces where URLSearchParams yields "+" — the difference is accepted, Ktor decodes
+    // both identically.
     function withProjectKey(path) {
         const pk = projectKey();
-        return pk ? path + "&projectKey=" + encodeURIComponent(pk) : path;
+        return pk ? path + (path.includes("?") ? "&" : "?") + "projectKey=" + encodeURIComponent(pk) : path;
     }
 
     function buildsSentence(filter, total, pageCount) {
@@ -496,8 +505,7 @@
     // slowest/flaky trends are plan 026/036. No new server route; reads the existing query API.
     async function testsView() {
         const seq = ++renderSeq;
-        // Build picker deliberately NOT threaded through the project selector (plan 077): tests/compare are per-build views keyed by buildId.
-        const { items: builds } = await apiList("/v1/builds?limit=50&offset=0");
+        const { items: builds } = await apiList(withProjectKey("/v1/builds?limit=50&offset=0"));
         if (seq !== renderSeq) return;
 
         app.textContent = "";
@@ -1030,7 +1038,7 @@
         // multi-series chart + delta table. Best-effort like the artifact panel below: a fetch
         // error just omits the section, never blanks the rest of the trends page.
         try {
-            const tagKeys = await api("/v1/tags");
+            const tagKeys = await api(withProjectKey("/v1/tags"));
             if (seq !== renderSeq) return;
             if (tagKeys.length) {
                 app.append(el("h3", "Split by tag"));
@@ -1090,8 +1098,7 @@
     // Comparisons (plan 022): pick two builds, then explain B's cache misses vs A by input diff.
     async function compareView() {
         const seq = ++renderSeq;
-        // Build picker deliberately NOT threaded through the project selector (plan 077): tests/compare are per-build views keyed by buildId.
-        const { items: builds } = await apiList("/v1/builds?limit=50&offset=0");
+        const { items: builds } = await apiList(withProjectKey("/v1/builds?limit=50&offset=0"));
         if (seq !== renderSeq) return;
 
         app.textContent = "";
@@ -1100,14 +1107,33 @@
             app.append(emptyState({ title: "No builds to compare", lines: ["Send builds first, then pick two here."] }));
             return;
         }
-        const label = b => when(b.startedAt) + " · " + b.outcome + " · " + (b.branch || "no branch") + " · " + b.mode;
+        // Under "All projects" each option is suffixed with the build's projectKey (plan 079
+        // amendment) so a mixed list stays readable; with a project selected every row is that
+        // project already, so no suffix. Option labels are textContent-safe by construction.
+        const showProject = !projectKey();
+        const label = b => when(b.startedAt) + " · " + b.outcome + " · " + (b.branch || "no branch") + " · " + b.mode
+            + (showProject && b.projectKey ? " · " + b.projectKey : "");
         const selectA = document.createElement("select");
         const selectB = document.createElement("select");
-        for (const build of builds) {
-            selectA.append(new Option(label(build), build.buildId));
-            selectB.append(new Option(label(build), build.buildId));
-        }
-        if (builds.length > 1) selectB.value = builds[1].buildId;
+        for (const build of builds) selectA.append(new Option(label(build), build.buildId));
+        selectA.value = builds[0].buildId;
+        // Same-project constraint (plan 079 amendment): once A is a build with a known project,
+        // B only offers that project's builds — plus pre-077 builds with no key (project unknown,
+        // comparable with anything). Rebuilt from the already-fetched rows on every A change;
+        // B's choice is kept when it survives the narrowing, else falls back like the original
+        // second-newest default. `compatible` is never empty: A itself always qualifies.
+        const rebuildB = preferred => {
+            const a = builds.find(b => b.buildId === selectA.value);
+            const compatible = (a && a.projectKey != null)
+                ? builds.filter(b => b.projectKey == null || b.projectKey === a.projectKey)
+                : builds;
+            selectB.textContent = "";
+            for (const build of compatible) selectB.append(new Option(label(build), build.buildId));
+            const fallback = compatible[compatible.length > 1 ? 1 : 0].buildId;
+            selectB.value = compatible.some(b => b.buildId === preferred) ? preferred : fallback;
+        };
+        selectA.addEventListener("change", () => rebuildB(selectB.value));
+        rebuildB(builds.length > 1 ? builds[1].buildId : builds[0].buildId);
         const bar = el("div", null, "filters");
         bar.append(el("span", "A (fast / cached): "), selectA, el("span", "  B (missed): "), selectB);
         const go = el("button", "Compare");
@@ -1145,6 +1171,14 @@
         app.append(refChips(result.a));
         app.append(el("h3", "B (missed)"));
         app.append(refChips(result.b));
+        // Same-project guard (plan 079 amendment): when both refs carry non-null, differing
+        // projectKeys the comparison is meaningless — refuse to render the tables (the API stays
+        // permissive; this is UI-level honesty). Null on either side (pre-077 build, project
+        // unknown) compares normally.
+        if (result.a.projectKey != null && result.b.projectKey != null && result.a.projectKey !== result.b.projectKey) {
+            app.append(el("p", "These builds belong to different projects (" + result.a.projectKey + " vs " + result.b.projectKey + ") — comparisons are per-project. Pick two builds from the same project.", "notice-warn"));
+            return;
+        }
         if (!result.requestedTasksMatch) {
             app.append(el("p", "⚠ These builds ran different requested tasks — the comparison may be misleading.", "error"));
         }
@@ -1188,8 +1222,7 @@
     async function tasksRollupView() {
         const seq = ++renderSeq;
         const cost = await api(withProjectKey("/v1/rollups/project-cost?days=30"));
-        // change-blast-radius does not accept projectKey yet (landed after plan 077) — deliberately unfiltered.
-        const blast = await api("/v1/rollups/change-blast-radius?days=30");
+        const blast = await api(withProjectKey("/v1/rollups/change-blast-radius?days=30"));
         const duration = await api(withProjectKey("/v1/rollups/task-duration?days=30"));
         const negative = await api(withProjectKey("/v1/rollups/negative-avoidance?days=30"));
         if (seq !== renderSeq) return;
@@ -1275,7 +1308,7 @@
             }
             if (mode === "plugin") {
                 const seq = ++pluginSeq;
-                if (!pluginCost) pluginCost = await api("/v1/rollups/plugin-cost?days=30");
+                if (!pluginCost) pluginCost = await api(withProjectKey("/v1/rollups/plugin-cost?days=30"));
                 // The fetch above is the only await in this function; if the user clicked a different
                 // toggle button while it was in flight, mode has since changed; if the user clicked
                 // "By plugin" again, a newer call now owns pluginSeq — either way that later click's
@@ -1499,12 +1532,11 @@
         // blanking the whole landing page (the same artifact-panel pattern).
         let toolchain = null;
         try { toolchain = await api(withProjectKey("/v1/rollups/toolchain?days=30")); } catch (e) { /* omit the section */ }
-        // warnings/cache-roi do not accept projectKey yet (landed after plan 077) — deliberately unfiltered.
         let warnings = null;
-        try { warnings = await api("/v1/rollups/warnings?period=" + p); } catch (e) { /* omit the section */ }
+        try { warnings = await api(withProjectKey("/v1/rollups/warnings?period=" + p)); } catch (e) { /* omit the section */ }
         // Remote-cache ROI (plan 067, research F17): best-effort like toolchain/warnings above.
         let cacheRoi = null;
-        try { cacheRoi = await api("/v1/rollups/cache-roi?days=30"); } catch (e) { /* omit the section */ }
+        try { cacheRoi = await api(withProjectKey("/v1/rollups/cache-roi?days=30")); } catch (e) { /* omit the section */ }
         if (seq !== renderSeq) return;
 
         app.textContent = "";
@@ -1715,7 +1747,7 @@
     // never zeros read as data.
     async function deliveryHealthView() {
         const seq = ++renderSeq;
-        const d = await api("/v1/rollups/delivery-health?days=30");
+        const d = await api(withProjectKey("/v1/rollups/delivery-health?days=30"));
         if (seq !== renderSeq) return;
 
         app.textContent = "";

@@ -128,7 +128,7 @@ paths:
         - { name: a, in: path, required: true, schema: { type: string } }
         - { name: b, in: path, required: true, schema: { type: string } }
       responses:
-        "200": { description: The build-to-build comparison. }
+        "200": { description: The build-to-build comparison. Each side's ref carries its payload projectKey (plan 079, additive; absent on pre-selector builds). }
         "404": { description: One or both builds are absent for this tenant. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
@@ -258,6 +258,7 @@ paths:
         `INSUFFICIENT_DATA`, never a claimed delta. Benchmark builds excluded by default, same as
         `/v1/trends`. An unknown `tag` key returns an empty comparison (no cohorts), never a 404.
       parameters:
+        - $ref: '#/components/parameters/ProjectKey'
         - { name: tag, in: query, required: true, schema: { type: string }, description: The tag key to split by. }
       responses:
         "200": { description: The per-cohort series + delta comparison. }
@@ -269,6 +270,8 @@ paths:
     get:
       summary: Distinct tag keys + capped top-N values each (plan 057).
       description: Populates the dashboard's split-by-tag picker. Benchmark builds excluded, days clamped like `/v1/trends`.
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: Tag keys with their most-frequent values. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -305,6 +308,8 @@ paths:
     get:
       summary: Owning-plugin cost rollup (plan 058, research F8 Layer 1).
       description: FQCN-prefix rollup over already-collected task types (zero new collection); days-window, benchmark-included, like `/v1/rollups/task-duration`.
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: Per-plugin task-time rows plus an honest availability flag. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -321,6 +326,7 @@ paths:
         whole build's downstream time to each (shared/over-counted), a ranking signal not causal
         isolation. Empty when no windowed build carried a `changedModules` block.
       parameters:
+        - $ref: '#/components/parameters/ProjectKey'
         - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
       responses:
         "200": { description: Top-25 costliest-modules-to-change rows. }
@@ -355,6 +361,8 @@ paths:
   /v1/rollups/rerun-causes:
     get:
       summary: Rerun-cause taxonomy rollup (plan 061).
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: Per-bucket coverage of executed task-hours (overlapping), a build-level cascade rate, and an optional build-logic-storm candidate. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -375,6 +383,7 @@ paths:
         (plan 036) whose affected builds intersect the rerun set — candidates, not confirmed causes.
         Benchmark builds excluded, like `/v1/rollups/bottlenecks`.
       parameters:
+        - $ref: '#/components/parameters/ProjectKey'
         - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
       responses:
         "200": { description: The delivery-health rollup for the window. }
@@ -389,6 +398,7 @@ paths:
         read straight from the payload jsonb — no `task_executions` column, no migration. Every row is
         a ranked candidate with its evidence share, never a confirmed fix.
       parameters:
+        - $ref: '#/components/parameters/ProjectKey'
         - { name: period, in: query, schema: { type: integer, default: 7, minimum: 1, maximum: 90 } }
       responses:
         "200": { description: Ranked warning candidates for the window. }
@@ -406,6 +416,7 @@ paths:
         A stored build row whose payload fails to decode is silently skipped rather than surfaced as an
         error, so a 500 from malformed data is impossible here — only a storage outage 503s.
       parameters:
+        - $ref: '#/components/parameters/ProjectKey'
         - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
       responses:
         "200": { description: The cache-miss diagnostics rollup for the window. }
@@ -427,6 +438,7 @@ paths:
         legitimately shows near-zero reuse). Benchmark builds excluded, like `/v1/rollups/bottlenecks`.
         A stored build row whose payload fails to decode is silently skipped, so only a storage outage 503s.
       parameters:
+        - $ref: '#/components/parameters/ProjectKey'
         - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
       responses:
         "200": { description: The remote-cache ROI rollup for the window. }
@@ -449,6 +461,7 @@ paths:
         like `/v1/rollups/bottlenecks`. A stored build row whose payload fails to decode is silently
         skipped, so only a storage outage 503s.
       parameters:
+        - $ref: '#/components/parameters/ProjectKey'
         - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
       responses:
         "200": { description: The CC-economics rollup for the window. }
@@ -473,6 +486,7 @@ paths:
         benchmark builds excluded, like `/v1/rollups/bottlenecks`. Empty (never an error) on no data; a
         stored build row whose payload fails to decode is silently skipped, so only a storage outage 503s.
       parameters:
+        - $ref: '#/components/parameters/ProjectKey'
         - { name: days, in: query, schema: { type: integer, default: 30, minimum: 1, maximum: 365 } }
       responses:
         "200": { description: Ranked recommendations for the window (possibly empty). }

@@ -933,16 +933,179 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     context.location.hash = "#/flaky"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/flaky?days=30&projectKey=nowinandroid")) throw new Error("flaky view did not thread projectKey");
 
+    // Post-077 surfaces (plan 079). fetched is cumulative — every assertion below slices from a
+    // mark so earlier history (which already contains the unfiltered paths) can't satisfy them.
+    // Delivery view threads projectKey at its hardcoded query string.
+    responses["/v1/rollups/delivery-health?days=30&projectKey=nowinandroid"] = {
+        period: 30, changeFailureRate: [], timeToGreen: [], leadTime: [],
+        retryTax: { chainCount: 0, rerunBuildIds: [], wastedCiMinutesLowerBound: 0.0, runAttemptReruns: 0, sameKeyCandidates: 0 },
+        connectorDataAvailable: false, flakyRerunTax: [],
+    };
+    let mark = fetched.length;
+    context.location.hash = "#/delivery"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/rollups/delivery-health?days=30&projectKey=nowinandroid")) throw new Error("delivery view did not thread projectKey");
+    if (!hasText(byId["app"], "Delivery health")) throw new Error("filtered delivery view did not render");
+
+    // Bottlenecks landing threads projectKey into warnings + cache-roi (079) alongside the
+    // 077-era bottlenecks/toolchain fetches. Toolchain filtered is left uncanned on purpose:
+    // its 404 exercises the best-effort omission without blanking the page.
+    responses["/v1/rollups/bottlenecks?period=7&projectKey=nowinandroid"] = {
+        period: 7,
+        buildCount: { current: 5, prior: 4, deltaPct: 0.25 },
+        successRate: { current: 0.9, prior: 0.9, deltaPct: 0.0 },
+        avgDurationMs: { current: 60000, prior: 60000, deltaPct: 0.0 },
+        hitRate: { current: 0.7, prior: 0.7, deltaPct: 0.0 },
+        regressedTasks: [], slowestWork: [], negativeAvoidance: [], cacheMissHotspots: [],
+        cacheDataAvailable: true, budgetBreaches: null, trendRegressions: null,
+    };
+    responses["/v1/rollups/warnings?period=7&projectKey=nowinandroid"] = { period: 7, warnings: [], typeDataAvailable: true };
+    responses["/v1/rollups/cache-roi?days=30&projectKey=nowinandroid"] = { remoteHitRateAvailable: false, buildsWithConfig: 0, remoteConfiguredShare: 0.0, perMode: [] };
+    mark = fetched.length;
+    context.location.hash = "#/bottlenecks"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/rollups/bottlenecks?period=7&projectKey=nowinandroid")) throw new Error("bottlenecks did not thread projectKey");
+    if (!fetched.slice(mark).includes("/v1/rollups/warnings?period=7&projectKey=nowinandroid")) throw new Error("bottlenecks warnings fetch did not thread projectKey");
+    if (!fetched.slice(mark).includes("/v1/rollups/cache-roi?days=30&projectKey=nowinandroid")) throw new Error("bottlenecks cache-roi fetch did not thread projectKey");
+    if (!hasText(byId["app"], "What got worse")) throw new Error("filtered bottlenecks landing did not render");
+
+    // Tasks explorer threads projectKey into change-blast-radius and the lazily fetched
+    // plugin-cost (079) alongside the 077-era rollups.
+    responses["/v1/rollups/project-cost?days=30&projectKey=nowinandroid"] = [];
+    responses["/v1/rollups/change-blast-radius?days=30&projectKey=nowinandroid"] = [];
+    responses["/v1/rollups/task-duration?days=30&projectKey=nowinandroid"] = { byName: [], byType: [], byTypeAvailable: false };
+    responses["/v1/rollups/negative-avoidance?days=30&projectKey=nowinandroid"] = [];
+    responses["/v1/rollups/plugin-cost?days=30&projectKey=nowinandroid"] = {
+        available: true,
+        plugins: [{ plugin: "Kotlin Gradle Plugin", totalMs: 800000, count: 40, sharePct: 0.8 }],
+    };
+    mark = fetched.length;
+    context.location.hash = "#/tasks"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/rollups/change-blast-radius?days=30&projectKey=nowinandroid")) throw new Error("tasks view did not thread projectKey into change-blast-radius");
+    clickButton(byId["app"], "By plugin");
+    await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/rollups/plugin-cost?days=30&projectKey=nowinandroid")) throw new Error("by-plugin toggle did not thread projectKey into plugin-cost");
+
+    // Tests/compare build pickers thread the selection too (plan 079 amendment — supersedes the
+    // 077 picker decision). withProjectKey appends at the path's end, so the picker path's param
+    // order differs from buildsView's query()-built one; the exact path is canned. Rows reuse
+    // b1/b2 so the tests view's follow-up detail fetch hits the existing fixture.
+    responses["/v1/builds?limit=50&offset=0&projectKey=nowinandroid"] = [
+        { buildId: "b1", startedAt: 1751450000000, durationMs: 65000, outcome: "SUCCESS", mode: "CI", branch: "main", projectKey: "nowinandroid", hitRate: 0.5 },
+        { buildId: "b2", startedAt: 1751450100000, durationMs: 900, outcome: "FAILED", mode: "LOCAL", projectKey: "nowinandroid" },
+    ];
+    mark = fetched.length;
+    context.location.hash = "#/tests"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/builds?limit=50&offset=0&projectKey=nowinandroid")) throw new Error("tests build picker did not thread projectKey");
+    if (!hasText(byId["app"], "Test results")) throw new Error("filtered tests view did not render");
+    mark = fetched.length;
+    context.location.hash = "#/compare"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/builds?limit=50&offset=0&projectKey=nowinandroid")) throw new Error("compare build pickers did not thread projectKey");
+
+    // Tags + cohorts (079): the bare /v1/tags path gains "?projectKey=" (the withProjectKey
+    // separator fix — "&" would 404), and a tag-cohort fetch carries projectKey via query().
+    // Canned bodies are shared object references with the unfiltered fixtures — read-only.
+    responses["/v1/trends?projectKey=nowinandroid&days=30"] = responses["/v1/trends?days=30"];
+    responses["/v1/tags?projectKey=nowinandroid"] = responses["/v1/tags"];
+    responses["/v1/artifacts/trends?projectKey=nowinandroid&days=30"] = [];
+    responses["/v1/trends/cohorts?projectKey=nowinandroid&days=30&tag=R8"] = responses["/v1/trends/cohorts?days=30&tag=R8"];
+    mark = fetched.length;
+    context.location.hash = "#/trends"; context._onhashchange(); await tick(); await tick(); await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/trends?projectKey=nowinandroid&days=30")) throw new Error("filtered trends view did not fetch");
+    if (!fetched.slice(mark).includes("/v1/tags?projectKey=nowinandroid")) throw new Error("bare /v1/tags path must gain ?projectKey= when a project is selected");
+    const filteredTagSelect = findTag(byId["app"], "select").find(s => findAll(s, n => n.tag === "option" && n.value === "R8").length > 0);
+    if (!filteredTagSelect) throw new Error("filtered trends page missing the tag split picker");
+    filteredTagSelect.value = "R8";
+    filteredTagSelect.listeners.change[0]();
+    await tick(); await tick(); await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/trends/cohorts?projectKey=nowinandroid&days=30&tag=R8")) throw new Error("tag split under a selected project did not thread projectKey into the cohorts fetch");
+
+    // Project switch resets the tag-cohort split (079): the stale R8 selection must not survive
+    // into sunflower's tag set — no cohorts fetch fires and the picker is back on "no split".
+    responses["/v1/trends?projectKey=sunflower&days=30"] = responses["/v1/trends?days=30"];
+    responses["/v1/tags?projectKey=sunflower"] = responses["/v1/tags"];
+    responses["/v1/artifacts/trends?projectKey=sunflower&days=30"] = [];
+    mark = fetched.length;
+    byId["project-select"].value = "sunflower";
+    byId["project-select"].listeners.change[0]();
+    await tick(); await tick(); await tick(); await tick();
+    if (store["buildhound.projectKey"] !== "sunflower") throw new Error("project switch did not persist the new key");
+    const staleCohorts = fetched.slice(mark).filter(p => p.indexOf("/v1/trends/cohorts") === 0);
+    if (staleCohorts.length !== 0) throw new Error("project switch must reset the tag split — stale cohorts fetch: " + staleCohorts);
+    const tagSelectAfterSwitch = findTag(byId["app"], "select").find(s => findAll(s, n => n.tag === "option" && n.value === "R8").length > 0);
+    if (!tagSelectAfterSwitch) throw new Error("tag picker missing after project switch");
+    if (tagSelectAfterSwitch.value !== "") throw new Error("tag split selection must be cleared on project switch, got: " + tagSelectAfterSwitch.value);
+
     // "All projects" clears the selection and restores the byte-identical unfiltered path.
-    // fetched is cumulative — assertions below slice from a mark so earlier history (which
-    // already contains the unfiltered path) can't satisfy them.
     byId["project-select"].value = "";
     byId["project-select"].listeners.change[0]();
-    await tick(); await tick();
+    await tick(); await tick(); await tick(); await tick();
     if (store["buildhound.projectKey"] !== "") throw new Error("selecting All projects must clear the stored project key");
-    let mark = fetched.length;
+    mark = fetched.length;
     context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
     if (!fetched.slice(mark).includes("/v1/builds?limit=50&offset=0")) throw new Error("selecting All projects must refetch the byte-identical unfiltered builds path");
+
+    // "All projects" on the 079 surfaces: delivery + trends/tags fetch the exact pre-selector
+    // paths and NOTHING in the window carries a projectKey= param.
+    mark = fetched.length;
+    context.location.hash = "#/delivery"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/trends"; context._onhashchange(); await tick(); await tick(); await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/rollups/delivery-health?days=30")) throw new Error("All projects must fetch the bare delivery-health path");
+    if (!fetched.slice(mark).includes("/v1/tags")) throw new Error("All projects must fetch the bare /v1/tags path");
+    const filteredLeak = fetched.slice(mark).filter(p => p.indexOf("projectKey=") >= 0);
+    if (filteredLeak.length) throw new Error("All projects must not append projectKey anywhere: " + filteredLeak);
+
+    // Compare under "All projects" (plan 079 amendment): options carry the projectKey suffix,
+    // and choosing an A with a known project narrows picker B to that project's builds plus
+    // pre-077 unknown-key builds; an unknown-key A leaves B unnarrowed.
+    responses["/v1/builds?limit=50&offset=0"] = [
+        { buildId: "ra1", startedAt: 1751450000000, durationMs: 1000, outcome: "SUCCESS", mode: "CI", branch: "main", projectKey: "repo-a" },
+        { buildId: "rb1", startedAt: 1751450100000, durationMs: 2000, outcome: "SUCCESS", mode: "CI", branch: "main", projectKey: "repo-b" },
+        { buildId: "old1", startedAt: 1751450200000, durationMs: 3000, outcome: "SUCCESS", mode: "CI", branch: "main" },
+        { buildId: "ra2", startedAt: 1751450300000, durationMs: 4000, outcome: "SUCCESS", mode: "CI", branch: "main", projectKey: "repo-a" },
+    ];
+    mark = fetched.length;
+    context.location.hash = "#/compare"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/builds?limit=50&offset=0")) throw new Error("All-projects compare picker must fetch the bare builds path");
+    const pickers = findTag(byId["app"], "select");
+    if (pickers.length < 2) throw new Error("compare picker must render two selects");
+    const pickA = pickers[0], pickB = pickers[1];
+    if (findAll(pickA, n => n.tag === "option" && (n.textContent || "").indexOf("repo-a") >= 0).length === 0) throw new Error("compare options must carry the projectKey suffix under All projects");
+    // A defaults to ra1 (repo-a) → B offers repo-a + unknown-key rows only.
+    const pickBValues = () => findAll(pickB, n => n.tag === "option").map(o => o.value);
+    if (pickBValues().includes("rb1")) throw new Error("picker B must exclude other projects' builds when A has a known project");
+    if (!pickBValues().includes("ra2")) throw new Error("picker B must keep same-project builds");
+    if (!pickBValues().includes("old1")) throw new Error("pre-077 unknown-key builds must stay selectable with anything");
+    // The stub's .value setter is permissive (real-DOM selects reject non-matching values), so the
+    // fallback-index selection must be asserted explicitly: second compatible of [ra1, old1, ra2].
+    if (pickB.value !== "old1") throw new Error("picker B must select the second compatible option after narrowing (got " + pickB.value + ")");
+    // An unknown-project A relaxes B back to the full list.
+    pickA.value = "old1";
+    pickA.listeners.change[0]();
+    if (!pickBValues().includes("rb1")) throw new Error("an unknown-project A must not narrow picker B");
+    if (pickB.value !== "old1") throw new Error("picker B must keep its surviving choice across a relax (got " + pickB.value + ")");
+
+    // Cross-project comparison guard (plan 079 amendment): both refs non-null and differing →
+    // the per-project notice (notice-warn) and NO comparison tables; a same-project pair and
+    // the null-key b1/b2 pair (asserted earlier) still render the full comparison.
+    responses["/v1/builds/ra1/compare/rb1"] = {
+        a: { buildId: "ra1", startedAt: 1751450000000, outcome: "SUCCESS", mode: "CI", branch: "main", projectKey: "repo-a" },
+        b: { buildId: "rb1", startedAt: 1751450100000, outcome: "SUCCESS", mode: "CI", branch: "main", projectKey: "repo-b" },
+        requestedTasksMatch: true,
+        missesToExplain: [":app:compileKotlin"],
+        diffs: [{ key: "jdk.home", scope: "BUILD", valueA: "aaaa1111…", valueB: "bbbb2222…", differingTaskCount: 0, coverage: 1.0, note: "JDK install path differs" }],
+    };
+    context.location.hash = "#/compare/ra1/rb1"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "different projects")) throw new Error("cross-project comparison guard notice missing");
+    if (findAll(byId["app"], n => (n.className || "").indexOf("notice-warn") >= 0).length === 0) throw new Error("cross-project guard must use the notice-warn styling");
+    if (hasText(byId["app"], "Changed inputs")) throw new Error("cross-project comparison must not render the comparison tables");
+    if (hasText(byId["app"], "jdk.home")) throw new Error("cross-project comparison must not render diff rows");
+    responses["/v1/builds/ra1/compare/ra2"] = {
+        a: { buildId: "ra1", startedAt: 1751450000000, outcome: "SUCCESS", mode: "CI", branch: "main", projectKey: "repo-a" },
+        b: { buildId: "ra2", startedAt: 1751450300000, outcome: "SUCCESS", mode: "CI", branch: "main", projectKey: "repo-a" },
+        requestedTasksMatch: true, missesToExplain: [], diffs: [],
+    };
+    context.location.hash = "#/compare/ra1/ra2"; context._onhashchange(); await tick(); await tick();
+    if (!hasText(byId["app"], "Changed inputs")) throw new Error("same-project comparison must still render");
+    if (hasText(byId["app"], "different projects")) throw new Error("same-project comparison must not trip the guard");
 
     // Vanished stored key while >= 2 keys remain (B1): the stale selection is cleared and the
     // view re-routed. The fetch sequence pins the double-render: first the stale filtered route
