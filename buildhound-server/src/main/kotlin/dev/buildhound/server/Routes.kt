@@ -95,7 +95,7 @@ fun Route.ingestRoutes(
             }
 
             payload.projectKey?.takeIf { it != project.key }?.let {
-                // take() bounds the logged value — the raw key is attacker-sized (plan 076 log-flood guard).
+                // take() bounds the logged value — the raw key is attacker-sized (plan 077 log-flood guard).
                 ingestLogger.warn("payload projectKey '{}' differs from token project '{}'", it.take(MAX_PROJECT_KEY_CHARS), project.key)
             }
 
@@ -394,7 +394,7 @@ private fun validateSettings(s: ProjectSettings): String? = when {
  */
 fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenStore, ciSpans: CiSpanStore) {
     route("/v1") {
-        // Distinct payload projectKeys for this tenant (plan 076): powers the dashboard's project
+        // Distinct payload projectKeys for this tenant (plan 077): powers the dashboard's project
         // selector. Read scope, tenant-scoped; newest-activity first. Shares the query rate limiter.
         get("/project-keys") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
@@ -1084,7 +1084,7 @@ private suspend fun ApplicationCall.authenticatedProject(
 
 /**
  * Filter values are allowlisted against the schema enum names — never free text. [projectKey] (plan
- * 076) is a pre-validated bound param supplied by the route via [projectKeyParamOrBadRequest].
+ * 077) is a pre-validated bound param supplied by the route via [projectKeyParamOrBadRequest].
  */
 private fun ApplicationCall.buildFilterOrNull(projectKey: String? = null): BuildFilter? {
     val mode = request.queryParameters["mode"]?.uppercase()
@@ -1129,7 +1129,7 @@ private fun ApplicationCall.buildTagFilterOrNull(): Map<String, String>? {
 }
 
 /**
- * A validated optional `projectKey` query param (plan 076), capped at [MAX_PROJECT_KEY_CHARS] (the
+ * A validated optional `projectKey` query param (plan 077), capped at [MAX_PROJECT_KEY_CHARS] (the
  * same store-side ingest clamp, so a clamped key stays reachable). [value] may be null ("all projects" —
  * today's behavior). The wrapper is null only when the param was present but over-long and a 400 has
  * already been sent — mirroring [buildFilterOrNull]'s null-is-handled contract. The value is only ever

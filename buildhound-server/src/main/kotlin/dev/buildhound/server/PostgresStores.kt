@@ -43,7 +43,7 @@ private const val PURGE_BATCH: Int = 5000
 class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
 
     override fun save(projectId: String, rawPayload: BuildPayload): Boolean {
-        // Clamp the projectKey before anything is written (plan 076): the clamped payload is what the
+        // Clamp the projectKey before anything is written (plan 077): the clamped payload is what the
         // hot column AND the jsonb store, so they can never disagree.
         val payload = boundProjectKey(rawPayload)
         return dataSource.connection.use { connection ->
@@ -149,7 +149,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             // Extracted CC state for the /trends per-day counters (plan 064); null on a pre-064 /
             // environment-less payload — historical rows already read null via the V14 additive column.
             statement.setString(14, payload.environment?.configurationCache?.name)
-            // Payload projectKey → hot column (plan 076); also covers the interrupted-build path (save()).
+            // Payload projectKey → hot column (plan 077); also covers the interrupted-build path (save()).
             statement.setString(15, payload.projectKey)
             statement.setObject(
                 16,
@@ -361,7 +361,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         filter.branch?.let { clauses.append(" AND branch = ?"); params.add(it) }
         filter.mode?.let { clauses.append(" AND mode = ?"); params.add(it) }
         filter.outcome?.let { clauses.append(" AND outcome = ?"); params.add(it) }
-        // Payload project selector (plan 076): unqualified `project_key` is unambiguous (only `builds`
+        // Payload project selector (plan 077): unqualified `project_key` is unambiguous (only `builds`
         // carries it), so the same clause is valid in the artifacts/trends join too.
         filter.projectKey?.let { clauses.append(" AND project_key = ?"); params.add(it) }
         // Fleet-view exclusion (plan 030): NOT IN over bound params, order-matched with the values.
@@ -480,7 +480,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         OffsetDateTime.ofInstant(Instant.ofEpochMilli(ms), ZoneOffset.UTC)
 
     /**
-     * ` AND [alias.]project_key = ?` when a projectKey filter is set (plan 076), else empty — so the
+     * ` AND [alias.]project_key = ?` when a projectKey filter is set (plan 077), else empty — so the
      * unfiltered SQL stays byte-identical. `alias`/column are fixed literals, the value is always bound.
      */
     private fun projectKeyClause(projectKey: String?, alias: String? = null): String =
@@ -488,7 +488,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
 
     override fun projectKeys(projectId: String): List<ProjectKeyRow> =
         dataSource.connection.use { connection ->
-            // Distinct non-null projectKeys, newest-activity first (plan 076): a grouped scan of the
+            // Distinct non-null projectKeys, newest-activity first (plan 077): a grouped scan of the
             // builds_project_projectkey_started_idx hot index. projectKey tiebreak mirrors the in-memory
             // store. LIMIT bounds hostile key cardinality (MAX_PROJECT_KEYS, a compile-time const —
             // never user input); ORDER means truncation drops the longest-idle keys.
@@ -522,7 +522,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
     override fun projectCost(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<ProjectCostRow> =
         dataSource.connection.use { connection ->
             // projectCost already joins builds for the wall time, so a projectKey filter is just an extra
-            // predicate on `b` — the unfiltered SQL stays byte-identical (plan 076).
+            // predicate on `b` — the unfiltered SQL stays byte-identical (plan 077).
             connection.prepareStatement(
                 // Integer division (sum/count) matches RollupCalculator's truncating averageOrZero;
                 // trunc() matches its .toInt() on the executed percentage (the eBay quirk).
@@ -585,7 +585,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
 
     override fun taskDuration(projectId: String, days: Int, nowMs: Long, projectKey: String?): TaskDurationRollup =
         dataSource.connection.use { connection ->
-            // task_executions carries no project_key, so a projectKey filter (plan 076) adds a join to
+            // task_executions carries no project_key, so a projectKey filter (plan 077) adds a join to
             // builds (unique on (project_id, build_id) → no row fan-out) with columns qualified. The
             // unfiltered branch is byte-identical to today; only the filtered branch takes the join.
             fun rank(byType: Boolean): List<TaskDurationRow> {
@@ -648,7 +648,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
 
     override fun negativeAvoidance(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<NegativeAvoidanceRow> =
         dataSource.connection.use { connection ->
-            // Only the `win` CTE reads task_executions, so a projectKey filter (plan 076) joins builds and
+            // Only the `win` CTE reads task_executions, so a projectKey filter (plan 077) joins builds and
             // qualifies inside that CTE; the med/excess/final stages are unchanged. Two verbatim branches so
             // the unfiltered SQL is byte-identical to today. percentile_cont(0.5) == RollupCalculator's
             // medianDouble; trunc() matches its .toLong().
@@ -941,7 +941,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         to: OffsetDateTime,
         projectKey: String? = null,
     ): List<TaskRow> =
-        // Already joins builds for wall time, so a projectKey filter (plan 076) is just an extra `b`
+        // Already joins builds for wall time, so a projectKey filter (plan 077) is just an extra `b`
         // predicate; unfiltered SQL stays byte-identical.
         connection.prepareStatement(
             """
@@ -1384,7 +1384,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         dataSource.connection.use { connection ->
             // Read the narrow per-class outcome table (indexed on (project, sha, module, class)) and
             // hand it to the shared FlakyDetector — same rows the in-memory store flattens, so parity.
-            // A projectKey filter (plan 076) joins builds (test_class_outcomes carries no project_key)
+            // A projectKey filter (plan 077) joins builds (test_class_outcomes carries no project_key)
             // with columns qualified; the unfiltered branch is byte-identical to today.
             // ORDER BY … LIMIT bounds the rows read into the JVM (FlakyDetector.MAX_OUTCOME_ROWS,
             // plan §6 "cap rows"): most-recent first, so truncation only ever drops the oldest of a

@@ -13,7 +13,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Dashboard project selector (plan 076): the `/v1/project-keys` enumeration endpoint and the optional
+ * Dashboard project selector (plan 077): the `/v1/project-keys` enumeration endpoint and the optional
  * `projectKey` filter on the query surface. In-memory routes; parity with Postgres is covered by
  * PostgresStoresIntegrationTest. Terminology guard: `projectKey` is the *payload* axis, never the tenant.
  */
@@ -37,7 +37,7 @@ class ProjectKeyRoutesTest {
     // Recent, so builds fall inside the rollup/trend real-clock windows (routes use System.now()).
     private val recent = System.currentTimeMillis() - 3_600_000
 
-    /** Two repos under one tenant: repo-a (3 builds, newer) + repo-b (1 build, older) + a pre-076 null. */
+    /** Two repos under one tenant: repo-a (3 builds, newer) + repo-b (1 build, older) + a pre-077 null. */
     private fun seed(fx: Fx) {
         // repo-a's FooTest diverges across ≥3 same-sha builds → a CROSS_RUN flake (FlakyDetector.MIN_SAMPLES).
         fx.stores.builds.save(
@@ -76,7 +76,7 @@ class ProjectKeyRoutesTest {
                 sha = "sha-b",
             ),
         )
-        // A pre-076 build (null projectKey) — appears only under "all projects", never as a selectable key.
+        // A pre-077 build (null projectKey) — appears only under "all projects", never as a selectable key.
         fx.stores.builds.save(
             fx.project.id,
             TestPayloads.build(buildId = "n-1", startedAt = recent, projectKey = null, userId = "u_1"),
@@ -181,7 +181,7 @@ class ProjectKeyRoutesTest {
     @Test
     fun `an over-long payload projectKey is clamped at save and stays reachable`() = testApplication {
         val fx = fx(); appWith(fx)
-        // The store clamps to MAX_PROJECT_KEY_CHARS (btree-index poison-pill guard, plan 076) — the
+        // The store clamps to MAX_PROJECT_KEY_CHARS (btree-index poison-pill guard, plan 077) — the
         // clamped key must equal the query-param cap, so the build stays reachable by filter.
         fx.stores.builds.save(fx.project.id, TestPayloads.build(buildId = "long-1", projectKey = "k".repeat(3000)))
         val keys = get("/v1/project-keys").bodyAsText()
