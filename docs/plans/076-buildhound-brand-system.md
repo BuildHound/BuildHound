@@ -1,57 +1,77 @@
-# 076 — BuildHound brand system
+# 076 — BuildHound brand exploration
 
 ## Source
 
-User request: create branding, design, icons, and imagery for BuildHound based on the
-existing Gradle plugin, server dashboard, and standalone web report, with reference from
-modern developer-tool websites.
+User request: create a reviewable BuildHound brand direction based on the existing Gradle
+plugin, server dashboard, standalone web report, and modern developer-tool websites. This
+phase produces guidelines and isolated concept pages only. Product integration is a later
+design-kit task.
 
 ## Scope
 
 In:
 
-- Define a product-facing visual language for BuildHound in the hosted dashboard.
-- Add first-party logo/icon treatment and lightweight product imagery without external
-  network dependencies.
-- Carry the same brand primitives into the standalone HTML report while preserving its
-  zero-network artifact contract.
-- Keep copy aligned with the existing open-source Gradle telemetry positioning.
+- Capture the visual decisions from the dashboard/report prototype in
+  `docs/brand/DESIGN-GPT.md`.
+- Define color, typography, spacing, shape, iconography, imagery, interaction, responsive,
+  accessibility, and product-copy guidance for later design-kit implementation.
+- Create self-contained HTML review pages under `docs/brand/gpt/` that demonstrate the
+  brand system, dashboard direction, report direction, and exportable SVG assets.
+- Keep the concepts grounded in real BuildHound surfaces: task timing, cache outcomes,
+  failures, flaky tests, CI spans, and offline reports.
+- Remove the prototype styling and markup from runtime dashboard/report resources after
+  its design decisions have been captured.
 
 Out:
 
-- New server routes, schema fields, or telemetry capture.
-- External image/font/icon dependencies.
-- A separate marketing site build.
+- Any change to `buildhound-server/src/main/resources/web/index.html`.
+- Any change to `buildhound-server/src/main/resources/web/dashboard.js`.
+- Any change to
+  `buildhound-report/src/main/resources/dev/buildhound/report/report-template.html`.
+- Product integration, a production design-kit package, server routes, schema fields, or
+  telemetry capture.
+- External image, font, or icon dependencies in the review pages.
 
 ## Design
 
-Touch only static web assets:
+The brand direction is "observability for builds": warm precision surfaces over a subtle
+measurement grid, a charcoal-and-amber hound/trail mark, and distinct semantic colors for
+healthy, cached, informational, and failed work. Imagery is built from actual product
+concepts such as timelines, signal tracks, cache states, flaky tests, and CI spans rather
+than generic developer illustrations.
 
-- `buildhound-server/src/main/resources/web/index.html`
-- `buildhound-server/src/main/resources/web/dashboard.js`
-- `buildhound-report/src/main/resources/dev/buildhound/report/report-template.html`
-
-The brand direction is "observability for builds": dark-on-light precision surfaces,
-amber/green/blue status colors, a hound-mark made from simple inline CSS/SVG primitives,
-and dashboard imagery made from real product concepts (timeline, cache, flaky tests,
-CI spans). All payload-derived text continues to reach the DOM through `textContent`;
-static decorative SVG/CSS is fixed markup only.
+The deliverable is intentionally implementation-neutral. `DESIGN-GPT.md` records tokens,
+rules, examples, and accessibility constraints; the HTML pages are review fixtures, not
+source files for direct product copying. A later design-kit plan will reconcile this
+direction with other brand explorations, turn approved choices into tokens/components,
+and define adoption by the dashboard and standalone report.
 
 ## Test Strategy
 
-- Run focused report/static asset tests that protect the standalone artifact contract.
-- Run server resource tests if available.
-- Smoke the dashboard and report in a browser-compatible local flow when practical.
+- Confirm runtime dashboard/report resources have no remaining changes in this branch.
+- Check the review pages for missing local assets, external network references, malformed
+  HTML, and accidental horizontal overflow.
+- Review the brand overview, dashboard sample, and report sample at desktop and mobile
+  viewport sizes in a browser.
+- Run `git diff --check`.
 
 ## Risks
 
-- Standalone report CSP and zero-network guarantees must remain intact.
-- Dashboard styles must stay responsive without adding a build step or dependencies.
-- Icons must be static/allowlisted, not generated from untrusted payload values.
+- Review fixtures may be mistaken for production-ready components; label their status and
+  document what still needs design-kit normalization.
+- A self-contained concept can drift from the real dashboard information architecture;
+  use representative BuildHound data and name mappings explicitly.
+- Semantic colors can lose contrast across light/dark themes; document paired foreground
+  and background values and verify the samples visually.
+- The concept may overlap with another brand draft; keep `DESIGN-GPT.md` clearly identified
+  as an alternative for review rather than silently replacing approved guidance.
 
 ## Exit Criteria
 
-- Dashboard has a coherent BuildHound header, visual system, icons, and first-run/empty
-  states that explain the product without a marketing page.
-- Standalone reports visually match the dashboard and remain offline-safe.
-- Focused tests pass, or any unrun tests are explicitly called out.
+- `docs/brand/DESIGN-GPT.md` fully captures the prototype's visual tokens, mark, component
+  patterns, imagery language, responsive behavior, and design-kit handoff notes.
+- `docs/brand/gpt/` contains self-contained, navigable brand, dashboard, and report sample
+  pages plus reusable local SVG/CSS assets.
+- The three runtime HTML/JavaScript resources listed above match the branch base.
+- The samples have been visually reviewed on desktop and mobile, and validation results
+  are recorded in the implementation handoff.
