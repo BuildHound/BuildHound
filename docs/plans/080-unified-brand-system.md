@@ -24,6 +24,8 @@ token pairs, and direct diagnostic voice.
   primitives, semantic foreground/background pairs, type, space, radius, and focus.
 - Deliver a complete seven-state status-icon set and exercise the system with representative
   BuildHound telemetry, filters, tables, diagnostics, and an accessible timeline.
+- Add repository-level adoption guidance so future public sites, product dashboards, and
+  report interfaces start from `DESIGN-V2.md`, its tokens, assets, and component rules.
 
 **Out:** runtime dashboard/report adoption; framework components; changes to telemetry,
 server routes, or report generation; deletion of either source exploration; external fonts,
@@ -70,6 +72,8 @@ the slow work.”; scent language is secondary editorial copy.
 - Desktop/mobile and light/dark render checks pass without page overflow; documented contrast,
   focus, target-size, semantic, and reduced-motion checks pass.
 - The two source explorations remain intact and are clearly labelled as historical inputs.
+- Root contributor guidance and the brand index direct site/dashboard/report work to V2 and
+  require intentional divergences to be reconciled in `DESIGN-V2.md` first.
 
 ## Divergences
 
