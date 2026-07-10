@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-labelledby="trace-h-small-title trace-h-small-desc">
+  <title id="trace-h-small-title">BuildHound Trace H small glyph</title>
+  <desc id="trace-h-small-desc">An optically adjusted, double-stepped Trace H for sixteen-pixel use.</desc>
+  <style>
+    .trace-h-small { stroke: #B85A28; }
+    @media (prefers-color-scheme: dark) { .trace-h-small { stroke: #DD8148; } }
+  </style>
+  <path class="trace-h-small" d="M3.5 13V3 M12.5 3v10 M3.5 10.5h3V6h3v3h3" fill="none" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

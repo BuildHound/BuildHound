@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; connect-src 'none'; form-action 'none'; frame-src 'none'; media-src 'none'; object-src 'none'; worker-src 'none'; font-src 'self'; img-src 'self'; manifest-src 'self'; script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-attr 'unsafe-inline'">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="BuildHound V2 brand system: identity, color, typography, iconography, and product components.">
+    <meta name="theme-color" content="#15130f">
+    <title>BuildHound V2 — Brand system</title>
+    <link rel="icon" href="assets/favicon/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="assets/favicon/favicon.ico" sizes="any">
+    <link rel="apple-touch-icon" href="assets/favicon/apple-touch-icon-180.png">
+    <link rel="manifest" href="assets/favicon/site.webmanifest">
+    <link rel="stylesheet" href="assets/tokens/tokens.css">
+    <link rel="stylesheet" href="assets/brand.css">
+    <script src="assets/theme.js" defer></script>
+</head>
+<body class="review-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="review-shell">
+        <header class="review-bar">
+            <a class="review-identity" href="index.html" aria-label="BuildHound V2 brand home">
+                <img src="assets/logo/trace-h-small.svg" alt="">
+                <span><strong>BuildHound V2</strong><small>Unified brand candidate</small></span>
+            </a>
+            <nav class="review-nav" aria-label="Review pages">
+                <a href="index.html" aria-current="page">Brand</a>
+                <a href="dashboard.html">Dashboard</a>
+                <a href="report.html">Report</a>
+            </nav>
+            <div class="theme-control" role="group" aria-label="Color theme">
+                <button class="theme-button" type="button" data-theme-choice="auto" aria-pressed="true">Auto</button>
+                <button class="theme-button" type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+                <button class="theme-button" type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+            </div>
+        </header>
+
+        <main id="main">
+            <section class="brand-hero telemetry-grid" aria-labelledby="brand-title">
+                <div class="hero-copy">
+                    <p class="eyebrow">Build observability, made legible</p>
+                    <h1 id="brand-title">Track every Gradle build.<br><span>Find the slow work.</span></h1>
+                    <p class="hero-lede">BuildHound turns Gradle task, cache, test, and CI telemetry into evidence a team can act on. Warm enough to be recognizable. Precise enough for the build room.</p>
+                    <div class="hero-actions" aria-label="Explore the design system">
+                        <a class="button button-primary" href="dashboard.html">Explore dashboard</a>
+                        <a class="button button-secondary" href="report.html">Open build report</a>
+                    </div>
+                    <dl class="hero-facts">
+                        <div><dt>Identity</dt><dd>Copper Trace H</dd></div>
+                        <div><dt>Product voice</dt><dd>Direct and diagnostic</dd></div>
+                        <div><dt>Delivery</dt><dd>Local-first assets</dd></div>
+                    </dl>
+                </div>
+
+                <div class="trace-board" role="img" aria-label="A build trace moves from ingestion through investigation to a healthy result">
+                    <div class="trace-board-header" aria-hidden="true">
+                        <span>BUILD TRACE</span><span>00:41.82</span>
+                    </div>
+                    <div class="trace-route" aria-hidden="true">
+                        <span class="trace-line"></span>
+                        <span class="trace-node trace-node-info"><b>01</b><small>ingest</small></span>
+                        <span class="trace-node trace-node-running"><b>02</b><small>inspect</small></span>
+                        <span class="trace-node trace-node-success"><b>03</b><small>resolve</small></span>
+                    </div>
+                    <div class="trace-result" aria-hidden="true">
+                        <span class="trace-glyph"></span>
+                        <p><span>Signal isolated</span><strong>:app:compileKotlin</strong></p>
+                        <b>+18.4 s</b>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="identity" aria-labelledby="identity-title">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">01 / Identity</p>
+                        <h2 id="identity-title">A tracking path, resolved into an H.</h2>
+                    </div>
+                    <p>The Trace H combines the durable geometry of a build-tool mark with a directional signal. It avoids a literal mascot while retaining the hound’s job: follow evidence to its source.</p>
+                </div>
+
+                <div class="asset-grid asset-grid-marks">
+                    <article class="asset-card asset-card-featured">
+                        <div class="asset-stage asset-stage-brand"><img src="assets/logo/trace-h-mark.svg" alt="Full-color BuildHound Trace H mark"></div>
+                        <div class="asset-copy"><h3>Primary mark</h3><p>Full-color, fixed palette. Product headers and owned surfaces.</p><a href="assets/logo/trace-h-mark.svg">Open SVG</a></div>
+                    </article>
+                    <article class="asset-card">
+                        <div class="asset-stage"><img src="assets/logo/trace-h-glyph.svg" alt="BuildHound Trace H field-free glyph"></div>
+                        <div class="asset-copy"><h3>Field-free glyph</h3><p>Editorial diagrams and larger telemetry compositions.</p><a href="assets/logo/trace-h-glyph.svg">Open SVG</a></div>
+                    </article>
+                    <article class="asset-card">
+                        <div class="asset-stage asset-stage-small"><img src="assets/logo/trace-h-small.svg" alt="Simplified BuildHound Trace H small-size mark"></div>
+                        <div class="asset-copy"><h3>Small-size cut</h3><p>Redrawn for clarity at 16, 24, and 32 pixels.</p><a href="assets/logo/trace-h-small.svg">Open SVG</a></div>
+                    </article>
+                </div>
+
+                <div class="lockup-grid" aria-label="Wordmark lockups">
+                    <a class="lockup-card lockup-card-light" href="assets/logo/lockup-light.svg"><img src="assets/logo/lockup-light.svg" alt="BuildHound lockup for light surfaces"><span>Light-surface lockup</span></a>
+                    <a class="lockup-card lockup-card-dark" href="assets/logo/lockup-dark.svg"><img src="assets/logo/lockup-dark.svg" alt="BuildHound lockup for dark surfaces"><span>Dark-surface lockup</span></a>
+                </div>
+            </section>
+
+            <section class="section" id="principles" aria-labelledby="principles-title">
+                <div class="section-heading">
+                    <div><p class="eyebrow">02 / Principles</p><h2 id="principles-title">Warm precision, without the noise.</h2></div>
+                    <p>The identity carries character. Product surfaces stay disciplined and let build evidence remain the loudest thing on screen.</p>
+                </div>
+                <div class="principle-grid">
+                    <article><span>01</span><h3>Evidence first</h3><p>Show durations, outcomes, deltas, and causes—not atmospheric code art.</p></article>
+                    <article><span>02</span><h3>Copper is brand</h3><p>Copper identifies BuildHound. It never doubles as a build status.</p></article>
+                    <article><span>03</span><h3>Dense, not cramped</h3><p>Compact data lives inside clear groups with deliberate scanning rhythm.</p></article>
+                    <article><span>04</span><h3>Local by default</h3><p>Fonts, icons, reports, and review pages work without a network request.</p></article>
+                </div>
+            </section>
+
+            <section class="section" id="color" aria-labelledby="color-title">
+                <div class="section-heading">
+                    <div><p class="eyebrow">03 / Color</p><h2 id="color-title">Brand warmth. Semantic clarity.</h2></div>
+                    <p>Every functional state has separate foreground, background, and solid aliases for light and dark themes. Labels and icons carry meaning with color.</p>
+                </div>
+                <div class="swatch-grid" aria-label="Core color roles">
+                    <div class="swatch swatch-brand"><span></span><b>Brand copper</b><small>Identity and selected emphasis</small></div>
+                    <div class="swatch swatch-text"><span></span><b>Technical charcoal</b><small>Text and structure</small></div>
+                    <div class="swatch swatch-surface"><span></span><b>Warm surface</b><small>Reading and evidence</small></div>
+                    <div class="swatch swatch-focus"><span></span><b>Focus blue</b><small>Keyboard focus only</small></div>
+                </div>
+
+                <div class="status-gallery" aria-label="Build status iconography">
+                    <article><span class="status status-success"><img src="assets/icons/status-success.svg" alt="">Passed</span><h3>Success</h3><p>Build completed successfully.</p></article>
+                    <article><span class="status status-cache-hit"><img src="assets/icons/status-cache-hit.svg" alt="">Cache hit</span><h3>Cache hit</h3><p>Output restored without work.</p></article>
+                    <article><span class="status status-failed"><img src="assets/icons/status-failed.svg" alt="">Failed</span><h3>Failure</h3><p>Build or task did not complete.</p></article>
+                    <article><span class="status status-flaky"><img src="assets/icons/status-flaky.svg" alt="">Flaky</span><h3>Flaky</h3><p>Outcome changed across runs.</p></article>
+                    <article><span class="status status-running"><img src="assets/icons/status-running.svg" alt="">Running</span><h3>Running</h3><p>Work is currently executing.</p></article>
+                    <article><span class="status status-cache-miss"><img src="assets/icons/status-cache-miss.svg" alt="">Cache miss</span><h3>Cache miss</h3><p>Output rebuilt from source.</p></article>
+                    <article><span class="status status-interrupted"><img src="assets/icons/status-interrupted.svg" alt="">Interrupted</span><h3>Interrupted</h3><p>Collection ended before completion.</p></article>
+                </div>
+            </section>
+
+            <section class="section" id="type" aria-labelledby="type-title">
+                <div class="section-heading">
+                    <div><p class="eyebrow">04 / Typography</p><h2 id="type-title">Three voices. Three clear jobs.</h2></div>
+                    <p>Bundled variable fonts keep the system distinctive and offline-safe. Each family has a narrow role rather than competing for attention.</p>
+                </div>
+                <div class="type-specimens">
+                    <article class="type-display"><span>Display / Fraunces</span><p>Track what changed.</p><small>Editorial headlines and first-run moments</small></article>
+                    <article class="type-ui"><span>Interface / Inter</span><p>Build duration improved by 18%.</p><small>Navigation, controls, tables, and long-form copy</small></article>
+                    <article class="type-mono"><span>Diagnostic / JetBrains Mono</span><p>:app:compileKotlin&nbsp;&nbsp;18.42s</p><small>Task paths, hashes, timing, and failure traces</small></article>
+                </div>
+            </section>
+
+            <section class="section" id="components" aria-labelledby="components-title">
+                <div class="section-heading">
+                    <div><p class="eyebrow">05 / Product grammar</p><h2 id="components-title">Framed evidence, direct next steps.</h2></div>
+                    <p>Controls remain compact on desktop and become touch-safe on mobile. Notices state the condition and the next useful action.</p>
+                </div>
+                <div class="component-board">
+                    <div class="filter-bar" aria-label="Example build filters">
+                        <label class="field field-grow"><span>Search</span><input type="search" value="compileKotlin" aria-label="Search example builds"></label>
+                        <label class="field"><span>Branch</span><select aria-label="Example branch"><option>main</option><option>release/*</option></select></label>
+                        <label class="field"><span>Outcome</span><select aria-label="Example outcome"><option>All outcomes</option><option>Failed</option></select></label>
+                    </div>
+                    <div class="notice notice-warning">
+                        <img src="assets/icons/status-interrupted.svg" alt="">
+                        <div><strong>3 builds ended before collection completed.</strong><p>Inspect the CI cancellation reason before comparing their durations.</p></div>
+                        <a href="dashboard.html#diagnostics">Review diagnostics</a>
+                    </div>
+                    <div class="empty-state telemetry-grid">
+                        <div class="empty-trace" aria-hidden="true"><span></span><span></span></div>
+                        <div><h3>No matching cache misses</h3><p>Clear the branch filter or widen the selected time range.</p></div>
+                        <a class="button button-secondary" href="dashboard.html#builds">View all builds</a>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section section-compact" id="assets" aria-labelledby="assets-title">
+                <div class="section-heading">
+                    <div><p class="eyebrow">06 / Delivery</p><h2 id="assets-title">One portable, local asset kit.</h2></div>
+                    <p>The manifest records every source and export. Tokens originate in JSON and ship as equivalent CSS for direct use.</p>
+                </div>
+                <div class="delivery-links">
+                    <a href="assets/manifest.json"><span>Asset manifest</span><code>assets/manifest.json</code></a>
+                    <a href="assets/tokens/tokens.json"><span>Token source</span><code>assets/tokens/tokens.json</code></a>
+                    <a href="../DESIGN-V2.md"><span>Design guidance</span><code>docs/brand/DESIGN-V2.md</code></a>
+                </div>
+            </section>
+        </main>
+
+        <footer class="review-footer">
+            <p><strong>BuildHound V2</strong> · unified brand review kit</p>
+            <nav aria-label="Brand documentation"><a href="../README.md">Brand index</a><a href="../DESIGN-V2.md">Design guidance</a><a href="dashboard.html">Dashboard sample</a><a href="report.html">Report sample</a></nav>
+        </footer>
+    </div>
+</body>
+</html>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="status-cache-miss-title status-cache-miss-desc">
+  <title id="status-cache-miss-title">Cache miss</title>
+  <desc id="status-cache-miss-desc">A dashed empty circle.</desc>
+  <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="3 3"/>
+</svg>

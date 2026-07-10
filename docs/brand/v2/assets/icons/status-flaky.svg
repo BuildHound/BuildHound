@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="status-flaky-title status-flaky-desc">
+  <title id="status-flaky-title">Flaky</title>
+  <desc id="status-flaky-desc">An unstable wave inside a circle.</desc>
+  <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"/>
+    <path d="M7.5 14c1-3 2-3 3 0s2 3 3 0 2-3 3 0"/>
+  </g>
+</svg>
