@@ -68,6 +68,9 @@ class ShardPlanRoutesTest {
         assertEquals(HttpStatusCode.BadRequest, plan(req(index = 1, reference = "")).status) // blank reference
         assertEquals(HttpStatusCode.BadRequest, plan(req(index = 1, total = 2_000)).status) // total > MAX_SHARDS (DoS guard)
         assertEquals(HttpStatusCode.BadRequest, plan("not json").status)
+        // reference feeds the shard_plans btree PK (plan 078): over-cap is 400, the boundary is fine.
+        assertEquals(HttpStatusCode.BadRequest, plan(req(index = 1, reference = "r".repeat(257))).status)
+        assertEquals(HttpStatusCode.OK, plan(req(index = 1, reference = "r".repeat(256))).status)
     }
 
     @Test

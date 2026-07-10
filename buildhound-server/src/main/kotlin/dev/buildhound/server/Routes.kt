@@ -194,7 +194,9 @@ fun Route.ingestRoutes(
 
             call.respond(
                 HttpStatusCode.Accepted,
-                IngestResponse(buildId = payload.buildId, status = if (stored) "accepted" else "duplicate"),
+                // The STORED (clamped) id, so the ack names what a detail/verdict poll can resolve
+                // (plan 078); the plugin discards the ack body, so no contract rides on it.
+                IngestResponse(buildId = bounded.buildId, status = if (stored) "accepted" else "duplicate"),
             )
         }
     }
@@ -420,7 +422,7 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val filter = call.buildFilterOrNull(projectKey.value)
-                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/branch/tag filter"))
             val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 200)
             val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceIn(0, 10_000)
             val result = call.runQuery {
@@ -571,7 +573,7 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val filter = call.buildFilterOrNull(projectKey.value)
-                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/branch/tag filter"))
             val days = (call.request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)
             call.respondQuery { store.trends(project.id, filter, days, System.currentTimeMillis()) }
         }
@@ -582,7 +584,7 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val filter = call.buildFilterOrNull(projectKey.value)
-                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/branch/tag filter"))
             call.respondQuery { store.artifactTrends(project.id, filter, call.daysParam(), System.currentTimeMillis()) }
         }
 
@@ -777,7 +779,7 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         get("/trends/cohorts") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val filter = call.buildFilterOrNull()
-                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/tag filter"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/branch/tag filter"))
             val tagKey = call.request.queryParameters["tag"]
             if (tagKey.isNullOrBlank()) {
                 return@get call.respond(HttpStatusCode.BadRequest, ApiError("tag query parameter is required"))
@@ -927,8 +929,15 @@ fun Route.testShardingRoutes(builds: BuildStore, shardPlans: ShardPlanStore, tok
             ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, ApiError("plan request too large"))
         val req = runCatching { BuildHoundJson.payload.decodeFromString(ShardPlanRequest.serializer(), body.decodeToString()) }
             .getOrElse { return@post call.respond(HttpStatusCode.BadRequest, ApiError("invalid plan request")) }
-        if (req.reference.isBlank() || req.total < 1 || req.total > MAX_SHARDS || req.index < 1 || req.index > req.total) {
-            return@post call.respond(HttpStatusCode.BadRequest, ApiError("reference must be non-blank and 1 <= index <= total <= $MAX_SHARDS"))
+        // reference is route-body free text feeding the shard_plans btree PK (plan 078) — cap it like
+        // every other index-bound string.
+        if (req.reference.isBlank() || req.reference.length > MAX_HOT_STRING_CHARS ||
+            req.total < 1 || req.total > MAX_SHARDS || req.index < 1 || req.index > req.total
+        ) {
+            return@post call.respond(
+                HttpStatusCode.BadRequest,
+                ApiError("reference must be non-blank and <= $MAX_HOT_STRING_CHARS chars, with 1 <= index <= total <= $MAX_SHARDS"),
+            )
         }
         val result = call.runQuery {
             shardPlans.planOrCompute(project.id, req.reference, req.total) {
