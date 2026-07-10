@@ -1,10 +1,6 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
-    // Kept only for the `gradleApi()` compile classpath (this module references Gradle settings +
-    // internal build-operation APIs). It no longer declares a plugin: since plan 074 there is ONE
-    // plugin (`dev.buildhound`) that bundles and drives this module via `InternalAdaptersWiring`.
-    `java-gradle-plugin`
 }
 
 description = "Internal-adapters capture bundled with the core plugin: cache origin/keys, critical path, " +
@@ -40,9 +36,14 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 dependencies {
+    // This module no longer declares a Gradle plugin (plan 074). Keep Gradle's public + internal
+    // types compile-only so its runtime variant can be bundled without exporting the host Gradle,
+    // Groovy, and Kotlin distribution into the Plugin Portal artifact (plan 077).
+    compileOnly(gradleApi())
     implementation(projects.buildhoundCommons)
 
     testImplementation(kotlin("test"))
+    testImplementation(gradleApi())
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 

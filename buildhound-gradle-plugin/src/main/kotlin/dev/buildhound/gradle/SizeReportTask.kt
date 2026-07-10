@@ -15,6 +15,7 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 
 /**
  * Measures the APK output of a variant (plan 031). APK output is a *directory* of split APKs
@@ -23,6 +24,9 @@ import org.gradle.api.tasks.TaskAction
  * §Limitations). Declared `@OutputFile`/inputs so the task stays UP-TO-DATE and never mutates or
  * deletes AGP's own outputs.
  */
+@DisableCachingByDefault(
+    because = "Artifact telemetry is cheap to regenerate and must not be retained or replayed by build caches",
+)
 abstract class ApkSizeReportTask : DefaultTask() {
 
     @get:InputDirectory
@@ -60,6 +64,9 @@ abstract class ApkSizeReportTask : DefaultTask() {
  * Measures a single AAB (app bundle) or AAR (library) file (plan 031); the artifact is one file, not
  * a directory. Same never-mutate-outputs discipline as [ApkSizeReportTask].
  */
+@DisableCachingByDefault(
+    because = "Artifact telemetry is cheap to regenerate and must not be retained or replayed by build caches",
+)
 abstract class FileSizeReportTask : DefaultTask() {
 
     @get:InputFile

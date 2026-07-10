@@ -1,6 +1,11 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.plugin.compatibility.compatibility
+
 plugins {
     alias(libs.plugins.kotlin.jvm)
-    `java-gradle-plugin`
+    alias(libs.plugins.gradle.plugin.publish)
+    alias(libs.plugins.shadow)
 }
 
 description = "Settings plugin collecting build/task telemetry (configuration-cache safe)"
@@ -41,6 +46,16 @@ tasks.withType<JavaCompile>().configureEach {
     options.release.set(21)
 }
 
+// Shadow's default runtimeClasspath includes Gradle's own API/runtime files on the 8.14 support
+// floor. Resolve only BuildHound implementation dependencies for the Portal bundle; compileOnly
+// Gradle/AGP APIs and Gradle's embedded Kotlin stay outside the artifact.
+val pluginBundle = configurations.create("pluginBundle") {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+    extendsFrom(configurations.implementation.get())
+    exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib")
+    exclude(group = "org.jetbrains", module = "annotations")
+}
 
 dependencies {
     implementation(projects.buildhoundCommons)
@@ -73,10 +88,17 @@ dependencies {
     "functionalTestImplementation"(libs.kotlin.test.junit5)
     "functionalTestImplementation"(libs.junit.jupiter)
     "functionalTestImplementation"(gradleTestKit())
+    // Runtime-only, separately compiled addon used to prove the published core preserves the
+    // public BuildHoundExtensionContributor ABI across the Shadow JAR boundary (plan 077).
+    "functionalTestRuntimeOnly"(projects.buildhoundAddonTestSharding)
     "functionalTestRuntimeOnly"(libs.junit.platform.launcher)
 }
 
 gradlePlugin {
+    // buildhound.dev currently has no valid TLS certificate, so the public GitHub repository is
+    // the release landing page until that domain is repaired (plan 077).
+    website = "https://github.com/BuildHound/BuildHound"
+    vcsUrl = "https://github.com/BuildHound/BuildHound"
     testSourceSets(functionalTest)
     plugins {
         create("buildhound") {
@@ -85,6 +107,45 @@ gradlePlugin {
             displayName = "BuildHound"
             description = "Collects Gradle build, task, and cache telemetry and ships it to a BuildHound server"
             tags = listOf("telemetry", "build-performance", "observability")
+            compatibility {
+                features {
+                    configurationCache = true
+                }
+            }
+        }
+    }
+}
+
+// The Plugin Portal publishes only this project. Bundle the three internal runtime projects and
+// kotlinx-serialization so consumers do not need unpublished dev.buildhound Maven coordinates.
+// Gradle itself supplies Kotlin stdlib (2.0 at our Gradle 8.14 floor); embedding the build's 2.4
+// stdlib would violate architecture §2 rule 10. Serialization keeps its public package because the
+// addon SPI exposes JsonElement; relocating it would rewrite that binary contract and break every
+// separately compiled contributor. Plugin Publish automatically selects shadowJar and classifies
+// the ordinary JAR as `main`, leaving the bundled JAR as the primary artifact.
+tasks.named<ShadowJar>("shadowJar") {
+    // Plugin Publish requires the bundled artifact to be the unclassified primary JAR.
+    archiveClassifier.set("")
+    // Shadow 9.2.2 is the newest release compatible with Gradle 8.14, but its metadata helper
+    // only reads through Kotlin 2.3. These package indexes are not used at runtime (and BuildHound
+    // uses no Kotlin reflection), so omit them; class metadata and bytecode remain intact.
+    exclude("META-INF/*.kotlin_module")
+    configurations.set(listOf(pluginBundle))
+    mergeServiceFiles()
+    dependencies {
+        exclude(dependency("org.jetbrains.kotlin:kotlin-stdlib:.*"))
+        exclude(dependency("org.jetbrains:annotations:.*"))
+    }
+}
+
+// A local Maven repository used only by PortalPublicationFunctionalTest. Resolving the plugin by
+// marker id/version (without withPluginClasspath/includeBuild) proves the published shape is usable.
+val releaseTestRepository = layout.buildDirectory.dir("release-test-repository")
+publishing {
+    repositories {
+        maven {
+            name = "releaseTest"
+            url = releaseTestRepository.get().asFile.toURI()
         }
     }
 }
@@ -102,6 +163,13 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
     // The isolated-projects suite is watched (non-blocking), run only by isolatedProjectsTest.
     useJUnitPlatform { excludeTags("isolated-projects") }
     systemProperty("buildhound.testkit.cc", testkitCcMode)
+    systemProperty("buildhound.release-test-repository", releaseTestRepository.get().asFile.absolutePath)
+    systemProperty("buildhound.release-version", version.toString())
+    // The Test reads the generated Maven repository. Task ordering alone does not fingerprint those
+    // artifacts, so declare the repository as an input to prevent stale UP-TO-DATE/cache hits after
+    // a same-version Shadow/POM change.
+    inputs.dir(releaseTestRepository).withPathSensitivity(PathSensitivity.RELATIVE)
+    dependsOn("publishAllPublicationsToReleaseTestRepository")
 }
 
 // Watched (non-blocking) isolated-projects suite (plan 021): runs the same functionalTest

@@ -1,0 +1,7 @@
+# actionlint 1.7.12 predates GitHub's `concurrency.queue` schema (added in 2026).
+# Keep every other workflow check enabled; remove this narrow exception after the
+# linter release learns the official `queue: max` key.
+paths:
+  .github/workflows/publish-gradle-plugin.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

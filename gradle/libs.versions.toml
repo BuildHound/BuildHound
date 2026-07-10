@@ -11,6 +11,10 @@ hikaricp = "7.1.0"
 testcontainers = "1.21.4"
 # AGP Variant API for the Android artifact-size collector (plan 031); compileOnly only — never shipped.
 agp = "9.2.1"
+# Plugin Publish 2.1.1 is the current Portal release. Shadow stays on the newest
+# line compatible with BuildHound's Gradle 8.14 support floor (9.3+ needs Gradle 9).
+gradle-plugin-publish = "2.1.1"
+shadow = "9.2.2"
 
 [libraries]
 android-gradle-api = { module = "com.android.tools.build:gradle-api", version.ref = "agp" }
@@ -41,3 +45,5 @@ testcontainers-junit = { module = "org.testcontainers:junit-jupiter", version.re
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+gradle-plugin-publish = { id = "com.gradle.plugin-publish", version.ref = "gradle-plugin-publish" }
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
