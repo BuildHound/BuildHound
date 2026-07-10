@@ -1,4 +1,4 @@
-# 076 — Dashboard project selector (payload `projectKey`)
+# 077 — Dashboard project selector (payload `projectKey`)
 
 ## Source
 
@@ -28,7 +28,7 @@ query param `projectKey`, endpoint `/v1/project-keys`, column `project_key`. UI 
 
 ## Design
 
-- **DB — `V11__project_key.sql`** (append-only, V3 recipe): `ALTER TABLE builds ADD COLUMN
+- **DB — `V15__project_key.sql`** (append-only, V3 recipe; V15 after the main-branch V11–V14 landed): `ALTER TABLE builds ADD COLUMN
   project_key text` (nullable); one-shot backfill `SET project_key = payload->>'projectKey'`;
   index `builds_project_projectkey_started_idx (project_id, project_key, started_at DESC)`.
   Ingest (`insertBuild`, including the interrupted-build path) writes the column from
@@ -58,7 +58,7 @@ query param `projectKey`, endpoint `/v1/project-keys`, column `project_key`. UI 
   - Every data view appends `projectKey=` to its query string when a selection is set
     (filter-pipeline views via `query()`, rollup views at their hardcoded query strings).
   - Builds table gains a "Project" column from `BuildSummary.projectKey` ("—" when null).
-    Builds with null `projectKey` (pre-076 plugin) appear only under "All projects".
+    Builds with null `projectKey` (pre-077 plugin) appear only under "All projects".
 
 ## Test strategy
 
@@ -104,10 +104,10 @@ query param `projectKey`, endpoint `/v1/project-keys`, column `project_key`. UI 
 Adjustments made during the §3 reviews; the design above stands except where noted.
 
 1. **Store-boundary clamp** `MAX_PROJECT_KEY_CHARS = 256` (`boundProjectKey`, applied in *both*
-   stores' `save()`) + backfill `left(payload->>'projectKey', 256)` in V11. Why: the raw payload
+   stores' `save()`) + backfill `left(payload->>'projectKey', 256)` in V15. Why: the raw payload
    `projectKey` feeds the btree-indexed hot column — unbounded, a hostile ingest token exceeds the
    index tuple limit (SQLSTATE 54000) and turns one payload into a permanently retried poison pill,
-   and one pre-existing oversized key would fail V11's `CREATE INDEX` and brick a self-hosted
+   and one pre-existing oversized key would fail V15's `CREATE INDEX` and brick a self-hosted
    upgrade. Why not `PayloadCapper`: it lives in commons (schema-scoped, golden-file-pinned); this
    is a server storage concern, so it stays server-side (the clamped payload *is* the stored
    payload, PayloadCapper precedent). Accepted divergence: Kotlin `take()` counts UTF-16 units,

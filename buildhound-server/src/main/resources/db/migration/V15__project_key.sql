@@ -1,4 +1,4 @@
--- Dashboard project selector (plan 076). Additive only: one nullable column on `builds`
+-- Dashboard project selector (plan 077). Additive only: one nullable column on `builds`
 -- backfilled from the stored payload, plus one hot index. No existing column is altered.
 
 -- The payload's `projectKey` (root project name) — the axis the dashboard selector filters on.

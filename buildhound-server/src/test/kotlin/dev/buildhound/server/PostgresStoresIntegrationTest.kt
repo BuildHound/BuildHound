@@ -209,7 +209,7 @@ class PostgresStoresIntegrationTest {
         assertEquals(1L, builds.count(projectA.id, BuildFilter()))
     }
 
-    /** Reads the `project_key` hot column directly — the ingest-writes-the-column contract (plan 076). */
+    /** Reads the `project_key` hot column directly — the ingest-writes-the-column contract (plan 077). */
     private fun projectKeyColumn(projectId: String, buildId: String): String? =
         dataSource.connection.use { c ->
             c.prepareStatement("SELECT project_key FROM builds WHERE project_id = ?::uuid AND build_id = ?").use { s ->
@@ -227,7 +227,7 @@ class PostgresStoresIntegrationTest {
         assertEquals("repo-x", projectKeyColumn(project.id, "hc-1"), "projectKey is extracted to the hot column")
         assertNull(projectKeyColumn(project.id, "hc-2"), "a null payload projectKey stays null in the column")
 
-        // Store-boundary clamp (plan 076): an oversized key must not reach the btree index (SQLSTATE
+        // Store-boundary clamp (plan 077): an oversized key must not reach the btree index (SQLSTATE
         // 54000 poison pill) — save succeeds (no SQLException = the index accepted the tuple) and the
         // hot column holds the clamped key. Both stores clamp identically, so enumeration stays parity.
         val oversized = TestPayloads.build(buildId = "hc-3", projectKey = "k".repeat(3000))
@@ -271,7 +271,7 @@ class PostgresStoresIntegrationTest {
                 sha = "sha-b",
                 artifacts = ArtifactSizes(android = listOf(ArtifactSize("debug", ":lib", ArtifactType.AAR, 300))),
             ),
-            // A pre-076 build (null projectKey): counted under "all projects", never a selectable key.
+            // A pre-077 build (null projectKey): counted under "all projects", never a selectable key.
             TestPayloads.build(buildId = "s-n1", startedAt = recent, projectKey = null, userId = "u_1"),
         )
         for (b in fixtures) {

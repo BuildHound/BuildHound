@@ -1,10 +1,10 @@
-# 077 — Server-side bounds for hot-column payload strings
+# 078 — Server-side bounds for hot-column payload strings
 
 ## Source
 
-§3.2 security review of plan 076 (follow-up finding): payload-derived strings other than
+§3.2 security review of plan 077 (follow-up finding): payload-derived strings other than
 `projectKey` are written unclamped into btree-indexed columns; a hostile ingest-token
-holder can exceed the ~2704-byte btree tuple limit → SQLSTATE 54000. Plan 076 already
+holder can exceed the ~2704-byte btree tuple limit → SQLSTATE 54000. Plan 077 already
 contains the blast radius (54xxx → permanent 400, no spool loop) and established the
 store-boundary clamp pattern (`boundProjectKey`, `MAX_PROJECT_KEY_CHARS`); this plan
 closes the class.
@@ -27,18 +27,18 @@ closes the class.
 | `POST /v1/metrics` `correlation.{buildId,provider,runId}` | `custom_metrics_uniq` btree | **route validation** 422 (scope/name/text/unit already capped; correlation is the gap) |
 
 **Out:** `buildhound-commons` / `PayloadCapper` / golden files (server storage concern,
-same rationale as 076); plugin changes; **no DB migration** — oversized values cannot
+same rationale as 077); plugin changes; **no DB migration** — oversized values cannot
 exist in these columns: the indexes have existed since each column's creation, so any
 oversized write would already have failed at insert time.
 
 ## Design
 
-- **One helper, one call path.** Generalize 076's `boundProjectKey` into
+- **One helper, one call path.** Generalize 077's `boundProjectKey` into
   `boundForStorage(payload: BuildPayload): BuildPayload` in `BuildStore.kt` (absorbs the
   projectKey clamp; `boundProjectKey` goes away). Constants next to it:
   `MAX_HOT_STRING_CHARS = 256` (buildId, branch, provider, runId, pipelineName, modules),
   `MAX_FQCN_CHARS = 512` (task `type`, test `className`), `MAX_SHA_CHARS = 64`. Shared
-  private `String.truncateSafely(max)` carrying 076's surrogate-pair guard. Copies only
+  private `String.truncateSafely(max)` carrying 077's surrogate-pair guard. Copies only
   when something exceeds a bound — the compliant-plugin path allocates nothing new.
 - **Applied**: (1) first line of both stores' `save()` (replacing the `boundProjectKey`
   call — parity by construction, covers direct-save writers incl. `InterruptedBuild`);
@@ -49,9 +49,9 @@ oversized write would already have failed at insert time.
 - **`buildId` clamp semantics:** two distinct hostile ids sharing a 256-char prefix
   collide post-clamp (idempotent dedupe merges them). Accepted — deterministic, reachable
   only by a hostile client, and strictly better than today's 54000.
-- **Residual (documented, accepted):** clamps are UTF-16-char-based like 076. A payload
+- **Residual (documented, accepted):** clamps are UTF-16-char-based like 077. A payload
   stuffing several 4-byte-char fields of a multi-column index (V7 PK worst case) can in
-  theory still exceed the tuple limit; the 54xxx → 400 classification from 076 is the
+  theory still exceed the tuple limit; the 54xxx → 400 classification from 077 is the
   designed backstop (payload dropped, never spooled). Byte-accurate clamping is not worth
   the complexity for a hostile-only residue.
 - **Routes:** `validateMetric` gains length checks on `correlation.buildId/provider/runId`

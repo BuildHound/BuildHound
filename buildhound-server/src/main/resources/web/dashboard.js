@@ -8,10 +8,10 @@
 
     const token = () => sessionStorage.getItem("buildhound.token") || "";
 
-    // Payload projectKey selector (plan 076): a per-tenant filter over which repo's builds
+    // Payload projectKey selector (plan 077): a per-tenant filter over which repo's builds
     // to show, separate from the auth token. "" means "All projects" — every query-building
     // helper treats an empty string the same as absent, so unset selections stay byte-identical
-    // to pre-076 URLs.
+    // to pre-077 URLs.
     const PROJECT_KEY_STORAGE = "buildhound.projectKey";
     const projectKey = () => sessionStorage.getItem(PROJECT_KEY_STORAGE) || "";
     const projectSelect = document.getElementById("project-select");
@@ -24,7 +24,7 @@
     // Only the most recently started populate call may touch the selector — mirrors renderSeq.
     let projectSelectSeq = 0;
 
-    // Populates the header selector from /v1/project-keys. Best-effort (plan 076): a 401/403,
+    // Populates the header selector from /v1/project-keys. Best-effort (plan 077): a 401/403,
     // network error, or fewer than two distinct keys all just leave the selector hidden — this
     // must never turn into a page-breaking error, only the read views 401 loudly.
     async function populateProjectSelect() {
@@ -42,7 +42,7 @@
             projectSelect.hidden = true;
             // <2 keys removes the selector UI: a lingering stored selection would keep every view
             // invisibly filtered with nothing to clear it. Even when the one remaining key IS the
-            // stored key, filtering is not "all projects" — it hides pre-076 null-projectKey builds.
+            // stored key, filtering is not "all projects" — it hides pre-077 null-projectKey builds.
             if (projectKey()) { resetProjectSelection(); route(); }
             return;
         }
@@ -267,7 +267,7 @@
     };
 
     // Appends projectKey= to a hardcoded query string (rollup/flaky/benchmark/bottleneck views,
-    // plan 076) when a project is selected; byte-identical to the input otherwise so unfiltered
+    // plan 077) when a project is selected; byte-identical to the input otherwise so unfiltered
     // requests never change shape. encodeURIComponent yields %20 for spaces where URLSearchParams
     // yields "+" — the difference is accepted, Ktor decodes both identically.
     function withProjectKey(path) {
@@ -496,7 +496,7 @@
     // slowest/flaky trends are plan 026/036. No new server route; reads the existing query API.
     async function testsView() {
         const seq = ++renderSeq;
-        // Build picker deliberately NOT threaded through the project selector (plan 076): tests/compare are per-build views keyed by buildId.
+        // Build picker deliberately NOT threaded through the project selector (plan 077): tests/compare are per-build views keyed by buildId.
         const { items: builds } = await apiList("/v1/builds?limit=50&offset=0");
         if (seq !== renderSeq) return;
 
@@ -1090,7 +1090,7 @@
     // Comparisons (plan 022): pick two builds, then explain B's cache misses vs A by input diff.
     async function compareView() {
         const seq = ++renderSeq;
-        // Build picker deliberately NOT threaded through the project selector (plan 076): tests/compare are per-build views keyed by buildId.
+        // Build picker deliberately NOT threaded through the project selector (plan 077): tests/compare are per-build views keyed by buildId.
         const { items: builds } = await apiList("/v1/builds?limit=50&offset=0");
         if (seq !== renderSeq) return;
 
@@ -1188,7 +1188,7 @@
     async function tasksRollupView() {
         const seq = ++renderSeq;
         const cost = await api(withProjectKey("/v1/rollups/project-cost?days=30"));
-        // change-blast-radius does not accept projectKey yet (landed after plan 076) — deliberately unfiltered.
+        // change-blast-radius does not accept projectKey yet (landed after plan 077) — deliberately unfiltered.
         const blast = await api("/v1/rollups/change-blast-radius?days=30");
         const duration = await api(withProjectKey("/v1/rollups/task-duration?days=30"));
         const negative = await api(withProjectKey("/v1/rollups/negative-avoidance?days=30"));
@@ -1499,7 +1499,7 @@
         // blanking the whole landing page (the same artifact-panel pattern).
         let toolchain = null;
         try { toolchain = await api(withProjectKey("/v1/rollups/toolchain?days=30")); } catch (e) { /* omit the section */ }
-        // warnings/cache-roi do not accept projectKey yet (landed after plan 076) — deliberately unfiltered.
+        // warnings/cache-roi do not accept projectKey yet (landed after plan 077) — deliberately unfiltered.
         let warnings = null;
         try { warnings = await api("/v1/rollups/warnings?period=" + p); } catch (e) { /* omit the section */ }
         // Remote-cache ROI (plan 067, research F17): best-effort like toolchain/warnings above.
@@ -1923,7 +1923,7 @@
 
     window.addEventListener("hashchange", route);
     // A token may already be in sessionStorage from an earlier page load; populate the project
-    // selector without blocking the first route() (plan 076 — best-effort, never gates routing).
+    // selector without blocking the first route() (plan 077 — best-effort, never gates routing).
     if (token()) populateProjectSelect().catch(() => {});
     route();
 })();

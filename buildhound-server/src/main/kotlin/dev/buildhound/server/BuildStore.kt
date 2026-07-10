@@ -205,7 +205,7 @@ internal fun dependencyEdgesOf(payload: BuildPayload): Map<String, List<String>>
         ?.takeIf { it.isNotEmpty() }
 }
 /**
- * Server-side bound on the payload's projectKey (plan 076). It feeds the btree-indexed
+ * Server-side bound on the payload's projectKey (plan 077). It feeds the btree-indexed
  * builds.project_key hot column; unbounded, a hostile ingest-token holder can exceed the
  * index tuple limit (SQLSTATE 54000) and turn one payload into a permanently retried poison
  * pill. Applied in BOTH stores' save() so the clamped payload IS the stored payload — hot
@@ -225,7 +225,7 @@ internal fun boundProjectKey(payload: BuildPayload): BuildPayload {
 }
 
 /**
- * Cap on GET /v1/project-keys rows (plan 076). Deliberately not [RollupCalculator.TOP_N] (25) — this
+ * Cap on GET /v1/project-keys rows (plan 077). Deliberately not [RollupCalculator.TOP_N] (25) — this
  * is an enumeration, not a ranking: 100 bounds a hostile key-churning ingest token's cardinality
  * without truncating legitimate multi-repo tenants, and the newest-activity-first ORDER means
  * truncation drops the longest-idle keys.
@@ -247,7 +247,7 @@ data class BuildFilter(
      */
     val tags: Map<String, String> = emptyMap(),
     /**
-     * Payload `projectKey` selector (plan 076): the root project name a build reported, NOT the tenant
+     * Payload `projectKey` selector (plan 077): the root project name a build reported, NOT the tenant
      * (`project_id`). Null = all projects (today's behavior, bit-for-bit). Bound in SQL, never interpolated.
      */
     val projectKey: String? = null,
@@ -298,11 +298,11 @@ data class BuildSummary(
     val mode: String,
     val branch: String? = null,
     val hitRate: Double? = null,
-    /** The payload's root-project name (plan 076); null on pre-076 builds — additive JSON field. */
+    /** The payload's root-project name (plan 077); null on pre-077 builds — additive JSON field. */
     val projectKey: String? = null,
 )
 
-/** One row of GET /v1/project-keys (plan 076): a distinct payload projectKey with its build count + last activity. */
+/** One row of GET /v1/project-keys (plan 077): a distinct payload projectKey with its build count + last activity. */
 @Serializable
 data class ProjectKeyRow(val projectKey: String, val builds: Int, val lastBuildAt: Long)
 
@@ -391,20 +391,20 @@ interface BuildStore {
     ): List<BaselinePoint>
 
     /**
-     * Distinct non-null payload [BuildPayload.projectKey]s for this tenant (plan 076), newest-activity
+     * Distinct non-null payload [BuildPayload.projectKey]s for this tenant (plan 077), newest-activity
      * first: the dashboard's project selector. Each carries its build count + last-build epoch-ms.
      * Capped at [MAX_PROJECT_KEYS] rows; the newest-activity ordering makes truncation drop the
      * longest-idle keys first.
      */
     fun projectKeys(projectId: String): List<ProjectKeyRow>
 
-    /** Per-module Project Cost family over the last [days] (plan 026); top-25 by cost scalar. [projectKey] narrows to one repo (plan 076). */
+    /** Per-module Project Cost family over the last [days] (plan 026); top-25 by cost scalar. [projectKey] narrows to one repo (plan 077). */
     fun projectCost(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<ProjectCostRow>
 
-    /** Task duration grouped by name and by type over the last [days] (plan 026); top-25 each. [projectKey] narrows to one repo (plan 076). */
+    /** Task duration grouped by name and by type over the last [days] (plan 026); top-25 each. [projectKey] narrows to one repo (plan 077). */
     fun taskDuration(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): TaskDurationRollup
 
-    /** Negative-avoidance ranking over the last [days] (plan 026); top-25 by total excess. [projectKey] narrows to one repo (plan 076). */
+    /** Negative-avoidance ranking over the last [days] (plan 026); top-25 by total excess. [projectKey] narrows to one repo (plan 077). */
     fun negativeAvoidance(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<NegativeAvoidanceRow>
 
     /**
@@ -433,7 +433,7 @@ interface BuildStore {
      * (scenario, isolationMode), optionally narrowed by [scenario]/[isolationMode]/[branch]/
      * [workersMax] (plan 065 — an exact match on the plaintext `environment.workersMax`). Each
      * group carries oldest-first points + a percentile summary. Empty when no benchmark builds match.
-     * [projectKey] narrows to one repo (plan 076).
+     * [projectKey] narrows to one repo (plan 077).
      */
     fun benchmarkSeries(
         projectId: String,
@@ -457,21 +457,21 @@ interface BuildStore {
      * "What got worse" landing rollup (plan 032): this [period]-day window vs the prior equal window.
      * Benchmark builds are excluded (fleet view). Both stores fetch raw rows for the two windows and
      * defer to [BottleneckCalculator], so in-memory and Postgres agree byte-for-byte.
-     * [projectKey] narrows to one repo (plan 076).
+     * [projectKey] narrows to one repo (plan 077).
      */
     fun bottlenecks(projectId: String, period: Int, nowMs: Long, projectKey: String? = null): BottlenecksRollup
 
     /**
      * Toolchain adoption over the last [days] (plan 032): per-dimension version distribution + hashed
      * distinct-user count + "who is behind". AGP/KGP/KSP report `available=false` until populated.
-     * [projectKey] narrows to one repo (plan 076).
+     * [projectKey] narrows to one repo (plan 077).
      */
     fun toolchainAdoption(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): ToolchainRollup
 
     /**
      * Flaky-test records over the last [days] (plan 036): the two-signal [FlakyDetector] over per-class
      * outcomes, ranked by flake rate. Both stores feed the same detector so results agree byte-for-byte.
-     * [projectKey] narrows to one repo (plan 076).
+     * [projectKey] narrows to one repo (plan 077).
      */
     fun flaky(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<FlakyRecord>
 

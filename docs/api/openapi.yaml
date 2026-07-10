@@ -47,7 +47,7 @@ components:
       in: query
       required: false
       description: >
-        Filter to one payload `projectKey` (plan 076) — the root project name a build reported, distinct
+        Filter to one payload `projectKey` (plan 077) — the root project name a build reported, distinct
         from the tenant. Omit for all projects (unchanged behavior). Length-capped at 256; longer is 400.
       schema: { type: string, maxLength: 256 }
 paths:
@@ -81,7 +81,7 @@ paths:
         "503": { $ref: '#/components/responses/Unavailable' }
   /v1/project-keys:
     get:
-      summary: Distinct payload projectKeys for this tenant (plan 076), newest-activity first.
+      summary: Distinct payload projectKeys for this tenant (plan 077), newest-activity first.
       description: >
         The dashboard's project selector. Read scope, tenant-scoped. Each row is projectKey + its build
         count + last-build epoch-ms. Empty when no build reported a non-null projectKey. Capped at 100
