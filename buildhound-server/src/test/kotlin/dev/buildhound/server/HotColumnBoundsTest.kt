@@ -67,7 +67,10 @@ class HotColumnBoundsTest {
                 startMs = 0, durationMs = 1000, outcome = TaskOutcome.EXECUTED,
             ),
         ),
-        tests = listOf(TestPayloads.testTask(module = "M".repeat(3000), className = "C".repeat(3000))),
+        // retriedCases makes testTask emit a failedOrRetried entry with the same oversized className —
+        // the retry-join key clamp (plan 078) is only observable here, not via store parity (both
+        // stores share boundForStorage/classOutcomesOf, so a regression would break them identically).
+        tests = listOf(TestPayloads.testTask(module = "M".repeat(3000), className = "C".repeat(3000), retriedCases = listOf("flaky()"))),
     )
 
     @Test
@@ -78,6 +81,10 @@ class HotColumnBoundsTest {
             BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), hostilePayload()),
         )
         assertEquals(HttpStatusCode.Accepted, ingest.status, ingest.bodyAsText())
+        // The ack echoes the STORED (clamped) id — the id a later detail/verdict poll would resolve.
+        val ack = ingest.bodyAsText()
+        assertTrue(ack.contains("b".repeat(256)), "ack carries the clamped buildId")
+        assertFalse(ack.contains("b".repeat(257)), "ack never echoes the raw id")
 
         // List: the summary carries the clamped buildId/branch/projectKey (256), never the raw 3000.
         val list = get("/v1/builds").bodyAsText()
@@ -98,6 +105,10 @@ class HotColumnBoundsTest {
         assertEquals(512, stored.tasks.single().type?.length)
         assertEquals(256, stored.tests.single().module?.length)
         assertEquals(512, stored.tests.single().classes.single().className.length)
+        // The failedOrRetried className is clamped too, so the retry-join key still matches its class
+        // rollup — a single build can't clear MIN_SAMPLES, so the join is asserted via classOutcomesOf.
+        assertEquals(512, stored.tests.single().failedOrRetried.single().className.length)
+        assertEquals(1, classOutcomesOf(stored).single().retryFlakyCases, "the retry-join key survives clamping")
 
         // Aggregations over the clamped fields don't error.
         assertEquals(HttpStatusCode.OK, get("/v1/flaky").status)
@@ -115,6 +126,21 @@ class HotColumnBoundsTest {
         )
         assertEquals(HttpStatusCode.UnprocessableEntity, response.status)
         assertTrue(response.bodyAsText().contains("provider"), response.bodyAsText())
+
+        // The sibling copy-paste branches each name their own field — that's what tells them apart.
+        val byBuildId = postJson(
+            "/v1/metrics",
+            """{"correlation":{"buildId":"${"b".repeat(3000)}"},"scope":"build","name":"m","value":1.0}""",
+        )
+        assertEquals(HttpStatusCode.UnprocessableEntity, byBuildId.status)
+        assertTrue(byBuildId.bodyAsText().contains("buildId"), byBuildId.bodyAsText())
+
+        val byRunId = postJson(
+            "/v1/metrics",
+            """{"correlation":{"provider":"azure-devops","runId":"${"r".repeat(3000)}"},"scope":"build","name":"m","value":1.0}""",
+        )
+        assertEquals(HttpStatusCode.UnprocessableEntity, byRunId.status)
+        assertTrue(byRunId.bodyAsText().contains("runId"), byRunId.bodyAsText())
     }
 
     @Test

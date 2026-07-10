@@ -554,7 +554,7 @@ paths:
       summary: Fetch/compute the idempotent shard plan for a CI run (plan 040). Ingest scope.
       responses:
         "200": { description: The shard plan for this reference. }
-        "400": { description: Malformed request. }
+        "400": { description: Malformed request (reference blank or over 256 chars, index/total out of range). }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
   /v1/addons/{addonId}/data:

@@ -90,3 +90,27 @@ oversized write would already have failed at insert time.
 - `./gradlew :buildhound-server:test` green incl. Testcontainers; full `./gradlew build`
   green.
 - No commons/golden/migration changes in the diff.
+
+## Review divergences (2026-07-10)
+
+Adjustments from the §3 reviews; the design above stands except where noted.
+
+1. **Inventory row added in review:** `POST /v1/addons/test-sharding/plan` `reference` →
+   `shard_plans` btree PK → route validation (blank or > `MAX_HOT_STRING_CHARS` → 400). The
+   audit covered payload strings + the metrics route but missed route-*body* strings feeding
+   a btree PK.
+2. **Residual paragraph corrected:** the 54xxx → 400 backstop is *ingest-only*. The metrics
+   route relies on `validateMetric`'s per-field 422 caps plus non-amplification (each field
+   is individually bounded, so no single field can exceed the tuple limit); a hostile
+   multibyte *combination* across the composite `custom_metrics_uniq` key would surface as a
+   503 — accepted, hostile-only, no spool loop exists on that path.
+3. **V15 comment updated** for the constant rename (`MAX_PROJECT_KEY_CHARS` → absorbed into
+   `MAX_HOT_STRING_CHARS`). Comment-only; the plan's "no migration changes" reading = no
+   *schema* changes (V15 is this branch's own new file, never applied anywhere durable).
+4. **Ingest ack echoes the clamped (stored) buildId**, not the wire value — the ack now names
+   an id that a detail/verdict poll can actually resolve. Zero contract risk: the plugin
+   discards the ack body (`BodyHandlers.discarding()`), and the CI assets read the local
+   payload file, not the ack.
+5. **`/v1/benchmark/series` `branch` deliberately keeps its lenient contract** (no 400): that
+   route documents unknown-values → empty groups, and an over-long value matches nothing
+   anyway since stored branches are clamped to the same bound.
