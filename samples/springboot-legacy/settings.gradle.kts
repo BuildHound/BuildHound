@@ -26,8 +26,9 @@ buildhound {
     // mode = dev.buildhound.gradle.TelemetryMode.AUTO
 
     // Low-cardinality dimensions attached to every build. Default: none.
-    // tags.put("team", "backend")
-
+    tags.put("team", "backend")
+    tags.put("project", "spring-legacy")
+    tags.put("type", "web")
     // Salted-HMAC pseudonyms for hostname/user (spec §3.7). Default: true.
     identity {
         pseudonymize = true

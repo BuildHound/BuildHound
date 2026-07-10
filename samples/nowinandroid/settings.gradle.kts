@@ -1,3 +1,5 @@
+import org.gradle.api.initialization.resolve.RepositoriesMode
+
 /*
  * Copyright 2021 The Android Open Source Project
  *
@@ -49,7 +51,9 @@ buildhound {
     // mode = dev.buildhound.gradle.TelemetryMode.AUTO
 
     // Low-cardinality dimensions attached to every build. Default: none.
-    // tags.put("team", "mobile")
+    tags.put("team", "mobile")
+    tags.put("project", "nowinandroid")
+    tags.put("type", "android")
 
     // Salted-HMAC pseudonyms for hostname/user (spec §3.7). Default: true.
     identity {
