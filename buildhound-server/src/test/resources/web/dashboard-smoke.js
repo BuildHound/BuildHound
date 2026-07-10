@@ -26,7 +26,7 @@ function makeNode(tag) {
 }
 
 const byId = {};
-for (const id of ["app", "token-bar", "token-save", "token-input"]) byId[id] = makeNode("div");
+for (const id of ["app", "token-bar", "token-save", "token-input", "project-select"]) byId[id] = makeNode("div");
 
 const documentStub = {
     createElement: makeNode,
@@ -62,6 +62,12 @@ const responses = {
         { buildId: "t1", startedAt: 1751450200000, durationMs: 12000, outcome: "SUCCESS", mode: "CI", branch: "main" },
     ],
     "/v1/builds?branch=none&limit=50&offset=0": [],
+    // Project-keys enumeration (plan 076): a single key at first, so the header selector stays
+    // hidden (< 2 distinct keys) right after the first token-save. A dedicated block near the
+    // end of this harness switches this to two keys and exercises the rest of the feature.
+    "/v1/project-keys": [
+        { projectKey: "pilot", builds: 14, lastBuildAt: 1751450000000 },
+    ],
     "/v1/builds/b1": {
         buildId: "b1", projectKey: "pilot", startedAt: 1751450000000, finishedAt: 1751450065000,
         outcome: "SUCCESS", mode: "CI",
@@ -433,6 +439,10 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     // Landing page is Bottlenecks (plan 032): saving a token renders it and fetches its rollups.
     if (!fetched.includes("/v1/rollups/bottlenecks?period=7")) throw new Error("bottlenecks landing did not fetch after token save");
     if (!hasText(byId["app"], "What got worse")) throw new Error("bottlenecks landing summary missing");
+    // Project selector (plan 076): token-save also fetches /v1/project-keys; a single key keeps
+    // the header selector hidden (< 2 distinct keys is not worth a filter UI).
+    if (!fetched.includes("/v1/project-keys")) throw new Error("token-save did not fetch project-keys");
+    if (byId["project-select"].hidden !== true) throw new Error("project selector must stay hidden with a single project key");
     // The Builds page is reachable via its own hash and shows the filter-aware count.
     context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/builds?limit=50&offset=0")) throw new Error("builds view did not fetch");
@@ -881,6 +891,111 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     numInputs()[0].value = "200"; numInputs()[1].value = "100"; // buildDays < rawDays → rejected
     clickButton(byId["app"], "Save"); await tick(); await tick();
     if (!hasText(byId["app"], "Rejected")) throw new Error("admin invalid save did not show the validation error");
+
+    // Project selector (plan 076): switching to two distinct keys reveals the header select.
+    // Re-saving the token (same value) re-fetches the key list, matching the token-change hook —
+    // the input must be re-filled first since a successful save clears it (plan 012 behaviour).
+    responses["/v1/project-keys"] = [
+        { projectKey: "nowinandroid", builds: 12, lastBuildAt: 1751450000000 },
+        { projectKey: "sunflower", builds: 4, lastBuildAt: 1751440000000 },
+    ];
+    byId["token-input"].value = "s3cr3t-token-value";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    if (store["buildhound.token"] !== "s3cr3t-token-value") throw new Error("re-saving the token must not change its stored value");
+    if (byId["project-select"].hidden !== false) throw new Error("project selector must become visible with >= 2 keys");
+    const projectOptions = findTag(byId["project-select"], "option");
+    if (projectOptions.length !== 3) throw new Error("project selector must offer 'All projects' plus one option per key, got " + projectOptions.length);
+    if (!hasText(byId["project-select"], "nowinandroid (12 builds)")) throw new Error("project option missing key + build count");
+    if (!hasText(byId["project-select"], "sunflower (4 builds)")) throw new Error("second project option missing");
+
+    // Selecting a project persists the choice and appends projectKey= to the next builds fetch
+    // (query threading via the query() helper); the Project column then shows the key text, or
+    // an em dash for a build carrying no projectKey (pre-076 plugin / other project row).
+    responses["/v1/builds?projectKey=nowinandroid&limit=50&offset=0"] = [
+        { buildId: "pk1", startedAt: 1751450000000, durationMs: 5000, outcome: "SUCCESS", mode: "CI", branch: "main", projectKey: "nowinandroid", hitRate: 0.8 },
+        { buildId: "pk2", startedAt: 1751450200000, durationMs: 3000, outcome: "SUCCESS", mode: "CI", branch: "main", hitRate: 0.6 },
+    ];
+    totals["/v1/builds?projectKey=nowinandroid&limit=50&offset=0"] = 2;
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    byId["project-select"].value = "nowinandroid";
+    byId["project-select"].listeners.change[0]();
+    await tick(); await tick();
+    if (store["buildhound.projectKey"] !== "nowinandroid") throw new Error("selected project key not persisted to sessionStorage");
+    if (!fetched.includes("/v1/builds?projectKey=nowinandroid&limit=50&offset=0")) throw new Error("selecting a project must refetch builds with projectKey=");
+    if (!hasText(byId["app"], "nowinandroid")) throw new Error("Project column must render the selected build's projectKey");
+    if (!hasExact(byId["app"], "—")) throw new Error("Project column must render an em dash for a build without projectKey");
+    if (!hasExact(byId["app"], "Project")) throw new Error("builds table missing the Project column header");
+
+    // Rollup/flaky/benchmark/bottleneck views thread projectKey too, at their hardcoded query
+    // strings (plan 076) — flaky checked here as the representative case.
+    responses["/v1/flaky?days=30&projectKey=nowinandroid"] = [];
+    context.location.hash = "#/flaky"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/flaky?days=30&projectKey=nowinandroid")) throw new Error("flaky view did not thread projectKey");
+
+    // "All projects" clears the selection and restores the byte-identical unfiltered path.
+    // fetched is cumulative — assertions below slice from a mark so earlier history (which
+    // already contains the unfiltered path) can't satisfy them.
+    byId["project-select"].value = "";
+    byId["project-select"].listeners.change[0]();
+    await tick(); await tick();
+    if (store["buildhound.projectKey"] !== "") throw new Error("selecting All projects must clear the stored project key");
+    let mark = fetched.length;
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/builds?limit=50&offset=0")) throw new Error("selecting All projects must refetch the byte-identical unfiltered builds path");
+
+    // Vanished stored key while >= 2 keys remain (B1): the stale selection is cleared and the
+    // view re-routed. The fetch sequence pins the double-render: first the stale filtered route
+    // from token-save's own route(), then the recovery re-route once populate resolves.
+    store["buildhound.projectKey"] = "nowinandroid";
+    responses["/v1/project-keys"] = [
+        { projectKey: "repo-c", builds: 3, lastBuildAt: 1751450000000 },
+        { projectKey: "repo-d", builds: 2, lastBuildAt: 1751440000000 },
+    ];
+    context.location.hash = "#/builds";
+    mark = fetched.length;
+    byId["token-input"].value = "s3cr3t-token-value";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    if (store["buildhound.projectKey"] !== "") throw new Error("vanished stored key must be cleared when >= 2 keys remain");
+    if (byId["project-select"].hidden !== false) throw new Error("selector must stay visible after a vanished-key recovery");
+    if (!fetched.slice(mark).includes("/v1/builds?projectKey=nowinandroid&limit=50&offset=0")) throw new Error("vanished-key recovery must start from the stale filtered route");
+    if (!fetched.slice(mark).includes("/v1/builds?limit=50&offset=0")) throw new Error("vanished-key recovery must re-route to the unfiltered path");
+
+    // Shrink to < 2 keys with a stored selection (B1): selector hides, the stored key is cleared
+    // even though the one remaining key IS the stored key (filtering still hides pre-076
+    // null-projectKey builds), and the recovery re-route lands on the unfiltered path.
+    store["buildhound.projectKey"] = "nowinandroid";
+    responses["/v1/project-keys"] = [{ projectKey: "nowinandroid", builds: 12, lastBuildAt: 1751450000000 }];
+    mark = fetched.length;
+    byId["token-input"].value = "s3cr3t-token-value";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    if (store["buildhound.projectKey"] !== "") throw new Error("stored key must be cleared when the selector hides (< 2 keys)");
+    if (byId["project-select"].hidden !== true) throw new Error("selector must hide with < 2 keys");
+    if (!fetched.slice(mark).includes("/v1/builds?limit=50&offset=0")) throw new Error("< 2 keys recovery must re-route to the unfiltered path");
+
+    // < 2 keys with NO stored key must not re-route (the load-bearing condition in B1): only
+    // token-save's own route() fetches builds — exactly once in this window.
+    mark = fetched.length;
+    byId["token-input"].value = "s3cr3t-token-value";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    const unfilteredCount = fetched.slice(mark).filter(p => p === "/v1/builds?limit=50&offset=0").length;
+    if (unfilteredCount !== 1) throw new Error("< 2 keys with no stored key must route exactly once, got " + unfilteredCount);
+
+    // Enumeration failure (stub 404 → api() throws → catch): hide only, never clear — a
+    // transient blip must not nuke a valid selection.
+    store["buildhound.projectKey"] = "nowinandroid";
+    delete responses["/v1/project-keys"];
+    mark = fetched.length;
+    byId["token-input"].value = "s3cr3t-token-value";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    if (store["buildhound.projectKey"] !== "nowinandroid") throw new Error("enumeration failure must not clear a stored selection");
+    if (byId["project-select"].hidden !== true) throw new Error("enumeration failure must hide the selector");
+    responses["/v1/project-keys"] = [{ projectKey: "nowinandroid", builds: 12, lastBuildAt: 1751450000000 }];
+    store["buildhound.projectKey"] = "";
 
     console.log("dashboard smoke OK — fetched " + fetched.length + " request(s)");
 })().catch(err => { console.error("SMOKE FAILURE:", err); process.exit(1); });

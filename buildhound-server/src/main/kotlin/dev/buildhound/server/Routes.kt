@@ -95,7 +95,8 @@ fun Route.ingestRoutes(
             }
 
             payload.projectKey?.takeIf { it != project.key }?.let {
-                ingestLogger.warn("payload projectKey '{}' differs from token project '{}'", it, project.key)
+                // take() bounds the logged value — the raw key is attacker-sized (plan 076 log-flood guard).
+                ingestLogger.warn("payload projectKey '{}' differs from token project '{}'", it.take(MAX_PROJECT_KEY_CHARS), project.key)
             }
 
             // Defensive server-side scrub (plan 076): scrub BEFORE cap, mirroring the plugin's own
@@ -160,10 +161,12 @@ fun Route.ingestRoutes(
             // Data-shaped failures (SQLSTATE 22xxx, e.g. \u0000 in jsonb) are permanent →
             // 400 so the plugin drops them; anything else is a storage outage → 503 so
             // the plugin spools and retries (its 4xx/5xx classification relies on this).
+            // (54xxx program-limit-exceeded — e.g. an index tuple over the btree cap — is equally
+            // data-shaped and deterministic: a retry can never succeed, so it is 400, never spooled.)
             val stored = try {
                 store.save(project.id, capped)
             } catch (e: SQLException) {
-                val permanent = e.sqlState?.startsWith("22") == true
+                val permanent = e.sqlState?.let { it.startsWith("22") || it.startsWith("54") } == true
                 return@post if (permanent) {
                     call.respond(HttpStatusCode.BadRequest, ApiError("payload not storable"))
                 } else {
@@ -391,9 +394,17 @@ private fun validateSettings(s: ProjectSettings): String? = when {
  */
 fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenStore, ciSpans: CiSpanStore) {
     route("/v1") {
+        // Distinct payload projectKeys for this tenant (plan 076): powers the dashboard's project
+        // selector. Read scope, tenant-scoped; newest-activity first. Shares the query rate limiter.
+        get("/project-keys") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            call.respondQuery { store.projectKeys(project.id) }
+        }
+
         get("/builds") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
-            val filter = call.buildFilterOrNull()
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
+            val filter = call.buildFilterOrNull(projectKey.value)
                 ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
             val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 200)
             val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceIn(0, 10_000)
@@ -543,7 +554,8 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
 
         get("/trends") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
-            val filter = call.buildFilterOrNull()
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
+            val filter = call.buildFilterOrNull(projectKey.value)
                 ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
             val days = (call.request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)
             call.respondQuery { store.trends(project.id, filter, days, System.currentTimeMillis()) }
@@ -553,7 +565,8 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // Read scope, tenant-scoped, same filter + days handling as /trends (benchmark excluded by default).
         get("/artifacts/trends") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
-            val filter = call.buildFilterOrNull()
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
+            val filter = call.buildFilterOrNull(projectKey.value)
                 ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome filter"))
             call.respondQuery { store.artifactTrends(project.id, filter, call.daysParam(), System.currentTimeMillis()) }
         }
@@ -562,18 +575,21 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // tenant-scoped, days clamped like /trends, top-25 result caps enforced in the store.
         get("/rollups/project-cost") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.projectCost(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.projectCost(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
         get("/rollups/task-duration") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.taskDuration(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.taskDuration(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
         get("/rollups/negative-avoidance") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.negativeAvoidance(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.negativeAvoidance(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
 
         // Owning-plugin cost rollup (plan 058, research F8 Layer 1): FQCN-prefix rollup over
@@ -604,6 +620,7 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // return empty groups.
         get("/benchmark/series") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
             val params = call.request.queryParameters
             call.respondQuery {
@@ -615,6 +632,7 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
                     days = days,
                     nowMs = System.currentTimeMillis(),
                     workersMax = params["workersMax"]?.toIntOrNull(),
+                    projectKey = projectKey.value,
                 )
             }
         }
@@ -623,8 +641,9 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // Read-scope, tenant-scoped; period clamped to [1, 90] (two windows = up to 180 days scanned).
         get("/rollups/bottlenecks") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val period = call.periodParam()
-            call.respondQuery { store.bottlenecks(project.id, period, System.currentTimeMillis()) }
+            call.respondQuery { store.bottlenecks(project.id, period, System.currentTimeMillis(), projectKey.value) }
         }
 
         // Toolchain adoption (plan 032, spec §6): per-dimension version distribution + hashed distinct
@@ -632,8 +651,9 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // report available=false until the plugin collects them.
         get("/rollups/toolchain") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.toolchainAdoption(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.toolchainAdoption(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
 
         // Rerun-cause taxonomy (plan 061, research F11): per-bucket coverage of executed task-hours
@@ -729,8 +749,9 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // window, ranked by flake rate. Read-scope, tenant-scoped, days clamped like /trends.
         get("/flaky") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.flaky(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.flaky(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
 
         // Tag-cohort comparison (plan 057, research F7): split a trend by a tag's distinct values —
@@ -1061,8 +1082,11 @@ private suspend fun ApplicationCall.authenticatedProject(
     return principal.project
 }
 
-/** Filter values are allowlisted against the schema enum names — never free text. */
-private fun ApplicationCall.buildFilterOrNull(): BuildFilter? {
+/**
+ * Filter values are allowlisted against the schema enum names — never free text. [projectKey] (plan
+ * 076) is a pre-validated bound param supplied by the route via [projectKeyParamOrBadRequest].
+ */
+private fun ApplicationCall.buildFilterOrNull(projectKey: String? = null): BuildFilter? {
     val mode = request.queryParameters["mode"]?.uppercase()
     if (mode != null && mode !in BuildMode.entries.map { it.name }) return null
     val outcome = request.queryParameters["outcome"]?.uppercase()
@@ -1072,7 +1096,14 @@ private fun ApplicationCall.buildFilterOrNull(): BuildFilter? {
     val includeBenchmark = request.queryParameters["includeBenchmark"].toBoolean()
     val excludeModes = if (mode == BuildMode.BENCHMARK.name || includeBenchmark) emptySet() else setOf(BuildMode.BENCHMARK.name)
     val tags = buildTagFilterOrNull() ?: return null
-    return BuildFilter(branch = request.queryParameters["branch"], mode = mode, outcome = outcome, excludeModes = excludeModes, tags = tags)
+    return BuildFilter(
+        branch = request.queryParameters["branch"],
+        mode = mode,
+        outcome = outcome,
+        excludeModes = excludeModes,
+        tags = tags,
+        projectKey = projectKey,
+    )
 }
 
 /**
@@ -1095,6 +1126,24 @@ private fun ApplicationCall.buildTagFilterOrNull(): Map<String, String>? {
     }
     if (tags.size > caps.maxTags) return null
     return tags
+}
+
+/**
+ * A validated optional `projectKey` query param (plan 076), capped at [MAX_PROJECT_KEY_CHARS] (the
+ * same store-side ingest clamp, so a clamped key stays reachable). [value] may be null ("all projects" —
+ * today's behavior). The wrapper is null only when the param was present but over-long and a 400 has
+ * already been sent — mirroring [buildFilterOrNull]'s null-is-handled contract. The value is only ever
+ * a bound SQL parameter downstream, never interpolated.
+ */
+private class ProjectKeyParam(val value: String?)
+
+private suspend fun ApplicationCall.projectKeyParamOrBadRequest(): ProjectKeyParam? {
+    val raw = request.queryParameters["projectKey"] ?: return ProjectKeyParam(null)
+    if (raw.length > MAX_PROJECT_KEY_CHARS) {
+        respond(HttpStatusCode.BadRequest, ApiError("projectKey must be at most $MAX_PROJECT_KEY_CHARS chars"))
+        return null
+    }
+    return ProjectKeyParam(raw)
 }
 
 private val ingestLogger = LoggerFactory.getLogger("dev.buildhound.server.Ingest")

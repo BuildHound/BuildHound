@@ -42,8 +42,11 @@ private const val PURGE_BATCH: Int = 5000
 
 class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
 
-    override fun save(projectId: String, payload: BuildPayload): Boolean =
-        dataSource.connection.use { connection ->
+    override fun save(projectId: String, rawPayload: BuildPayload): Boolean {
+        // Clamp the projectKey before anything is written (plan 076): the clamped payload is what the
+        // hot column AND the jsonb store, so they can never disagree.
+        val payload = boundProjectKey(rawPayload)
+        return dataSource.connection.use { connection ->
             // The build row and its normalized task rows go in as one all-or-nothing unit (plan 026),
             // so a partial failure never leaves task rows without their build (idempotency at the
             // build level, no PK on task rows). autoCommit is restored in finally.
@@ -70,6 +73,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 runCatching { connection.autoCommit = true }
             }
         }
+    }
 
     override fun allProjectIds(): List<String> =
         dataSource.connection.use { connection ->
@@ -121,8 +125,8 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             """
             INSERT INTO builds (project_id, build_id, started_at, finished_at, outcome,
                                 mode, branch, duration_ms, hit_rate, ci_provider, ci_run_id,
-                                pipeline_name, requested_tasks_sig, cc_state, payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                pipeline_name, requested_tasks_sig, cc_state, project_key, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (project_id, build_id) DO NOTHING
             """.trimIndent(),
         ).use { statement ->
@@ -145,8 +149,10 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             // Extracted CC state for the /trends per-day counters (plan 064); null on a pre-064 /
             // environment-less payload — historical rows already read null via the V14 additive column.
             statement.setString(14, payload.environment?.configurationCache?.name)
+            // Payload projectKey → hot column (plan 076); also covers the interrupted-build path (save()).
+            statement.setString(15, payload.projectKey)
             statement.setObject(
-                15,
+                16,
                 PGobject().apply {
                     type = "jsonb"
                     value = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
@@ -355,6 +361,9 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         filter.branch?.let { clauses.append(" AND branch = ?"); params.add(it) }
         filter.mode?.let { clauses.append(" AND mode = ?"); params.add(it) }
         filter.outcome?.let { clauses.append(" AND outcome = ?"); params.add(it) }
+        // Payload project selector (plan 076): unqualified `project_key` is unambiguous (only `builds`
+        // carries it), so the same clause is valid in the artifacts/trends join too.
+        filter.projectKey?.let { clauses.append(" AND project_key = ?"); params.add(it) }
         // Fleet-view exclusion (plan 030): NOT IN over bound params, order-matched with the values.
         val excluded = filter.excludeModes.toList()
         if (excluded.isNotEmpty()) {
@@ -377,7 +386,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             val (clauses, params) = filterSql(filter)
             connection.prepareStatement(
                 """
-                SELECT build_id, started_at, duration_ms, outcome, mode, branch, hit_rate
+                SELECT build_id, started_at, duration_ms, outcome, mode, branch, hit_rate, project_key
                 FROM builds WHERE project_id = ?$clauses
                 ORDER BY started_at DESC, build_id DESC LIMIT ? OFFSET ?
                 """.trimIndent(),
@@ -399,6 +408,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                                     mode = rows.getString("mode"),
                                     branch = rows.getString("branch"),
                                     hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
+                                    projectKey = rows.getString("project_key"),
                                 ),
                             )
                         }
@@ -469,8 +479,50 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
     private fun atMs(ms: Long): OffsetDateTime =
         OffsetDateTime.ofInstant(Instant.ofEpochMilli(ms), ZoneOffset.UTC)
 
-    override fun projectCost(projectId: String, days: Int, nowMs: Long): List<ProjectCostRow> =
+    /**
+     * ` AND [alias.]project_key = ?` when a projectKey filter is set (plan 076), else empty — so the
+     * unfiltered SQL stays byte-identical. `alias`/column are fixed literals, the value is always bound.
+     */
+    private fun projectKeyClause(projectKey: String?, alias: String? = null): String =
+        if (projectKey == null) "" else " AND ${alias?.let { "$it." } ?: ""}project_key = ?"
+
+    override fun projectKeys(projectId: String): List<ProjectKeyRow> =
         dataSource.connection.use { connection ->
+            // Distinct non-null projectKeys, newest-activity first (plan 076): a grouped scan of the
+            // builds_project_projectkey_started_idx hot index. projectKey tiebreak mirrors the in-memory
+            // store. LIMIT bounds hostile key cardinality (MAX_PROJECT_KEYS, a compile-time const —
+            // never user input); ORDER means truncation drops the longest-idle keys.
+            connection.prepareStatement(
+                """
+                SELECT project_key, count(*) AS builds, max(started_at) AS last_build
+                FROM builds
+                WHERE project_id = ? AND project_key IS NOT NULL
+                GROUP BY project_key
+                ORDER BY last_build DESC, project_key
+                LIMIT $MAX_PROJECT_KEYS
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                ProjectKeyRow(
+                                    projectKey = rows.getString("project_key"),
+                                    builds = rows.getInt("builds"),
+                                    lastBuildAt = rows.getObject("last_build", OffsetDateTime::class.java).toInstant().toEpochMilli(),
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    override fun projectCost(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<ProjectCostRow> =
+        dataSource.connection.use { connection ->
+            // projectCost already joins builds for the wall time, so a projectKey filter is just an extra
+            // predicate on `b` — the unfiltered SQL stays byte-identical (plan 076).
             connection.prepareStatement(
                 // Integer division (sum/count) matches RollupCalculator's truncating averageOrZero;
                 // trunc() matches its .toInt() on the executed percentage (the eBay quirk).
@@ -479,7 +531,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                     SELECT te.build_id, te.module, te.outcome, te.duration_ms, te.user_id, b.duration_ms AS wall
                     FROM task_executions te
                     JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
-                    WHERE te.project_id = ? AND te.started_at >= ?
+                    WHERE te.project_id = ? AND te.started_at >= ?${projectKeyClause(projectKey, "b")}
                 ),
                 total AS (SELECT count(DISTINCT build_id) AS n FROM win),
                 mb AS (
@@ -509,6 +561,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             ).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
+                projectKey?.let { statement.setString(3, it) }
                 statement.executeQuery().use { rows ->
                     buildList {
                         while (rows.next()) {
@@ -530,23 +583,38 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             }
         }
 
-    override fun taskDuration(projectId: String, days: Int, nowMs: Long): TaskDurationRollup =
+    override fun taskDuration(projectId: String, days: Int, nowMs: Long, projectKey: String?): TaskDurationRollup =
         dataSource.connection.use { connection ->
+            // task_executions carries no project_key, so a projectKey filter (plan 076) adds a join to
+            // builds (unique on (project_id, build_id) → no row fan-out) with columns qualified. The
+            // unfiltered branch is byte-identical to today; only the filtered branch takes the join.
             fun rank(byType: Boolean): List<TaskDurationRow> {
                 // SQL-injection safety: `column`/`typeFilter` are chosen ONLY by this Boolean and are
                 // fixed literals — never request/payload input. Keep it that way (no String column arg).
                 val column = if (byType) "type" else "name"
-                val typeFilter = if (byType) "AND type IS NOT NULL " else ""
-                return connection.prepareStatement(
+                val sql = if (projectKey == null) {
+                    val typeFilter = if (byType) "AND type IS NOT NULL " else ""
                     """
                     SELECT $column AS k, count(*) AS cnt, sum(duration_ms) AS total,
                            sum(duration_ms) / count(*) AS avg, min(duration_ms) AS mn, max(duration_ms) AS mx
                     FROM task_executions WHERE project_id = ? AND started_at >= ? $typeFilter
                     GROUP BY $column ORDER BY total DESC, k ASC LIMIT ${RollupCalculator.TOP_N}
-                    """.trimIndent(),
-                ).use { statement ->
+                    """.trimIndent()
+                } else {
+                    val typeFilter = if (byType) "AND te.type IS NOT NULL " else ""
+                    """
+                    SELECT te.$column AS k, count(*) AS cnt, sum(te.duration_ms) AS total,
+                           sum(te.duration_ms) / count(*) AS avg, min(te.duration_ms) AS mn, max(te.duration_ms) AS mx
+                    FROM task_executions te
+                    JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
+                    WHERE te.project_id = ? AND te.started_at >= ? AND b.project_key = ? $typeFilter
+                    GROUP BY te.$column ORDER BY total DESC, k ASC LIMIT ${RollupCalculator.TOP_N}
+                    """.trimIndent()
+                }
+                return connection.prepareStatement(sql).use { statement ->
                     statement.setObject(1, UUID.fromString(projectId))
                     statement.setObject(2, cutoff(days, nowMs))
+                    projectKey?.let { statement.setString(3, it) }
                     statement.executeQuery().use { rows ->
                         buildList {
                             while (rows.next()) {
@@ -562,20 +630,29 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                     }
                 }
             }
-            val available = connection.prepareStatement(
-                "SELECT EXISTS(SELECT 1 FROM task_executions WHERE project_id = ? AND started_at >= ? AND type IS NOT NULL)",
-            ).use { statement ->
+            val availableSql = if (projectKey == null) {
+                "SELECT EXISTS(SELECT 1 FROM task_executions WHERE project_id = ? AND started_at >= ? AND type IS NOT NULL)"
+            } else {
+                "SELECT EXISTS(SELECT 1 FROM task_executions te " +
+                    "JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id " +
+                    "WHERE te.project_id = ? AND te.started_at >= ? AND b.project_key = ? AND te.type IS NOT NULL)"
+            }
+            val available = connection.prepareStatement(availableSql).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
+                projectKey?.let { statement.setString(3, it) }
                 statement.executeQuery().use { rows -> rows.next(); rows.getBoolean(1) }
             }
             TaskDurationRollup(byName = rank(byType = false), byType = rank(byType = true), byTypeAvailable = available)
         }
 
-    override fun negativeAvoidance(projectId: String, days: Int, nowMs: Long): List<NegativeAvoidanceRow> =
+    override fun negativeAvoidance(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<NegativeAvoidanceRow> =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                // percentile_cont(0.5) == RollupCalculator.medianDouble; trunc() matches its .toLong().
+            // Only the `win` CTE reads task_executions, so a projectKey filter (plan 076) joins builds and
+            // qualifies inside that CTE; the med/excess/final stages are unchanged. Two verbatim branches so
+            // the unfiltered SQL is byte-identical to today. percentile_cont(0.5) == RollupCalculator's
+            // medianDouble; trunc() matches its .toLong().
+            val sql = if (projectKey == null) {
                 """
                 WITH win AS (
                     SELECT coalesce(type, name) AS grp, outcome, duration_ms
@@ -593,10 +670,33 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 SELECT grp AS k, count(*) AS cnt, trunc(sum(ex))::bigint AS total_excess, trunc(max(ex))::bigint AS worst
                 FROM excess GROUP BY grp
                 ORDER BY total_excess DESC, k ASC LIMIT ${RollupCalculator.TOP_N}
-                """.trimIndent(),
-            ).use { statement ->
+                """.trimIndent()
+            } else {
+                """
+                WITH win AS (
+                    SELECT coalesce(te.type, te.name) AS grp, te.outcome, te.duration_ms
+                    FROM task_executions te
+                    JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
+                    WHERE te.project_id = ? AND te.started_at >= ? AND b.project_key = ?
+                ),
+                med AS (
+                    SELECT grp, percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_ms) AS median
+                    FROM win WHERE outcome = 'EXECUTED' GROUP BY grp
+                ),
+                excess AS (
+                    SELECT w.grp, (w.duration_ms - m.median) AS ex
+                    FROM win w JOIN med m ON m.grp = w.grp
+                    WHERE w.outcome IN ('UP_TO_DATE', 'FROM_CACHE') AND w.duration_ms > m.median
+                )
+                SELECT grp AS k, count(*) AS cnt, trunc(sum(ex))::bigint AS total_excess, trunc(max(ex))::bigint AS worst
+                FROM excess GROUP BY grp
+                ORDER BY total_excess DESC, k ASC LIMIT ${RollupCalculator.TOP_N}
+                """.trimIndent()
+            }
+            connection.prepareStatement(sql).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
+                projectKey?.let { statement.setString(3, it) }
                 statement.executeQuery().use { rows ->
                     buildList {
                         while (rows.next()) {
@@ -727,6 +827,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         days: Int,
         nowMs: Long,
         workersMax: Int?,
+        projectKey: String?,
     ): List<BenchmarkSeries> =
         dataSource.connection.use { connection ->
             // Benchmark keys live in the jsonb payload (no hot columns, no migration). Optional
@@ -741,6 +842,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             // serializes identically), bound as a param like its three siblings — no cast, so a
             // malformed stored value can never error the query; it just doesn't match.
             workersMax?.let { clauses.append(" AND payload->'environment'->>'workersMax' = ?"); strParams.add(it.toString()) }
+            projectKey?.let { clauses.append(" AND project_key = ?"); strParams.add(it) }
             connection.prepareStatement(
                 """
                 SELECT build_id, started_at, duration_ms, hit_rate,
@@ -813,7 +915,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             }
         }
 
-    override fun bottlenecks(projectId: String, period: Int, nowMs: Long): BottlenecksRollup =
+    override fun bottlenecks(projectId: String, period: Int, nowMs: Long, projectKey: String?): BottlenecksRollup =
         dataSource.connection.use { connection ->
             // Both windows are fetched as raw rows and handed to the shared BottleneckCalculator, so
             // Postgres and in-memory agree byte-for-byte (the plan-026 parity discipline). Half-open
@@ -823,10 +925,10 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             val currentFrom = atMs(nowMs - windowMs)
             val priorFrom = atMs(nowMs - 2 * windowMs)
             BottleneckCalculator.compute(
-                currentTasks = taskRowsBetween(connection, projectId, currentFrom, now),
-                priorTasks = taskRowsBetween(connection, projectId, priorFrom, currentFrom),
-                currentBuilds = kpiRowsBetween(connection, projectId, currentFrom, now),
-                priorBuilds = kpiRowsBetween(connection, projectId, priorFrom, currentFrom),
+                currentTasks = taskRowsBetween(connection, projectId, currentFrom, now, projectKey),
+                priorTasks = taskRowsBetween(connection, projectId, priorFrom, currentFrom, projectKey),
+                currentBuilds = kpiRowsBetween(connection, projectId, currentFrom, now, projectKey),
+                priorBuilds = kpiRowsBetween(connection, projectId, priorFrom, currentFrom, projectKey),
                 period = period,
             )
         }
@@ -837,19 +939,23 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         projectId: String,
         from: OffsetDateTime,
         to: OffsetDateTime,
+        projectKey: String? = null,
     ): List<TaskRow> =
+        // Already joins builds for wall time, so a projectKey filter (plan 076) is just an extra `b`
+        // predicate; unfiltered SQL stays byte-identical.
         connection.prepareStatement(
             """
             SELECT te.build_id, te.user_id, te.module, te.name, te.type, te.outcome,
                    te.duration_ms, te.cacheable, te.execution_reasons, b.duration_ms AS wall
             FROM task_executions te
             JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
-            WHERE te.project_id = ? AND te.started_at >= ? AND te.started_at < ? AND b.mode <> 'BENCHMARK'
+            WHERE te.project_id = ? AND te.started_at >= ? AND te.started_at < ? AND b.mode <> 'BENCHMARK'${projectKeyClause(projectKey, "b")}
             """.trimIndent(),
         ).use { statement ->
             statement.setObject(1, UUID.fromString(projectId))
             statement.setObject(2, from)
             statement.setObject(3, to)
+            projectKey?.let { statement.setString(4, it) }
             statement.executeQuery().use { rows ->
                 buildList {
                     while (rows.next()) {
@@ -891,16 +997,18 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
         projectId: String,
         from: OffsetDateTime,
         to: OffsetDateTime,
+        projectKey: String? = null,
     ): List<BuildKpiRow> =
         connection.prepareStatement(
             """
             SELECT outcome, duration_ms, hit_rate FROM builds
-            WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+            WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
             """.trimIndent(),
         ).use { statement ->
             statement.setObject(1, UUID.fromString(projectId))
             statement.setObject(2, from)
             statement.setObject(3, to)
+            projectKey?.let { statement.setString(4, it) }
             statement.executeQuery().use { rows ->
                 buildList {
                     while (rows.next()) {
@@ -916,7 +1024,7 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             }
         }
 
-    override fun toolchainAdoption(projectId: String, days: Int, nowMs: Long): ToolchainRollup =
+    override fun toolchainAdoption(projectId: String, days: Int, nowMs: Long, projectKey: String?): ToolchainRollup =
         dataSource.connection.use { connection ->
             // Every dimension read from the jsonb payload in one pass; distribution/behind math is the
             // shared ToolchainCalculator so both stores agree. userId is already the pseudonymized u_…
@@ -933,12 +1041,13 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                        payload->'toolchain'->>'ksp' AS ksp,
                        payload->'toolchain'->>'springBoot' AS spring_boot
                 FROM builds
-                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                 """.trimIndent(),
             ).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
                 statement.setObject(3, atMs(nowMs))
+                projectKey?.let { statement.setString(4, it) }
                 statement.executeQuery().use { rows ->
                     val gradle = mutableListOf<ToolchainSample>()
                     val jdk = mutableListOf<ToolchainSample>()
@@ -1271,15 +1380,17 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
             }
         }
 
-    override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> =
+    override fun flaky(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<FlakyRecord> =
         dataSource.connection.use { connection ->
             // Read the narrow per-class outcome table (indexed on (project, sha, module, class)) and
             // hand it to the shared FlakyDetector — same rows the in-memory store flattens, so parity.
-            connection.prepareStatement(
-                // ORDER BY … LIMIT bounds the rows read into the JVM (FlakyDetector.MAX_OUTCOME_ROWS,
-                // plan §6 "cap rows"): most-recent first, so truncation only ever drops the oldest of a
-                // pathological history. Detection is order-invariant, so below the cap the in-memory
-                // store (identical sort + take) sees the same set — parity holds.
+            // A projectKey filter (plan 076) joins builds (test_class_outcomes carries no project_key)
+            // with columns qualified; the unfiltered branch is byte-identical to today.
+            // ORDER BY … LIMIT bounds the rows read into the JVM (FlakyDetector.MAX_OUTCOME_ROWS,
+            // plan §6 "cap rows"): most-recent first, so truncation only ever drops the oldest of a
+            // pathological history. Detection is order-invariant, so below the cap the in-memory
+            // store (identical sort + take) sees the same set — parity holds.
+            val sql = if (projectKey == null) {
                 """
                 SELECT build_id, (extract(epoch from started_at) * 1000)::bigint AS started_ms,
                        sha, module, class_fqcn, passed, failed, retry_flaky_cases
@@ -1287,11 +1398,23 @@ class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
                 WHERE project_id = ? AND started_at >= ?
                 ORDER BY started_at DESC, build_id, module, class_fqcn
                 LIMIT ?
-                """.trimIndent(),
-            ).use { statement ->
+                """.trimIndent()
+            } else {
+                """
+                SELECT tco.build_id, (extract(epoch from tco.started_at) * 1000)::bigint AS started_ms,
+                       tco.sha, tco.module, tco.class_fqcn, tco.passed, tco.failed, tco.retry_flaky_cases
+                FROM test_class_outcomes tco
+                JOIN builds b ON b.project_id = tco.project_id AND b.build_id = tco.build_id
+                WHERE tco.project_id = ? AND tco.started_at >= ? AND b.project_key = ?
+                ORDER BY tco.started_at DESC, tco.build_id, tco.module, tco.class_fqcn
+                LIMIT ?
+                """.trimIndent()
+            }
+            connection.prepareStatement(sql).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
-                statement.setInt(3, FlakyDetector.MAX_OUTCOME_ROWS)
+                val limitIndex = if (projectKey == null) 3 else { statement.setString(3, projectKey); 4 }
+                statement.setInt(limitIndex, FlakyDetector.MAX_OUTCOME_ROWS)
                 statement.executeQuery().use { rows ->
                     val outcomes = buildList {
                         while (rows.next()) {

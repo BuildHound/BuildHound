@@ -204,6 +204,33 @@ internal fun dependencyEdgesOf(payload: BuildPayload): Map<String, List<String>>
         ?.dependencyEdges
         ?.takeIf { it.isNotEmpty() }
 }
+/**
+ * Server-side bound on the payload's projectKey (plan 076). It feeds the btree-indexed
+ * builds.project_key hot column; unbounded, a hostile ingest-token holder can exceed the
+ * index tuple limit (SQLSTATE 54000) and turn one payload into a permanently retried poison
+ * pill. Applied in BOTH stores' save() so the clamped payload IS the stored payload — hot
+ * column, jsonb, and in-memory object agree by construction (PayloadCapper precedent: the
+ * server stores the capped payload, not the wire bytes). Equals the query-param cap, so a
+ * clamped key stays reachable by filter. take() counts UTF-16 units (never splitting a
+ * surrogate pair); the V15 backfill's left(…,256) counts codepoints — divergence accepted,
+ * see the V15 comment.
+ */
+internal const val MAX_PROJECT_KEY_CHARS: Int = 256
+
+internal fun boundProjectKey(payload: BuildPayload): BuildPayload {
+    val key = payload.projectKey ?: return payload
+    if (key.length <= MAX_PROJECT_KEY_CHARS) return payload
+    val cut = key.take(MAX_PROJECT_KEY_CHARS)
+    return payload.copy(projectKey = if (cut.last().isHighSurrogate()) cut.dropLast(1) else cut)
+}
+
+/**
+ * Cap on GET /v1/project-keys rows (plan 076). Deliberately not [RollupCalculator.TOP_N] (25) — this
+ * is an enumeration, not a ranking: 100 bounds a hostile key-churning ingest token's cardinality
+ * without truncating legitimate multi-repo tenants, and the newest-activity-first ORDER means
+ * truncation drops the longest-idle keys.
+ */
+internal const val MAX_PROJECT_KEYS: Int = 100
 
 /** Query-API filters (plan 010); values are validated at the route, bound in SQL. */
 data class BuildFilter(
@@ -219,6 +246,11 @@ data class BuildFilter(
      * value are always bound, never interpolated, since tags are user-controlled strings.
      */
     val tags: Map<String, String> = emptyMap(),
+    /**
+     * Payload `projectKey` selector (plan 076): the root project name a build reported, NOT the tenant
+     * (`project_id`). Null = all projects (today's behavior, bit-for-bit). Bound in SQL, never interpolated.
+     */
+    val projectKey: String? = null,
 )
 
 /** One point of a benchmark series (plan 030); ordered oldest-first within its (scenario, isolation). */
@@ -266,7 +298,13 @@ data class BuildSummary(
     val mode: String,
     val branch: String? = null,
     val hitRate: Double? = null,
+    /** The payload's root-project name (plan 076); null on pre-076 builds — additive JSON field. */
+    val projectKey: String? = null,
 )
+
+/** One row of GET /v1/project-keys (plan 076): a distinct payload projectKey with its build count + last activity. */
+@Serializable
+data class ProjectKeyRow(val projectKey: String, val builds: Int, val lastBuildAt: Long)
 
 /** One daily bucket of the on-read rollup (plan 010). */
 @Serializable
@@ -352,14 +390,22 @@ interface BuildStore {
         n: Int,
     ): List<BaselinePoint>
 
-    /** Per-module Project Cost family over the last [days] (plan 026); top-25 by cost scalar. */
-    fun projectCost(projectId: String, days: Int, nowMs: Long): List<ProjectCostRow>
+    /**
+     * Distinct non-null payload [BuildPayload.projectKey]s for this tenant (plan 076), newest-activity
+     * first: the dashboard's project selector. Each carries its build count + last-build epoch-ms.
+     * Capped at [MAX_PROJECT_KEYS] rows; the newest-activity ordering makes truncation drop the
+     * longest-idle keys first.
+     */
+    fun projectKeys(projectId: String): List<ProjectKeyRow>
 
-    /** Task duration grouped by name and by type over the last [days] (plan 026); top-25 each. */
-    fun taskDuration(projectId: String, days: Int, nowMs: Long): TaskDurationRollup
+    /** Per-module Project Cost family over the last [days] (plan 026); top-25 by cost scalar. [projectKey] narrows to one repo (plan 076). */
+    fun projectCost(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<ProjectCostRow>
 
-    /** Negative-avoidance ranking over the last [days] (plan 026); top-25 by total excess. */
-    fun negativeAvoidance(projectId: String, days: Int, nowMs: Long): List<NegativeAvoidanceRow>
+    /** Task duration grouped by name and by type over the last [days] (plan 026); top-25 each. [projectKey] narrows to one repo (plan 076). */
+    fun taskDuration(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): TaskDurationRollup
+
+    /** Negative-avoidance ranking over the last [days] (plan 026); top-25 by total excess. [projectKey] narrows to one repo (plan 076). */
+    fun negativeAvoidance(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<NegativeAvoidanceRow>
 
     /**
      * Owning-plugin cost rollup over the last [days] (plan 058, research F8 Layer 1): the same
@@ -387,6 +433,7 @@ interface BuildStore {
      * (scenario, isolationMode), optionally narrowed by [scenario]/[isolationMode]/[branch]/
      * [workersMax] (plan 065 — an exact match on the plaintext `environment.workersMax`). Each
      * group carries oldest-first points + a percentile summary. Empty when no benchmark builds match.
+     * [projectKey] narrows to one repo (plan 076).
      */
     fun benchmarkSeries(
         projectId: String,
@@ -396,6 +443,7 @@ interface BuildStore {
         days: Int,
         nowMs: Long,
         workersMax: Int? = null,
+        projectKey: String? = null,
     ): List<BenchmarkSeries>
 
     /**
@@ -409,20 +457,23 @@ interface BuildStore {
      * "What got worse" landing rollup (plan 032): this [period]-day window vs the prior equal window.
      * Benchmark builds are excluded (fleet view). Both stores fetch raw rows for the two windows and
      * defer to [BottleneckCalculator], so in-memory and Postgres agree byte-for-byte.
+     * [projectKey] narrows to one repo (plan 076).
      */
-    fun bottlenecks(projectId: String, period: Int, nowMs: Long): BottlenecksRollup
+    fun bottlenecks(projectId: String, period: Int, nowMs: Long, projectKey: String? = null): BottlenecksRollup
 
     /**
      * Toolchain adoption over the last [days] (plan 032): per-dimension version distribution + hashed
      * distinct-user count + "who is behind". AGP/KGP/KSP report `available=false` until populated.
+     * [projectKey] narrows to one repo (plan 076).
      */
-    fun toolchainAdoption(projectId: String, days: Int, nowMs: Long): ToolchainRollup
+    fun toolchainAdoption(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): ToolchainRollup
 
     /**
      * Flaky-test records over the last [days] (plan 036): the two-signal [FlakyDetector] over per-class
      * outcomes, ranked by flake rate. Both stores feed the same detector so results agree byte-for-byte.
+     * [projectKey] narrows to one repo (plan 076).
      */
-    fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord>
+    fun flaky(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<FlakyRecord>
 
     /**
      * Per-`TestUnitKey` CI test-class durations over the last [days] (plan 040): the shard balancer's
@@ -687,8 +738,10 @@ interface TokenStore {
 class InMemoryBuildStore : BuildStore {
     private val builds = ConcurrentHashMap<Pair<String, String>, BuildPayload>()
 
-    override fun save(projectId: String, payload: BuildPayload): Boolean =
-        builds.putIfAbsent(projectId to payload.buildId, payload) == null
+    override fun save(projectId: String, rawPayload: BuildPayload): Boolean {
+        val payload = boundProjectKey(rawPayload)
+        return builds.putIfAbsent(projectId to payload.buildId, payload) == null
+    }
 
     override fun findById(projectId: String, buildId: String): BuildPayload? =
         builds[projectId to buildId]
@@ -715,6 +768,7 @@ class InMemoryBuildStore : BuildStore {
             .filter { filter.outcome == null || it.outcome.name == filter.outcome }
             .filter { it.mode.name !in filter.excludeModes }
             .filter { payload -> filter.tags.all { (key, value) -> payload.tags[key] == value } }
+            .filter { filter.projectKey == null || it.projectKey == filter.projectKey }
 
     override fun list(projectId: String, filter: BuildFilter, limit: Int, offset: Int): List<BuildSummary> =
         matching(projectId, filter)
@@ -731,6 +785,7 @@ class InMemoryBuildStore : BuildStore {
                     mode = payload.mode.name,
                     branch = payload.vcs?.branch,
                     hitRate = payload.derived?.cacheableHitRate,
+                    projectKey = payload.projectKey,
                 )
             }
 
@@ -826,14 +881,25 @@ class InMemoryBuildStore : BuildStore {
             .take(n)
             .map { BaselinePoint(durationMs = it.finishedAt - it.startedAt, hitRate = it.derived?.cacheableHitRate) }
 
-    override fun projectCost(projectId: String, days: Int, nowMs: Long): List<ProjectCostRow> =
-        RollupCalculator.projectCost(taskRowsInWindow(projectId, days, nowMs))
+    override fun projectKeys(projectId: String): List<ProjectKeyRow> =
+        builds.entries
+            .filter { it.key.first == projectId }
+            .map { it.value }
+            .filter { it.projectKey != null }
+            .groupBy { it.projectKey!! }
+            // Newest-activity first; projectKey tiebreak matches Postgres's `ORDER BY last_build DESC, project_key`.
+            .map { (key, group) -> ProjectKeyRow(key, group.size, group.maxOf { it.startedAt }) }
+            .sortedWith(compareByDescending<ProjectKeyRow> { it.lastBuildAt }.thenBy { it.projectKey })
+            .take(MAX_PROJECT_KEYS)
 
-    override fun taskDuration(projectId: String, days: Int, nowMs: Long): TaskDurationRollup =
-        RollupCalculator.taskDuration(taskRowsInWindow(projectId, days, nowMs))
+    override fun projectCost(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<ProjectCostRow> =
+        RollupCalculator.projectCost(taskRowsInWindow(projectId, days, nowMs, projectKey))
 
-    override fun negativeAvoidance(projectId: String, days: Int, nowMs: Long): List<NegativeAvoidanceRow> =
-        RollupCalculator.negativeAvoidance(taskRowsInWindow(projectId, days, nowMs))
+    override fun taskDuration(projectId: String, days: Int, nowMs: Long, projectKey: String?): TaskDurationRollup =
+        RollupCalculator.taskDuration(taskRowsInWindow(projectId, days, nowMs, projectKey))
+
+    override fun negativeAvoidance(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<NegativeAvoidanceRow> =
+        RollupCalculator.negativeAvoidance(taskRowsInWindow(projectId, days, nowMs, projectKey))
 
     override fun pluginCost(projectId: String, days: Int, nowMs: Long): PluginCostRollup =
         RollupCalculator.pluginCost(taskRowsInWindow(projectId, days, nowMs))
@@ -873,6 +939,7 @@ class InMemoryBuildStore : BuildStore {
         days: Int,
         nowMs: Long,
         workersMax: Int?,
+        projectKey: String?,
     ): List<BenchmarkSeries> {
         val cutoff = nowMs - days.toLong() * 86_400_000
         return builds.entries
@@ -885,6 +952,7 @@ class InMemoryBuildStore : BuildStore {
             // workersMax slicing (plan 065): exact match on the plaintext environment scalar; a
             // build that never carried one matches no workersMax filter (honest, never a guess).
             .filter { workersMax == null || it.environment?.workersMax == workersMax }
+            .filter { projectKey == null || it.projectKey == projectKey }
             .groupBy { it.benchmark!!.scenario to it.benchmark!!.isolationMode }
             .map { (key, group) -> benchmarkSeriesOf(key.first, key.second, group) }
             .sortedWith(compareBy({ it.scenario }, { it.isolationMode ?: "" }))
@@ -914,12 +982,12 @@ class InMemoryBuildStore : BuildStore {
             .sortedWith(compareBy({ it.day }, { it.variant }, { it.type }, { it.module ?: "" }))
     }
 
-    override fun bottlenecks(projectId: String, period: Int, nowMs: Long): BottlenecksRollup {
+    override fun bottlenecks(projectId: String, period: Int, nowMs: Long, projectKey: String?): BottlenecksRollup {
         val windowMs = period.toLong() * 86_400_000
         val currentFrom = nowMs - windowMs
         val priorFrom = nowMs - 2 * windowMs
-        val current = payloadsBetween(projectId, currentFrom, nowMs)
-        val prior = payloadsBetween(projectId, priorFrom, currentFrom)
+        val current = payloadsBetween(projectId, currentFrom, nowMs, projectKey)
+        val prior = payloadsBetween(projectId, priorFrom, currentFrom, projectKey)
         return BottleneckCalculator.compute(
             currentTasks = current.flatMap { taskRowsOf(it) },
             priorTasks = prior.flatMap { taskRowsOf(it) },
@@ -929,8 +997,8 @@ class InMemoryBuildStore : BuildStore {
         )
     }
 
-    override fun toolchainAdoption(projectId: String, days: Int, nowMs: Long): ToolchainRollup {
-        val payloads = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+    override fun toolchainAdoption(projectId: String, days: Int, nowMs: Long, projectKey: String?): ToolchainRollup {
+        val payloads = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs, projectKey)
         fun samples(select: (BuildPayload) -> String?): List<ToolchainSample> =
             payloads.map { ToolchainSample(select(it), it.environment?.userId, it.startedAt) }
         // The jdk dimension (plan 065): duration-carrying samples, grouped by JDK major — the
@@ -1043,12 +1111,13 @@ class InMemoryBuildStore : BuildStore {
             runAttempt = DeliveryHealthCalculator.parseRunAttempt(payload.ci?.attributes?.get("runAttempt")),
         )
 
-    override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> {
+    override fun flaky(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<FlakyRecord> {
         val cutoff = nowMs - days.toLong() * 86_400_000
         val rows = builds.entries
             .filter { it.key.first == projectId }
             .map { it.value }
             .filter { it.startedAt >= cutoff }
+            .filter { projectKey == null || it.projectKey == projectKey }
             .flatMap { classOutcomesOf(it) }
             // Same most-recent-first order + cap as the Postgres LIMIT, so the two stores read the
             // identical bounded set (FlakyDetector.MAX_OUTCOME_ROWS). Benchmark builds are deliberately
@@ -1087,12 +1156,13 @@ class InMemoryBuildStore : BuildStore {
     }
 
     /** Non-benchmark builds whose startedAt ∈ [fromMs, toMs) — the fleet-view window (plan 032). */
-    private fun payloadsBetween(projectId: String, fromMs: Long, toMs: Long): List<BuildPayload> =
+    private fun payloadsBetween(projectId: String, fromMs: Long, toMs: Long, projectKey: String? = null): List<BuildPayload> =
         builds.entries
             .filter { it.key.first == projectId }
             .map { it.value }
             .filter { it.mode.name != "BENCHMARK" }
             .filter { it.startedAt in fromMs until toMs }
+            .filter { projectKey == null || it.projectKey == projectKey }
 
     private fun kpiRowOf(payload: BuildPayload): BuildKpiRow =
         BuildKpiRow(payload.outcome.name, payload.finishedAt - payload.startedAt, payload.derived?.cacheableHitRate)
@@ -1115,12 +1185,13 @@ class InMemoryBuildStore : BuildStore {
     }
 
     /** Flatten in-window builds into per-task rows, exactly the shape task_executions holds. */
-    private fun taskRowsInWindow(projectId: String, days: Int, nowMs: Long): List<TaskRow> {
+    private fun taskRowsInWindow(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<TaskRow> {
         val cutoff = nowMs - days.toLong() * 86_400_000
         return builds.entries
             .filter { it.key.first == projectId }
             .map { it.value }
             .filter { it.startedAt >= cutoff }
+            .filter { projectKey == null || it.projectKey == projectKey }
             .flatMap { taskRowsOf(it) }
     }
 
