@@ -18,10 +18,12 @@ creating Portal/GitHub credentials, and changing the default development version
 - Pin the current `com.gradle.plugin-publish` and newest Gradle-8.14-compatible
   `com.gradleup.shadow` versions in the version catalog. Apply both only to
   `buildhound-gradle-plugin`.
-- Complete `gradlePlugin {}` with the public GitHub repository as both the landing page and VCS URL,
-  plus a Configuration Cache compatibility declaration. This diverges from the planned
-  `buildhound.dev` website because a live pre-release check found its TLS certificate does not match
-  the hostname; switch the landing page back only after HTTPS is valid. Keep id/group `dev.buildhound`.
+- Complete `gradlePlugin {}` with `https://buildhound.dev` as the final landing page, the public GitHub
+  repository as VCS URL, and a Configuration Cache compatibility declaration. A live pre-release
+  check found that the website's TLS certificate does not validate, so the credential-free validation
+  job must fetch the HTTPS URL successfully before any protected upload job can start; the protected
+  job rechecks after approval, and `publishPlugins` enforces the same check inside every real upload
+  while allowing `--validate-only`. Keep id/group `dev.buildhound`.
 - Declare the two artifact-size tasks explicitly non-cacheable; Plugin Publish makes their previously
   latent `validatePlugins` cacheability-policy warnings release-blocking, while caching would retain
   local artifact telemetry and could replay stale output after a caught probe failure.

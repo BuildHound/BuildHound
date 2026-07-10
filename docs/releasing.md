@@ -39,6 +39,11 @@ artifacts. When a dependency changes, regenerate only the necessary verification
 metadata diff, and independently compare release-critical checksums with the authoritative repository;
 never disable verification to make a release pass.
 
+The Portal metadata advertises `https://buildhound.dev`. Do not publish while that URL has an invalid
+certificate or does not return a direct successful HTTPS response. `publishPlugins` enforces this for
+every real local/CI upload while leaving `--validate-only` available. GitHub also checks before
+validation and again after Environment approval, immediately before the secret-scoped upload step.
+
 ## GitHub Actions setup
 
 Create a GitHub Environment named `gradle-plugin-portal`. Add both credentials as **environment
@@ -67,8 +72,9 @@ Publishing a GitHub Release runs `.github/workflows/publish-gradle-plugin.yml`. 
 be SemVer, optionally prefixed with `v`, for example `v0.1.0` or `0.1.0`. The workflow removes the
 optional prefix, rejects invalid SemVer and any `SNAPSHOT` version, then exports the result as
 `BUILDHOUND_VERSION` for the build. The tag must point to a commit already on the default branch. A
-credential-free job checks the plugin and validates the Portal publication; only its successful,
-exact commit/version pair reaches the protected publish job.
+credential-free job verifies `https://buildhound.dev`, checks the plugin, and validates the Portal
+publication; only its successful, exact commit/version pair reaches the protected publish job, where
+the website is checked again before upload.
 
 For an intentional manual release, open **Actions**, select **Publish Gradle plugin**, choose **Run
 workflow** on the default branch, and enter the version. Manual input follows the same version checks
