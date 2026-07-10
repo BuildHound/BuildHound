@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44" role="img" aria-labelledby="title desc">
+  <title id="title">BuildHound hound glyph</title>
+  <desc id="desc">An angular hound profile with a green signal point.</desc>
+  <path d="M7 27c7-14 21-18 29-9l-10 6 9 9H14l-7 6z" fill="none" stroke="#151a22" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="31" cy="14" r="3.4" fill="#17a66a"/>
+</svg>
