@@ -1,4 +1,14 @@
 import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+import com.gradle.publish.PublishTask
+import java.io.IOException
+import java.io.Serializable
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
+import org.gradle.api.Action
+import org.gradle.api.Task
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.plugin.compatibility.compatibility
 
@@ -6,6 +16,57 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.gradle.plugin.publish)
     alias(libs.plugins.shadow)
+}
+
+private object PluginWebsiteVerifier {
+    fun verify() {
+        val website = URI.create("https://buildhound.dev/")
+        val client =
+            HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .build()
+        val request =
+            HttpRequest.newBuilder(website)
+                .timeout(Duration.ofSeconds(10))
+                .GET()
+                .build()
+        var failure = "no response"
+
+        repeat(3) { attempt ->
+            try {
+                val status = client.send(request, HttpResponse.BodyHandlers.discarding()).statusCode()
+                if (status in 200..299) return
+                if (status != 429 && status !in 500..599) {
+                    throw GradleException("Plugin website $website returned HTTP $status; refusing Portal upload")
+                }
+                failure = "HTTP $status"
+            } catch (error: IOException) {
+                failure = error::class.java.simpleName
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw GradleException("Plugin website verification was interrupted", error)
+            }
+
+            if (attempt < 2) {
+                try {
+                    Thread.sleep(2_000)
+                } catch (error: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw GradleException("Plugin website verification was interrupted", error)
+                }
+            }
+        }
+
+        throw GradleException("Plugin website $website failed HTTPS verification after 3 attempts ($failure)")
+    }
+}
+
+private class VerifyPluginWebsiteAction(private val uploadOnly: Boolean) : Action<Task>, Serializable {
+    override fun execute(task: Task) {
+        if (uploadOnly && task is PublishTask && task.validateOnly.getOrElse(false)) return
+        PluginWebsiteVerifier.verify()
+    }
 }
 
 description = "Settings plugin collecting build/task telemetry (configuration-cache safe)"
@@ -95,9 +156,9 @@ dependencies {
 }
 
 gradlePlugin {
-    // buildhound.dev currently has no valid TLS certificate, so the public GitHub repository is
-    // the release landing page until that domain is repaired (plan 077).
-    website = "https://github.com/BuildHound/BuildHound"
+    // Advertise the final product URL now. The release workflow verifies HTTPS before validation,
+    // so the Portal cannot receive this metadata while buildhound.dev has an invalid certificate.
+    website = "https://buildhound.dev"
     vcsUrl = "https://github.com/BuildHound/BuildHound"
     testSourceSets(functionalTest)
     plugins {
@@ -136,6 +197,17 @@ tasks.named<ShadowJar>("shadowJar") {
         exclude(dependency("org.jetbrains.kotlin:kotlin-stdlib:.*"))
         exclude(dependency("org.jetbrains:annotations:.*"))
     }
+}
+
+// Keep validation usable while the certificate is being repaired, but make every real local/CI
+// upload fail closed inside the upload task itself. The standalone task is safe to run as a preflight.
+tasks.register("verifyPluginWebsite") {
+    description = "Verifies the public Plugin Portal website over HTTPS"
+    group = "publishing"
+    doLast(VerifyPluginWebsiteAction(uploadOnly = false))
+}
+tasks.named<PublishTask>("publishPlugins") {
+    doFirst(VerifyPluginWebsiteAction(uploadOnly = true))
 }
 
 // A local Maven repository used only by PortalPublicationFunctionalTest. Resolving the plugin by

@@ -59,6 +59,30 @@ jobs:
             exit 1
           fi
 
+      # The Portal metadata links to buildhound.dev. Keep this credential-free gate ahead of
+      # validation and the protected publish job so an invalid certificate can never ship.
+      - name: Verify public plugin website
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(
+            curl --fail --silent --show-error \
+              --proto '=https' \
+              --connect-timeout 5 \
+              --max-time 10 \
+              --retry 2 \
+              --retry-all-errors \
+              --retry-delay 2 \
+              --retry-max-time 34 \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              https://buildhound.dev/
+          )"
+          if [[ ! "$status" =~ ^2[0-9]{2}$ ]]; then
+            echo "buildhound.dev returned HTTP $status; refusing Portal upload." >&2
+            exit 1
+          fi
+
       # Event values enter the shell through the environment, never by direct
       # expression interpolation. The SemVer check also makes GITHUB_ENV safe.
       - name: Resolve release version
@@ -123,6 +147,30 @@ jobs:
       - uses: gradle/actions/setup-gradle@90ddb51e90a5fd9ba75f40cf85156b7b41bf76a3 # v6
         with:
           cache-read-only: true
+
+      # Environment approval can take time. Recheck after approval and immediately before the
+      # secret-scoped step; publishPlugins also enforces the same gate for local/CI uploads.
+      - name: Recheck public plugin website
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(
+            curl --fail --silent --show-error \
+              --proto '=https' \
+              --connect-timeout 5 \
+              --max-time 10 \
+              --retry 2 \
+              --retry-all-errors \
+              --retry-delay 2 \
+              --retry-max-time 34 \
+              --output /dev/null \
+              --write-out '%{http_code}' \
+              https://buildhound.dev/
+          )"
+          if [[ ! "$status" =~ ^2[0-9]{2}$ ]]; then
+            echo "buildhound.dev returned HTTP $status; refusing Portal upload." >&2
+            exit 1
+          fi
 
       # Keep Portal credentials out of checkout, setup, checks, and validation.
       - name: Publish plugin
