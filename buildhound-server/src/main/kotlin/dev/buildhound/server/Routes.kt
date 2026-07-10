@@ -614,8 +614,9 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // like its taskDuration/projectCost/negativeAvoidance siblings (benchmark builds included).
         get("/rollups/plugin-cost") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.pluginCost(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.pluginCost(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
 
         // Costliest modules to change (plan 063, research F13): ranks each changed Gradle module by the
@@ -625,8 +626,9 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // windowed build carried a changedModules block.
         get("/rollups/change-blast-radius") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.changeBlastRadius(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.changeBlastRadius(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
 
         // Benchmark series (plan 030, spec §7): mode=BENCHMARK builds grouped by (scenario, isolation)
@@ -679,8 +681,9 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // /trends; benchmark builds excluded (the bottlenecks/toolchain fleet-view convention).
         get("/rollups/rerun-causes") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.rerunCauses(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.rerunCauses(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
 
         // Build-Analyzer-style warning taxonomy (plan 060, research F10): three rule-based candidate
@@ -689,8 +692,9 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // (its own jsonb scan, not task_executions — see BuildStore.warnings).
         get("/rollups/warnings") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val period = call.periodParam()
-            call.respondQuery { store.warnings(project.id, period, System.currentTimeMillis()) }
+            call.respondQuery { store.warnings(project.id, period, System.currentTimeMillis(), projectKey.value) }
         }
 
         // Cache-miss diagnostics (plan 068, research F18): non-relocatable-task candidates (self-gated
@@ -700,8 +704,9 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // excluded (the bottlenecks/toolchain/rerun-causes/warnings fleet-view convention).
         get("/rollups/cache-miss-diagnostics") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.cacheMissDiagnostics(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.cacheMissDiagnostics(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
 
         // Fleet remote-cache ROI (plan 067, research F17): per-mode remote/local hit rate from the opt-in
@@ -711,8 +716,9 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // tenant-scoped, days clamped like /trends; benchmark builds excluded (the fleet-view convention).
         get("/rollups/cache-roi") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.cacheRoi(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.cacheRoi(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
 
         // CC economics + reuse diagnostics (plan 064, research F14): the advisory CI-reuse class (an
@@ -722,8 +728,9 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // convention). The per-day CC counters ride on /trends' TrendPoints; this is the window rollup.
         get("/rollups/cc-economics") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.ccEconomics(project.id, days, System.currentTimeMillis()) }
+            call.respondQuery { store.ccEconomics(project.id, days, System.currentTimeMillis(), projectKey.value) }
         }
 
         // Fleet recommendations (plan 054, research F4): five rule-based families (hygiene/threshold, KAPT
@@ -734,9 +741,10 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // ESTIMATED origins keep the hedged blog/JDK-floor numbers honest.
         get("/rollups/recommendations") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
             call.respondQuery {
-                val payloads = store.windowPayloads(project.id, days, MAX_RECOMMENDATION_ROWS, System.currentTimeMillis())
+                val payloads = store.windowPayloads(project.id, days, MAX_RECOMMENDATION_ROWS, System.currentTimeMillis(), projectKey.value)
                 RecommendationsRollup(
                     period = days,
                     buildsAnalyzed = payloads.size,
@@ -755,10 +763,11 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // 500), while a storage outage on the core read still 503s through respondQuery.
         get("/rollups/delivery-health") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
             call.respondQuery {
-                val core = store.deliveryHealth(project.id, days, System.currentTimeMillis())
-                enrichDeliveryHealth(core, project.id, days, store, ciSpans)
+                val core = store.deliveryHealth(project.id, days, System.currentTimeMillis(), projectKey.value)
+                enrichDeliveryHealth(core, project.id, days, store, ciSpans, projectKey = projectKey.value)
             }
         }
 
@@ -778,7 +787,8 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // comparison (no cohorts), never a 404 — mirroring /trends' unmatched-filter behavior.
         get("/trends/cohorts") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
-            val filter = call.buildFilterOrNull()
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
+            val filter = call.buildFilterOrNull(projectKey.value)
                 ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/branch/tag filter"))
             val tagKey = call.request.queryParameters["tag"]
             if (tagKey.isNullOrBlank()) {
@@ -794,7 +804,8 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         // split-by-tag picker. Read-scope, tenant-scoped, days clamped like /trends.
         get("/tags") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
-            call.respondQuery { store.tagKeys(project.id, call.daysParam(), System.currentTimeMillis()) }
+            val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
+            call.respondQuery { store.tagKeys(project.id, call.daysParam(), System.currentTimeMillis(), projectKey.value) }
         }
     }
 }
@@ -975,6 +986,7 @@ internal fun enrichDeliveryHealth(
     store: BuildStore,
     ciSpans: CiSpanStore,
     nowMs: Long = System.currentTimeMillis(),
+    projectKey: String? = null,
 ): DeliveryHealthRollup {
     var connectorSeen = false
     val runCache = mutableMapOf<String, StoredCiRun?>()
@@ -1028,7 +1040,9 @@ internal fun enrichDeliveryHealth(
             emptyList()
         } else {
             val rerunIds = core.retryTax.rerunBuildIds.toSet()
-            store.flaky(projectId, days, nowMs).mapNotNull { record ->
+            // The flaky window inherits the route's projectKey (plan 079) — otherwise a sibling repo's
+            // flaky classes could claim this repo's rerun builds in the panel.
+            store.flaky(projectId, days, nowMs, projectKey).mapNotNull { record ->
                 val hits = record.affectedBuildIds.filter { it in rerunIds }
                 if (hits.isEmpty()) return@mapNotNull null
                 FlakyRerunCandidate(

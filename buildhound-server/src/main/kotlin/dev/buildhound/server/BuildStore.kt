@@ -468,8 +468,9 @@ interface BuildStore {
      * (its sibling) — not [bottlenecks]' period-window, benchmark-excluded convention. Both stores
      * fetch the identical windowed [TaskRow]s and defer to [RollupCalculator.pluginCost], so in-memory
      * and Postgres agree byte-for-byte (the plan-026 parity discipline).
+     * [projectKey] narrows to one repo (plan 079).
      */
-    fun pluginCost(projectId: String, days: Int, nowMs: Long): PluginCostRollup
+    fun pluginCost(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): PluginCostRollup
 
     /**
      * Costliest-modules-to-change rollup over the last [days] (plan 063, research F13): ranks each
@@ -480,8 +481,9 @@ interface BuildStore {
      * [ChangeBlastBuild]s (changed-module set × per-module executed durations) and defer to
      * [RollupCalculator.changeBlastRadius], so in-memory and Postgres agree byte-for-byte (the plan-026
      * parity discipline). Empty when no windowed build carried a `changedModules` block.
+     * [projectKey] narrows to one repo (plan 079).
      */
-    fun changeBlastRadius(projectId: String, days: Int, nowMs: Long): List<ChangeBlastRadiusRow>
+    fun changeBlastRadius(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<ChangeBlastRadiusRow>
 
     /**
      * Benchmark series over the last [days] (plan 030): `mode=BENCHMARK` builds grouped by
@@ -561,8 +563,9 @@ interface BuildStore {
      * fleet-view convention `bottlenecks`/`toolchainAdoption` use; benchmark has its own dedicated
      * view, plan 030). Capped ([TagCohortCalculator.MAX_KEYS] keys, [TagCohortCalculator.MAX_VALUES_PER_KEY]
      * values each) so a misused high-cardinality tag can't blow up the response.
+     * [projectKey] narrows to one repo (plan 079).
      */
-    fun tagKeys(projectId: String, days: Int, nowMs: Long): List<TagKeySummary>
+    fun tagKeys(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<TagKeySummary>
 
     /**
      * Rerun-cause taxonomy over `executionReasons` (plan 061, research F11): per-bucket coverage of
@@ -570,8 +573,9 @@ interface BuildStore {
      * the last [days]. Benchmark builds excluded (the `bottlenecks`/`toolchainAdoption` fleet-view
      * convention) — both stores fetch the same windowed [TaskRow]s and defer to
      * [RerunCauseRollupCalculator], so in-memory and Postgres agree byte-for-byte.
+     * [projectKey] narrows to one repo (plan 079).
      */
-    fun rerunCauses(projectId: String, days: Int, nowMs: Long): RerunCauseRollup
+    fun rerunCauses(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): RerunCauseRollup
 
     /**
      * Build-Analyzer-style warning taxonomy (plan 060, research F10): three rule-based candidate
@@ -585,8 +589,9 @@ interface BuildStore {
      * same windowed [TaskRow]s (Postgres via its own `jsonb_array_elements` scan, kept separate from
      * [rerunCauses]'s indexed-table scan so `/rollups/bottlenecks` stays fast) and defer to
      * [WarningCalculator], so in-memory and Postgres agree byte-for-byte.
+     * [projectKey] narrows to one repo (plan 079).
      */
-    fun warnings(projectId: String, period: Int, nowMs: Long): WarningsRollup
+    fun warnings(projectId: String, period: Int, nowMs: Long, projectKey: String? = null): WarningsRollup
 
     /**
      * Cache-miss diagnostics over the last [days] (plan 068, research F18): non-relocatable-task
@@ -599,8 +604,9 @@ interface BuildStore {
      * parity discipline). Benchmark builds are excluded (the bottlenecks/toolchain/rerun-causes/warnings
      * fleet-view convention — a repeated same-scenario benchmark build on a fixed runner would otherwise
      * inflate both the cross-host count and the fingerprint-volatility signal).
+     * [projectKey] narrows to one repo (plan 079) — applied before the row cap, never after.
      */
-    fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long): CacheMissDiagnostics
+    fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): CacheMissDiagnostics
 
     /**
      * Fleet remote-cache ROI over the last [days] (plan 067, research F17): per-build-mode remote/local
@@ -614,8 +620,9 @@ interface BuildStore {
      * JsonElement navigation, and defer to the pure [CacheRoiCalculator], so in-memory and Postgres agree
      * byte-for-byte (the plan-026/032/068 parity discipline). Benchmark builds excluded (the fleet-view
      * convention — a repeated same-scenario benchmark build on a fixed runner would skew the fleet rate).
+     * [projectKey] narrows to one repo (plan 079) — applied before the row cap, never after.
      */
-    fun cacheRoi(projectId: String, days: Int, nowMs: Long): CacheRoiRollup
+    fun cacheRoi(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): CacheRoiRollup
 
     /**
      * Configuration-cache economics + reuse diagnostics over the last [days] (plan 064, research F14):
@@ -627,8 +634,9 @@ interface BuildStore {
      * LIMIT` — flatten via [ccBuildRowOf] and defer to the pure [CcEconomicsCalculator], so in-memory and
      * Postgres agree byte-for-byte. Not gated to a carried block: the reuse classification needs every
      * windowed build's CC posture (a DISABLED-only window is a real [CiReuseClass.DISABLED] verdict).
+     * [projectKey] narrows to one repo (plan 079) — applied before the row cap, never after.
      */
-    fun ccEconomics(projectId: String, days: Int, nowMs: Long): CcEconomicsReport
+    fun ccEconomics(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): CcEconomicsReport
 
     /**
      * Delivery-health **proxies** over the last [days] (plan 059, research F9): change-failure rate
@@ -641,8 +649,9 @@ interface BuildStore {
      * byte-for-byte (the plan-026/032 parity discipline). Connector/flaky enrichment happens at the
      * route, never here — the parity core stays build-only (no [dev.buildhound.server.connector.CiSpanStore]
      * in any store constructor).
+     * [projectKey] narrows to one repo (plan 079).
      */
-    fun deliveryHealth(projectId: String, days: Int, nowMs: Long): DeliveryHealthRollup
+    fun deliveryHealth(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): DeliveryHealthRollup
 
     /**
      * The newest [cap] non-benchmark builds started in the last [days] as **whole** [BuildPayload]s
@@ -656,8 +665,9 @@ interface BuildStore {
      * parity discipline). Reads the whole `payload` jsonb — the engine needs `processes[]`,
      * `configurationCache`, a per-build `jdk∧ksp` join, `excludedTaskNames`, and `extensions` that no
      * normalized rollup column carries.
+     * [projectKey] narrows to one repo (plan 079) — applied before the [cap], never after.
      */
-    fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long): List<BuildPayload>
+    fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long, projectKey: String? = null): List<BuildPayload>
 
     /** Every project id with stored data (retention sweep, plan 042); default empty for a store that has none. */
     fun allProjectIds(): List<String> = emptyList()
@@ -790,7 +800,12 @@ interface TokenStore {
     fun ensureProjectWithToken(projectKey: String, tokenHash: String, scope: String = TokenScope.ALL): ProjectRef
 }
 
-class InMemoryBuildStore : BuildStore {
+class InMemoryBuildStore(
+    // Injectable for cap-starvation tests (plan 079 review); production uses the default.
+    internal val diagnosticRowCap: Int = RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS,
+    internal val cacheRoiRowCap: Int = MAX_CACHE_ROI_ROWS,
+    internal val ccEconomicsRowCap: Int = MAX_CC_ECONOMICS_ROWS,
+) : BuildStore {
     private val builds = ConcurrentHashMap<Pair<String, String>, BuildPayload>()
 
     override fun save(projectId: String, rawPayload: BuildPayload): Boolean {
@@ -898,8 +913,8 @@ class InMemoryBuildStore : BuildStore {
         return TagCohortCalculator.groupByCohort(rows)
     }
 
-    override fun tagKeys(projectId: String, days: Int, nowMs: Long): List<TagKeySummary> {
-        val payloads = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+    override fun tagKeys(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<TagKeySummary> {
+        val payloads = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs, projectKey)
         return TagCohortCalculator.tagKeySummaries(payloads.map { it.tags })
     }
 
@@ -956,10 +971,10 @@ class InMemoryBuildStore : BuildStore {
     override fun negativeAvoidance(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<NegativeAvoidanceRow> =
         RollupCalculator.negativeAvoidance(taskRowsInWindow(projectId, days, nowMs, projectKey))
 
-    override fun pluginCost(projectId: String, days: Int, nowMs: Long): PluginCostRollup =
-        RollupCalculator.pluginCost(taskRowsInWindow(projectId, days, nowMs))
+    override fun pluginCost(projectId: String, days: Int, nowMs: Long, projectKey: String?): PluginCostRollup =
+        RollupCalculator.pluginCost(taskRowsInWindow(projectId, days, nowMs, projectKey))
 
-    override fun changeBlastRadius(projectId: String, days: Int, nowMs: Long): List<ChangeBlastRadiusRow> {
+    override fun changeBlastRadius(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<ChangeBlastRadiusRow> {
         // Same days-window, benchmark-included convention as projectCost (started_at >= cutoff), gated
         // to builds carrying a changedModules block. Both stores flatten to ChangeBlastBuild and defer
         // to the one calculator, so in-memory and Postgres agree byte-for-byte.
@@ -968,6 +983,7 @@ class InMemoryBuildStore : BuildStore {
             .filter { it.key.first == projectId }
             .map { it.value }
             .filter { it.startedAt >= cutoff }
+            .filter { projectKey == null || it.projectKey == projectKey }
             .mapNotNull { changeBlastBuildOf(it) }
         return RollupCalculator.changeBlastRadius(builds)
     }
@@ -1073,32 +1089,33 @@ class InMemoryBuildStore : BuildStore {
         )
     }
 
-    override fun rerunCauses(projectId: String, days: Int, nowMs: Long): RerunCauseRollup {
+    override fun rerunCauses(projectId: String, days: Int, nowMs: Long, projectKey: String?): RerunCauseRollup {
         // Same half-open [cutoff, now) window + benchmark exclusion as bottlenecks/toolchainAdoption
         // (payloadsBetween), NOT the projectCost/taskDuration/negativeAvoidance convention
         // (taskRowsInWindow, which does not exclude benchmark) — a rerun-cause signal is about
         // real-build rework, so repeated same-scenario benchmark reruns must not skew the fleet share.
-        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs, projectKey)
         return RerunCauseRollupCalculator.compute(windowed.flatMap { taskRowsOf(it) })
     }
 
-    override fun warnings(projectId: String, period: Int, nowMs: Long): WarningsRollup {
+    override fun warnings(projectId: String, period: Int, nowMs: Long, projectKey: String?): WarningsRollup {
         // Same half-open [cutoff, now) fleet-view window + benchmark exclusion as bottlenecks/
         // toolchainAdoption/rerunCauses (payloadsBetween) — a warning candidate is about real-build
         // behavior, so repeated same-scenario benchmark reruns must not skew the fleet share.
-        val windowed = payloadsBetween(projectId, nowMs - period.toLong() * 86_400_000, nowMs)
+        val windowed = payloadsBetween(projectId, nowMs - period.toLong() * 86_400_000, nowMs, projectKey)
         return WarningCalculator.compute(windowed.flatMap { taskRowsOf(it) }, period)
     }
 
-    override fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long): CacheMissDiagnostics {
+    override fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long, projectKey: String?): CacheMissDiagnostics {
         // Same fleet-view window as bottlenecks/toolchainAdoption/rerunCauses/warnings (benchmark
         // excluded), further gated to builds carrying either block and capped/tie-broken identically to
         // the Postgres store's `ORDER BY started_at DESC, build_id DESC LIMIT` so the two agree
-        // byte-for-byte even above the cap (plan 068).
-        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+        // byte-for-byte even above the cap (plan 068). projectKey filters BEFORE the cap (plan 079) —
+        // a busy sibling repo must never starve the selected repo's window.
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs, projectKey)
             .filter { carriesCacheMissDiagnosticsBlock(it) }
             .sortedWith(compareByDescending<BuildPayload> { it.startedAt }.thenByDescending { it.buildId })
-            .take(RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS)
+            .take(diagnosticRowCap)
         val relocatabilityRows = windowed.flatMap { relocatabilityRowsOf(it) }
         val streamRows = windowed.mapNotNull { fingerprintStreamRowOf(it) }
         return CacheMissDiagnostics(
@@ -1108,45 +1125,46 @@ class InMemoryBuildStore : BuildStore {
         )
     }
 
-    override fun cacheRoi(projectId: String, days: Int, nowMs: Long): CacheRoiRollup {
+    override fun cacheRoi(projectId: String, days: Int, nowMs: Long, projectKey: String?): CacheRoiRollup {
         // Same fleet-view window as bottlenecks/toolchainAdoption/cacheMissDiagnostics (benchmark
         // excluded), further gated to builds carrying either block and capped/tie-broken identically to
         // the Postgres store's `ORDER BY started_at DESC, build_id DESC LIMIT` so the two agree
-        // byte-for-byte even above the cap (plan 067).
-        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+        // byte-for-byte even above the cap (plan 067). projectKey filters BEFORE the cap (plan 079).
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs, projectKey)
             .filter { carriesCacheRoiBlock(it) }
             .sortedWith(compareByDescending<BuildPayload> { it.startedAt }.thenByDescending { it.buildId })
-            .take(MAX_CACHE_ROI_ROWS)
+            .take(cacheRoiRowCap)
         return CacheRoiCalculator.compute(
             originRows = windowed.flatMap { cacheRoiRowsOf(it) },
             configRows = windowed.mapNotNull { cacheConfigRowOf(it) },
         )
     }
 
-    override fun deliveryHealth(projectId: String, days: Int, nowMs: Long): DeliveryHealthRollup {
+    override fun deliveryHealth(projectId: String, days: Int, nowMs: Long, projectKey: String?): DeliveryHealthRollup {
         // Same fleet-view window + benchmark exclusion as bottlenecks/toolchainAdoption/rerunCauses
         // (payloadsBetween) — CFR refines plan-032's fleet successRate, so it inherits its population.
-        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs, projectKey)
         return DeliveryHealthCalculator.compute(windowed.map { deliveryRowOf(it) }, days)
     }
 
-    override fun ccEconomics(projectId: String, days: Int, nowMs: Long): CcEconomicsReport {
+    override fun ccEconomics(projectId: String, days: Int, nowMs: Long, projectKey: String?): CcEconomicsReport {
         // Same fleet-view window as bottlenecks/cacheMissDiagnostics/cacheRoi (benchmark excluded),
         // capped/tie-broken identically to the Postgres store's `ORDER BY started_at DESC, build_id DESC
         // LIMIT` so the two agree byte-for-byte even above the cap (plan 064). NOT gated to a carried
         // block — the reuse classification needs every windowed build's CC posture (a DISABLED-only
-        // window is a real verdict, not an empty one).
-        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+        // window is a real verdict, not an empty one). projectKey filters BEFORE the cap (plan 079).
+        val windowed = payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs, projectKey)
             .sortedWith(compareByDescending<BuildPayload> { it.startedAt }.thenByDescending { it.buildId })
-            .take(MAX_CC_ECONOMICS_ROWS)
+            .take(ccEconomicsRowCap)
         return CcEconomicsCalculator.compute(windowed.map { ccBuildRowOf(it) })
     }
 
-    override fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long): List<BuildPayload> =
+    override fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long, projectKey: String?): List<BuildPayload> =
         // Same fleet-view window as bottlenecks/cacheRoi/ccEconomics (benchmark excluded via payloadsBetween),
         // most-recent-first with the same (startedAt, buildId) tie-break + cap as the Postgres LIMIT so the
         // two stores return the identical bounded set even above the cap (plan 054 parity discipline).
-        payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs)
+        // projectKey filters BEFORE the cap (plan 079).
+        payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs, projectKey)
             .sortedWith(compareByDescending<BuildPayload> { it.startedAt }.thenByDescending { it.buildId })
             .take(cap)
 

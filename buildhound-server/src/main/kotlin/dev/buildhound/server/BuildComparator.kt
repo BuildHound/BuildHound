@@ -13,6 +13,8 @@ data class CompareBuildRef(
     val mode: String,
     val branch: String? = null,
     val sha: String? = null,
+    /** The payload's root-project name (plan 079); powers the dashboard's same-project comparison guard. Additive. */
+    val projectKey: String? = null,
 )
 
 /**
@@ -74,6 +76,7 @@ object BuildComparator {
         mode = p.mode.name,
         branch = p.vcs?.branch,
         sha = p.vcs?.sha,
+        projectKey = p.projectKey,
     )
 
     /** Tasks that ran in B but were avoided in A — the cache misses worth explaining. */

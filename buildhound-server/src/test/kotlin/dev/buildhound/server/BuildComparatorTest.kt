@@ -19,8 +19,9 @@ class BuildComparatorTest {
         fingerprints: FingerprintInfo? = null,
         requestedTasks: List<String> = listOf("build"),
         toolchain: ToolchainInfo? = null,
+        projectKey: String? = null,
     ) = BuildPayload(
-        buildId = id, startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
+        buildId = id, projectKey = projectKey, startedAt = 0, finishedAt = 1, outcome = BuildOutcome.SUCCESS,
         requestedTasks = requestedTasks, tasks = tasks, fingerprints = fingerprints, toolchain = toolchain,
     )
 
@@ -102,5 +103,20 @@ class BuildComparatorTest {
         val a = build("a", requestedTasks = listOf("assemble"))
         val b = build("b", requestedTasks = listOf("test"))
         assertTrue(!BuildComparator.compare(a, b).requestedTasksMatch)
+    }
+
+    @Test
+    fun `each ref carries its side's projectKey, and a null key stays off the wire`() {
+        // Powers the dashboard's same-project comparison guard (plan 079): the refs must name each
+        // side's repo. Additive — explicitNulls=false keeps a null-key build's JSON byte-identical
+        // to the pre-079 shape, so the guard degrades safely on pre-selector builds.
+        val result = BuildComparator.compare(build("a", projectKey = "repo-a"), build("b", projectKey = "repo-b"))
+        assertEquals("repo-a", result.a.projectKey)
+        assertEquals("repo-b", result.b.projectKey)
+
+        val nullKey = BuildComparator.compare(build("a"), build("b"))
+        assertEquals(null, nullKey.a.projectKey)
+        val json = dev.buildhound.commons.payload.BuildHoundJson.payload.encodeToString(CompareResult.serializer(), nullKey)
+        assertTrue(!json.contains("projectKey"), "a null projectKey is absent from the JSON, not null: $json")
     }
 }
