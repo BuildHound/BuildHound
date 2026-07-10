@@ -13,6 +13,7 @@ CI assets. Apache-2.0.
 | `docs/build-telemetry-roadmap.md` | Phase ordering and exit criteria |
 | `docs/build-telemetry-research.md` | Why — landscape, APIs, risk register (§6) |
 | `docs/architecture.md` | How we build it well — **living** architecture + best practices (Gradle plugin, KMP, OCI). Update it whenever development produces a better insight |
+| `docs/brand/DESIGN-V2.md` | Required brand and product-design system for public sites, dashboards, and HTML report interfaces |
 | `docs/plans/` | One committed plan per feature (see workflow below) |
 
 ## Modules
@@ -66,6 +67,18 @@ constraints that always apply:
 - The plugin must never fail a build; every failure path degrades to a `warn` log.
 - Configuration-cache compatibility for all plugin code.
 - Schema changes are additive only; add golden files, never edit them.
+- Any work that creates or modifies a public site, product dashboard, or HTML report
+  interface must use `docs/brand/DESIGN-V2.md`, reuse its tokens and assets, and follow its
+  status semantics, typography, component, and responsive rules. The files under
+  `docs/brand/v2/` are static reference fixtures, not production components. The older
+  `docs/brand/DESIGN.md`, `docs/brand/DESIGN-GPT.md`, `docs/brand/site/`, and
+  `docs/brand/gpt/` directions are historical references, not implementation sources.
+  Reconcile an intentional divergence in `docs/brand/DESIGN-V2.md` before coding it.
+  Production reports may adopt token values, semantic rules, system-font roles, and inline
+  SVG path geometry, but must not copy `<link>`, `<img>`, `url()`, `@import`, webfont, or
+  relative asset references from the fixtures. Never weaken
+  `buildhound-report/src/test/kotlin/dev/buildhound/report/ReportAssetsTest.kt` to adopt V2.
+  Runtime adoption requires a separate implementation plan.
 - No internal Gradle APIs on the always-on core path (v1). All internal-API use is quarantined in
   the bundled `buildhound-internal-adapters` module and stays dormant until a
   `buildhound { internalAdapters { } }` toggle is set — enabling a toggle is the per-feature consent
