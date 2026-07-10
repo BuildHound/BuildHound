@@ -31,6 +31,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Semantic validation for every workflow, including release-only keys/expressions that a
+      # generic YAML parser cannot check. This job receives no deployment environment or secrets.
+      - name: Lint GitHub Actions workflows
+        uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8 # v2.1.2
+        with:
+          version: 1.7.12
+          shellcheck: false
+          pyflakes: false
+
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

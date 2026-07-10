@@ -86,7 +86,7 @@ pluginManagement {
 }
 plugins {
     id("dev.buildhound")                               // dev (version supplied by the included build)
-    // id("dev.buildhound") version "0.1.0-SNAPSHOT"   // once published
+    // id("dev.buildhound") version "0.1.0"            // after the first Portal release
 }
 
 buildhound {
@@ -113,6 +113,9 @@ buildhound {
 
 Leaving `server {}` unset (or `url` empty) runs the plugin **offline** — it still writes the HTML
 report but uploads nothing.
+
+Release maintainers: see [Gradle Plugin Portal releases](docs/releasing.md) for local credentials,
+validation, and the protected GitHub deployment workflow.
 
 ### Configuration reference
 
