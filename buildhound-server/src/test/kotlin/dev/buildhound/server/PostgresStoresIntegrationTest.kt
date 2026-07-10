@@ -1,7 +1,11 @@
 package dev.buildhound.server
 
+import dev.buildhound.commons.payload.ArtifactSize
+import dev.buildhound.commons.payload.ArtifactSizes
+import dev.buildhound.commons.payload.ArtifactType
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.TaskOutcome
 import javax.sql.DataSource
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -203,5 +207,110 @@ class PostgresStoresIntegrationTest {
         assertEquals(build, loaded, "jsonb round trip must be lossless")
         assertNull(builds.findById(projectA.id, "missing"))
         assertEquals(1L, builds.count(projectA.id, BuildFilter()))
+    }
+
+    /** Reads the `project_key` hot column directly — the ingest-writes-the-column contract (plan 076). */
+    private fun projectKeyColumn(projectId: String, buildId: String): String? =
+        dataSource.connection.use { c ->
+            c.prepareStatement("SELECT project_key FROM builds WHERE project_id = ?::uuid AND build_id = ?").use { s ->
+                s.setString(1, projectId)
+                s.setString(2, buildId)
+                s.executeQuery().use { r -> if (r.next()) r.getString(1) else null }
+            }
+        }
+
+    @Test
+    fun `ingest writes the project_key hot column from the payload`() {
+        val project = tokens.ensureProjectWithToken("hotcol-project", sha256Hex("hc"))
+        builds.save(project.id, TestPayloads.build(buildId = "hc-1", projectKey = "repo-x"))
+        builds.save(project.id, TestPayloads.build(buildId = "hc-2", projectKey = null))
+        assertEquals("repo-x", projectKeyColumn(project.id, "hc-1"), "projectKey is extracted to the hot column")
+        assertNull(projectKeyColumn(project.id, "hc-2"), "a null payload projectKey stays null in the column")
+
+        // Store-boundary clamp (plan 076): an oversized key must not reach the btree index (SQLSTATE
+        // 54000 poison pill) — save succeeds (no SQLException = the index accepted the tuple) and the
+        // hot column holds the clamped key. Both stores clamp identically, so enumeration stays parity.
+        val oversized = TestPayloads.build(buildId = "hc-3", projectKey = "k".repeat(3000))
+        builds.save(project.id, oversized)
+        assertEquals("k".repeat(256), projectKeyColumn(project.id, "hc-3"), "the hot column holds the clamped key")
+        val inMemory = InMemoryBuildStore()
+        inMemory.save(project.id, TestPayloads.build(buildId = "hc-1", projectKey = "repo-x"))
+        inMemory.save(project.id, TestPayloads.build(buildId = "hc-2", projectKey = null))
+        inMemory.save(project.id, oversized)
+        assertEquals(inMemory.projectKeys(project.id), builds.projectKeys(project.id), "clamped-key enumeration parity")
+    }
+
+    @Test
+    fun `projectKey selector filters and aggregates in lockstep with the in-memory store`() {
+        val project = tokens.ensureProjectWithToken("selector-project", sha256Hex("sp"))
+        val inMemory = InMemoryBuildStore()
+        val now = System.currentTimeMillis()
+        val recent = now - 3_600_000
+        val fixtures = listOf(
+            TestPayloads.build(
+                buildId = "s-a1", startedAt = recent + 2000, projectKey = "repo-a", userId = "u_1",
+                tasks = listOf(TestPayloads.task(":app:compileKotlin", TaskOutcome.EXECUTED, 5000, type = "KotlinCompile")),
+                tests = listOf(TestPayloads.testTask(className = "com.a.FooTest", passed = 5, failed = 0)), sha = "sha-a",
+                artifacts = ArtifactSizes(android = listOf(ArtifactSize("release", ":app", ArtifactType.APK, 8_000))),
+            ),
+            TestPayloads.build(
+                buildId = "s-a2", startedAt = recent + 3000, projectKey = "repo-a", userId = "u_2",
+                tasks = listOf(TestPayloads.task(":app:compileKotlin", TaskOutcome.EXECUTED, 6000, type = "KotlinCompile")),
+                tests = listOf(TestPayloads.testTask(className = "com.a.FooTest", passed = 4, failed = 1)), sha = "sha-a",
+            ),
+            // A third same-sha repo-a build so FooTest reaches FlakyDetector.MIN_SAMPLES → a real cross-run flake.
+            TestPayloads.build(
+                buildId = "s-a3", startedAt = recent + 4000, projectKey = "repo-a", userId = "u_1",
+                tasks = listOf(TestPayloads.task(":app:compileKotlin", TaskOutcome.EXECUTED, 7000, type = "KotlinCompile")),
+                tests = listOf(TestPayloads.testTask(className = "com.a.FooTest", passed = 5, failed = 0)), sha = "sha-a",
+            ),
+            TestPayloads.build(
+                buildId = "s-b1", startedAt = recent + 1000, projectKey = "repo-b", userId = "u_1",
+                tasks = listOf(TestPayloads.task(":lib:compileKotlin", TaskOutcome.EXECUTED, 4000, type = "KotlinCompile")),
+                tests = listOf(TestPayloads.testTask(module = ":lib", className = "com.b.BarTest", passed = 3, retriedCases = listOf("flaky()"))),
+                sha = "sha-b",
+                artifacts = ArtifactSizes(android = listOf(ArtifactSize("debug", ":lib", ArtifactType.AAR, 300))),
+            ),
+            // A pre-076 build (null projectKey): counted under "all projects", never a selectable key.
+            TestPayloads.build(buildId = "s-n1", startedAt = recent, projectKey = null, userId = "u_1"),
+        )
+        for (b in fixtures) {
+            builds.save(project.id, b)
+            inMemory.save(project.id, b)
+        }
+
+        // Enumeration: distinct non-null keys, newest-activity first, with counts + last-build ms.
+        assertEquals(inMemory.projectKeys(project.id), builds.projectKeys(project.id), "project-keys aggregation parity")
+        assertEquals(
+            listOf(ProjectKeyRow("repo-a", 3, recent + 4000), ProjectKeyRow("repo-b", 1, recent + 1000)),
+            builds.projectKeys(project.id),
+        )
+
+        // list + count: filter-aware and parity-safe; BuildSummary carries the projectKey.
+        val filter = BuildFilter(projectKey = "repo-a")
+        assertEquals(inMemory.list(project.id, filter, 50, 0), builds.list(project.id, filter, 50, 0), "list parity")
+        assertEquals(3L, builds.count(project.id, filter))
+        assertEquals(inMemory.count(project.id, filter), builds.count(project.id, filter), "count parity")
+        assertEquals("repo-a", builds.list(project.id, filter, 1, 0).first().projectKey)
+        // The unfiltered path still counts every build (including the null-key one) — bit-for-bit as before.
+        assertEquals(5L, builds.count(project.id, BuildFilter()))
+
+        // trends + every rollup + flaky agree byte-for-byte, filtered.
+        assertEquals(inMemory.trends(project.id, filter, 30, now), builds.trends(project.id, filter, 30, now), "trends")
+        assertEquals(inMemory.projectCost(project.id, 30, now, "repo-a"), builds.projectCost(project.id, 30, now, "repo-a"), "projectCost")
+        assertEquals(inMemory.taskDuration(project.id, 30, now, "repo-a"), builds.taskDuration(project.id, 30, now, "repo-a"), "taskDuration")
+        assertEquals(inMemory.negativeAvoidance(project.id, 30, now, "repo-a"), builds.negativeAvoidance(project.id, 30, now, "repo-a"), "negativeAvoidance")
+        assertEquals(inMemory.bottlenecks(project.id, 7, now, "repo-a"), builds.bottlenecks(project.id, 7, now, "repo-a"), "bottlenecks")
+        assertEquals(inMemory.toolchainAdoption(project.id, 30, now, "repo-a"), builds.toolchainAdoption(project.id, 30, now, "repo-a"), "toolchain")
+        assertEquals(inMemory.flaky(project.id, 30, now, "repo-a"), builds.flaky(project.id, 30, now, "repo-a"), "flaky")
+        // The filter genuinely excludes repo-b's data (else the parity asserts could pass on empties).
+        assertTrue(builds.projectCost(project.id, 30, now, "repo-a").all { it.module == ":app" }, "repo-b's :lib is excluded")
+        assertTrue(builds.flaky(project.id, 30, now, "repo-a").all { it.className == "com.a.FooTest" }, "repo-b's flake is excluded")
+
+        // artifactTrends: filtered parity, non-vacuous, and repo-b's series genuinely excluded.
+        val artifactTrends = builds.artifactTrends(project.id, filter, 30, now)
+        assertEquals(inMemory.artifactTrends(project.id, filter, 30, now), artifactTrends, "artifactTrends parity")
+        assertTrue(artifactTrends.isNotEmpty(), "non-vacuous: repo-a's APK series is present")
+        assertTrue(artifactTrends.all { it.module == ":app" }, "repo-b's :lib AAR series is excluded when filtered")
     }
 }

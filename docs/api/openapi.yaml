@@ -41,6 +41,15 @@ components:
       properties:
         error: { type: string }
       required: [error]
+  parameters:
+    ProjectKey:
+      name: projectKey
+      in: query
+      required: false
+      description: >
+        Filter to one payload `projectKey` (plan 076) — the root project name a build reported, distinct
+        from the tenant. Omit for all projects (unchanged behavior). Length-capped at 256; longer is 400.
+      schema: { type: string, maxLength: 256 }
 paths:
   /health:
     get:
@@ -61,9 +70,24 @@ paths:
         "422": { description: The payload failed schema validation. }
         "503": { $ref: '#/components/responses/Unavailable' }
     get:
-      summary: List builds (newest first), filterable by branch/mode/outcome.
+      summary: List builds (newest first), filterable by branch/mode/outcome/projectKey.
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: A page of build summaries. }
+        "400": { description: Invalid filter (e.g. over-long projectKey). }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "503": { $ref: '#/components/responses/Unavailable' }
+  /v1/project-keys:
+    get:
+      summary: Distinct payload projectKeys for this tenant (plan 076), newest-activity first.
+      description: >
+        The dashboard's project selector. Read scope, tenant-scoped. Each row is projectKey + its build
+        count + last-build epoch-ms. Empty when no build reported a non-null projectKey. Capped at 100
+        rows; truncation drops the longest-idle keys first (newest-activity ordering).
+      responses:
+        "200": { description: The project-key rows. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "503": { $ref: '#/components/responses/Unavailable' }
@@ -178,6 +202,8 @@ paths:
   /v1/trends:
     get:
       summary: Fleet duration/cache trend points over a window.
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: Trend points. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -186,6 +212,8 @@ paths:
   /v1/artifacts/trends:
     get:
       summary: Android artifact-size trend points (plan 031).
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: Artifact-size trend points. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -203,6 +231,7 @@ paths:
           description: >
             Slice to builds whose plaintext `environment.workersMax` equals this value (plan 065).
             A build that never carried the field matches no filter; a non-integer value is ignored.
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: Benchmark series points. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -210,6 +239,8 @@ paths:
   /v1/flaky:
     get:
       summary: Flaky test classes over a window (plan 036).
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: Flaky records. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -243,6 +274,8 @@ paths:
   /v1/rollups/project-cost:
     get:
       summary: Project cost rollup (plan 026).
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: Project-cost rows. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -250,6 +283,8 @@ paths:
   /v1/rollups/task-duration:
     get:
       summary: Task-duration rollup (plan 026).
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: The task-duration rollup. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -257,6 +292,8 @@ paths:
   /v1/rollups/negative-avoidance:
     get:
       summary: Negative-avoidance rollup (plan 026).
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: Negative-avoidance rows. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -289,6 +326,8 @@ paths:
   /v1/rollups/bottlenecks:
     get:
       summary: Bottlenecks rollup (plan 032).
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: The bottlenecks rollup. }
         "401": { $ref: '#/components/responses/Unauthorized' }
@@ -304,6 +343,8 @@ paths:
         `durationP50Ms` null. Since plan 072 an additive `springBoot` dimension rides alongside
         agp/kgp/ksp (the server-service JVM analogue), read from the same `builds.payload` jsonb with
         no migration.
+      parameters:
+        - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: The toolchain rollup. }
         "401": { $ref: '#/components/responses/Unauthorized' }

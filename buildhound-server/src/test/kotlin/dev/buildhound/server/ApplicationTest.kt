@@ -13,6 +13,7 @@ import io.ktor.http.contentType
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import java.io.ByteArrayOutputStream
+import java.sql.SQLException
 import java.util.zip.GZIPOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -130,6 +131,46 @@ class ApplicationTest {
         assertEquals(HttpStatusCode.Accepted, second.status)
         assertTrue(second.bodyAsText().contains("duplicate"))
         assertEquals(1, fixture.stores.builds.count(fixture.project.id))
+    }
+
+    @Test
+    fun `ingest classifies program-limit SQLSTATE 54xxx as a permanent 400`() = testApplication {
+        // 54xxx (e.g. an index tuple over the btree cap) is data-shaped and deterministic — a retry can
+        // never succeed, so it must be 400 (plugin warns-and-drops), never 503 (plugin spools forever).
+        val stores = ServerStores(
+            builds = object : BuildStore by InMemoryBuildStore() {
+                override fun save(projectId: String, payload: BuildPayload): Boolean =
+                    throw SQLException("index row size exceeds maximum", "54000")
+            },
+            tokens = InMemoryTokenStore(),
+        )
+        stores.tokens.ensureProjectWithToken("pilot", sha256Hex("test-token"))
+        application { buildHoundModule(stores) }
+        val response = client.post("/v1/builds") {
+            header("Authorization", "Bearer test-token")
+            contentType(ContentType.Application.Json)
+            setBody(payloadJson())
+        }
+        assertEquals(HttpStatusCode.BadRequest, response.status, "program-limit-exceeded is permanent")
+    }
+
+    @Test
+    fun `ingest classifies a connection-shaped SQLException as a retryable 503`() = testApplication {
+        val stores = ServerStores(
+            builds = object : BuildStore by InMemoryBuildStore() {
+                override fun save(projectId: String, payload: BuildPayload): Boolean =
+                    throw SQLException("connection lost", "08006")
+            },
+            tokens = InMemoryTokenStore(),
+        )
+        stores.tokens.ensureProjectWithToken("pilot", sha256Hex("test-token"))
+        application { buildHoundModule(stores) }
+        val response = client.post("/v1/builds") {
+            header("Authorization", "Bearer test-token")
+            contentType(ContentType.Application.Json)
+            setBody(payloadJson())
+        }
+        assertEquals(HttpStatusCode.ServiceUnavailable, response.status, "an outage stays retryable")
     }
 
     @Test

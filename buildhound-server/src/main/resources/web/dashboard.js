@@ -8,11 +8,76 @@
 
     const token = () => sessionStorage.getItem("buildhound.token") || "";
 
+    // Payload projectKey selector (plan 076): a per-tenant filter over which repo's builds
+    // to show, separate from the auth token. "" means "All projects" — every query-building
+    // helper treats an empty string the same as absent, so unset selections stay byte-identical
+    // to pre-076 URLs.
+    const PROJECT_KEY_STORAGE = "buildhound.projectKey";
+    const projectKey = () => sessionStorage.getItem(PROJECT_KEY_STORAGE) || "";
+    const projectSelect = document.getElementById("project-select");
+
+    function resetProjectSelection() {
+        sessionStorage.setItem(PROJECT_KEY_STORAGE, "");
+        if (projectSelect) projectSelect.value = "";
+    }
+
+    // Only the most recently started populate call may touch the selector — mirrors renderSeq.
+    let projectSelectSeq = 0;
+
+    // Populates the header selector from /v1/project-keys. Best-effort (plan 076): a 401/403,
+    // network error, or fewer than two distinct keys all just leave the selector hidden — this
+    // must never turn into a page-breaking error, only the read views 401 loudly.
+    async function populateProjectSelect() {
+        const seq = ++projectSelectSeq;
+        if (!projectSelect) return;
+        let keys;
+        try {
+            keys = await api("/v1/project-keys");
+        } catch (e) {
+            if (seq === projectSelectSeq) projectSelect.hidden = true;
+            return;
+        }
+        if (seq !== projectSelectSeq) return;
+        if (!Array.isArray(keys) || keys.length < 2) {
+            projectSelect.hidden = true;
+            // <2 keys removes the selector UI: a lingering stored selection would keep every view
+            // invisibly filtered with nothing to clear it. Even when the one remaining key IS the
+            // stored key, filtering is not "all projects" — it hides pre-076 null-projectKey builds.
+            if (projectKey()) { resetProjectSelection(); route(); }
+            return;
+        }
+        const current = projectKey();
+        projectSelect.textContent = "";
+        projectSelect.append(new Option("All projects", ""));
+        for (const k of keys) {
+            const count = k.builds + (k.builds === 1 ? " build" : " builds");
+            projectSelect.append(new Option(k.projectKey + " (" + count + ")", k.projectKey));
+        }
+        // If the previously-selected key vanished from a fresh enumeration, fall back to "All
+        // projects" in BOTH the visible select and sessionStorage — query-building helpers read
+        // sessionStorage directly, so leaving it stale would filter data the UI no longer shows —
+        // then re-route so the visible data matches. The changed-only condition is load-bearing:
+        // an unchanged selection must not re-route (route() already ran alongside this populate;
+        // renderSeq makes an extra render safe, but it would double every startup fetch).
+        const resolved = keys.some(k => k.projectKey === current) ? current : "";
+        projectSelect.value = resolved;
+        projectSelect.hidden = false;
+        if (resolved !== current) { sessionStorage.setItem(PROJECT_KEY_STORAGE, resolved); route(); }
+    }
+
+    if (projectSelect) {
+        projectSelect.addEventListener("change", () => {
+            sessionStorage.setItem(PROJECT_KEY_STORAGE, projectSelect.value);
+            route();
+        });
+    }
+
     document.getElementById("token-save").addEventListener("click", () => {
         const input = document.getElementById("token-input");
         sessionStorage.setItem("buildhound.token", input.value.trim());
         input.value = ""; // don't leave the token sitting in the live DOM
         tokenBar.hidden = true;
+        populateProjectSelect().catch(() => {});
         route();
     });
 
@@ -70,7 +135,7 @@
         return { items: items, total: Number.isFinite(parsed) ? parsed : null };
     }
 
-    const filterIsActive = filter => !!(filter.branch || filter.mode || filter.outcome);
+    const filterIsActive = filter => !!(filter.branch || filter.mode || filter.outcome || projectKey());
 
     // Env-var provider only — never a literal token (architecture §6); uses this server's
     // own origin so the copy-paste URL is correct wherever the dashboard is hosted.
@@ -196,8 +261,19 @@
         if (filter.branch) params.set("branch", filter.branch);
         if (filter.mode) params.set("mode", filter.mode);
         if (filter.outcome) params.set("outcome", filter.outcome);
+        const pk = projectKey();
+        if (pk) params.set("projectKey", pk);
         return params;
     };
+
+    // Appends projectKey= to a hardcoded query string (rollup/flaky/benchmark/bottleneck views,
+    // plan 076) when a project is selected; byte-identical to the input otherwise so unfiltered
+    // requests never change shape. encodeURIComponent yields %20 for spaces where URLSearchParams
+    // yields "+" — the difference is accepted, Ktor decodes both identically.
+    function withProjectKey(path) {
+        const pk = projectKey();
+        return pk ? path + "&projectKey=" + encodeURIComponent(pk) : path;
+    }
 
     function buildsSentence(filter, total, pageCount) {
         const n = total != null ? total : pageCount;
@@ -228,8 +304,8 @@
                 app.append(filterControls(filter, next => buildsView(next, 0).catch(fail)));
                 app.append(emptyState({
                     title: "No builds match this filter",
-                    lines: ["Try a different branch, mode, or outcome."],
-                    onClear: () => buildsView({}, 0).catch(fail),
+                    lines: ["Try a different branch, mode, or outcome, or a different project."],
+                    onClear: () => { resetProjectSelection(); buildsView({}, 0).catch(fail); },
                 }));
             } else {
                 app.append(emptyState({
@@ -245,7 +321,7 @@
         app.append(filterControls(filter, next => buildsView(next, 0).catch(fail)));
         const table = el("table");
         const head = el("tr");
-        for (const columnName of ["Started", "Outcome", "Duration", "Mode", "Branch", "Hit rate"]) head.append(el("th", columnName));
+        for (const columnName of ["Started", "Outcome", "Duration", "Mode", "Branch", "Project", "Hit rate"]) head.append(el("th", columnName));
         table.append(head);
         for (const build of builds) {
             const row = el("tr", null, "row");
@@ -255,6 +331,7 @@
             row.append(durationCell);
             row.append(el("td", build.mode));
             row.append(el("td", build.branch || ""));
+            row.append(el("td", build.projectKey || "—"));
             row.append(el("td", build.hitRate == null ? "" : Math.round(build.hitRate * 100) + "%", "num"));
             row.addEventListener("click", () => { location.hash = "#/build/" + encodeURIComponent(build.buildId); });
             table.append(row);
@@ -419,6 +496,7 @@
     // slowest/flaky trends are plan 026/036. No new server route; reads the existing query API.
     async function testsView() {
         const seq = ++renderSeq;
+        // Build picker deliberately NOT threaded through the project selector (plan 076): tests/compare are per-build views keyed by buildId.
         const { items: builds } = await apiList("/v1/builds?limit=50&offset=0");
         if (seq !== renderSeq) return;
 
@@ -910,7 +988,7 @@
                 lines: [filterIsActive(filter)
                     ? "No matching builds in this range."
                     : "Send builds to see duration and cache-hit trends here."],
-                onClear: filterIsActive(filter) ? (() => trendsView({}, days).catch(fail)) : undefined,
+                onClear: filterIsActive(filter) ? (() => { resetProjectSelection(); trendsView({}, days).catch(fail); }) : undefined,
             }));
             return;
         }
@@ -1012,6 +1090,7 @@
     // Comparisons (plan 022): pick two builds, then explain B's cache misses vs A by input diff.
     async function compareView() {
         const seq = ++renderSeq;
+        // Build picker deliberately NOT threaded through the project selector (plan 076): tests/compare are per-build views keyed by buildId.
         const { items: builds } = await apiList("/v1/builds?limit=50&offset=0");
         if (seq !== renderSeq) return;
 
@@ -1108,10 +1187,11 @@
     // module/name/type are the same untrusted class as task paths already rendered elsewhere.
     async function tasksRollupView() {
         const seq = ++renderSeq;
-        const cost = await api("/v1/rollups/project-cost?days=30");
+        const cost = await api(withProjectKey("/v1/rollups/project-cost?days=30"));
+        // change-blast-radius does not accept projectKey yet (landed after plan 076) — deliberately unfiltered.
         const blast = await api("/v1/rollups/change-blast-radius?days=30");
-        const duration = await api("/v1/rollups/task-duration?days=30");
-        const negative = await api("/v1/rollups/negative-avoidance?days=30");
+        const duration = await api(withProjectKey("/v1/rollups/task-duration?days=30"));
+        const negative = await api(withProjectKey("/v1/rollups/negative-avoidance?days=30"));
         if (seq !== renderSeq) return;
 
         app.textContent = "";
@@ -1267,7 +1347,7 @@
     // isolation-mode selector. Benchmark builds are excluded from fleet trends, so this is their home.
     async function benchmarkView() {
         const seq = ++renderSeq;
-        const series = await api("/v1/benchmark/series?days=90");
+        const series = await api(withProjectKey("/v1/benchmark/series?days=90"));
         if (seq !== renderSeq) return;
 
         app.textContent = "";
@@ -1414,11 +1494,12 @@
     async function bottlenecksView(period) {
         const seq = ++renderSeq;
         const p = period || 7;
-        const b = await api("/v1/rollups/bottlenecks?period=" + p);
+        const b = await api(withProjectKey("/v1/rollups/bottlenecks?period=" + p));
         // Toolchain and Warnings are both best-effort: a failure omits the section rather than
         // blanking the whole landing page (the same artifact-panel pattern).
         let toolchain = null;
-        try { toolchain = await api("/v1/rollups/toolchain?days=30"); } catch (e) { /* omit the section */ }
+        try { toolchain = await api(withProjectKey("/v1/rollups/toolchain?days=30")); } catch (e) { /* omit the section */ }
+        // warnings/cache-roi do not accept projectKey yet (landed after plan 076) — deliberately unfiltered.
         let warnings = null;
         try { warnings = await api("/v1/rollups/warnings?period=" + p); } catch (e) { /* omit the section */ }
         // Remote-cache ROI (plan 067, research F17): best-effort like toolchain/warnings above.
@@ -1588,7 +1669,7 @@
 
     async function flakyView() {
         const seq = ++renderSeq;
-        const records = await api("/v1/flaky?days=30");
+        const records = await api(withProjectKey("/v1/flaky?days=30"));
         if (seq !== renderSeq) return;
 
         app.textContent = "";
@@ -1841,5 +1922,8 @@
     }
 
     window.addEventListener("hashchange", route);
+    // A token may already be in sessionStorage from an earlier page load; populate the project
+    // selector without blocking the first route() (plan 076 — best-effort, never gates routing).
+    if (token()) populateProjectSelect().catch(() => {});
     route();
 })();

@@ -48,7 +48,7 @@ class FlakyAlerterTest {
     fun `a thrown detector error never propagates (ingest unaffected)`() {
         // A store whose flaky() throws — the hook must swallow it.
         val throwing = object : BuildStore by InMemoryBuildStore() {
-            override fun flaky(projectId: String, days: Int, nowMs: Long): List<FlakyRecord> = throw RuntimeException("boom")
+            override fun flaky(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<FlakyRecord> = throw RuntimeException("boom")
         }
         val (_, alerts, alerter) = harness(throwing)
         // Must not throw.

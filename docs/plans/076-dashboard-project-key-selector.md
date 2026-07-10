@@ -98,3 +98,34 @@ query param `projectKey`, endpoint `/v1/project-keys`, column `project_key`. UI 
   view via the header selector, and "All projects" reproduces today's behavior bit-for-bit.
 - `./gradlew build` green (unit + functional + smoke); Testcontainers suite green.
 - OpenAPI spec matches live routes; golden files untouched.
+
+## Review divergences (2026-07-10)
+
+Adjustments made during the §3 reviews; the design above stands except where noted.
+
+1. **Store-boundary clamp** `MAX_PROJECT_KEY_CHARS = 256` (`boundProjectKey`, applied in *both*
+   stores' `save()`) + backfill `left(payload->>'projectKey', 256)` in V11. Why: the raw payload
+   `projectKey` feeds the btree-indexed hot column — unbounded, a hostile ingest token exceeds the
+   index tuple limit (SQLSTATE 54000) and turns one payload into a permanently retried poison pill,
+   and one pre-existing oversized key would fail V11's `CREATE INDEX` and brick a self-hosted
+   upgrade. Why not `PayloadCapper`: it lives in commons (schema-scoped, golden-file-pinned); this
+   is a server storage concern, so it stays server-side (the clamped payload *is* the stored
+   payload, PayloadCapper precedent). Accepted divergence: Kotlin `take()` counts UTF-16 units,
+   SQL `left()` counts codepoints — cosmetic, both far below the btree limit.
+2. **Ingest SQLException classification** now treats SQLSTATE `54xxx` (program-limit-exceeded)
+   like `22xxx`: permanent → 400, so the plugin warns-and-drops instead of spooling a
+   deterministic failure forever. Addon PUT classification left unchanged.
+3. **`/v1/project-keys` is capped** at `MAX_PROJECT_KEYS = 100` rows. Deliberately not
+   `TOP_N` (25): this is an enumeration, not a ranking — 100 bounds hostile key-churning
+   cardinality without truncating legitimate multi-repo tenants, and the newest-activity-first
+   ordering makes truncation drop the longest-idle keys.
+4. **Dashboard stale-selection recovery:** the selector clears the stored selection and
+   re-routes when the enumeration returns <2 keys or the selected key vanished. The
+   enumeration-*error* path keeps the selection (a hidden-selector filtered state until the next
+   successful populate) — accepted, because the builds/trends "Clear filters" action calls
+   `resetProjectSelection()`.
+5. **Accepted notes:** benchmark builds are included in enumeration counts (excluding them would
+   make a benchmark-only repo vanish from the selector); the ordering tiebreak uses the DB
+   collation vs Kotlin's code-point compare — remedy with `COLLATE "C"` if it ever flakes;
+   `%20`-vs-`+` query encoding differences are decoded identically by Ktor. An empty
+   `projectKey=` param is a literal value (matches nothing), like `branch=` — not "unset".
