@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BuildHound — Brand Identity</title>
+<meta name="description" content="BuildHound's visual identity: mark, color, type, iconography, and downloadable brand assets.">
+
+<link rel="icon" href="assets/favicon/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="assets/favicon/apple-touch-icon-180.png">
+
+<!--
+  Inline fallback for the --bh-* color tokens, matching colors.css's dark :root exactly.
+  Placed BEFORE the colors.css <link> on purpose: if that stylesheet loads, its later
+  light/data-theme overrides still win the cascade (same specificity, later wins). If it
+  fails to load (blocked file:// fetch, wrong relative path, assets/ folder missing), the
+  page still renders correctly in dark instead of every var(--bh-*) resolving to nothing.
+-->
+<style>
+  :root {
+    --bh-char: #15130f; --bh-ember: #221d17; --bh-ember-2: #2c241b; --bh-bone: #f2ebdf;
+    --bh-bone-dim: #c9bfaf; --bh-slate: #8a8177; --bh-line: rgba(242, 235, 223, 0.13);
+    --bh-copper: #dd8148; --bh-copper-soft: #e9a878; --bh-copper-dim: #5a3a24;
+    --bh-ok: #4abd8c; --bh-bad: #e5646a; --bh-warn: #f0b158; --bh-info: #6fa8ff;
+  }
+</style>
+<link rel="stylesheet" href="assets/tokens/colors.css">
+
+<style>
+  @font-face {
+    font-family: 'Fraunces';
+    font-weight: 300 900;
+    font-style: normal;
+    font-display: swap;
+    src: url('assets/fonts/Fraunces-Variable.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Inter';
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+    src: url('assets/fonts/Inter-Variable.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'JetBrains Mono';
+    font-weight: 100 800;
+    font-style: normal;
+    font-display: swap;
+    src: url('assets/fonts/JetBrainsMono-Variable.woff2') format('woff2');
+  }
+
+  :root {
+    --font-display: 'Fraunces', ui-serif, Georgia, serif;
+    --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bh-char);
+    color: var(--bh-bone);
+    font-family: var(--font-body);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--bh-copper); color: var(--bh-char); }
+  a { color: inherit; }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 28px; }
+  section { padding: 88px 0; border-bottom: 1px solid var(--bh-line); }
+  section:last-of-type { border-bottom: none; }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--bh-copper);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 20px;
+  }
+  .eyebrow::before { content: ""; width: 18px; height: 1px; background: var(--bh-copper); }
+
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 700; text-wrap: balance; margin: 0; }
+  p { text-wrap: pretty; }
+  .lede { font-size: clamp(17px, 2vw, 20px); color: var(--bh-bone-dim); max-width: 62ch; margin: 18px 0 0; }
+  .section-title { font-size: clamp(28px, 4vw, 40px); }
+
+  /* ---------- Hero ---------- */
+  .hero { padding: 108px 0 96px; }
+  .hero-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 56px; gap: 16px; flex-wrap: wrap; }
+  .hero-tag { font-family: var(--font-mono); font-size: 11.5px; letter-spacing: 0.1em; color: var(--bh-slate); text-transform: uppercase; text-align: right; }
+  .wordmark-row { display: flex; align-items: center; gap: 22px; }
+  .wordmark-row svg { width: 58px; height: 58px; color: var(--bh-copper); flex-shrink: 0; }
+  h1.wordmark { font-size: clamp(52px, 9vw, 96px); letter-spacing: -0.01em; line-height: 0.98; }
+  h1.wordmark .hound { font-style: italic; font-weight: 500; color: var(--bh-copper); }
+  .hero .lede { margin-top: 26px; font-size: clamp(18px, 2.2vw, 23px); }
+  .hero-line { font-family: var(--font-mono); font-size: 13.5px; color: var(--bh-bone-dim); margin-top: 34px; border-left: 2px solid var(--bh-copper-dim); padding-left: 16px; }
+
+  /* ---------- Field notes ---------- */
+  .method { font-size: 14px; color: var(--bh-slate); max-width: 68ch; margin: 14px 0 40px; }
+  .field-scroll { overflow-x: auto; border: 1px solid var(--bh-line); border-radius: 10px; }
+  table.field { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 760px; }
+  table.field th {
+    text-align: left; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--bh-slate); font-weight: 500; padding: 14px 16px;
+    background: var(--bh-ember); border-bottom: 1px solid var(--bh-line);
+  }
+  table.field td { padding: 14px 16px; border-bottom: 1px solid var(--bh-line); vertical-align: top; }
+  table.field tr:last-child td { border-bottom: none; }
+  table.field td.site { font-weight: 600; white-space: nowrap; }
+  .swatch-row { display: flex; gap: 5px; margin-bottom: 6px; flex-wrap: wrap; }
+  .sw { width: 15px; height: 15px; border-radius: 4px; flex-shrink: 0; border: 1px solid var(--bh-line); }
+  td.muted { color: var(--bh-slate); font-style: italic; }
+  .field td small { display: block; color: var(--bh-slate); font-family: var(--font-mono); font-size: 11px; margin-top: 3px; }
+
+  .gap-note {
+    margin-top: 28px; padding: 20px 22px; background: var(--bh-ember); border-radius: 10px;
+    border-left: 3px solid var(--bh-copper); font-size: 15px; color: var(--bh-bone-dim);
+  }
+  .gap-note strong { color: var(--bh-bone); }
+
+  /* ---------- Rationale ---------- */
+  .rationale-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-top: 36px; }
+  .rationale-grid h3 { font-size: 20px; margin-bottom: 10px; }
+  .rationale-grid p { color: var(--bh-bone-dim); font-size: 15px; margin: 0; }
+
+  /* ---------- Marks / assets ---------- */
+  .marks-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--bh-line); border: 1px solid var(--bh-line); border-radius: 12px; overflow: hidden; margin-top: 40px; }
+  .mark-card { background: var(--bh-ember); padding: 40px 28px; }
+  .mark-card .glyph { width: 72px; height: 72px; color: var(--bh-copper); margin-bottom: 26px; }
+  .mark-card h3 { font-size: 19px; margin-bottom: 8px; }
+  .mark-card .role { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--bh-copper); margin-bottom: 14px; display: block; }
+  .mark-card p { font-size: 14px; color: var(--bh-bone-dim); margin: 0 0 14px; }
+  .mark-card .file {
+    display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 12px;
+    color: var(--bh-slate); text-decoration: none; border: 1px solid var(--bh-line); border-radius: 6px;
+    padding: 5px 10px; transition: color .15s, border-color .15s;
+  }
+  .mark-card .file:hover { color: var(--bh-copper); border-color: var(--bh-copper-dim); }
+
+  .reduction { margin-top: 40px; display: flex; align-items: flex-end; gap: 36px; padding: 28px 30px; background: var(--bh-ember); border-radius: 12px; flex-wrap: wrap; }
+  .reduction-item { text-align: center; }
+  .reduction-item .box { background: var(--bh-char); border: 1px solid var(--bh-line); border-radius: 8px; display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; color: var(--bh-copper); }
+  .reduction-item span { display: block; font-family: var(--font-mono); font-size: 11px; color: var(--bh-slate); }
+
+  /* ---------- Downloads ---------- */
+  .asset-table { width: 100%; border-collapse: collapse; margin-top: 36px; font-size: 14px; }
+  .asset-table th { text-align: left; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--bh-slate); font-weight: 500; padding: 10px 14px; border-bottom: 1px solid var(--bh-line); }
+  .asset-table td { padding: 12px 14px; border-bottom: 1px solid var(--bh-line); vertical-align: middle; }
+  .asset-table tr:last-child td { border-bottom: none; }
+  .asset-table .prev { width: 46px; }
+  .asset-table .prev img, .asset-table .prev svg { width: 28px; height: 28px; display: block; }
+  .asset-table .path { font-family: var(--font-mono); font-size: 12.5px; }
+  .asset-table .path a { text-decoration: none; border-bottom: 1px dotted var(--bh-copper-dim); }
+  .asset-table .path a:hover { border-bottom-color: var(--bh-copper); color: var(--bh-copper); }
+  .asset-table .note { color: var(--bh-slate); font-size: 13px; }
+  .asset-section-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--bh-copper); margin: 40px 0 0; }
+  .asset-section-label:first-of-type { margin-top: 0; }
+
+  /* ---------- Color ---------- */
+  .swatch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; margin-top: 36px; }
+  .swatch { border-radius: 12px; overflow: hidden; border: 1px solid var(--bh-line); background: var(--bh-ember); }
+  .swatch .fill { height: 84px; }
+  .swatch .meta { padding: 12px 14px; }
+  .swatch .name { font-weight: 600; font-size: 14px; }
+  .swatch .hex { font-family: var(--font-mono); font-size: 12px; color: var(--bh-slate); margin-top: 2px; }
+  .swatch .use { font-size: 12px; color: var(--bh-bone-dim); margin-top: 6px; }
+  .semantic-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; margin-top: 18px; }
+  .chip { display: flex; align-items: center; gap: 9px; padding: 13px 15px; background: var(--bh-ember); border: 1px solid var(--bh-line); border-radius: 10px; font-size: 13.5px; }
+  .chip .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .chip .hex { margin-left: auto; font-family: var(--font-mono); font-size: 11.5px; color: var(--bh-slate); }
+
+  /* ---------- Type ---------- */
+  .type-block { margin-top: 40px; }
+  .type-block + .type-block { margin-top: 44px; padding-top: 44px; border-top: 1px solid var(--bh-line); }
+  .type-label { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--font-mono); font-size: 12px; color: var(--bh-slate); margin-bottom: 16px; letter-spacing: 0.04em; }
+  .type-label b { color: var(--bh-bone); font-family: var(--font-body); font-size: 14px; }
+  .specimen-display { font-family: var(--font-display); font-weight: 600; font-size: clamp(30px, 4.5vw, 46px); line-height: 1.15; }
+  .specimen-display.italic { font-style: italic; font-weight: 500; color: var(--bh-copper); }
+  .specimen-body { font-family: var(--font-body); font-size: 17px; max-width: 60ch; color: var(--bh-bone-dim); }
+  .specimen-mono { font-family: var(--font-mono); font-size: 14px; color: var(--bh-bone-dim); }
+  .weights { display: flex; gap: 22px; margin-top: 14px; flex-wrap: wrap; }
+  .weights span { font-family: var(--font-display); font-size: 22px; }
+
+  /* ---------- Icons ---------- */
+  .icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 14px; margin-top: 36px; }
+  .icon-card { background: var(--bh-ember); border: 1px solid var(--bh-line); border-radius: 12px; padding: 22px 18px; }
+  .icon-card svg { width: 26px; height: 26px; margin-bottom: 14px; }
+  .icon-card .name { font-weight: 600; font-size: 14px; }
+  .icon-card .desc { font-size: 12.5px; color: var(--bh-slate); margin-top: 4px; }
+
+  /* ---------- Dashboard mockup ---------- */
+  .app { margin-top: 40px; background: var(--bh-ember); border: 1px solid var(--bh-line); border-radius: 14px; overflow: hidden; }
+  .app-bar { display: flex; align-items: center; gap: 10px; padding: 14px 20px; border-bottom: 1px solid var(--bh-line); font-family: var(--font-mono); font-size: 12px; color: var(--bh-slate); }
+  .app-bar svg { width: 24px; height: 24px; color: var(--bh-copper); }
+  .app-bar b { color: var(--bh-bone); font-family: var(--font-body); font-size: 14px; margin-right: auto; }
+  .row { display: grid; grid-template-columns: 22px 1.6fr 100px 90px 80px; align-items: center; gap: 16px; padding: 15px 20px; border-bottom: 1px solid var(--bh-line); font-size: 14px; }
+  .row:last-child { border-bottom: none; }
+  .row .icon { width: 18px; height: 18px; }
+  .row .task { font-weight: 500; }
+  .row .task small { display: block; font-family: var(--font-mono); font-size: 11.5px; color: var(--bh-slate); font-weight: 400; margin-top: 2px; }
+  .row .dur { font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--bh-bone-dim); text-align: right; }
+  .row .badge { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.03em; padding: 4px 9px; border-radius: 20px; text-align: center; text-transform: uppercase; }
+  .row .ts { font-family: var(--font-mono); font-size: 12px; color: var(--bh-slate); text-align: right; }
+  .row-head { color: var(--bh-slate); font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+
+  /* ---------- Footer ---------- */
+  .colophon { padding: 56px 0 80px; display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; flex-wrap: wrap; }
+  .colophon svg { width: 22px; height: 22px; color: var(--bh-slate); }
+  .colophon p { font-size: 13px; color: var(--bh-slate); max-width: 46ch; margin: 0; }
+  .colophon .redirect { font-family: var(--font-mono); font-size: 12px; color: var(--bh-copper); text-align: right; }
+
+  @media (max-width: 720px) {
+    section { padding: 56px 0; }
+    .rationale-grid { grid-template-columns: 1fr; gap: 30px; }
+    .marks-grid { grid-template-columns: 1fr; }
+    .row { grid-template-columns: 18px 1fr 74px; }
+    .row .dur, .row .ts { display: none; }
+    .hero-top { flex-direction: column; align-items: flex-start; gap: 14px; }
+    .hero-tag { text-align: left; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .ping circle { animation: ping-pulse 2.4s ease-out infinite; }
+    .ping circle:nth-child(2) { animation-delay: .5s; }
+    .ping circle:nth-child(3) { animation-delay: 1s; }
+  }
+  @keyframes ping-pulse {
+    0% { opacity: .9; transform: scale(0.7); transform-origin: center; }
+    100% { opacity: 0; transform: scale(1.35); transform-origin: center; }
+  }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="hero-top">
+      <div class="eyebrow" style="margin:0">Brand identity</div>
+      <div class="hero-tag">dev.buildhound · Apache-2.0<br>docs/brand/site</div>
+    </div>
+
+    <div class="wordmark-row">
+      <svg viewBox="0 0 64 64" fill="currentColor" aria-hidden="true">
+        <rect x="19" y="27" width="26" height="23" rx="11.5"/>
+        <circle cx="14" cy="25" r="6.4"/><circle cx="26" cy="14.5" r="6.8"/>
+        <circle cx="40" cy="14.5" r="6.8"/><circle cx="52" cy="25" r="6.4"/>
+      </svg>
+      <h1 class="wordmark">Build<span class="hound">Hound</span></h1>
+    </div>
+
+    <p class="lede">Every build leaves a scent — a slow task, a flaky test, a cache that should have hit and didn't. BuildHound is the identity for a dashboard built to follow that trail.</p>
+    <div class="hero-line">an open, self-hosted alternative to Gradle Enterprise / Develocity — plugin + ingestion service + report, apache-2.0</div>
+  </div>
+</header>
+
+<section id="field">
+  <div class="wrap">
+    <div class="eyebrow">Field notes</div>
+    <h2 class="section-title">What the category already owns</h2>
+    <p class="method">Pulled straight from each site's served HTML and CSS — meta colors, inline hex, linked font families, favicon SVGs — rather than a visual screenshot pass (the in-browser tool was unreachable during research). Cells marked "—" weren't exposed in static source and would need a manual look to fill in.</p>
+
+    <div class="field-scroll">
+      <table class="field">
+        <thead><tr><th>Site</th><th>Ground</th><th>Accent(s)</th><th>Typeface</th><th>Mark</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="site">Develocity</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#13171b"></div></div>near‑black</td>
+            <td class="muted">none — monochrome</td>
+            <td class="muted">—</td>
+            <td>lowercase "d", black‑on‑white for favicon safety<small>brand‑kit comment left in source</small></td>
+          </tr>
+          <tr>
+            <td class="site">Bazel</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#f8f9fa;border-color:#00000022"></div></div>light docs shell</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#0c713a"></div><div class="sw" style="background:#1e431e"></div></div>green (kept from prior mark, "rooted into identity")</td>
+            <td>Roboto + Roboto Mono</td>
+            <td>interlocking assembled blocks<small>2017 redesign, community‑voted</small></td>
+          </tr>
+          <tr>
+            <td class="site">Honeycomb</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#25303e"></div></div>slate navy</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#ffb000"></div><div class="sw" style="background:#0278cd"></div></div>honey amber + blue</td>
+            <td>Inter + Matter</td>
+            <td class="muted">hexagon cell (name‑literal)</td>
+          </tr>
+          <tr>
+            <td class="site">Datadog</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#110617"></div></div>near‑black</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#8000ff"></div><div class="sw" style="background:#0060ff"></div><div class="sw" style="background:#ff3a44"></div><div class="sw" style="background:#ffe000"></div></div>violet + a full 6‑hue status ramp</td>
+            <td>Inter</td>
+            <td class="muted">barking dog in a ring</td>
+          </tr>
+          <tr>
+            <td class="site">Dash0</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#101010"></div><div class="sw" style="background:#2c2c2c"></div></div>neutral charcoal</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#f8494d"></div><div class="sw" style="background:#a8fbbe"></div></div>coral + mint, used sparingly</td>
+            <td>Roobert + a dedicated <code>--type-mono</code> token</td>
+            <td class="muted">—</td>
+          </tr>
+          <tr>
+            <td class="site">Depot</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#eeeef0;border-color:#00000022"></div></div>off‑white default</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#46a759"></div><div class="sw" style="background:#4b9dd6"></div></div>green + blue</td>
+            <td>Inter</td>
+            <td>grid‑of‑blocks glyph, swaps fill for light/dark automatically</td>
+          </tr>
+          <tr>
+            <td class="site">Kiro</td>
+            <td class="muted">—</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#9046ff"></div><div class="sw" style="background:#c6a0ff"></div></div>violet / lavender</td>
+            <td class="muted">—</td>
+            <td>rounded‑square app icon, white glyph on violet</td>
+          </tr>
+          <tr>
+            <td class="site">Blacksmith</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#202020"></div></div>near‑black</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#f0fb29"></div></div>acid lime, one hue only</td>
+            <td class="muted">—</td>
+            <td class="muted">—</td>
+          </tr>
+          <tr>
+            <td class="site">Confident AI</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#ced8e2"></div></div>cool gray</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#ff006b"></div><div class="sw" style="background:#6e00ff"></div></div>magenta + violet</td>
+            <td>IBM Plex Mono + Lexend Deca</td>
+            <td class="muted">—</td>
+          </tr>
+          <tr>
+            <td class="site">Better Stack</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#0b0c14"></div><div class="sw" style="background:#171926"></div></div>navy‑black</td>
+            <td><div class="swatch-row"><div class="sw" style="background:#7c87f7"></div></div>periwinkle indigo</td>
+            <td class="muted">—</td>
+            <td class="muted">—</td>
+          </tr>
+          <tr>
+            <td class="site">Tuist</td>
+            <td class="muted">mostly neutral</td>
+            <td class="muted">not distinct in source</td>
+            <td>Space Grotesk + Space Mono</td>
+            <td class="muted">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="gap-note">
+      <strong>The gap:</strong> purple is Datadog's and, one shade lighter, Kiro's and Confident AI's. Honeycomb sits on amber‑and‑navy. Depot and Bazel share green. Better Stack has indigo, Blacksmith has lime, Dash0 leans neutral‑plus‑coral. Almost every ground is a near‑black charcoal — that part of the category is settled and worth following, not fighting. What's open is a <strong>warm hue</strong>: something that isn't blue‑adjacent at all. Copper reads as neither "SaaS cool" nor "alert red," and it's the literal color of a hound's coat.
+    </div>
+  </div>
+</section>
+
+<section id="territory">
+  <div class="wrap">
+    <div class="eyebrow">The territory</div>
+    <h2 class="section-title">Why a hound, specifically</h2>
+    <p class="lede" style="font-size:17px">Develocity tells you a build happened. BuildHound is built around the narrower, more useful question: <em>what in this build is worth chasing?</em> A hound doesn't watch — it tracks. That's a real product difference, not just a mascot.</p>
+
+    <div class="rationale-grid">
+      <div>
+        <h3>The name already does the work</h3>
+        <p>"Hound" carries tracking, scent, tenacity — and it's a dog, which every build‑tool mascot in this space (Gradle's elephant, Docker's whale) has already normalized as friendly rather than cute. No metaphor stretch required.</p>
+      </div>
+      <div>
+        <h3>Charcoal, because the category already agreed</h3>
+        <p>Develocity, Dash0, Blacksmith, Better Stack, Bazel's console views — dark, near‑black grounds are the default for anything showing logs and metrics. Fighting that convention buys nothing. BuildHound's charcoal is warm‑biased, not a pure gray, so it sits underneath copper instead of competing with it.</p>
+      </div>
+      <div>
+        <h3>Copper is brand; red/green/amber/blue are function</h3>
+        <p>The mistake Datadog's ramp warns against: don't let the identity hue double as a status color. BuildHound's build‑status states — pass, fail, flaky, running, cache hit — get their own separate, purely functional palette. Copper never appears in a status chip.</p>
+      </div>
+      <div>
+        <h3>The mono face isn't decoration</h3>
+        <p>A build‑telemetry surface is mostly numbers and identifiers: durations, task paths, cache keys, exit codes. Those need a typeface built for tabular alignment, not the display face dressed down. JetBrains Mono is doing real work here, not just "looking technical."</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="mark">
+  <div class="wrap">
+    <div class="eyebrow">The mark</div>
+    <h2 class="section-title">Three ways in, one recommendation</h2>
+    <p class="lede" style="font-size:16px">Leading with the paw — it's the most ownable and ties directly to "tracking down what's wrong." The other two are real alternates, not filler, in case the direct read feels too literal once it's on a badge next to Bazel and Gradle's own marks.</p>
+
+    <div class="marks-grid">
+      <div class="mark-card">
+        <svg class="glyph" viewBox="0 0 64 64" fill="currentColor" aria-hidden="true">
+          <rect x="19" y="27" width="26" height="23" rx="11.5"/>
+          <circle cx="14" cy="25" r="6.4"/><circle cx="26" cy="14.5" r="6.8"/>
+          <circle cx="40" cy="14.5" r="6.8"/><circle cx="52" cy="25" r="6.4"/>
+        </svg>
+        <span class="role">Lead</span>
+        <h3>Paw</h3>
+        <p>A pad and four toes, nothing else. Reads at 16px. The "scent trail" is a lockup device that follows the paw at larger sizes — it never has to be baked into the glyph itself.</p>
+        <a class="file" href="assets/logo/paw-mark.svg">assets/logo/paw-mark.svg</a>
+      </div>
+      <div class="mark-card">
+        <svg class="glyph" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+          <rect x="9" y="8" width="14" height="48" rx="5" fill="currentColor"/>
+          <rect x="41" y="8" width="14" height="48" rx="5" fill="currentColor"/>
+          <rect x="9" y="27" width="46" height="10" rx="5" fill="currentColor"/>
+          <g style="color: var(--bh-char)"><rect x="43" y="10" width="10" height="10" rx="2.5" fill="currentColor" fill-opacity=".85"/></g>
+        </svg>
+        <span class="role">Alternate</span>
+        <h3>Assembled&nbsp;H</h3>
+        <p>Bazel proved a build‑tool mark can be pure geometry. This one is a straightforward H — for Hound — built the same way a build is: discrete blocks locked together, with one block left "lit" to mark it as live, still assembling.</p>
+        <a class="file" href="assets/logo/assembled-h.svg">assets/logo/assembled-h.svg</a>
+      </div>
+      <div class="mark-card">
+        <svg class="glyph ping" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+          <circle cx="32" cy="32" r="6" fill="currentColor"/>
+          <circle cx="32" cy="32" r="15" stroke="currentColor" stroke-width="3"/>
+          <circle cx="32" cy="32" r="24" stroke="currentColor" stroke-width="2" opacity=".55"/>
+        </svg>
+        <span class="role">Alternate</span>
+        <h3>Scent&nbsp;Ping</h3>
+        <p>For a "running" or "just found something" state rather than static branding — concentric rings reading as a hit registering, animated as a single soft pulse (inert for anyone with reduced‑motion set).</p>
+        <a class="file" href="assets/logo/scent-ping.svg">assets/logo/scent-ping.svg</a>
+      </div>
+    </div>
+
+    <div class="reduction">
+      <div class="reduction-item">
+        <div class="box" style="width:64px;height:64px"><svg width="40" height="40" viewBox="0 0 64 64" fill="currentColor"><rect x="19" y="27" width="26" height="23" rx="11.5"/><circle cx="14" cy="25" r="6.4"/><circle cx="26" cy="14.5" r="6.8"/><circle cx="40" cy="14.5" r="6.8"/><circle cx="52" cy="25" r="6.4"/></svg></div>
+        <span>64px</span>
+      </div>
+      <div class="reduction-item">
+        <div class="box" style="width:32px;height:32px"><svg width="20" height="20" viewBox="0 0 64 64" fill="currentColor"><rect x="19" y="27" width="26" height="23" rx="11.5"/><circle cx="14" cy="25" r="6.4"/><circle cx="26" cy="14.5" r="6.8"/><circle cx="40" cy="14.5" r="6.8"/><circle cx="52" cy="25" r="6.4"/></svg></div>
+        <span>32px</span>
+      </div>
+      <div class="reduction-item">
+        <div class="box" style="width:16px;height:16px"><svg width="11" height="11" viewBox="0 0 64 64" fill="currentColor"><rect x="19" y="27" width="26" height="23" rx="11.5"/><circle cx="14" cy="25" r="6.4"/><circle cx="26" cy="14.5" r="6.8"/><circle cx="40" cy="14.5" r="6.8"/><circle cx="52" cy="25" r="6.4"/></svg></div>
+        <span>16px · favicon</span>
+      </div>
+      <p style="font-size:13px;color:var(--bh-slate);margin:0;max-width:32ch">Every weight of the paw is the same five shapes, just rescaled — nothing thins out or drops off at favicon size. See <a class="file" style="margin-left:2px" href="assets/favicon/favicon.svg">assets/favicon/</a> for the shipped set.</p>
+    </div>
+  </div>
+</section>
+
+<section id="downloads">
+  <div class="wrap">
+    <div class="eyebrow">Brand kit</div>
+    <h2 class="section-title">Every file, in one place</h2>
+    <p class="lede" style="font-size:16px">Everything below lives under <code>docs/brand/site/assets/</code> in the repo — grab it directly, no export step.</p>
+
+    <p class="asset-section-label">Logo</p>
+    <table class="asset-table">
+      <thead><tr><th class="prev"></th><th>File</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td class="prev"><svg viewBox="0 0 64 64" fill="#DD8148"><rect x="19" y="27" width="26" height="23" rx="11.5"/><circle cx="14" cy="25" r="6.4"/><circle cx="26" cy="14.5" r="6.8"/><circle cx="40" cy="14.5" r="6.8"/><circle cx="52" cy="25" r="6.4"/></svg></td><td class="path"><a href="assets/logo/paw-mark.svg">logo/paw-mark.svg</a></td><td class="note">fixed copper fill — safe default for &lt;img&gt; use</td></tr>
+        <tr><td class="prev"><svg viewBox="0 0 64 64" style="color:#DD8148" fill="currentColor"><rect x="19" y="27" width="26" height="23" rx="11.5"/><circle cx="14" cy="25" r="6.4"/><circle cx="26" cy="14.5" r="6.8"/><circle cx="40" cy="14.5" r="6.8"/><circle cx="52" cy="25" r="6.4"/></svg></td><td class="path"><a href="assets/logo/paw-mark-mono.svg">logo/paw-mark-mono.svg</a></td><td class="note"><code>currentColor</code> — inherits CSS <code>color</code> when inlined</td></tr>
+        <tr><td class="prev"><svg viewBox="0 0 64 64" fill="#DD8148"><rect x="9" y="8" width="14" height="48" rx="5"/><rect x="41" y="8" width="14" height="48" rx="5"/><rect x="9" y="27" width="46" height="10" rx="5"/></svg></td><td class="path"><a href="assets/logo/assembled-h.svg">logo/assembled-h.svg</a></td><td class="note">abstract alternate</td></tr>
+        <tr><td class="prev"><svg viewBox="0 0 64 64" fill="none" stroke="#DD8148" stroke-width="3"><circle cx="32" cy="32" r="6" fill="#DD8148" stroke="none"/><circle cx="32" cy="32" r="15"/></svg></td><td class="path"><a href="assets/logo/scent-ping.svg">logo/scent-ping.svg</a></td><td class="note">running / live‑state alternate</td></tr>
+        <tr><td class="prev"><img src="assets/logo/wordmark-lockup-dark.png" alt="wordmark on dark" style="height:22px;width:auto"></td><td class="path"><a href="assets/logo/wordmark-lockup-dark.png">logo/wordmark-lockup-dark.png</a></td><td class="note">rasterized lockup, transparent bg, for dark surfaces</td></tr>
+        <tr><td class="prev" style="background:#fbf7f1;border-radius:6px"><img src="assets/logo/wordmark-lockup-light.png" alt="wordmark on light" style="height:22px;width:auto"></td><td class="path"><a href="assets/logo/wordmark-lockup-light.png">logo/wordmark-lockup-light.png</a></td><td class="note">rasterized lockup, transparent bg, for light surfaces</td></tr>
+      </tbody>
+    </table>
+
+    <p class="asset-section-label">Favicon</p>
+    <table class="asset-table">
+      <thead><tr><th class="prev"></th><th>File</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td class="prev"><img src="assets/favicon/favicon.svg" style="width:24px;height:24px"></td><td class="path"><a href="assets/favicon/favicon.svg">favicon/favicon.svg</a></td><td class="note">primary — modern browsers</td></tr>
+        <tr><td class="prev"><img src="assets/favicon/favicon-32.png" style="width:24px;height:24px"></td><td class="path"><a href="assets/favicon/favicon.ico">favicon/favicon.ico</a></td><td class="note">multi‑res 16/32/48 fallback</td></tr>
+        <tr><td class="prev"><img src="assets/favicon/apple-touch-icon-180.png" style="width:24px;height:24px"></td><td class="path"><a href="assets/favicon/apple-touch-icon-180.png">favicon/apple-touch-icon-180.png</a></td><td class="note">iOS home‑screen icon</td></tr>
+        <tr><td class="prev"><img src="assets/favicon/icon-512.png" style="width:24px;height:24px"></td><td class="path"><a href="assets/favicon/icon-512.png">favicon/icon-512.png</a></td><td class="note">PWA manifest / large app icon</td></tr>
+      </tbody>
+    </table>
+
+    <p class="asset-section-label">Status icons</p>
+    <table class="asset-table">
+      <thead><tr><th class="prev"></th><th>File</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td class="prev"><svg viewBox="0 0 24 24" fill="none" stroke="#4ABD8C" stroke-width="2"><circle cx="12" cy="12" r="9.5"/><path d="M8 12.5l2.7 2.7L16.5 9"/></svg></td><td class="path"><a href="assets/icons/status-success.svg">icons/status-success.svg</a></td><td class="note">build passed</td></tr>
+        <tr><td class="prev"><svg viewBox="0 0 24 24" fill="none" stroke="#E5646A" stroke-width="2"><circle cx="12" cy="12" r="9.5"/><path d="M9 9l6 6M15 9l-6 6"/></svg></td><td class="path"><a href="assets/icons/status-failed.svg">icons/status-failed.svg</a></td><td class="note">build broke</td></tr>
+        <tr><td class="prev"><svg viewBox="0 0 24 24" fill="none" stroke="#F0B158" stroke-width="2"><circle cx="12" cy="12" r="9.5"/><path d="M7.5 14c1-3 2-3 3 0s2 3 3 0 2-3 3 0"/></svg></td><td class="path"><a href="assets/icons/status-flaky.svg">icons/status-flaky.svg</a></td><td class="note">inconsistent test</td></tr>
+        <tr><td class="prev"><svg viewBox="0 0 24 24" fill="none" stroke="#DD8148" stroke-width="2"><circle cx="12" cy="12" r="2.6" fill="#DD8148" stroke="none"/><circle cx="12" cy="12" r="6.6"/></svg></td><td class="path"><a href="assets/icons/status-running.svg">icons/status-running.svg</a></td><td class="note">build in progress</td></tr>
+        <tr><td class="prev"><svg viewBox="0 0 24 24" fill="none" stroke="#6FA8FF" stroke-width="2"><circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="3.4" fill="#6FA8FF" stroke="none"/></svg></td><td class="path"><a href="assets/icons/status-cache-hit.svg">icons/status-cache-hit.svg</a></td><td class="note">restored from cache</td></tr>
+        <tr><td class="prev"><svg viewBox="0 0 24 24" fill="none" stroke="#8A8177" stroke-width="2"><circle cx="12" cy="12" r="9.5" stroke-dasharray="3.2 3.2"/></svg></td><td class="path"><a href="assets/icons/status-cache-miss.svg">icons/status-cache-miss.svg</a></td><td class="note">rebuilt from source</td></tr>
+      </tbody>
+    </table>
+
+    <p class="asset-section-label">Fonts &amp; tokens</p>
+    <table class="asset-table">
+      <thead><tr><th class="prev"></th><th>File</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td class="prev">Aa</td><td class="path"><a href="assets/fonts/Fraunces-Variable.woff2">fonts/Fraunces-Variable.woff2</a></td><td class="note">display — variable, wght 300–900, OFL‑1.1</td></tr>
+        <tr><td class="prev">Aa</td><td class="path"><a href="assets/fonts/Inter-Variable.woff2">fonts/Inter-Variable.woff2</a></td><td class="note">UI/body — variable, wght 100–900, OFL‑1.1</td></tr>
+        <tr><td class="prev">Aa</td><td class="path"><a href="assets/fonts/JetBrainsMono-Variable.woff2">fonts/JetBrainsMono-Variable.woff2</a></td><td class="note">mono — variable, wght 100–800, OFL‑1.1</td></tr>
+        <tr><td class="prev">§</td><td class="path"><a href="assets/fonts/OFL.txt">fonts/OFL.txt</a></td><td class="note">bundled license + per‑font copyright notices</td></tr>
+        <tr><td class="prev">{ }</td><td class="path"><a href="assets/tokens/colors.css">tokens/colors.css</a></td><td class="note">CSS custom properties — dark default, light + data‑theme overrides</td></tr>
+        <tr><td class="prev">{ }</td><td class="path"><a href="assets/tokens/colors.json">tokens/colors.json</a></td><td class="note">same palette as JSON, for non‑CSS consumers</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="color">
+  <div class="wrap">
+    <div class="eyebrow">Color</div>
+    <h2 class="section-title">Brand, then function — kept separate</h2>
+
+    <div class="swatch-grid">
+      <div class="swatch"><div class="fill" style="background:#15130f"></div><div class="meta"><div class="name">Char</div><div class="hex">#15130F</div><div class="use">ground</div></div></div>
+      <div class="swatch"><div class="fill" style="background:#221d17"></div><div class="meta"><div class="name">Ember</div><div class="hex">#221D17</div><div class="use">surface, card</div></div></div>
+      <div class="swatch"><div class="fill" style="background:#dd8148"></div><div class="meta"><div class="name">Copper</div><div class="hex">#DD8148</div><div class="use">brand accent — logo, links, focus</div></div></div>
+      <div class="swatch"><div class="fill" style="background:#f2ebdf"></div><div class="meta"><div class="name">Bone</div><div class="hex">#F2EBDF</div><div class="use">primary text</div></div></div>
+      <div class="swatch"><div class="fill" style="background:#8a8177"></div><div class="meta"><div class="name">Slate</div><div class="hex">#8A8177</div><div class="use">secondary text, borders</div></div></div>
+    </div>
+
+    <div class="type-label" style="margin-top:44px"><span>Semantic — build status only, never used decoratively</span></div>
+    <div class="semantic-row">
+      <div class="chip"><span class="dot" style="background:var(--bh-ok)"></span>Success<span class="hex">#4ABD8C</span></div>
+      <div class="chip"><span class="dot" style="background:var(--bh-bad)"></span>Failed<span class="hex">#E5646A</span></div>
+      <div class="chip"><span class="dot" style="background:var(--bh-warn)"></span>Flaky<span class="hex">#F0B158</span></div>
+      <div class="chip"><span class="dot" style="background:var(--bh-info)"></span>Cache hit<span class="hex">#6FA8FF</span></div>
+      <div class="chip"><span class="dot" style="background:var(--bh-copper)"></span>Running<span class="hex">#DD8148</span></div>
+    </div>
+  </div>
+</section>
+
+<section id="type">
+  <div class="wrap">
+    <div class="eyebrow">Type</div>
+    <h2 class="section-title">Three faces, three jobs</h2>
+
+    <div class="type-block">
+      <div class="type-label"><span>Display — headlines, the wordmark, marketing only</span><b>Fraunces</b></div>
+      <div class="specimen-display">The build that got away.</div>
+      <div class="specimen-display italic">Now it doesn't.</div>
+    </div>
+
+    <div class="type-block">
+      <div class="type-label"><span>Body / UI — every screen in the product</span><b>Inter</b></div>
+      <div class="specimen-body">BuildHound collects task, cache, and test‑flakiness telemetry from a Gradle settings plugin and ships it to a self‑hosted ingestion service — no seat licenses, no data leaving your infrastructure.</div>
+      <div class="weights">
+        <span style="font-family:var(--font-body);font-weight:400">Regular</span>
+        <span style="font-family:var(--font-body);font-weight:600">Semibold</span>
+        <span style="font-family:var(--font-body);font-weight:800">Extrabold</span>
+      </div>
+    </div>
+
+    <div class="type-block">
+      <div class="type-label"><span>Mono — durations, task paths, cache keys, logs</span><b>JetBrains Mono</b></div>
+      <div class="specimen-mono">:app:compileDebugKotlin  UP-TO-DATE  0.041s<br>:core:test               FLAKY       3/5 retries<br>cache  a1b2c9f4  MISS → 340ms rebuild</div>
+    </div>
+  </div>
+</section>
+
+<section id="icons">
+  <div class="wrap">
+    <div class="eyebrow">Iconography</div>
+    <h2 class="section-title">Six states, one stroke weight</h2>
+    <p class="lede" style="font-size:16px">Every icon is built from the same 2px rounded stroke as the Assembled&nbsp;H mark, so status chips and the logo read as one family instead of a mascot bolted onto a generic icon set.</p>
+
+    <div class="icon-grid">
+      <div class="icon-card"><svg viewBox="0 0 24 24" fill="none" style="color:var(--bh-ok)" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M8 12.5l2.7 2.7L16.5 9"/></svg><div class="name">Success</div><div class="desc">build passed</div></div>
+      <div class="icon-card"><svg viewBox="0 0 24 24" fill="none" style="color:var(--bh-bad)" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M9 9l6 6M15 9l-6 6"/></svg><div class="name">Failed</div><div class="desc">build broke</div></div>
+      <div class="icon-card"><svg viewBox="0 0 24 24" fill="none" style="color:var(--bh-warn)" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M7.5 14c1-3 2-3 3 0s2 3 3 0 2-3 3 0"/></svg><div class="name">Flaky</div><div class="desc">inconsistent test</div></div>
+      <div class="icon-card"><svg viewBox="0 0 24 24" fill="none" style="color:var(--bh-copper)" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="6.6"/><circle cx="12" cy="12" r="10.2" opacity=".5"/></svg><div class="name">Running</div><div class="desc">build in progress</div></div>
+      <div class="icon-card"><svg viewBox="0 0 24 24" fill="none" style="color:var(--bh-info)" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="3.4" fill="currentColor" stroke="none"/></svg><div class="name">Cache hit</div><div class="desc">restored from cache</div></div>
+      <div class="icon-card"><svg viewBox="0 0 24 24" fill="none" style="color:var(--bh-slate)" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5" stroke-dasharray="3.2 3.2"/></svg><div class="name">Cache miss</div><div class="desc">rebuilt from source</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="use">
+  <div class="wrap">
+    <div class="eyebrow">In use</div>
+    <h2 class="section-title">A build list, not a mood board</h2>
+
+    <div class="app">
+      <div class="app-bar">
+        <svg viewBox="0 0 64 64" fill="currentColor"><rect x="19" y="27" width="26" height="23" rx="11.5"/><circle cx="14" cy="25" r="6.4"/><circle cx="26" cy="14.5" r="6.8"/><circle cx="40" cy="14.5" r="6.8"/><circle cx="52" cy="25" r="6.4"/></svg>
+        <b>BuildHound</b>
+        recent builds · buildhound-server
+      </div>
+      <div class="row row-head"><span></span><span>Task</span><span>Status</span><span style="text-align:right">Duration</span><span style="text-align:right">When</span></div>
+      <div class="row">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" style="color:var(--bh-ok)" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M8 12.5l2.7 2.7L16.5 9"/></svg>
+        <div class="task">:buildhound-server:test<small>main @ 4f2a91c</small></div>
+        <div class="badge" style="background:color-mix(in srgb, var(--bh-ok) 18%, transparent);color:var(--bh-ok)">Passed</div>
+        <div class="dur">38.204s</div><div class="ts">2m ago</div>
+      </div>
+      <div class="row">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" style="color:var(--bh-warn)" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M7.5 14c1-3 2-3 3 0s2 3 3 0 2-3 3 0"/></svg>
+        <div class="task">BuildStoreTest.retriesOnConflict<small>flaky · 3 of last 5 runs</small></div>
+        <div class="badge" style="background:color-mix(in srgb, var(--bh-warn) 18%, transparent);color:var(--bh-warn)">Flaky</div>
+        <div class="dur">1.9s</div><div class="ts">2m ago</div>
+      </div>
+      <div class="row">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" style="color:var(--bh-info)" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="3.4" fill="currentColor" stroke="none"/></svg>
+        <div class="task">:buildhound-commons:compileKotlin<small>cache key a1b2c9f</small></div>
+        <div class="badge" style="background:color-mix(in srgb, var(--bh-info) 18%, transparent);color:var(--bh-info)">Cache hit</div>
+        <div class="dur">0.041s</div><div class="ts">9m ago</div>
+      </div>
+      <div class="row">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" style="color:var(--bh-bad)" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.5"/><path d="M9 9l6 6M15 9l-6 6"/></svg>
+        <div class="task">:buildhound-gradle-plugin:functionalTest<small>TestKit · JDK 21</small></div>
+        <div class="badge" style="background:color-mix(in srgb, var(--bh-bad) 18%, transparent);color:var(--bh-bad)">Failed</div>
+        <div class="dur">4m 12s</div><div class="ts">31m ago</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="colophon">
+  <div class="wrap" style="display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;width:100%">
+    <div style="display:flex;gap:14px;align-items:flex-start">
+      <svg viewBox="0 0 64 64" fill="currentColor"><rect x="19" y="27" width="26" height="23" rx="11.5"/><circle cx="14" cy="25" r="6.4"/><circle cx="26" cy="14.5" r="6.8"/><circle cx="40" cy="14.5" r="6.8"/><circle cx="52" cy="25" r="6.4"/></svg>
+      <p>A starting draft, not a locked system — redirect the mark, the copper hue, or the whole "hound" premise if a stronger idea shows up in review. See <a href="../DESIGN.md" style="border-bottom:1px dotted var(--bh-copper-dim)">DESIGN.md</a> for the full spec and open questions.</p>
+    </div>
+    <div class="redirect">buildhound.dev</div>
+  </div>
+</footer>
+
+</body>
+</html>

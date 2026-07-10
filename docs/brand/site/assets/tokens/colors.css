@@ -1,0 +1,60 @@
+/*
+ * BuildHound color tokens.
+ * Dark is the default (:root) — the category convention for build/telemetry
+ * dashboards. Light overrides apply automatically via prefers-color-scheme,
+ * and can be forced with data-theme="light" / data-theme="dark" on <html>.
+ */
+
+:root {
+  --bh-char: #15130f;      /* ground */
+  --bh-ember: #221d17;     /* surface / card */
+  --bh-ember-2: #2c241b;   /* card hover / nested surface */
+  --bh-bone: #f2ebdf;      /* primary text */
+  --bh-bone-dim: #c9bfaf;  /* secondary text */
+  --bh-slate: #8a8177;     /* tertiary text, borders */
+  --bh-line: rgba(242, 235, 223, 0.13);
+  --bh-copper: #dd8148;        /* brand accent — logo, links, focus rings */
+  --bh-copper-soft: #e9a878;   /* copper on dark, lower emphasis */
+  --bh-copper-dim: #5a3a24;    /* copper-tinted borders / fills */
+
+  /* semantic — build status only, never used decoratively */
+  --bh-ok: #4abd8c;     /* success */
+  --bh-bad: #e5646a;    /* failed */
+  --bh-warn: #f0b158;   /* flaky */
+  --bh-info: #6fa8ff;   /* cache hit */
+  /* "running" uses --bh-copper; "cache miss" uses --bh-slate */
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bh-char: #fbf7f1;
+    --bh-ember: #f1e8dc;
+    --bh-ember-2: #e8dcc9;
+    --bh-bone: #211c15;
+    --bh-bone-dim: #4a4137;
+    --bh-slate: #7a7266;
+    --bh-line: rgba(33, 28, 21, 0.12);
+    --bh-copper: #b85a28;
+    --bh-copper-soft: #8f4419;
+    --bh-copper-dim: #ecd2b8;
+
+    --bh-ok: #1f8055;
+    --bh-bad: #c22e33;
+    --bh-warn: #a5680e;
+    --bh-info: #2a6fd1;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bh-char: #15130f; --bh-ember: #221d17; --bh-ember-2: #2c241b; --bh-bone: #f2ebdf;
+  --bh-bone-dim: #c9bfaf; --bh-slate: #8a8177; --bh-line: rgba(242, 235, 223, 0.13);
+  --bh-copper: #dd8148; --bh-copper-soft: #e9a878; --bh-copper-dim: #5a3a24;
+  --bh-ok: #4abd8c; --bh-bad: #e5646a; --bh-warn: #f0b158; --bh-info: #6fa8ff;
+}
+
+:root[data-theme="light"] {
+  --bh-char: #fbf7f1; --bh-ember: #f1e8dc; --bh-ember-2: #e8dcc9; --bh-bone: #211c15;
+  --bh-bone-dim: #4a4137; --bh-slate: #7a7266; --bh-line: rgba(33, 28, 21, 0.12);
+  --bh-copper: #b85a28; --bh-copper-soft: #8f4419; --bh-copper-dim: #ecd2b8;
+  --bh-ok: #1f8055; --bh-bad: #c22e33; --bh-warn: #a5680e; --bh-info: #2a6fd1;
+}
