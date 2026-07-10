@@ -5,6 +5,7 @@ import dev.buildhound.commons.payload.ArtifactSizes
 import dev.buildhound.commons.payload.ArtifactType
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
 import javax.sql.DataSource
 import kotlin.test.assertEquals
@@ -312,5 +313,66 @@ class PostgresStoresIntegrationTest {
         assertEquals(inMemory.artifactTrends(project.id, filter, 30, now), artifactTrends, "artifactTrends parity")
         assertTrue(artifactTrends.isNotEmpty(), "non-vacuous: repo-a's APK series is present")
         assertTrue(artifactTrends.all { it.module == ":app" }, "repo-b's :lib AAR series is excluded when filtered")
+    }
+
+    /** length() of a hot column for one build row — the clamped-storage probe (plan 077). */
+    private fun columnLength(table: String, column: String, projectId: String, buildId: String): Int =
+        dataSource.connection.use { c ->
+            // table/column are test-fixed literals, never fixture data.
+            c.prepareStatement("SELECT max(length($column)) FROM $table WHERE project_id = ?::uuid AND build_id = ?").use { s ->
+                s.setString(1, projectId)
+                s.setString(2, buildId)
+                s.executeQuery().use { r -> r.next(); r.getInt(1) }
+            }
+        }
+
+    @Test
+    fun `a payload with oversized strings in every indexed field stores clamped — no 54000 — and stays parity-safe`() {
+        val project = tokens.ensureProjectWithToken("bounds-project", sha256Hex("bnd"))
+        val inMemory = InMemoryBuildStore()
+        val now = System.currentTimeMillis()
+        val recent = now - 3_600_000
+        // Same oversized sha + className across three builds (green/red/green) so the clamped values
+        // still join into a cross-run flake; every other indexed field oversized on the first build.
+        fun hostile(buildId: String, i: Int, failed: Int) = TestPayloads.build(
+            buildId = buildId, startedAt = recent + i * 1000L,
+            branch = "B".repeat(3000), sha = "s".repeat(3000),
+            provider = "P".repeat(3000), runId = "r".repeat(3000), pipelineName = "L".repeat(3000),
+            tasks = listOf(
+                TaskExecution(
+                    path = ":app:x", module = "m".repeat(3000), type = "T".repeat(3000),
+                    startMs = 0, durationMs = 1000, outcome = TaskOutcome.EXECUTED,
+                ),
+            ),
+            tests = listOf(TestPayloads.testTask(module = "M".repeat(3000), className = "C".repeat(3000), passed = 5 - failed, failed = failed)),
+        )
+        val fixtures = listOf(
+            hostile("h".repeat(3000), 0, failed = 0),
+            hostile("hb-2", 1, failed = 1),
+            hostile("hb-3", 2, failed = 0),
+        )
+        for (b in fixtures) {
+            // No SQLException here = every index (incl. the V7 test_class_outcomes PK) accepted the tuple.
+            assertTrue(builds.save(project.id, b), "save must succeed, clamped — never 54000")
+            inMemory.save(project.id, b)
+        }
+
+        // Hot columns hold the clamped values.
+        val clampedId = "h".repeat(256)
+        assertEquals(256, columnLength("builds", "branch", project.id, clampedId))
+        assertEquals(256, columnLength("builds", "ci_provider", project.id, clampedId))
+        assertEquals(256, columnLength("builds", "ci_run_id", project.id, clampedId))
+        assertEquals(256, columnLength("builds", "pipeline_name", project.id, clampedId))
+        assertEquals(256, columnLength("task_executions", "module", project.id, clampedId))
+        assertEquals(512, columnLength("task_executions", "type", project.id, clampedId))
+        assertEquals(512, columnLength("test_class_outcomes", "class_fqcn", project.id, clampedId))
+        assertEquals(64, columnLength("test_class_outcomes", "sha", project.id, clampedId))
+
+        // Aggregations over the clamped fields agree byte-for-byte across stores and are non-vacuous.
+        assertEquals(inMemory.flaky(project.id, 30, now), builds.flaky(project.id, 30, now), "flaky parity")
+        assertEquals(inMemory.taskDuration(project.id, 30, now), builds.taskDuration(project.id, 30, now), "taskDuration parity")
+        val flake = builds.flaky(project.id, 30, now).single()
+        assertEquals(512, flake.className.length, "the cross-run flake joined on the clamped className")
+        assertEquals("T".repeat(512), builds.taskDuration(project.id, 30, now).byType.single().key)
     }
 }

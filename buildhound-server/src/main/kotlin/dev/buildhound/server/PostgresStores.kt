@@ -43,9 +43,9 @@ private const val PURGE_BATCH: Int = 5000
 class PostgresBuildStore(private val dataSource: DataSource) : BuildStore {
 
     override fun save(projectId: String, rawPayload: BuildPayload): Boolean {
-        // Clamp the projectKey before anything is written (plan 077): the clamped payload is what the
-        // hot column AND the jsonb store, so they can never disagree.
-        val payload = boundProjectKey(rawPayload)
+        // Clamp every index-feeding string before anything is written (plan 078): the clamped payload
+        // is what the hot columns AND the jsonb store, so they can never disagree.
+        val payload = boundForStorage(rawPayload)
         return dataSource.connection.use { connection ->
             // The build row and its normalized task rows go in as one all-or-nothing unit (plan 026),
             // so a partial failure never leaves task rows without their build (idempotency at the

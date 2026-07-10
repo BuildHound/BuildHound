@@ -60,7 +60,10 @@ paths:
   /v1/builds:
     post:
       summary: Ingest a build payload (gzip-compressed BuildPayload JSON).
-      description: Ingest scope. Body is size-capped; a malformed payload is 422, an oversized body 413.
+      description: >
+        Ingest scope. Body is size-capped; a malformed payload is 422, an oversized body 413.
+        Identifier-like strings (buildId, branch, ci provider/runId/pipelineName, module names — 256
+        chars; task types/test class names — 512; sha — 64) are truncated to server bounds at storage.
       responses:
         "202": { description: Accepted and stored (or a duplicate build id, idempotent). }
         "400": { description: Malformed request. }
@@ -75,7 +78,7 @@ paths:
         - $ref: '#/components/parameters/ProjectKey'
       responses:
         "200": { description: A page of build summaries. }
-        "400": { description: Invalid filter (e.g. over-long projectKey). }
+        "400": { description: Invalid filter (e.g. over-long projectKey or branch — both capped at 256 chars). }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "503": { $ref: '#/components/responses/Unavailable' }
@@ -510,10 +513,14 @@ paths:
   /v1/metrics:
     post:
       summary: Ingest a custom measure from the metric CLI (plan 025). Ingest scope.
+      description: >
+        Scope/name/text/unit caps are enforced in code (422); correlation ids (buildId, provider,
+        runId) are capped at 256 chars each (422) — rejected loudly, never clamped.
       responses:
         "202": { description: Accepted (idempotent on the correlation key). }
         "400": { description: Malformed metric. }
         "413": { description: Body too large. }
+        "422": { description: The metric failed validation (caps, correlation). }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
   /v1/metrics/prometheus:
