@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>BuildHound Trail Grid - Standalone Report Concept</title>
+    <link rel="icon" href="assets/hound-trail-mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="assets/brand.css">
+</head>
+<body>
+<div class="review-shell" style="max-width:1152px">
+    <div class="review-bar">
+        <strong>Offline report concept / review candidate</strong>
+        <nav class="review-nav" aria-label="Concept pages">
+            <a href="index.html">Brand</a>
+            <a href="dashboard.html">Dashboard</a>
+            <a href="report.html" aria-current="page">Report</a>
+        </nav>
+    </div>
+
+    <header class="report-header">
+        <div class="report-brand-row">
+            <img class="brand-mark" src="assets/hound-trail-mark.svg" alt="">
+            <div>
+                <p class="eyebrow">BuildHound</p>
+                <h1 class="report-title">Build Report</h1>
+            </div>
+        </div>
+        <p class="report-meta">buildhound-server / main @ 4f2a91c / Gradle 9.1 / JDK 21 / 10 July 2026, 10:42 CEST</p>
+        <div class="report-strip" aria-label="Executed, healthy, informational, and failed telemetry signals"><span></span><span></span><span></span><span></span></div>
+    </header>
+
+    <main>
+        <ul class="chips" aria-label="Build summary">
+            <li><strong>Result</strong> <span class="badge failed">Failed</span></li>
+            <li><strong>Duration</strong> 4m 12s</li>
+            <li><strong>Tasks</strong> 186</li>
+            <li><strong>Cache hit</strong> 82.7%</li>
+            <li><strong>Tests</strong> 1,438</li>
+            <li><strong>Flaky</strong> 3</li>
+        </ul>
+
+        <section class="section" aria-labelledby="timeline-title">
+            <div class="section-heading">
+                <div><p class="eyebrow">Critical path</p><h2 class="section-title" id="timeline-title">Task timeline</h2></div>
+                <p>Bars preserve semantic color and sit on the same measurement grid as the application shell.</p>
+            </div>
+            <div class="timeline" role="img" aria-label="Task timeline: configuration followed by Kotlin compilation, tests, and a failed functional test">
+                <div class="timeline-row"><span class="timeline-label">configuration</span><span class="timeline-track"><span class="timeline-bar amber"></span></span></div>
+                <div class="timeline-row"><span class="timeline-label">:commons:compileKotlin</span><span class="timeline-track"><span class="timeline-bar green"></span></span></div>
+                <div class="timeline-row"><span class="timeline-label">:server:test</span><span class="timeline-track"><span class="timeline-bar blue"></span></span></div>
+                <div class="timeline-row"><span class="timeline-label">:plugin:functionalTest</span><span class="timeline-track"><span class="timeline-bar red"></span></span></div>
+            </div>
+        </section>
+
+        <section class="section" aria-labelledby="tasks-title">
+            <div class="section-heading">
+                <div><p class="eyebrow">Execution evidence</p><h2 class="section-title" id="tasks-title">Slowest tasks</h2></div>
+                <p>The standalone artifact uses the same table, badge, chip, and code-surface grammar without depending on the hosted dashboard.</p>
+            </div>
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead><tr><th>Task</th><th>Outcome</th><th class="num">Duration</th><th class="num">Share</th></tr></thead>
+                    <tbody>
+                    <tr><td><span class="task-name">:buildhound-gradle-plugin:functionalTest</span><span class="task-meta">TestKit / JDK 21</span></td><td><span class="badge failed">Failed</span></td><td class="num">4m 12s</td><td class="num">64.7%</td></tr>
+                    <tr><td><span class="task-name">:buildhound-server:test</span><span class="task-meta">218 tests</span></td><td><span class="badge executed">Executed</span></td><td class="num">38.204s</td><td class="num">9.8%</td></tr>
+                    <tr><td><span class="task-name">:buildhound-commons:compileKotlin</span><span class="task-meta">cache key a1b2c9f</span></td><td><span class="badge from-cache">From cache</span></td><td class="num">0.041s</td><td class="num">0.1%</td></tr>
+                    <tr><td><span class="task-name">:buildhound-report:processResources</span><span class="task-meta">unchanged inputs</span></td><td><span class="badge up-to-date">Up-to-date</span></td><td class="num">0.018s</td><td class="num">0.0%</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section" aria-labelledby="warnings-title">
+            <div class="section-heading">
+                <div><p class="eyebrow">Build diagnostics</p><h2 class="section-title" id="warnings-title">Warnings and failure</h2></div>
+                <p>High-density evidence gets a stable dark surface in light and dark themes.</p>
+            </div>
+            <div class="notice"><strong>12 tasks missed the cache.</strong> Four account for 68% of rebuild time; inspect input fingerprints before enabling broader cache reuse.</div>
+            <p><strong class="muted">Failure summary</strong><br>BuildStoreTest.retriesOnConflict expected the persisted build identifier after a retry.</p>
+            <pre class="failure-trace">org.gradle.api.tasks.TaskExecutionException:
+Execution failed for task ':buildhound-gradle-plugin:functionalTest'.
+  Caused by: java.lang.AssertionError: expected stored build id
+  at dev.buildhound.server.BuildStoreTest.retriesOnConflict(BuildStoreTest.kt:184)
+  at java.base/java.lang.reflect.Method.invoke(Method.java:580)</pre>
+        </section>
+    </main>
+
+    <footer class="review-footer">
+        <span>This page uses only local review assets. Production reports remain unchanged.</span>
+        <a href="../DESIGN-GPT.md">Read the full design guidance</a>
+    </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>BuildHound Trail Grid - Dashboard Concept</title>
+    <link rel="icon" href="assets/hound-trail-mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="assets/brand.css">
+</head>
+<body>
+<div class="review-shell">
+    <div class="review-bar">
+        <strong>Dashboard concept / review candidate</strong>
+        <nav class="review-nav" aria-label="Concept pages">
+            <a href="index.html">Brand</a>
+            <a href="dashboard.html" aria-current="page">Dashboard</a>
+            <a href="report.html">Report</a>
+        </nav>
+    </div>
+
+    <header class="concept-header">
+        <a class="brand-lockup" href="#builds" aria-label="BuildHound dashboard">
+            <img class="brand-mark" src="assets/hound-trail-mark.svg" alt="">
+            <span class="brand-copy">
+                <span class="brand-name"><strong>BuildHound</strong></span>
+                <span class="brand-kicker">Build telemetry for Gradle</span>
+            </span>
+        </a>
+        <nav class="product-nav" aria-label="BuildHound">
+            <a href="#bottlenecks">Bottlenecks</a>
+            <a href="#builds" aria-current="page">Builds</a>
+            <a href="#failures">Failures</a>
+            <a href="#flaky">Flaky tests</a>
+            <a href="#cache">Cache</a>
+            <a href="#spans">CI spans</a>
+            <a href="#compare">Compare</a>
+            <a href="#admin">Admin</a>
+        </nav>
+        <span class="site-pill">buildhound.dev</span>
+    </header>
+
+    <main>
+        <div class="token-bar">
+            <label>Read token <input class="control grow" type="password" value="buildhound_review_token" aria-label="Read token"></label>
+            <button class="button">Use token</button>
+            <span class="muted">Kept in this tab only.</span>
+        </div>
+
+        <section class="brand-hero" aria-labelledby="hero-title">
+            <div class="hero-panel">
+                <p class="eyebrow">BuildHound</p>
+                <h1 class="page-title" id="hero-title">Track every Gradle build. Find the slow work.</h1>
+                <p class="lede">Task time, cache outcomes, failures, flaky tests, CI spans, and offline reports on infrastructure you control.</p>
+                <div class="brand-stats">
+                    <div class="brand-stat"><b>Gradle</b><span class="muted">settings plugin</span></div>
+                    <div class="brand-stat"><b>Zero network</b><span class="muted">standalone report</span></div>
+                    <div class="brand-stat"><b>Self-hosted</b><span class="muted">query surface</span></div>
+                </div>
+            </div>
+            <div class="signal-board" aria-label="Build telemetry summary">
+                <div class="signal-path" aria-hidden="true"><span></span><span></span><span></span></div>
+                <div class="signal-row"><span class="signal-label">Task time</span><span class="signal-track"><span class="track-amber"></span></span><span class="signal-value">74%</span></div>
+                <div class="signal-row"><span class="signal-label">Cache hits</span><span class="signal-track"><span class="track-green"></span></span><span class="signal-value">88%</span></div>
+                <div class="signal-row"><span class="signal-label">CI spans</span><span class="signal-track"><span class="track-blue"></span></span><span class="signal-value">56%</span></div>
+                <div class="signal-row"><span class="signal-label">Failures</span><span class="signal-track"><span class="track-red"></span></span><span class="signal-value">22%</span></div>
+            </div>
+        </section>
+
+        <section class="section" id="bottlenecks" aria-labelledby="kpi-title">
+            <div class="section-heading">
+                <div><p class="eyebrow">Main / last 7 days</p><h2 class="section-title" id="kpi-title">Build health</h2></div>
+                <p>Median duration is improving, but cache misses remain concentrated in four tasks.</p>
+            </div>
+            <div class="kpi-grid">
+                <div class="kpi"><span class="kpi-label">Median build</span><strong class="kpi-value">2m 18s</strong><span class="delta delta-good">18s faster</span></div>
+                <div class="kpi"><span class="kpi-label">Cache hit rate</span><strong class="kpi-value">88.4%</strong><span class="delta delta-good">+3.2 points</span></div>
+                <div class="kpi"><span class="kpi-label">Failed builds</span><strong class="kpi-value">14</strong><span class="delta delta-bad">+4 builds</span></div>
+            </div>
+        </section>
+
+        <section class="section" id="builds" aria-labelledby="builds-title">
+            <div class="section-heading">
+                <div><p class="eyebrow">Recent evidence</p><h2 class="section-title" id="builds-title">Builds</h2></div>
+                <p>Operational tables use one frame, restrained row emphasis, mono paths, and tabular numbers.</p>
+            </div>
+            <div class="toolbar">
+                <input class="control grow" type="search" placeholder="Search branch, commit, task" aria-label="Search builds">
+                <select class="control" aria-label="Result"><option>All results</option><option>Passed</option><option>Failed</option></select>
+                <select class="control" aria-label="Branch"><option>main</option><option>release/*</option><option>all branches</option></select>
+                <button class="button">Clear</button>
+            </div>
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead><tr><th>Build</th><th>Result</th><th>Cache</th><th class="num">Duration</th><th>Started</th></tr></thead>
+                    <tbody>
+                    <tr><td><span class="task-name">:buildhound-server:test</span><span class="task-meta">main @ 4f2a91c / CI</span></td><td><span class="badge success">Passed</span></td><td><span class="badge from-cache">88% hit</span></td><td class="num">38.204s</td><td>2m ago</td></tr>
+                    <tr><td><span class="task-name">BuildStoreTest.retriesOnConflict</span><span class="task-meta">main @ 4f2a91c / retry 3 of 5</span></td><td><span class="badge flaky-retry">Flaky</span></td><td><span class="badge up-to-date">Up-to-date</span></td><td class="num">1.902s</td><td>2m ago</td></tr>
+                    <tr><td><span class="task-name">:buildhound-commons:compileKotlin</span><span class="task-meta">cache key a1b2c9f / JDK 21</span></td><td><span class="badge success">Passed</span></td><td><span class="badge from-cache">From cache</span></td><td class="num">0.041s</td><td>9m ago</td></tr>
+                    <tr><td><span class="task-name">:buildhound-gradle-plugin:functionalTest</span><span class="task-meta">feature/cache-probes @ 9bd402e / TestKit</span></td><td><span class="badge failed">Failed</span></td><td><span class="badge executed">Executed</span></td><td class="num">4m 12s</td><td>31m ago</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="section" id="failures" aria-labelledby="diagnostics-title">
+            <div class="section-heading">
+                <div><p class="eyebrow">Contextual states</p><h2 class="section-title" id="diagnostics-title">Diagnostics</h2></div>
+                <p>Empty and failure states remain compact and action-oriented rather than becoming decorative illustrations.</p>
+            </div>
+            <div class="two-column">
+                <div class="empty-state">
+                    <div class="empty-icon" aria-hidden="true"></div>
+                    <h3>No cache regressions on main</h3>
+                    <p class="muted">The selected window has no tasks whose cache hit rate dropped by more than 10 points.</p>
+                    <div class="toolbar"><button class="button">Clear filters</button></div>
+                </div>
+                <div>
+                    <div class="notice"><strong>Configuration cache changed.</strong> Two consecutive builds recorded different state fingerprints.</div>
+                    <pre class="failure-trace">org.gradle.api.tasks.TaskExecutionException:
+Execution failed for task ':app:test'.
+  Caused by: AssertionError: expected stored build id
+  at BuildStoreTest.kt:184</pre>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="review-footer">
+        <span>Static review data. No product source files are changed by this concept.</span>
+        <a href="../DESIGN-GPT.md">Read the full design guidance</a>
+    </footer>
+</div>
+</body>
+</html>
