@@ -1,0 +1,1 @@
+for all instructions see [CLAUDE.md](CLAUDE.md)

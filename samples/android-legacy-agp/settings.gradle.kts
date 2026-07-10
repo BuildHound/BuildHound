@@ -1,3 +1,5 @@
+import org.gradle.api.initialization.resolve.RepositoriesMode
+
 pluginManagement {
     // BuildHound lives in this repository two levels up; the included build supplies the
     // `dev.buildhound` settings plugin without a published artifact (same wiring as
@@ -33,7 +35,9 @@ buildhound {
     // mode = dev.buildhound.gradle.TelemetryMode.AUTO
 
     // Low-cardinality dimensions attached to every build. Default: none.
-    // tags.put("team", "mobile")
+    tags.put("team", "mobile")
+    tags.put("project", "android-legacy-app")
+    tags.put("type", "android")
 
     // Salted-HMAC pseudonyms for hostname/user (spec §3.7). Default: true.
     identity {
