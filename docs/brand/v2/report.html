@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; connect-src 'none'; form-action 'none'; frame-src 'none'; media-src 'none'; object-src 'none'; worker-src 'none'; font-src 'self'; img-src 'self'; manifest-src 'self'; script-src 'self'; script-src-attr 'none'; style-src 'self'; style-src-attr 'unsafe-inline'">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="BuildHound V2 offline report review fixture using representative build data.">
+    <meta name="theme-color" content="#15130f">
+    <title>BuildHound V2 — Offline report review fixture</title>
+    <link rel="icon" href="assets/favicon/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="assets/tokens/tokens.css">
+    <link rel="stylesheet" href="assets/brand.css">
+    <script src="assets/theme.js" defer></script>
+</head>
+<body class="product-page report-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="report-shell">
+        <header class="review-bar review-bar-product">
+            <a class="review-identity" href="index.html" aria-label="Return to BuildHound V2 brand home">
+                <img src="assets/logo/trace-h-small.svg" alt="">
+                <span><strong>V2 review</strong><small>Offline report surface</small></span>
+            </a>
+            <nav class="review-nav" aria-label="Review pages">
+                <a href="index.html">Brand</a>
+                <a href="dashboard.html">Dashboard</a>
+                <a href="report.html" aria-current="page">Report</a>
+            </nav>
+            <div class="theme-control" role="group" aria-label="Color theme">
+                <button class="theme-button" type="button" data-theme-choice="auto" aria-pressed="true">Auto</button>
+                <button class="theme-button" type="button" data-theme-choice="light" aria-pressed="false">Light</button>
+                <button class="theme-button" type="button" data-theme-choice="dark" aria-pressed="false">Dark</button>
+            </div>
+        </header>
+
+        <header class="report-header">
+            <div class="report-brand">
+                <img src="assets/logo/trace-h-mark.svg" alt="">
+                <div><p>BuildHound</p><h1>Build report</h1></div>
+            </div>
+            <div class="report-meta">
+                <span class="status status-success"><img src="assets/icons/status-success.svg" alt="">Passed</span>
+                <dl><div><dt>Project</dt><dd>android-app</dd></div><div><dt>Build</dt><dd><code>8ad2f14</code></dd></div><div><dt>Generated</dt><dd><time datetime="2026-07-10T13:44:00Z">10 Jul 2026, 15:44</time></dd></div></dl>
+            </div>
+        </header>
+
+        <main id="main">
+            <aside class="offline-notice" aria-label="Offline report review fixture notice"><span aria-hidden="true"></span><p><strong>Offline review fixture</strong> · representative telemetry and adjacent V2 assets load locally with no network request. Runtime adoption must inline them into BuildHound's single-file report.</p></aside>
+
+            <section class="report-summary" aria-labelledby="summary-title">
+                <div class="report-section-heading"><div><p class="eyebrow">Overview</p><h2 id="summary-title">Build at a glance</h2></div><p><code>main</code> on CI · Gradle 9.1 · JDK 21</p></div>
+                <div class="metric-grid report-metrics" aria-label="Build summary">
+                    <article class="metric-card"><p>Total duration</p><strong>3m 52s</strong><span class="metric-delta metric-good">18s faster than baseline</span></article>
+                    <article class="metric-card"><p>Configuration</p><strong>18.2s</strong><span class="metric-delta metric-good">Within baseline</span></article>
+                    <article class="metric-card"><p>Tasks</p><strong>284</strong><span class="metric-delta metric-neutral">112 executed</span></article>
+                    <article class="metric-card"><p>Cache hit rate</p><strong>81%</strong><span class="metric-delta metric-good">229 outputs restored</span></article>
+                </div>
+            </section>
+
+            <section class="report-section" id="report-timeline" aria-labelledby="report-timeline-title">
+                <div class="report-section-heading"><div><p class="eyebrow">Critical path</p><h2 id="report-timeline-title">Where the build spent time</h2></div><p>Five phases account for the full 232-second build.</p></div>
+                <figure class="timeline-figure report-timeline">
+                    <figcaption>The longest critical-path task is <code>:app:compileKotlin</code> at 41.8 seconds. Bar color is outcome-specific: neutral means executed, blue means cache hit, and violet means a flaky retry.</figcaption>
+                    <ol class="timeline-summary sr-only">
+                        <li>Configuration executed for 18.2 seconds.</li>
+                        <li>:core:compileKotlin was restored from cache in 25.4 seconds.</li>
+                        <li>:app:compileKotlin executed for 41.8 seconds and was the longest individual task.</li>
+                        <li>:app:testDebug passed after a flaky retry in 30.7 seconds.</li>
+                        <li>Packaging and finalization executed for 115.9 seconds.</li>
+                    </ol>
+                    <div class="timeline-chart telemetry-grid" aria-hidden="true">
+                        <div class="timeline-axis"><span>0s</span><span>60s</span><span>120s</span><span>180s</span><span>232s</span></div>
+                        <div class="timeline-row"><span class="timeline-label"><code>configuration</code><small>Executed</small></span><span class="timeline-track"><i class="bar bar-neutral" style="--start:0%;--size:8%"></i></span><b>18.2s</b></div>
+                        <div class="timeline-row"><span class="timeline-label"><code>:core:compileKotlin</code><small>Cache hit</small></span><span class="timeline-track"><i class="bar bar-info" style="--start:8%;--size:11%"></i></span><b>25.4s</b></div>
+                        <div class="timeline-row"><span class="timeline-label"><code>:app:compileKotlin</code><small>Executed</small></span><span class="timeline-track"><i class="bar bar-neutral" style="--start:19%;--size:18%"></i></span><b>41.8s</b></div>
+                        <div class="timeline-row"><span class="timeline-label"><code>:app:testDebug</code><small>Flaky retry</small></span><span class="timeline-track"><i class="bar bar-flaky" style="--start:37%;--size:13%"></i></span><b>30.7s</b></div>
+                        <div class="timeline-row"><span class="timeline-label"><code>package + finalize</code><small>Executed</small></span><span class="timeline-track"><i class="bar bar-neutral" style="--start:50%;--size:50%"></i></span><b>115.9s</b></div>
+                    </div>
+                </figure>
+            </section>
+
+            <section class="report-section" id="slow-tasks" aria-labelledby="slow-tasks-title">
+                <div class="report-section-heading"><div><p class="eyebrow">Task evidence</p><h2 id="slow-tasks-title">Slowest executed tasks</h2></div><p>Ordered by wall-clock duration.</p></div>
+                <div class="table-scroll" tabindex="0" role="region" aria-label="Slowest tasks table, horizontally scrollable on small screens">
+                    <table class="data-table report-table">
+                        <caption>Five slowest executed tasks in build 8ad2f14</caption>
+                        <thead><tr><th scope="col">Task</th><th scope="col">Outcome</th><th scope="col">Duration</th><th scope="col">Share</th><th scope="col">Change</th></tr></thead>
+                        <tbody>
+                            <tr><td><code>:app:compileKotlin</code></td><td><span class="status status-cache-miss"><img src="assets/icons/status-cache-miss.svg" alt="">Executed</span></td><td><strong>41.8s</strong></td><td>18.0%</td><td><span class="negative-text">+12.4s</span></td></tr>
+                            <tr><td><code>:app:testDebugUnitTest</code></td><td><span class="status status-cache-miss"><img src="assets/icons/status-cache-miss.svg" alt="">Executed</span></td><td><strong>30.7s</strong></td><td>13.2%</td><td><span class="positive-text">−2.1s</span></td></tr>
+                            <tr><td><code>:core:compileKotlin</code></td><td><span class="status status-cache-hit"><img src="assets/icons/status-cache-hit.svg" alt="">Cache hit</span></td><td><strong>25.4s</strong></td><td>10.9%</td><td>—</td></tr>
+                            <tr><td><code>:app:mergeDebugResources</code></td><td><span class="status status-cache-miss"><img src="assets/icons/status-cache-miss.svg" alt="">Executed</span></td><td><strong>19.3s</strong></td><td>8.3%</td><td><span class="negative-text">+3.8s</span></td></tr>
+                            <tr><td><code>:app:packageDebug</code></td><td><span class="status status-cache-hit"><img src="assets/icons/status-cache-hit.svg" alt="">Up to date</span></td><td><strong>14.6s</strong></td><td>6.3%</td><td><span class="positive-text">−1.4s</span></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="report-split" aria-label="Cache and test findings">
+                <article class="report-section" id="cache-findings">
+                    <div class="report-section-heading"><div><p class="eyebrow">Cache</p><h2>Missed opportunities</h2></div></div>
+                    <div class="signal-list">
+                        <div><span class="signal-icon signal-warning"><img src="assets/icons/status-interrupted.svg" alt=""></span><p><strong>12 avoidable misses</strong><small>18m 24s estimated across recent builds</small></p><b>High</b></div>
+                        <div><span class="signal-icon signal-success"><img src="assets/icons/status-cache-hit.svg" alt=""></span><p><strong>229 outputs restored</strong><small>81% cache hit rate in this build</small></p><b>Healthy</b></div>
+                    </div>
+                </article>
+                <article class="report-section" id="test-findings">
+                    <div class="report-section-heading"><div><p class="eyebrow">Tests</p><h2>Failure context</h2></div></div>
+                    <div class="failure-card">
+                        <span class="status status-flaky"><img src="assets/icons/status-flaky.svg" alt="">Flaky signal</span>
+                        <h3>CheckoutViewModelTest</h3>
+                        <p>Passed on retry without a source change. Seen in 3 of the last 5 builds.</p>
+                        <pre><code>Expected: Ready
+Actual:   Loading</code></pre>
+                    </div>
+                </article>
+            </section>
+
+            <aside class="notice notice-warning report-warning">
+                <img src="assets/icons/status-interrupted.svg" alt="">
+                <div><strong>Comparison excludes interrupted builds.</strong><p>Three recent CI runs ended before telemetry collection completed.</p></div>
+                <a href="#slow-tasks">Review task evidence</a>
+            </aside>
+        </main>
+
+        <footer class="report-footer">
+            <div><img src="assets/logo/trace-h-small.svg" alt=""><p><strong>BuildHound V2 report preview</strong><span>Representative data · not a generated artifact</span></p></div>
+            <nav aria-label="Review links"><a href="index.html">Brand system</a><a href="dashboard.html">Dashboard</a><a href="../DESIGN-V2.md">Design guidance</a></nav>
+        </footer>
+    </div>
+</body>
+</html>

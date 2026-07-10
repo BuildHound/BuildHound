@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-labelledby="status-cache-hit-title status-cache-hit-desc">
+  <title id="status-cache-hit-title">Cache hit</title>
+  <desc id="status-cache-hit-desc">A filled center inside a circle.</desc>
+  <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"/>
+    <circle cx="12" cy="12" r="3.25" fill="currentColor" stroke="none"/>
+  </g>
+</svg>

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="242" height="44" viewBox="0 0 242 44" role="img" aria-labelledby="lockup-light-title lockup-light-desc">
+  <title id="lockup-light-title">BuildHound</title>
+  <desc id="lockup-light-desc">The copper Trace H beside the BuildHound wordmark for light surfaces.</desc>
+  <defs>
+    <style>
+      @font-face {
+        font-family: "Fraunces";
+        src: url("../fonts/Fraunces-Variable.woff2") format("woff2");
+        font-style: normal;
+        font-weight: 300 900;
+      }
+      .wordmark {
+        font-family: "Fraunces", Georgia, serif;
+        font-size: 30px;
+        font-style: normal;
+        font-weight: 650;
+        letter-spacing: -0.45px;
+      }
+    </style>
+  </defs>
+  <path d="M7 32V12 M25 12v20 M7 27h6v-9h6v6h6" fill="none" stroke="#B85A28" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <text class="wordmark" x="42" y="32" fill="#211C15">BuildHound</text>
+</svg>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-labelledby="trace-h-glyph-title trace-h-glyph-desc">
+  <title id="trace-h-glyph-title">BuildHound Trace H glyph</title>
+  <desc id="trace-h-glyph-desc">An H whose crossbar follows a compact double-stepped telemetry trace.</desc>
+  <path d="M7 26V6 M25 6v20 M7 21h6v-9h6v6h6" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
