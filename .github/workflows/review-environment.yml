@@ -6,6 +6,8 @@ on:
       head_sha: {description: Exact approved 40-character head SHA, required: true}
       action: {description: Action, required: true, type: choice, options: [deploy, delete]}
 permissions: {contents: read, pull-requests: read, packages: read}
+env:
+  IMAGE_REGISTRY_PREFIX: ghcr.io/buildhound
 concurrency: {group: review-environment-global, cancel-in-progress: false}
 jobs:
   review:
@@ -41,8 +43,8 @@ jobs:
           NETWORK_OK: ${{ vars.BUILDHOUND_REVIEW_NETWORK_ISOLATION_VERIFIED }}
         run: |
           test "$NETWORK_OK" = true
-          server="ghcr.io/${GITHUB_REPOSITORY_OWNER}/buildhound-server:pr-${{ inputs.pr }}-${{ inputs.head_sha }}"
-          site="ghcr.io/${GITHUB_REPOSITORY_OWNER}/buildhound-site:pr-${{ inputs.pr }}-${{ inputs.head_sha }}"
+          server="$IMAGE_REGISTRY_PREFIX/buildhound-server:pr-${{ inputs.pr }}-${{ inputs.head_sha }}"
+          site="$IMAGE_REGISTRY_PREFIX/buildhound-site:pr-${{ inputs.pr }}-${{ inputs.head_sha }}"
           server_digest=$(docker buildx imagetools inspect "$server" --format '{{json .Manifest.Digest}}' | tr -d '"')
           site_digest=$(docker buildx imagetools inspect "$site" --format '{{json .Manifest.Digest}}' | tr -d '"')
           BUILDHOUND_REVIEW_DB_PASSWORD=$(openssl rand -hex 32); export BUILDHOUND_REVIEW_DB_PASSWORD

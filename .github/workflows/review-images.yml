@@ -3,6 +3,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 permissions: {contents: read, packages: write}
+env:
+  IMAGE_REGISTRY_PREFIX: ghcr.io/buildhound
 jobs:
   build:
     if: github.event.pull_request.head.repo.full_name == github.repository
@@ -19,6 +21,6 @@ jobs:
           context: .
           file: ${{ matrix.image == 'server' && 'buildhound-server/Dockerfile' || 'site/Dockerfile' }}
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/buildhound-${{ matrix.image }}:pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-${{ matrix.image }}:pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           provenance: true
           sbom: true

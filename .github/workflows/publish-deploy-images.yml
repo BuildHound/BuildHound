@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths: [buildhound-server/**, site/**, deploy/dokploy/backup/**, .github/workflows/publish-deploy-images.yml]
 permissions: {contents: read, packages: write}
+env:
+  IMAGE_REGISTRY_PREFIX: ghcr.io/buildhound
 concurrency:
   group: publish-deploy-${{ github.sha }}
   cancel-in-progress: false
@@ -23,11 +25,11 @@ jobs:
           context: .
           file: ${{ matrix.image == 'server' && 'buildhound-server/Dockerfile' || matrix.image == 'site' && 'site/Dockerfile' || 'deploy/dokploy/backup/Dockerfile' }}
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/buildhound-${{ matrix.image }}:${{ github.sha }}
+          tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-${{ matrix.image }}:${{ github.sha }}
           provenance: true
           sbom: true
       - name: Record immutable reference
-        run: printf '%s\n' 'ghcr.io/${{ github.repository_owner }}/buildhound-${{ matrix.image }}@${{ steps.build.outputs.digest }}' > image-${{ matrix.image }}.txt
+        run: printf '%s\n' '${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-${{ matrix.image }}@${{ steps.build.outputs.digest }}' > image-${{ matrix.image }}.txt
       - uses: actions/upload-artifact@v4
         with: {name: "image-${{ matrix.image }}", path: "image-${{ matrix.image }}.txt", retention-days: 14}
   release:
