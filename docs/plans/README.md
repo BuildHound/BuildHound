@@ -8,7 +8,7 @@ order. Numbering continues across directories — the next plan takes the next f
 
 Lifecycle: active plans live in this directory; once a plan's exit criteria are met and the
 work is merged, the file moves to [implemented/](implemented/) (`git mv`, same PR or a sweep).
-Plans 000–076 are implemented and live there, except [035](035-cc-miss-reason-capture.md),
+Plans 000–080 are implemented and live there, except [035](035-cc-miss-reason-capture.md),
 [037](037-test-quarantine-addon.md), [055](055-github-actions-setup-buildhound-job-summary.md),
 and [075](075-internal-adapters-cc-hit-toggle-rehydration.md) below — including
 [045](implemented/045-composite-task-dictionary.md), which was
