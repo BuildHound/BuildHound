@@ -1,0 +1,137 @@
+version: "3.8"
+
+services:
+  server:
+    image: ${BUILDHOUND_SERVER_IMAGE}
+    environment:
+      BUILDHOUND_PORT: "8080"
+      BUILDHOUND_DB_URL: jdbc:postgresql://db:5432/buildhound
+      BUILDHOUND_DB_USER: buildhound
+      BUILDHOUND_DB_PASSWORD: ${BUILDHOUND_DB_PASSWORD}
+      BUILDHOUND_BOOTSTRAP_PROJECT: ${BUILDHOUND_BOOTSTRAP_PROJECT:-}
+      BUILDHOUND_BOOTSTRAP_TOKEN: ${BUILDHOUND_BOOTSTRAP_TOKEN:-}
+      BUILDHOUND_INGEST_RPM: ${BUILDHOUND_INGEST_RPM:-60}
+      BUILDHOUND_QUERY_RPM: ${BUILDHOUND_QUERY_RPM:-120}
+      BUILDHOUND_HOST_RPM: ${BUILDHOUND_HOST_RPM:-600}
+    networks: [private, ingress]
+    read_only: true
+    tmpfs:
+      - "/tmp:size=64m,mode=1777"
+    healthcheck:
+      test: [CMD, curl, -fsS, "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.buildhound.traefik == true
+      update_config:
+        order: stop-first
+        failure_action: pause
+      resources:
+        reservations: {cpus: "0.25", memory: 256M}
+        limits: {cpus: "2.0", memory: 2G}
+      restart_policy: {condition: on-failure, delay: 5s, max_attempts: 5}
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.buildhound.rule=Host(`${BUILDHOUND_DASHBOARD_HOST}`)
+        - traefik.http.routers.buildhound.entrypoints=websecure
+        - traefik.http.routers.buildhound.tls.certresolver=letsencrypt
+        - traefik.http.routers.buildhound.middlewares=buildhound-ratelimit
+        - traefik.http.middlewares.buildhound-ratelimit.ratelimit.average=10
+        - traefik.http.middlewares.buildhound-ratelimit.ratelimit.burst=20
+        - traefik.http.services.buildhound.loadbalancer.server.port=8080
+
+  db:
+    image: timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
+    entrypoint: [/opt/buildhound/volume-guard.sh]
+    environment:
+      POSTGRES_DB: buildhound
+      POSTGRES_USER: buildhound
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+      BUILDHOUND_DB_INSTANCE: ${BUILDHOUND_DB_INSTANCE}
+      BUILDHOUND_DB_ALLOW_INIT: ${BUILDHOUND_DB_ALLOW_INIT:-false}
+      BUILDHOUND_DB_MAJOR: "16"
+    secrets: [db_password]
+    configs:
+      - source: volume_guard
+        target: /opt/buildhound/volume-guard.sh
+        mode: 0555
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [private]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U buildhound -d buildhound]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.buildhound.db == ${BUILDHOUND_DB_NODE}
+      update_config: {order: stop-first, failure_action: pause}
+      resources:
+        reservations: {cpus: "0.5", memory: 512M}
+        limits: {cpus: "2.0", memory: 4G}
+      restart_policy: {condition: on-failure, delay: 10s, max_attempts: 3}
+
+  backup:
+    image: ${BUILDHOUND_BACKUP_IMAGE}
+    command: [/opt/buildhound/backup-loop.sh]
+    environment:
+      PGHOST: db
+      PGDATABASE: buildhound
+      PGUSER: buildhound
+      PGPASSFILE: /run/secrets/pgpass
+      AGE_RECIPIENT: ${BUILDHOUND_AGE_RECIPIENT}
+      S3_ENDPOINT: ${BUILDHOUND_S3_ENDPOINT}
+      S3_BUCKET: ${BUILDHOUND_S3_BUCKET}
+      BACKUP_INTERVAL_SECONDS: ${BUILDHOUND_BACKUP_INTERVAL_SECONDS:-82800}
+      BUILDHOUND_DB_INSTANCE: ${BUILDHOUND_DB_INSTANCE}
+      BUILDHOUND_RELEASE_ID: ${BUILDHOUND_RELEASE_ID:-manual}
+    secrets: [pgpass, s3_credentials]
+    networks: [private, backup_egress]
+    read_only: true
+    tmpfs:
+      - "/tmp:size=64m,mode=1777"
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.buildhound.db == ${BUILDHOUND_DB_NODE}
+      update_config: {order: stop-first, failure_action: pause}
+      resources:
+        reservations: {cpus: "0.1", memory: 64M}
+        limits: {cpus: "1.0", memory: 512M}
+      restart_policy: {condition: on-failure, delay: 30s}
+
+networks:
+  private:
+    driver: overlay
+    internal: true
+    driver_opts:
+      encrypted: "true"
+  ingress:
+    external: true
+    name: ${DOKPLOY_INGRESS_NETWORK}
+  backup_egress:
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
+
+volumes:
+  pgdata:
+    name: ${BUILDHOUND_PGDATA_VOLUME}
+
+configs:
+  volume_guard:
+    file: ./volume-guard.sh
+
+secrets:
+  db_password: {external: true, name: "${BUILDHOUND_DB_PASSWORD_SECRET}"}
+  pgpass: {external: true, name: "${BUILDHOUND_PGPASS_SECRET}"}
+  s3_credentials: {external: true, name: "${BUILDHOUND_S3_CREDENTIALS_SECRET}"}

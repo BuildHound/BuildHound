@@ -55,7 +55,7 @@ idempotently on boot, so a rolling deploy against a shared DB is safe.
 | `BUILDHOUND_BOOTSTRAP_PROJECT` | — | Idempotently create this project on boot. |
 | `BUILDHOUND_BOOTSTRAP_TOKEN` | — | Attach this token (hashed) to the bootstrap project. Provisions the first `all`-scope token. |
 | `BUILDHOUND_DASHBOARD_URL` | — | Public dashboard base URL used in alert deep links. |
-| `BUILDHOUND_INGEST_RPM` / `BUILDHOUND_QUERY_RPM` / `BUILDHOUND_HOST_RPM` | `0` (off) | Per-token ingest/query and per-host rate limits (requests/min). Behind a reverse proxy the per-host limiter keys on the direct peer — set it there. |
+| `BUILDHOUND_INGEST_RPM` / `BUILDHOUND_QUERY_RPM` / `BUILDHOUND_HOST_RPM` | `60` / `120` / `600` | Per-token ingest/query and per-host rate limits (requests/min). `0` disables an individual limit. Behind a reverse proxy the per-host limiter keys on the direct peer — retain a nonzero proxy limit as the public-IP backstop. |
 | `BUILDHOUND_RETENTION_SWEEP_HOURS` | `24` | Retention purge interval; `0` disables it. Instance-local — run the sweep on **one** replica (see §5). |
 | `BUILDHOUND_CONNECTOR_{AZURE,GITHUB,GITLAB}_*` | *(unset → inert)* | CI-timeline connector credentials + host allowlists — see [`buildhound-ci-assets/README.md`](../buildhound-ci-assets/README.md). Unset ⇒ the connector never dials out. |
 
@@ -105,6 +105,10 @@ aggregates / hypertable conversion are deferred until volume demands them (the r
 raw rows on a schedule and does not require hypertables).
 
 ## 5. Backup, restore, and replicas
+
+The supported Dokploy pilot manifests and encrypted-recovery runbook live in
+[`deploy/dokploy/`](../deploy/dokploy/README.md). PostgreSQL is authoritative; object
+storage contains client-side-encrypted recovery copies, not live payload state.
 
 - **Backup:** `pg_dump` the BuildHound database on a schedule (or snapshot the volume). Do this **before**
   enabling aggressive retention windows.

@@ -66,6 +66,8 @@ captures
 !*.xcworkspace/contents.xcworkspacedata
 **/xcshareddata/WorkspaceSettings.xcsettings
 node_modules/
+__pycache__/
+*.py[cod]
 
 # built application files
 *.apk

@@ -1,0 +1,95 @@
+name: Deploy immutable release
+on:
+  workflow_dispatch:
+    inputs:
+      target: {description: Environment, type: choice, options: [staging, production], required: true}
+      release_artifact: {description: Trusted release.json artifact name, required: true}
+      source_run_id: {description: Successful main-branch publish workflow run ID, required: true}
+      staging_run_id: {description: Successful staging deployment run ID for production, required: false}
+      backup_object: {description: Fresh encrypted backup object key, required: true}
+      bootstrap_bom: {description: First staging BOM after a verified manual deployment, type: boolean, default: false}
+permissions: {contents: read, actions: read}
+concurrency:
+  group: deploy-${{ inputs.target }}
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.event.repository.default_branch }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: "${{ inputs.release_artifact }}", run-id: "${{ inputs.source_run_id }}", github-token: "${{ github.token }}"}
+      - name: Verify trusted publish provenance
+        env: {GH_TOKEN: "${{ github.token }}", RUN: "${{ inputs.source_run_id }}"}
+        run: |
+          run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$RUN")
+          test "$(jq -r .conclusion <<<"$run")" = success
+          test "$(jq -r .head_branch <<<"$run")" = "${{ github.event.repository.default_branch }}"
+          test "$(jq -r .name <<<"$run")" = 'Publish deployment images'
+          test "$(jq -r .head_sha <<<"$run")" = "$(jq -r .sourceCommit release.json)"
+      - name: Validate release and production gates
+        env: {TARGET: "${{ inputs.target }}", STAGING_RUN: "${{ inputs.staging_run_id }}", GH_TOKEN: "${{ github.token }}"}
+        run: |
+          id=$(python3 deploy/dokploy/dokploy.py release-id release.json)
+          if [ "$TARGET" = production ]; then
+            test -n "$STAGING_RUN"
+            run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$STAGING_RUN")
+            test "$(jq -r .conclusion <<<"$run")" = success
+            test "$(jq -r .event <<<"$run")" = workflow_dispatch
+            test "$(jq -r .head_branch <<<"$run")" = "${{ github.event.repository.default_branch }}"
+            test "$(jq -r .name <<<"$run")" = 'Deploy immutable release'
+            deployment_id=$(gh api "repos/${GITHUB_REPOSITORY}/deployments?environment=staging&ref=$(jq -r .head_sha <<<"$run")" --jq '.[0].id')
+            gh api "repos/${GITHUB_REPOSITORY}/deployments/$deployment_id/statuses" --jq ".[] | select(.state == \"success\" and (.log_url | contains(\"/actions/runs/$STAGING_RUN\"))) | .state" | grep -Fx success
+            gh run download "$STAGING_RUN" --name staging-attestation --dir /tmp/staging
+            test "$(jq -r .releaseId /tmp/staging/staging.json)" = "$id"
+          fi
+      - name: Verify fresh encrypted backup
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.BACKUP_AWS_REGION }}
+          ENDPOINT: ${{ vars.BACKUP_S3_ENDPOINT }}
+          BUCKET: ${{ vars.BACKUP_S3_BUCKET }}
+          OBJECT: ${{ inputs.backup_object }}
+          DB_INSTANCE: ${{ secrets.BUILDHOUND_DB_INSTANCE }}
+          AGE_RECIPIENT: ${{ vars.BUILDHOUND_AGE_RECIPIENT }}
+        run: |
+          case "$OBJECT" in *.dump.age) ;; *) exit 1;; esac
+          aws --endpoint-url "$ENDPOINT" s3api head-object --bucket "$BUCKET" --key "$OBJECT" > /tmp/backup-head.json
+          modified=$(jq -r .LastModified /tmp/backup-head.json)
+          test $(( $(date -u +%s) - $(date -u -d "$modified" +%s) )) -le 86400
+          test "$(jq -r '.ContentLength > 0' /tmp/backup-head.json)" = true
+          test "$(jq -r .VersionId /tmp/backup-head.json)" != null
+          test "$(jq -r '.Metadata["buildhound-db-instance"]' /tmp/backup-head.json)" = "$DB_INSTANCE"
+          test "$(jq -r '.Metadata["age-recipient-sha256"]' /tmp/backup-head.json)" = "$(printf '%s' "$AGE_RECIPIENT" | sha256sum | cut -d' ' -f1)"
+          if [ '${{ inputs.bootstrap_bom }}' = true ]; then
+            test '${{ inputs.target }}' = staging
+            test "$(jq -r '.Metadata["buildhound-release-id"]' /tmp/backup-head.json)" = manual
+          else
+            current=$(DOKPLOY_URL='${{ secrets.DOKPLOY_URL }}' DOKPLOY_TOKEN='${{ secrets.DOKPLOY_TOKEN }}' python3 deploy/dokploy/dokploy.py current-release-id --compose-id '${{ secrets.DOKPLOY_COMPOSE_ID }}')
+            test "$(jq -r '.Metadata["buildhound-release-id"]' /tmp/backup-head.json)" = "$current"
+          fi
+          completed=$(jq -r '.Metadata["completed-at"]' /tmp/backup-head.json)
+          test $(( $(date -u -d "$modified" +%s) - $(date -u -d "$completed" +%s) )) -le 300
+      - name: Explicit Dokploy deploy
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
+          COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+          SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
+        run: python3 deploy/dokploy/dokploy.py deploy-release release.json --compose-id "$COMPOSE_ID" --site-application-id "$SITE_APPLICATION_ID" > deployment-evidence.json
+      - name: Verify public site and authenticated data path
+        env:
+          BUILDHOUND_SITE_URL: ${{ vars.BUILDHOUND_SITE_URL }}
+          BUILDHOUND_DASHBOARD_URL: ${{ vars.BUILDHOUND_DASHBOARD_URL }}
+          BUILDHOUND_READ_TOKEN: ${{ secrets.BUILDHOUND_READ_TOKEN }}
+          BUILDHOUND_INGEST_TOKEN: ${{ secrets.BUILDHOUND_INGEST_TOKEN }}
+        run: deploy/dokploy/verify-release.sh
+      - name: Record staging attestation
+        if: inputs.target == 'staging'
+        run: jq --arg runId "$GITHUB_RUN_ID" '. + {runId:$runId}' deployment-evidence.json > staging.json
+      - uses: actions/upload-artifact@v4
+        if: inputs.target == 'staging'
+        with: {name: staging-attestation, path: staging.json, retention-days: 90}

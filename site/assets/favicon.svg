@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img" aria-labelledby="favicon-title favicon-desc">
+  <title id="favicon-title">BuildHound</title>
+  <desc id="favicon-desc">The copper Trace H on a charcoal tile.</desc>
+  <rect width="16" height="16" rx="3.25" fill="#15130F"/>
+  <path d="M3.5 13V3 M12.5 3v10 M3.5 10.5h3V6h3v3h3" fill="none" stroke="#DD8148" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

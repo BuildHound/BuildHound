@@ -7,5 +7,9 @@ docs
 # reach the build context even though the rest of docs/ is excluded.
 !docs/api/openapi.yaml
 buildhound-ci-assets
-deploy
+deploy/*
+!deploy/dokploy/
+deploy/dokploy/*
+!deploy/dokploy/backup/
+!deploy/dokploy/backup/*.sh
 *.md
