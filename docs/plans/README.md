@@ -9,19 +9,17 @@ order. Numbering continues across directories — the next plan takes the next f
 Lifecycle: active plans live in this directory; once a plan's exit criteria are met and the
 work is merged, the file moves to [implemented/](implemented/) (`git mv`, same PR or a sweep).
 Plans 000–080 are implemented and live there, except [035](035-cc-miss-reason-capture.md),
-[037](037-test-quarantine-addon.md), [055](055-github-actions-setup-buildhound-job-summary.md),
-and [075](075-internal-adapters-cc-hit-toggle-rehydration.md) below — including
+[037](037-test-quarantine-addon.md), and
+[075](075-internal-adapters-cc-hit-toggle-rehydration.md) below — including
 [045](implemented/045-composite-task-dictionary.md), which was
 superseded/closed by [056](implemented/056-composite-build-logic-dictionary-priority.md) rather
-than shipping standalone, but whose own exit criteria were met by that work. Four plans remain
+than shipping standalone, but whose own exit criteria were met by that work. Three plans remain
 active in this directory:
 
 - [035](035-cc-miss-reason-capture.md) — CC miss-reason capture — **blocked**, not implementable
   as specified.
 - [037](037-test-quarantine-addon.md) — test-quarantine addon — **blocked**, deferred behind
   gate #3 (flaky-detection precision validation against real pilot data).
-- [055](055-github-actions-setup-buildhound-job-summary.md) — GitHub Actions job-summary +
-  `cache-provider: basic` positioning — drafted alongside the 051–076 batch but **not started**.
 - [075](075-internal-adapters-cc-hit-toggle-rehydration.md) — internal-adapters CC-hit toggle
   rehydration — **open**; a warm-daemon configuration-cache hit can still replay a
   previously-enabled capture toggle even when the current build's config has it off. Design and
