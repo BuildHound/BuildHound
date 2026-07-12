@@ -242,6 +242,13 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
         val serverToken: Property<String>
 
         @get:Input
+        val jobSummary: Property<Boolean>
+
+        @get:Input
+        @get:Optional
+        val dashboardUrl: Property<String>
+
+        @get:Input
         val localBuildsEnabled: Property<Boolean>
 
         @get:Input
@@ -518,6 +525,20 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             }
 
             val payloadFile = writePayload(payload, parameters.outputDir.get())
+            if (parameters.jobSummary.getOrElse(true)) {
+                runCatching {
+                    CiJobSummary.write(
+                        payload = payload,
+                        provider = ci?.provider,
+                        env = System.getenv(),
+                        dashboardBaseUrl = parameters.dashboardUrl.orNull ?: parameters.serverUrl.orNull,
+                        outputDir = payloadFile.parentFile,
+                        warn = { logger.info("[buildhound] job summary skipped (build unaffected): {}", it) },
+                    )
+                }.onFailure {
+                    logger.info("[buildhound] job summary failed (build unaffected): {}", it.message)
+                }
+            }
             if (parameters.htmlReportEnabled.getOrElse(true)) {
                 // Wire-format JSON (not the pretty file) — the artifact doubles as an
                 // offline payload copy (spec §3.8); render() escapes for the HTML context.

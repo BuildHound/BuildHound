@@ -108,4 +108,49 @@ class CiEnvironmentBreadthFunctionalTest {
         val spool = File(projectDir, "build/buildhound/spool").listFiles { f -> f.name.endsWith(".json.gz") }.orEmpty()
         assertEquals(1, spool.size, "the payload was spooled, not uploaded inline")
     }
+
+    @Test
+    fun `GitHub Actions appends a summary on configuration-cache store and reuse`() {
+        setUpProject()
+        val summary = File(projectDir, "github-step-summary.md")
+        val environment = neutralEnv() + mapOf(
+            "GITHUB_ACTIONS" to "true",
+            "GITHUB_STEP_SUMMARY" to summary.invariantSeparatorsPath,
+        )
+
+        val gradle = runner("hello").freshDaemon().withEnvironment(environment)
+        gradle.build()
+        val first = summary.readText()
+        val second = gradle.build()
+
+        assertTrue(first.contains("## BuildHound"))
+        assertTrue(summary.readText().length > first.length, "CC replay appends another summary")
+        assertTrue(second.output.contains("Configuration cache entry reused"))
+    }
+
+    @Test
+    fun `job summary property override suppresses GitHub output`() {
+        setUpProject()
+        val summary = File(projectDir, "github-step-summary-disabled.md")
+        runner("hello", "-Pbuildhound.ci.jobSummary=false").freshDaemon()
+            .withEnvironment(
+                neutralEnv() + mapOf(
+                    "GITHUB_ACTIONS" to "true",
+                    "GITHUB_STEP_SUMMARY" to summary.invariantSeparatorsPath,
+                ),
+            ).build()
+
+        assertFalse(summary.exists())
+    }
+
+    @Test
+    fun `Azure DevOps emits an uploadsummary command`() {
+        setUpProject()
+        val result = runner("hello").freshDaemon()
+            .withEnvironment(neutralEnv() + mapOf("TF_BUILD" to "true"))
+            .build()
+
+        assertTrue(result.output.contains("##vso[task.uploadsummary]"))
+        assertTrue(File(projectDir, "build/buildhound/job-summary.md").isFile)
+    }
 }

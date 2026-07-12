@@ -127,3 +127,13 @@
   provider (toggleable, no secret inlined); ci-assets README carries the positioning note;
   YAML-parse test green.
 - `./gradlew build` green.
+
+## Implementation divergences (2026-07-12)
+
+- Requested task names are Markdown-escaped and capped, and the build id is percent-encoded in the
+  deep link. The plan described bounded output but did not explicitly require these injection guards.
+- The composite action exposes `cache-provider` (default `basic`) and treats an empty value as the
+  off switch by skipping `setup-gradle`; this keeps the toggle on one documented input without
+  forwarding an invalid empty provider value.
+- The repository had no existing YAML parser test to extend. A dependency-free action contract test
+  pins the v6 action, the `basic` default, input forwarding, and the no-inlined-secret invariant.

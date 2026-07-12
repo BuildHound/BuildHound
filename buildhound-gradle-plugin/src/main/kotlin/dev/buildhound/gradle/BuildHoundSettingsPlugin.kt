@@ -45,6 +45,8 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
         extension.localBuilds.requireOptInFile.convention(overrides.bool("localBuilds.requireOptInFile") ?: true)
         extension.upload.uploadInBackground.convention(overrides.bool("upload.uploadInBackground") ?: false)
         overrides.string("server.url")?.let { extension.server.url.convention(it) }
+        extension.ci.jobSummary.convention(overrides.bool("ci.jobSummary") ?: true)
+        overrides.string("ci.dashboardUrl")?.let { extension.ci.dashboardUrl.convention(it) }
         extension.kotlinReports.bundle.convention(true)
         extension.tests.collect.convention(true)
         extension.processProbe.enabled.convention(overrides.bool("processProbe.enabled") ?: true)
@@ -545,6 +547,8 @@ abstract class BuildHoundSettingsPlugin @Inject constructor(
             spec.parameters.rootDir.set(settings.rootDir.absolutePath)
             spec.parameters.serverUrl.set(extension.server.url)
             spec.parameters.serverToken.set(extension.server.token)
+            spec.parameters.jobSummary.set(extension.ci.jobSummary)
+            spec.parameters.dashboardUrl.set(extension.ci.dashboardUrl)
             spec.parameters.localBuildsEnabled.set(extension.localBuilds.enabled)
             spec.parameters.requireOptInFile.set(extension.localBuilds.requireOptInFile)
             // uploadInBackground (plan 027): a local build spools instead of attempting the inline upload.

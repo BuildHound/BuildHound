@@ -32,6 +32,10 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
 
     fun server(action: Action<ServerSpec>) = action.execute(server)
 
+    val ci: CiSpec = objects.newInstance(CiSpec::class.java)
+
+    fun ci(action: Action<CiSpec>) = action.execute(ci)
+
     val localBuilds: LocalBuildsSpec = objects.newInstance(LocalBuildsSpec::class.java)
 
     fun localBuilds(action: Action<LocalBuildsSpec>) = action.execute(localBuilds)
@@ -59,6 +63,15 @@ abstract class BuildHoundExtension @Inject constructor(objects: ObjectFactory) {
     val internalAdapters: InternalAdaptersSpec = objects.newInstance(InternalAdaptersSpec::class.java)
 
     fun internalAdapters(action: Action<InternalAdaptersSpec>) = action.execute(internalAdapters)
+}
+
+/** CI presentation controls (plan 055). No token or environment value is captured here. */
+abstract class CiSpec {
+    /** Write a provider-native job summary after finalization (default true). */
+    abstract val jobSummary: Property<Boolean>
+
+    /** Optional public dashboard base URL; falls back to `server.url`. */
+    abstract val dashboardUrl: Property<String>
 }
 
 /**

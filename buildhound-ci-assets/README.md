@@ -44,6 +44,14 @@ Set `verdictGate: warn|fail` on the steps template to poll the per-build regress
 the Gradle build. `warn` logs an Azure warning on a `FAIL` verdict; `fail` fails the pipeline. The
 verdict is BuildHound's rolling-baseline comparison (spec §5, plan 025).
 
+## GitHub Actions cache posture
+
+The composite action configures `gradle/actions/setup-gradle@v6` with `cache-provider: basic` by
+default. That keeps cache-key metadata on your own GitHub/runner infrastructure while BuildHound
+provides the open telemetry and diagnostics layer. Override the action's `cache-provider` input only
+when your organization has deliberately chosen another provider; no BuildHound token is passed to
+the setup step.
+
 ## Wrapper-integrity check (plan 066, research F16)
 
 Set `validateWrapper: warn|fail` on the steps template for a **preventive** check that runs
