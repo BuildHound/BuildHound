@@ -1,4 +1,4 @@
-# 077 — Gradle Plugin Portal release
+# 087 — Gradle Plugin Portal release
 
 ## Source
 
@@ -32,9 +32,13 @@ creating Portal/GitHub credentials, and changing the default development version
   descriptors and exclude Kotlin stdlib classes: the supported Gradle floor supplies embedded Kotlin
   2.0 (architecture §2 rule 10). Keep serialization in its public package because the addon SPI
   exposes `JsonElement`; review proved blanket relocation rewrites the interface descriptor and makes
-  separately compiled contributors fail with `AbstractMethodError`. Leave optional Kotlin module
-  indexes out of the bundled JAR: the floor-compatible Shadow line parses metadata only through Kotlin
-  2.3 while this build emits 2.4 metadata, and the plugin uses no Kotlin reflection.
+  separately compiled contributors fail with `AbstractMethodError`. This required ABI choice leaves
+  a known consumer-classpath risk: another settings/plugin dependency can co-load an incompatible
+  `kotlinx-serialization` version and cause a linkage error. Verification and the addon-boundary test
+  prove BuildHound's pinned artifact, not isolation from arbitrary consumer plugin sets; document the
+  isolation/reproduction steps in the release guide. Leave optional Kotlin module indexes out of the
+  bundled JAR: the floor-compatible Shadow line parses metadata only through Kotlin 2.3 while this build
+  emits 2.4 metadata, and the plugin uses no Kotlin reflection.
   Feed Shadow a dedicated configuration derived only from `implementation`: Gradle 8.14's default
   `runtimeClasspath` includes Gradle's own runtime files. Replace internal-adapters' obsolete
   `java-gradle-plugin` application (it has declared no plugin since plan 074) with explicit
@@ -46,12 +50,15 @@ creating Portal/GitHub credentials, and changing the default development version
 - Split deployment into a credential-free validation job and a protected `gradle-plugin-portal`
   Environment publish job. Pin every release action by full commit, require the event commit to be on
   the default branch, reject non-default manual refs, and queue every immutable release. External
-  Environment setup must require non-self review plus selected protected branch/tag rules. Only the
-  upload step receives `GRADLE_PUBLISH_KEY` and `GRADLE_PUBLISH_SECRET` from same-named environment
-  secrets; validation and tests receive neither. Document the matching `gradle.publish.*` keys in
-  user-home `~/.gradle/gradle.properties`; no credential is committed or passed on the command line.
+  Environment setup must require non-self review, disabled administrator bypass, and selected protected
+  branch/tag rules; the credential-free job verifies those live settings through the GitHub API before
+  release validation. Only the upload step receives `GRADLE_PUBLISH_KEY` and
+  `GRADLE_PUBLISH_SECRET` from same-named environment secrets; validation and tests receive neither.
+  Document the matching `gradle.publish.*` keys in user-home `~/.gradle/gradle.properties`; no
+  credential is committed or passed on the command line.
 - Pin the Wrapper distribution to Gradle's official SHA-256 and check in strict dependency-verification
-  metadata so the release build authenticates executable plugins and redistributed runtime artifacts.
+  metadata so the release build verifies the integrity of executable plugins and redistributed runtime
+  artifacts.
 
 ## Test strategy
 
@@ -63,17 +70,21 @@ creating Portal/GitHub credentials, and changing the default development version
 - Resolve and apply the generated plugin marker from a temporary Maven repository in TestKit, with no
   included build or `withPluginClasspath()`, run a real task/report finalization, and load the published
   core alongside the separately compiled test-sharding contributor to guard the public SPI descriptor.
+  Clean that repository before publication and resolve timestamped SNAPSHOT artifacts from Maven
+  metadata so repeated builds cannot select stale output or invalidate the suite unnecessarily.
 - Parse/lint the GitHub workflow locally, enforce actionlint in CI, and run the full repository build
   with Configuration Cache enabled.
 
 ## Risks
 
 Shading can drop service resources, break a public type boundary, or accidentally bundle a newer Kotlin
-runtime; artifact and separately compiled-addon tests guard those cases. Release versions are immutable
-on the Portal, so the workflow validates SemVer and uses a non-cancelling, non-dropping queue. Both Portal
-values are secrets (never GitHub configuration variables), and the protected environment must require
-approval before they are exposed. The first Portal publication still needs Gradle's manual
-namespace/content review.
+runtime; artifact and separately compiled-addon tests guard those cases. They do not guard every
+consumer's shared plugin classpath: an incompatible co-loaded `kotlinx-serialization` remains an accepted,
+documented limitation because relocating the public `JsonElement` ABI breaks external addons. Release
+versions are immutable on the Portal, so the workflow validates SemVer and uses a non-cancelling,
+non-dropping queue. Both Portal values are secrets (never GitHub configuration variables), and the
+protected environment must require approval before they are exposed. The first Portal publication still
+needs Gradle's manual namespace/content review.
 
 ## Exit criteria
 

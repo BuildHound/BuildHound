@@ -2,6 +2,18 @@
 # Keep every other workflow check enabled; remove this narrow exception after the
 # linter release learns the official `queue: max` key.
 paths:
+  .github/workflows/deploy-release.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/publish-deploy-images.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
   .github/workflows/publish-gradle-plugin.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/reconcile-reviews.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/review-environment.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'

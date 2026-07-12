@@ -11,6 +11,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 # Plugin Portal versions are immutable. Serialize releases and never cancel an
@@ -41,9 +42,71 @@ jobs:
           distribution: temurin
           java-version: 26
 
-      - uses: gradle/actions/setup-gradle@90ddb51e90a5fd9ba75f40cf85156b7b41bf76a3 # v6
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
         with:
           cache-read-only: true
+
+      # The publish job's Environment declaration is only effective when repository-side
+      # protection remains configured. Fail before release validation if it drifts.
+      - name: Verify publication environment protections
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG_POLICY: '*.*.*'
+        run: |
+          set -euo pipefail
+          environment="$(
+            gh api \
+              --method GET \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "repos/$GITHUB_REPOSITORY/environments/gradle-plugin-portal"
+          )"
+
+          if ! jq -e '
+            any(
+              .protection_rules[]?;
+              .type == "required_reviewers" and
+              .prevent_self_review == true and
+              (.reviewers | length) > 0
+            )
+          ' <<<"$environment" >/dev/null; then
+            echo "gradle-plugin-portal must require at least one non-self reviewer." >&2
+            exit 1
+          fi
+
+          if ! jq -e '.can_admins_bypass == false' <<<"$environment" >/dev/null; then
+            echo "Disable 'Allow administrators to bypass configured protection rules' for gradle-plugin-portal." >&2
+            exit 1
+          fi
+
+          if ! jq -e '
+            any(.protection_rules[]?; .type == "branch_policy") and
+            .deployment_branch_policy.protected_branches == false and
+            .deployment_branch_policy.custom_branch_policies == true
+          ' <<<"$environment" >/dev/null; then
+            echo "gradle-plugin-portal must use 'Selected branches and tags'; protected-branches-only rejects release tags." >&2
+            exit 1
+          fi
+
+          policies="$(
+            gh api \
+              --method GET \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "repos/$GITHUB_REPOSITORY/environments/gradle-plugin-portal/deployment-branch-policies?per_page=100"
+          )"
+
+          if ! jq -e --arg branch "$DEFAULT_BRANCH" --arg pattern "$RELEASE_TAG_POLICY" '
+            .total_count == 2 and
+            (.branch_policies | length) == 2 and
+            any(.branch_policies[]?; .type == "branch" and .name == $branch) and
+            any(.branch_policies[]?; .type == "tag" and .name == $pattern)
+          ' <<<"$policies" >/dev/null; then
+            echo "gradle-plugin-portal must allow exactly branch '$DEFAULT_BRANCH' and tag '$RELEASE_TAG_POLICY'." >&2
+            exit 1
+          fi
 
       # A release tag must resolve to a commit already reviewed on the default branch.
       # This also rejects a manual run whose event metadata is ever inconsistent with the job guard.
@@ -66,7 +129,7 @@ jobs:
         run: |
           set -euo pipefail
           status="$(
-            curl --fail --silent --show-error \
+            curl --silent --show-error \
               --proto '=https' \
               --connect-timeout 5 \
               --max-time 10 \
@@ -144,7 +207,7 @@ jobs:
           distribution: temurin
           java-version: 26
 
-      - uses: gradle/actions/setup-gradle@90ddb51e90a5fd9ba75f40cf85156b7b41bf76a3 # v6
+      - uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
         with:
           cache-read-only: true
 
@@ -155,7 +218,7 @@ jobs:
         run: |
           set -euo pipefail
           status="$(
-            curl --fail --silent --show-error \
+            curl --silent --show-error \
               --proto '=https' \
               --connect-timeout 5 \
               --max-time 10 \
