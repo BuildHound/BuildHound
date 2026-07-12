@@ -39,10 +39,20 @@ inputs:
     description: "off | warn | fail — gate the run on the per-build regression verdict."
     required: false
     default: "off"
+  cache-provider:
+    description: "Gradle Actions cache provider. Defaults to the open basic provider; set empty to disable setup-gradle caching."
+    required: false
+    default: "basic"
 
 runs:
   using: "composite"
   steps:
+    - name: "Set up Gradle"
+      if: ${{ inputs.cache-provider != '' }}
+      uses: gradle/actions/setup-gradle@v6
+      with:
+        cache-provider: ${{ inputs.cache-provider }}
+
     - name: "Gradle build (with build telemetry)"
       shell: bash
       # gradle-tasks is bound to an env var and referenced as $GRADLE_TASKS — never interpolated into
