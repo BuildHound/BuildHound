@@ -49,7 +49,7 @@ runs:
   steps:
     - name: "Set up Gradle"
       if: ${{ inputs.cache-provider != '' }}
-      uses: gradle/actions/setup-gradle@v6
+      uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6
       with:
         cache-provider: ${{ inputs.cache-provider }}
 

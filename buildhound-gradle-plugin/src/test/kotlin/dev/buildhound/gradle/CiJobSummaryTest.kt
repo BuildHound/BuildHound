@@ -41,6 +41,29 @@ class CiJobSummaryTest {
     }
 
     @Test
+    fun `credential query and markdown delimiter dashboard bases omit the link`() {
+        val unsafe = listOf(
+            "https://user:secret@example.com",
+            "https://example.com/dashboard?token=secret",
+            "https://example.com/dashboard)|injected",
+            "https://example.com/dashboard\nnext-row",
+        )
+        unsafe.forEach { assertFalse(CiJobSummary.render(payload, it).contains("Open build"), it) }
+    }
+
+    @Test
+    fun `missing derived metrics render n-a without leaking unrelated sensitive text`() {
+        val summary = CiJobSummary.render(
+            payload.copy(derived = null, requestedTasks = listOf(":safe:build")),
+            "https://buildhound.example.com",
+        )
+        assertTrue(summary.contains("Cacheable hit rate | n/a"))
+        assertFalse(summary.contains("token", ignoreCase = true))
+        assertFalse(summary.contains("/Users/"))
+        assertFalse(summary.contains("C:\\"))
+    }
+
+    @Test
     fun `github write is a no-op without its step-summary environment`() {
         CiJobSummary.write(payload, "github-actions", emptyMap(), null, tempDir) { error(it) }
         assertTrue(tempDir.listFiles().orEmpty().isEmpty())

@@ -2,6 +2,7 @@ package dev.buildhound.gradle
 
 import dev.buildhound.commons.payload.BuildPayload
 import java.io.File
+import java.net.URI
 import java.util.Locale
 
 /** Provider-native CI job summaries rendered only from the already-scrubbed payload (plan 055). */
@@ -16,9 +17,7 @@ internal object CiJobSummary {
         val tasks = payload.requestedTasks
             .joinToString(" ") { markdownText(it) }
             .ifEmpty { "(default tasks)" }
-        val link = dashboardBaseUrl
-            ?.trimEnd('/')
-            ?.takeIf(::isHttpUrl)
+        val link = dashboardBaseUrl?.let(::safeDashboardBaseUrl)
             ?.let { "$it/#/build/${urlSegment(payload.buildId)}" }
 
         return buildString {
@@ -30,7 +29,7 @@ internal object CiJobSummary {
             appendLine("| Duration | ${formatDuration(durationMs)} |")
             appendLine("| Cacheable hit rate | $hitRate |")
             appendLine("| Requested tasks | $tasks |")
-            if (link != null) appendLine("| Dashboard | [Open build]($link) |")
+            if (link != null) appendLine("| Dashboard | [Open build](<$link>) |")
         }.take(MAX_SUMMARY_CHARS)
     }
 
@@ -77,6 +76,13 @@ internal object CiJobSummary {
             ) byte.toInt().toChar().toString() else "%%%02X".format(Locale.ROOT, unsigned)
         }
 
-    private fun isHttpUrl(value: String): Boolean =
-        value.startsWith("https://", ignoreCase = true) || value.startsWith("http://", ignoreCase = true)
+    /** Reject credential/query-bearing or structurally ambiguous bases before persisting them in CI. */
+    private fun safeDashboardBaseUrl(value: String): String? = runCatching {
+        if (value.any { it.isISOControl() }) return null
+        val parsed = URI(value.trim())
+        val scheme = parsed.scheme?.lowercase(Locale.ROOT)
+        if (scheme != "https" && scheme != "http") return null
+        if (parsed.host.isNullOrBlank() || parsed.userInfo != null || parsed.query != null || parsed.fragment != null) return null
+        URI(scheme, null, parsed.host, parsed.port, parsed.path?.trimEnd('/').orEmpty(), null, null).toASCIIString()
+    }.getOrNull()
 }

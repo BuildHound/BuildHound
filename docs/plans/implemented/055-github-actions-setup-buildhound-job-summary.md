@@ -137,3 +137,6 @@
   forwarding an invalid empty provider value.
 - The repository had no existing YAML parser test to extend. A dependency-free action contract test
   pins the v6 action, the `basic` default, input forwarding, and the no-inlined-secret invariant.
+- Security review tightened the dashboard base from a prefix check to structural URI validation:
+  credentials, queries/fragments, control characters, and malformed hosts are rejected before the
+  URL can enter persistent CI Markdown. The v6 action is pinned to its reviewed full commit SHA.

@@ -153,4 +153,33 @@ class CiEnvironmentBreadthFunctionalTest {
         assertTrue(result.output.contains("##vso[task.uploadsummary]"))
         assertTrue(File(projectDir, "build/buildhound/job-summary.md").isFile)
     }
+
+    @Test
+    fun `dashboard URL overrides server URL and server URL remains the fallback`() {
+        setUpProject(
+            dsl = """
+            mode = dev.buildhound.gradle.TelemetryMode.LOCAL
+            server { url = "https://ingest.example.com" }
+            ci { dashboardUrl = "https://dashboard.example.com" }
+            """.trimIndent(),
+        )
+        val summary = File(projectDir, "github-step-summary-url.md")
+        val environment = neutralEnv() + mapOf(
+            "GITHUB_ACTIONS" to "true",
+            "GITHUB_STEP_SUMMARY" to summary.invariantSeparatorsPath,
+        )
+        val gradle = runner("hello").freshDaemon().withEnvironment(environment)
+        gradle.build()
+        assertTrue(summary.readText().contains("https://dashboard.example.com/#/build/"))
+        assertFalse(summary.readText().contains("https://ingest.example.com/#/build/"))
+
+        setUpProject(
+            dsl = """
+            mode = dev.buildhound.gradle.TelemetryMode.LOCAL
+            server { url = "https://ingest.example.com" }
+            """.trimIndent(),
+        )
+        gradle.build()
+        assertTrue(summary.readText().contains("https://ingest.example.com/#/build/"))
+    }
 }
