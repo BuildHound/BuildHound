@@ -9,6 +9,8 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import org.gradle.api.Action
 import org.gradle.api.Task
+import org.gradle.api.publish.maven.tasks.PublishToMavenRepository
+import org.gradle.api.tasks.Delete
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.plugin.compatibility.compatibility
 
@@ -150,8 +152,10 @@ dependencies {
     "functionalTestImplementation"(libs.junit.jupiter)
     "functionalTestImplementation"(gradleTestKit())
     // Runtime-only, separately compiled addon used to prove the published core preserves the
-    // public BuildHoundExtensionContributor ABI across the Shadow JAR boundary (plan 077).
-    "functionalTestRuntimeOnly"(projects.buildhoundAddonTestSharding)
+    // public BuildHoundExtensionContributor ABI across the Shadow JAR boundary (plan 087).
+    if (rootProject.findProject(":buildhound-addon-test-sharding") != null) {
+        "functionalTestRuntimeOnly"(project(":buildhound-addon-test-sharding"))
+    }
     "functionalTestRuntimeOnly"(libs.junit.platform.launcher)
 }
 
@@ -222,6 +226,17 @@ publishing {
     }
 }
 
+// Snapshot publication filenames include a timestamp and build number. Start each fixture
+// publication from an empty repository so its Maven metadata can name exactly one current artifact
+// instead of accumulating candidates that could make the functional test resolve stale output.
+val cleanReleaseTestRepository = tasks.register<Delete>("cleanReleaseTestRepository") {
+    delete(releaseTestRepository)
+}
+tasks.withType<PublishToMavenRepository>().configureEach {
+    // Repository is assigned after task creation; the generated task name is available immediately.
+    if (name.endsWith("ToReleaseTestRepository")) dependsOn(cleanReleaseTestRepository)
+}
+
 // Inner-build CC mode for the TestKit suite (plan 021): forwarded from the
 // `-Pbuildhound.testkit.cc` Gradle property (default `on`) as a system property the tests
 // read. Provider-based so it is a proper CC input of this build (which itself keeps CC on).
@@ -237,10 +252,15 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
     systemProperty("buildhound.testkit.cc", testkitCcMode)
     systemProperty("buildhound.release-test-repository", releaseTestRepository.get().asFile.absolutePath)
     systemProperty("buildhound.release-version", version.toString())
-    // The Test reads the generated Maven repository. Task ordering alone does not fingerprint those
-    // artifacts, so declare the repository as an input to prevent stale UP-TO-DATE/cache hits after
-    // a same-version Shadow/POM change.
-    inputs.dir(releaseTestRepository).withPathSensitivity(PathSensitivity.RELATIVE)
+    // Fingerprint the deterministic publication sources, not the generated repository: SNAPSHOT
+    // Maven metadata and filenames change on every publish even when the artifact is identical.
+    // These are the files the fixture resolves and validates, including the plugin marker POM.
+    inputs.files(
+        tasks.named<ShadowJar>("shadowJar").flatMap { it.archiveFile },
+        tasks.named("generatePomFileForPluginMavenPublication"),
+        tasks.named("generateMetadataFileForPluginMavenPublication"),
+        tasks.named("generatePomFileForBuildhoundPluginMarkerMavenPublication"),
+    ).withPathSensitivity(PathSensitivity.RELATIVE)
     dependsOn("publishAllPublicationsToReleaseTestRepository")
 }
 

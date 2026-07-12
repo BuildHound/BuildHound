@@ -4,6 +4,7 @@ import java.io.File
 import java.net.URL
 import java.net.URLClassLoader
 import java.util.zip.ZipFile
+import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,6 +12,7 @@ import kotlin.test.assertTrue
 import org.gradle.testkit.runner.GradleRunner
 import org.gradle.testkit.runner.TaskOutcome
 import org.junit.jupiter.api.io.TempDir
+import org.w3c.dom.Element
 
 class PortalPublicationFunctionalTest {
 
@@ -53,6 +55,9 @@ class PortalPublicationFunctionalTest {
         val result =
             GradleRunner.create()
                 .withProjectDir(projectDir)
+                // The fixture version is stable in development. Isolate dependency caches so the
+                // just-published marker and plugin JAR cannot be replaced by an older SNAPSHOT hit.
+                .freshDaemon()
                 .withArguments("hello", "--stacktrace", testkitCcFlag())
                 .build()
 
@@ -67,14 +72,7 @@ class PortalPublicationFunctionalTest {
     private fun assertPublishedArtifact(repository: File, releaseVersion: String): File {
         val moduleDirectory =
             repository.resolve("dev/buildhound/buildhound-gradle-plugin/$releaseVersion")
-        val exactJar = moduleDirectory.resolve("buildhound-gradle-plugin-$releaseVersion.jar")
-        val pluginJar =
-            exactJar.takeIf(File::isFile)
-                ?: moduleDirectory.listFiles()
-                    ?.filter { it.name.endsWith(".jar") && !it.name.endsWith("-sources.jar") && !it.name.endsWith("-javadoc.jar") }
-                    ?.maxByOrNull(File::lastModified)
-                ?: error("no published plugin JAR under $moduleDirectory")
-        assertTrue(pluginJar.isFile, "missing published plugin JAR: $pluginJar")
+        val pluginJar = resolvePublishedArtifact(moduleDirectory, releaseVersion, "jar")
 
         val entries = mutableSetOf<String>()
         val serviceBody =
@@ -108,17 +106,48 @@ class PortalPublicationFunctionalTest {
         }
         assertFalse(entries.any { it.endsWith(".kotlin_module") }, "incompatible Kotlin module index bundled")
 
-        val exactPom = moduleDirectory.resolve("buildhound-gradle-plugin-$releaseVersion.pom")
-        val pom =
-            exactPom.takeIf(File::isFile)
-                ?: moduleDirectory.listFiles()
-                    ?.filter { it.name.endsWith(".pom") }
-                    ?.maxByOrNull(File::lastModified)
-                ?: error("no published POM under $moduleDirectory")
-        assertTrue(pom.isFile, "missing published POM: $pom")
+        val pom = resolvePublishedArtifact(moduleDirectory, releaseVersion, "pom")
         assertFalse(pom.readText().contains("<dependencies>"), "shadow publication leaked runtime dependencies")
         return pluginJar
     }
+
+    private fun resolvePublishedArtifact(
+        moduleDirectory: File,
+        releaseVersion: String,
+        extension: String,
+    ): File {
+        val artifactId = "buildhound-gradle-plugin"
+        val exactArtifact = moduleDirectory.resolve("$artifactId-$releaseVersion.$extension")
+        if (exactArtifact.isFile) return exactArtifact
+
+        val metadata = moduleDirectory.resolve("maven-metadata.xml")
+        assertTrue(metadata.isFile, "missing Maven metadata: $metadata")
+        val documentBuilderFactory =
+            DocumentBuilderFactory.newInstance().apply {
+                setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+                setFeature("http://xml.org/sax/features/external-general-entities", false)
+                setFeature("http://xml.org/sax/features/external-parameter-entities", false)
+                setXIncludeAware(false)
+                setExpandEntityReferences(false)
+            }
+        val document = metadata.inputStream().use { documentBuilderFactory.newDocumentBuilder().parse(it) }
+        val snapshotVersions = document.getElementsByTagName("snapshotVersion")
+        val publishedVersion =
+            (0 until snapshotVersions.length)
+                .asSequence()
+                .mapNotNull { snapshotVersions.item(it) as? Element }
+                .filter { it.childText("extension") == extension }
+                .filter { it.childText("classifier").isNullOrBlank() }
+                .mapNotNull { it.childText("value") }
+                .singleOrNull()
+                ?: error("no unclassified .$extension artifact in $metadata")
+        val artifact = moduleDirectory.resolve("$artifactId-$publishedVersion.$extension")
+        assertTrue(artifact.isFile, "Maven metadata points to missing artifact: $artifact")
+        return artifact
+    }
+
+    private fun Element.childText(tagName: String): String? =
+        getElementsByTagName(tagName).item(0)?.textContent?.trim()
 
     /**
      * Load the published core together with the real test-sharding addon from its separately compiled
