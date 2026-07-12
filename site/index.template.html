@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Open-source, self-hosted Gradle build observability.">
+  <title>BuildHound — Gradle build observability</title>
+  <link rel="icon" href="/assets/favicon.svg"><link rel="stylesheet" href="/assets/site.css">
+  <script src="/assets/theme.js" defer></script>
+</head>
+<body>
+  <header class="nav"><a class="brand" href="/" aria-label="BuildHound home"><img src="/assets/logo/trace-h-mark.svg" alt=""><span>BuildHound</span></a>
+    <fieldset class="theme"><legend>Theme</legend><button data-theme="auto">Auto</button><button data-theme="light">Light</button><button data-theme="dark">Dark</button></fieldset>
+  </header>
+  <main>
+    <section class="hero"><p class="eyebrow">Open source · Self-hosted · Apache-2.0</p><h1>Track every Gradle build.<br><em>Find the slow work.</em></h1>
+      <p class="lede">BuildHound collects task time, cache outcomes, failures, flaky tests, and CI spans—then turns them into evidence your team can act on.</p>
+      <div class="actions"><a class="primary" href="__DASHBOARD_URL__">Open dashboard</a><a href="https://github.com/BuildHound/BuildHound">View on GitHub</a></div>
+    </section>
+    <section class="signals" aria-labelledby="signals-title"><div><p class="mono">:app:compileKotlin</p><strong>18.4 s</strong><span class="warning">Slow task · +31%</span></div><div><p class="mono">Build cache</p><strong>84%</strong><span class="success">Healthy · +9%</span></div><div><p class="mono">CheckoutTest</p><strong>Flaky</strong><span class="flaky">3 retries this week</span></div></section>
+    <section class="details"><h2 id="signals-title">Every build leaves a trace.</h2><p>Ingest from Gradle, inspect the live dashboard, and keep a standalone offline report with each build. Your telemetry stays in infrastructure you control.</p></section>
+  </main>
+  <footer><span>BuildHound</span><a href="https://github.com/BuildHound/BuildHound/blob/main/LICENSE">Apache-2.0</a></footer>
+</body></html>

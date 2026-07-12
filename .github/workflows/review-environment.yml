@@ -1,0 +1,61 @@
+name: Review environment
+on:
+  workflow_dispatch:
+    inputs:
+      pr: {description: Pull request number, required: true, type: number}
+      head_sha: {description: Exact approved 40-character head SHA, required: true}
+      action: {description: Action, required: true, type: choice, options: [deploy, delete]}
+permissions: {contents: read, pull-requests: read, packages: read}
+concurrency: {group: review-environment-global, cancel-in-progress: false}
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    environment: review
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.event.repository.default_branch }}"}
+      - id: pr
+        env: {GH_TOKEN: "${{ github.token }}", PR: "${{ inputs.pr }}", EXPECTED_SHA: "${{ inputs.head_sha }}"}
+        run: |
+          data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$PR")
+          test "$(jq -r .head.repo.full_name <<<"$data")" = "$GITHUB_REPOSITORY"
+          if [ '${{ inputs.action }}' = deploy ]; then
+            test "$(jq -r .state <<<"$data")" = open
+            test "$(jq -r .head.sha <<<"$data")" = "$EXPECTED_SHA"
+            gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review
+          else
+            { test "$(jq -r .state <<<"$data")" != open || ! gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review; }
+          fi
+      - name: Enforce active ceiling
+        if: inputs.action == 'deploy'
+        env: {DOKPLOY_URL: "${{ secrets.DOKPLOY_URL }}", DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}", ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}", MAX: "${{ vars.BUILDHOUND_REVIEW_MAX_ACTIVE }}"}
+        run: test "$(python3 deploy/dokploy/dokploy.py count-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID")" -lt "$MAX"
+      - name: Deploy trusted review manifest
+        if: inputs.action == 'deploy'
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
+          ENVIRONMENT_ID: ${{ secrets.DOKPLOY_ENVIRONMENT_ID }}
+          DNS_SUFFIX: ${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}
+          GH_TOKEN: ${{ github.token }}
+          NETWORK_OK: ${{ vars.BUILDHOUND_REVIEW_NETWORK_ISOLATION_VERIFIED }}
+        run: |
+          test "$NETWORK_OK" = true
+          server="ghcr.io/${GITHUB_REPOSITORY_OWNER}/buildhound-server:pr-${{ inputs.pr }}-${{ inputs.head_sha }}"
+          site="ghcr.io/${GITHUB_REPOSITORY_OWNER}/buildhound-site:pr-${{ inputs.pr }}-${{ inputs.head_sha }}"
+          server_digest=$(docker buildx imagetools inspect "$server" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          site_digest=$(docker buildx imagetools inspect "$site" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          BUILDHOUND_REVIEW_DB_PASSWORD=$(openssl rand -hex 32); export BUILDHOUND_REVIEW_DB_PASSWORD
+          BUILDHOUND_REVIEW_TOKEN=$(openssl rand -hex 32); export BUILDHOUND_REVIEW_TOKEN
+          echo "::add-mask::$BUILDHOUND_REVIEW_DB_PASSWORD"; echo "::add-mask::$BUILDHOUND_REVIEW_TOKEN"
+          python3 deploy/dokploy/dokploy.py deploy-review --base-repo "$GITHUB_REPOSITORY" --head-repo "$GITHUB_REPOSITORY" --pr '${{ inputs.pr }}' --sha '${{ inputs.head_sha }}' --state open --label-present --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --server-image "$server@$server_digest" --site-image "$site@$site_digest"
+      - name: Delete exact owned review
+        if: inputs.action == 'delete'
+        env: {DOKPLOY_URL: "${{ secrets.DOKPLOY_URL }}", DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}", ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"}
+        run: |
+          python3 deploy/dokploy/dokploy.py list-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" > /tmp/reviews.json
+          compose_id=$(jq -er '.[] | select(.pr == $pr) | .composeId' --argjson pr '${{ inputs.pr }}' /tmp/reviews.json)
+          deployed_sha=$(jq -er '.[] | select(.pr == $pr) | .sha' --argjson pr '${{ inputs.pr }}' /tmp/reviews.json)
+          data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ inputs.pr }}")
+          { test "$(jq -r .state <<<"$data")" != open || ! gh api "repos/${GITHUB_REPOSITORY}/issues/${{ inputs.pr }}/labels" --jq '.[].name' | grep -Fx deploy-review; }
+          python3 deploy/dokploy/dokploy.py delete-review --base-repo "$GITHUB_REPOSITORY" --pr '${{ inputs.pr }}' --environment-id "$ENVIRONMENT_ID" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha"

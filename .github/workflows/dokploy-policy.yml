@@ -1,0 +1,18 @@
+name: Dokploy policy
+on:
+  pull_request:
+    paths: [deploy/dokploy/**, site/**, .github/workflows/**]
+  push:
+    branches: [main]
+    paths: [deploy/dokploy/**, site/**, .github/workflows/**]
+permissions: {contents: read}
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s deploy/dokploy/test -v
+      - run: sh site/test/site-test.sh
+      - run: sh deploy/dokploy/test/volume-guard-test.sh
+      - name: Validate shell syntax
+        run: find deploy/dokploy site -type f -name '*.sh' -exec sh -n {} \;
