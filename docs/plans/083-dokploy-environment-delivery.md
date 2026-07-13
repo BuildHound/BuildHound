@@ -50,7 +50,10 @@ capacity allocator/global inventory service.
   `mr<PR number>.<review DNS suffix>` and its dashboard FQDN is
   `mr<PR number>.dashboard.<review DNS suffix>`. Wildcard DNS is only a prerequisite;
   create ordinary concrete routes/certificates idempotently and reuse them across pushes.
-  Treat Dokploy as source of truth: list only the review environment, verify
+  Keep that public name stable while deriving a separate repository-scoped internal ID for
+  Dokploy's application name and Traefik router/service/middleware keys, preventing another
+  repository's same-numbered PR from colliding on a shared provider. Treat Dokploy as source
+  of truth: list only the review environment, verify
   repository/PR/SHA ownership metadata, then mutate exact returned IDs.
 - Close/unlabel removes routes before Stack after a final PR-state check. A non-cancellable
   reconciler deletes verified closed, unlabelled, or expired reviews and old PR image tags.
