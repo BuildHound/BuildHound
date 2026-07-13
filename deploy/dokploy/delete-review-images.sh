@@ -10,10 +10,10 @@ fi
 
 owner=${GITHUB_REPOSITORY%%/*}
 repo_name=${GITHUB_REPOSITORY#*/}
-[ -n "$owner" ] && [ -n "$repo_name" ] && [ "$owner/$repo_name" = "$GITHUB_REPOSITORY" ] || {
+if [ -z "$owner" ] || [ -z "$repo_name" ] || [ "$owner/$repo_name" != "$GITHUB_REPOSITORY" ]; then
   echo "invalid repository identity" >&2
   exit 64
-}
+fi
 
 owner_type=$(gh api "repos/$GITHUB_REPOSITORY" --jq .owner.type)
 case "$owner_type" in
