@@ -52,8 +52,10 @@ capacity allocator/global inventory service.
   create ordinary concrete routes/certificates idempotently and reuse them across pushes.
   Keep that public name stable while deriving a separate repository-scoped internal ID for
   Dokploy's application name and Traefik router/service/middleware keys, preventing another
-  repository's same-numbered PR from colliding on a shared provider. Treat Dokploy as source
-  of truth: list only the review environment, verify
+  repository's same-numbered PR from colliding on a shared provider. Because the public host
+  intentionally omits repository identity, require a review DNS suffix unique to this
+  repository on any shared ingress provider. Treat Dokploy as source of truth: list only the
+  review environment, verify
   repository/PR/SHA ownership metadata, then mutate exact returned IDs.
 - Close/unlabel removes routes before Stack after a final PR-state check. A non-cancellable
   reconciler deletes verified closed, unlabelled, or expired reviews and old PR image tags.
