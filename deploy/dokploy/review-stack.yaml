@@ -24,9 +24,10 @@ services:
         - traefik.enable=true
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.rule=Host(`${BUILDHOUND_REVIEW_SITE_HOST}`)
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.entrypoints=websecure
-        - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.tls.certresolver=letsencrypt
+        - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.tls=true
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.middlewares=${BUILDHOUND_REVIEW_PROVIDER_ID}-noindex
         - traefik.http.services.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.loadbalancer.server.port=8080
+        - traefik.swarm.network=${DOKPLOY_REVIEW_INGRESS_NETWORK}
   server:
     image: ${BUILDHOUND_SERVER_IMAGE}
     user: "10001:10001"
@@ -50,10 +51,11 @@ services:
         - traefik.enable=true
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.rule=Host(`${BUILDHOUND_REVIEW_DASHBOARD_HOST}`)
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.entrypoints=websecure
-        - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.tls.certresolver=letsencrypt
+        - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.tls=true
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.middlewares=${BUILDHOUND_REVIEW_PROVIDER_ID}-noindex
         - traefik.http.middlewares.${BUILDHOUND_REVIEW_PROVIDER_ID}-noindex.headers.customresponseheaders.X-Robots-Tag=noindex, nofollow
         - traefik.http.services.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.loadbalancer.server.port=8080
+        - traefik.swarm.network=${DOKPLOY_REVIEW_INGRESS_NETWORK}
   db:
     image: timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
     environment:

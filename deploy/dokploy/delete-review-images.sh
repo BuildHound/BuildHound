@@ -71,10 +71,25 @@ for package in buildhound-server buildhound-site; do
       had_error=true
       continue
     fi
-    if ! printf '%s\n' "$runs" | jq -e --arg sha "$sha" --argjson pr "$REVIEW_PR" '
+    if ! printf '%s\n' "$runs" | jq -e --arg sha "$sha" --arg repo "$GITHUB_REPOSITORY" '
       .[] | .workflow_runs[]? |
       select(.head_sha == $sha and .event == "pull_request" and .conclusion == "success") |
-      select(any(.pull_requests[]?; .number == $pr))
+      select(.head_repository.full_name == $repo)
+    ' >/dev/null; then
+      echo "unverified $package repository/SHA workflow provenance; preserving image" >&2
+      had_error=true
+      continue
+    fi
+    if pulls=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/pulls"); then
+      :
+    else
+      echo "unable to verify $package PR provenance; preserving image" >&2
+      had_error=true
+      continue
+    fi
+    if ! printf '%s\n' "$pulls" | jq -e --arg repo "$GITHUB_REPOSITORY" --argjson pr "$REVIEW_PR" '
+      .[] |
+      select(.number == $pr and .head.repo.full_name == $repo and .base.repo.full_name == $repo)
     ' >/dev/null; then
       echo "unverified $package repository/PR/SHA provenance; preserving image" >&2
       had_error=true

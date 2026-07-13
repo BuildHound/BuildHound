@@ -31,10 +31,13 @@ case "$*" in
     fi
     ;;
   *"actions/workflows/99/runs?event=pull_request&head_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"*)
+    printf '[{"workflow_runs":[{"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","head_repository":{"full_name":"BuildHound/BuildHound"},"event":"pull_request","conclusion":"success","pull_requests":[]}]}]\n'
+    ;;
+  "api repos/BuildHound/BuildHound/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/pulls")
     if [ "${PACKAGE_TEST_MODE:-normal}" = unowned ]; then
-      printf '[{"workflow_runs":[{"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","conclusion":"success","pull_requests":[{"number":7}]}]}]\n'
+      printf '[{"number":7,"head":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"full_name":"BuildHound/BuildHound"}},"base":{"repo":{"full_name":"BuildHound/BuildHound"}}}]\n'
     else
-      printf '[{"workflow_runs":[{"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","event":"pull_request","conclusion":"success","pull_requests":[{"number":42}]}]}]\n'
+      printf '[{"number":42,"head":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repo":{"full_name":"BuildHound/BuildHound"}},"base":{"repo":{"full_name":"BuildHound/BuildHound"}}}]\n'
     fi
     ;;
   *) printf 'unexpected gh call: %s\n' "$*" >&2; exit 90 ;;
