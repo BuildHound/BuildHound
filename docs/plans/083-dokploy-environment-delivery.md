@@ -26,7 +26,9 @@ capacity allocator/global inventory service.
 - Staging explicitly deploys one BOM and records its digest/returned deployment IDs.
   Production accepts only that staging-proven BOM, requires protected-environment approval
   and a fresh backup, and never rebuilds. Use distinct narrowest-available review, staging,
-  and production Dokploy credentials. A forward deployment must reproduce the current
+  and production Dokploy credentials. Supply the common non-secret Dokploy HTTPS origin as
+  the repository variable `DOKPLOY_URL`, while every protected GitHub Environment supplies
+  its own `DOKPLOY_TOKEN` secret. A forward deployment must reproduce the current
   migration-history prefix exactly; previous-BOM rollback requires explicit migration
   compatibility attestation. Otherwise pause and roll forward.
 - Build same-repository PR images in an unprivileged job with no Dokploy, environment,
