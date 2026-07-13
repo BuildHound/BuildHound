@@ -1,0 +1,46 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/Users/dylan/DynaDroid/side-projects/BuildHound/.codex/hooks/worktree-guard.sh'"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/Users/dylan/DynaDroid/side-projects/BuildHound/.codex/hooks/checkout-stray-check.sh' baseline"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/Users/dylan/DynaDroid/side-projects/BuildHound/.codex/hooks/checkout-stray-check.sh' check"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/Users/dylan/DynaDroid/side-projects/BuildHound/.codex/hooks/checkout-stray-check.sh' check"
+          }
+        ]
+      }
+    ]
+  }
+}
