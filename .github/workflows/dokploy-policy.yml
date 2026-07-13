@@ -12,10 +12,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s deploy/dokploy/test -v
+      - run: bash deploy/dokploy/test/api-test.sh
+      - run: bash deploy/dokploy/test/integrations-test.sh
+      - run: bash deploy/dokploy/test/release-client-test.sh
+      - run: bash deploy/dokploy/test/review-client-test.sh
+      - run: bash deploy/dokploy/test/delivery-cli-test.sh
       - run: sh site/test/site-test.sh
       - run: sh deploy/dokploy/test/volume-guard-test.sh
       - run: bash deploy/dokploy/test/backup-loop-test.sh
       - run: bash deploy/dokploy/test/restore-test.sh
+      - run: bash deploy/dokploy/test/select-backup-test.sh
       - run: bash deploy/dokploy/test/verify-release-test.sh
       - run: bash deploy/dokploy/test/delete-review-images-test.sh
       - run: sh deploy/dokploy/test/reconcile-reviews-test.sh
@@ -59,6 +65,6 @@ jobs:
           docker build -f deploy/dokploy/db/Dockerfile -t buildhound-db:policy .
           BUILDHOUND_SITE_TEST_IMAGE=buildhound-site:policy sh site/test/site-test.sh
       - name: ShellCheck deployment scripts
-        run: find deploy/dokploy site -type f -name '*.sh' -print0 | xargs -0 shellcheck
+        run: find deploy/dokploy site -type f -name '*.sh' -print0 | xargs -0 shellcheck -x
       - name: Validate shell syntax
-        run: find deploy/dokploy site -type f -name '*.sh' -exec sh -n {} \;
+        run: find deploy/dokploy site -type f -name '*.sh' -exec bash -n {} \;

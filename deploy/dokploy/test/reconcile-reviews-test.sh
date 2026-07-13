@@ -6,10 +6,11 @@ bin="$root/bin"
 mkdir -p "$bin"
 trap 'rm -rf "$root"' EXIT
 delete_log="$root/deletes"
+attempt_log="$root/attempts"
 real_jq=$(command -v jq)
-export DELETE_LOG="$delete_log" REAL_JQ="$real_jq"
+export DELETE_LOG="$delete_log" ATTEMPT_LOG="$attempt_log" REAL_JQ="$real_jq"
 
-cat > "$bin/python3" <<'EOF'
+cat > "$bin/bash" <<'EOF'
 #!/bin/sh
 set -eu
 command=$2
@@ -20,11 +21,16 @@ case "$command" in
     ;;
   revoke-review)
     pr=
+    attempt=
     while [ "$#" -gt 0 ]; do
-      if [ "$1" = --pr ]; then pr=$2; break; fi
-      shift
+      case "$1" in
+        --pr) pr=$2; shift 2 ;;
+        --expected-attempt-id) attempt=$2; shift 2 ;;
+        *) shift ;;
+      esac
     done
     printf '%s\n' "$pr" >> "$DELETE_LOG"
+    printf '%s|%s\n' "$pr" "$attempt" >> "$ATTEMPT_LOG"
     if [ "${FAIL_DELETE_PR:-}" = "$pr" ]; then exit 1; fi
     ;;
   delete-review)
@@ -41,6 +47,7 @@ set -eu
 case "$*" in
   "api repos/BuildHound/BuildHound --jq .owner.type") printf 'Organization\n'; exit 0 ;;
   "api repos/BuildHound/BuildHound/actions/workflows/review-images.yml --jq .id") printf '99\n'; exit 0 ;;
+  "api repos/BuildHound/BuildHound/actions/workflows/review-environment.yml --jq .id") printf '100\n'; exit 0 ;;
   *"packages/container/buildhound-server/versions"*|*"packages/container/buildhound-site/versions"*)
     if [ "${FAIL_IMAGE_PR:-}" = "${REVIEW_PR:-}" ]; then exit 1; fi
     printf '[[]]\n'; exit 0
@@ -48,6 +55,13 @@ case "$*" in
 esac
 url=$2
 case "$url" in
+  */actions/runs/*/attempts/*)
+    rest=${url#*/actions/runs/}
+    run_id=${rest%%/*}
+    run_attempt=${url##*/}
+    key="$run_id.$run_attempt"
+    printf '%s\n' "$RUNS_JSON" | "$REAL_JQ" -er --arg key "$key" '.[$key]'
+    ;;
   */pulls/*)
     pr=${url##*/}
     if [ "${GH_FAIL_PR:-}" = "$pr" ]; then exit 1; fi
@@ -80,11 +94,34 @@ case "$3" in
   *) exit 1 ;;
 esac
 EOF
-chmod +x "$bin/python3" "$bin/gh" "$bin/date"
+chmod +x "$bin/bash" "$bin/gh" "$bin/date"
 
 sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 review() {
-  printf '{"pr":%s,"createdAt":%s,"composeId":"compose-%s","sha":"%s"}' "$1" "$2" "$1" "$sha"
+  attempt=${3:-}
+  if [ -n "$attempt" ]; then
+    printf '{"attemptId":"%s","pr":%s,"createdAt":%s,"composeId":"compose-%s","sha":"%s"}' \
+      "$attempt" "$1" "$2" "$1" "$sha"
+  else
+    printf '{"pr":%s,"createdAt":%s,"composeId":"compose-%s","sha":"%s"}' "$1" "$2" "$1" "$sha"
+  fi
+}
+
+run_evidence() {
+  pr=$1
+  attempt_id=$2
+  status=$3
+  conclusion=$4
+  run_attempt=${attempt_id#*.}
+  # shellcheck disable=SC2016
+  "$real_jq" -cn --arg repository BuildHound/BuildHound --arg sha "$sha" \
+    --arg branch main --arg status "$status" --arg conclusion "$conclusion" \
+    --argjson pr "$pr" --argjson runAttempt "$run_attempt" '
+      {workflow_id:100,run_attempt:$runAttempt,event:"pull_request_target",
+       repository:{full_name:$repository},
+       pull_requests:[{number:$pr,head:{sha:$sha},base:{ref:$branch}}],
+       status:$status,conclusion:(if $conclusion == "null" then null else $conclusion end)}
+    '
 }
 
 run_reconcile() {
@@ -95,10 +132,14 @@ run_reconcile() {
   fail_delete=${5:-}
   fail_gh=${6:-}
   fail_image=${7:-}
+  runs=${8-}
+  if [ -z "$runs" ]; then runs='{}'; fi
   : > "$delete_log"
+  : > "$attempt_log"
   PATH="$bin:$PATH" \
     TTL_HOURS="$ttl" \
     GITHUB_REPOSITORY=BuildHound/BuildHound \
+    DEFAULT_BRANCH=main \
     ENVIRONMENT_ID=review \
     DNS_SUFFIX=review.buildhound.dev \
     REVIEWS_JSON="$reviews" \
@@ -107,7 +148,17 @@ run_reconcile() {
     FAIL_DELETE_PR="$fail_delete" \
     GH_FAIL_PR="$fail_gh" \
     FAIL_IMAGE_PR="$fail_image" \
+    RUNS_JSON="$runs" \
     sh deploy/dokploy/reconcile-reviews.sh
+}
+
+assert_attempts() {
+  expected=$1
+  actual=$(paste -sd, "$attempt_log")
+  if [ "$actual" != "$expected" ]; then
+    printf 'expected attempts %s, got %s\n' "$expected" "$actual" >&2
+    exit 1
+  fi
 }
 
 assert_deletes() {
@@ -150,5 +201,24 @@ assert_deletes 6
 image_cleanup_retry=$(review 7 '"fresh"')
 if run_reconcile 1 "[$image_cleanup_retry]" '{"7":"closed"}' '{}' '' '' 7; then exit 1; fi
 assert_deletes 7
+
+failed=$(review 8 '"fresh"' 800.1)
+cancelled=$(review 9 '"fresh"' 900.1)
+active=$(review 10 '"fresh"' 1000.1)
+successful=$(review 11 '"fresh"' 1100.1)
+failed_run=$(run_evidence 8 800.1 completed failure)
+cancelled_run=$(run_evidence 9 900.1 completed cancelled)
+active_run=$(run_evidence 10 1000.1 in_progress null)
+successful_run=$(run_evidence 11 1100.1 completed success)
+# shellcheck disable=SC2016
+runs=$("$real_jq" -cn --argjson failed "$failed_run" --argjson cancelled "$cancelled_run" \
+  --argjson active "$active_run" --argjson successful "$successful_run" \
+  '{"800.1":$failed,"900.1":$cancelled,"1000.1":$active,"1100.1":$successful}')
+run_reconcile 1 "[$failed,$cancelled,$active,$successful]" \
+  '{"8":"open","9":"open","10":"open","11":"open"}' \
+  '{"8":["deploy-review"],"9":["deploy-review"],"10":["deploy-review"],"11":["deploy-review"]}' \
+  '' '' '' "$runs"
+assert_deletes 8,9
+assert_attempts '8|800.1,9|900.1'
 
 printf 'review reconciliation validated\n'

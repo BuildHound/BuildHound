@@ -50,6 +50,7 @@ chmod +x "$bin/aws" "$bin/age" "$bin/pg_restore"
 
 run_restore() (
   export BACKUP_OBJECT=$1
+  export BACKUP_VERSION_ID=${BACKUP_VERSION_ID-version-1}
   export AGE_KEY_FILE="$root/age-key"
   export S3_ENDPOINT=https://s3.example.test
   export S3_BUCKET=test-bucket
@@ -70,6 +71,22 @@ run_restore backups/test.dump.age.partial >/dev/null 2>&1
 status=$?
 set -e
 test "$status" -eq 64
+test ! -s "$aws_log"
+
+: > "$aws_log"
+set +e
+BACKUP_VERSION_ID='' run_restore backups/test.dump.age >/dev/null 2>&1
+status=$?
+set -e
+test "$status" -ne 0
+test ! -s "$aws_log"
+
+: > "$aws_log"
+set +e
+BACKUP_VERSION_ID=None run_restore backups/test.dump.age >/dev/null 2>&1
+status=$?
+set -e
+test "$status" -eq 66
 test ! -s "$aws_log"
 
 : > "$aws_log"
@@ -95,9 +112,23 @@ if grep -F -- 's3api get-object' "$aws_log" >/dev/null; then
 fi
 
 : > "$aws_log"
+set +e
+BACKUP_VERSION_ID=version-42 HEAD_VERSION=version-41 \
+  run_restore backups/test.dump.age >/dev/null 2>&1
+status=$?
+set -e
+test "$status" -eq 66
+grep -F -- 's3api head-object --bucket test-bucket --key backups/test.dump.age --version-id version-42' "$aws_log" >/dev/null
+if grep -F -- 's3api get-object' "$aws_log" >/dev/null; then
+  echo 'restore downloaded a version that did not match the attestation' >&2
+  exit 1
+fi
+
+: > "$aws_log"
 : > "$restore_log"
-HEAD_COMPLETE=true HEAD_VERSION=version-42 run_restore backups/test.dump.age >/dev/null
-grep -F -- 's3api head-object --bucket test-bucket --key backups/test.dump.age' "$aws_log" >/dev/null
+BACKUP_VERSION_ID=version-42 HEAD_COMPLETE=true HEAD_VERSION=version-42 \
+  run_restore backups/test.dump.age >/dev/null
+grep -F -- 's3api head-object --bucket test-bucket --key backups/test.dump.age --version-id version-42' "$aws_log" >/dev/null
 grep -F -- 's3api get-object --bucket test-bucket --key backups/test.dump.age --version-id version-42' "$aws_log" >/dev/null
 list_match=$(grep -n -m 1 -F -- '--list' "$restore_log")
 apply_match=$(grep -n -m 1 -F -- '--exit-on-error --single-transaction' "$restore_log")

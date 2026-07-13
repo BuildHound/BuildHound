@@ -14,7 +14,6 @@ cat > "$bin/gh" <<'EOF'
 set -eu
 case "$*" in
   "api repos/BuildHound/BuildHound --jq .owner.type") printf 'Organization\n' ;;
-  "api repos/BuildHound/BuildHound/actions/workflows/review-images.yml --jq .id") printf '99\n' ;;
   "api --method DELETE "*) printf '%s\n' "$*" >> "$DELETE_LOG" ;;
   *"packages/container/buildhound-server/versions"*)
     if [ "${PACKAGE_TEST_MODE:-normal}" = shared ]; then
@@ -29,9 +28,6 @@ case "$*" in
     else
       printf '[[{"id":21,"metadata":{"container":{"tags":["pr-42-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}}},{"id":22,"metadata":{"container":{"tags":["pr-42-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]}}}]]\n'
     fi
-    ;;
-  *"actions/workflows/99/runs?event=pull_request&head_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"*)
-    printf '[{"workflow_runs":[{"head_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","head_repository":{"full_name":"BuildHound/BuildHound"},"event":"pull_request","conclusion":"success","pull_requests":[]}]}]\n'
     ;;
   "api repos/BuildHound/BuildHound/commits/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/pulls")
     if [ "${PACKAGE_TEST_MODE:-normal}" = unowned ]; then
