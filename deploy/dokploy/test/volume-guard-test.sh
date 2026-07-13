@@ -1,9 +1,56 @@
 #!/bin/sh
 set -eu
-root=$(mktemp -d); bin=$(mktemp -d); trap 'rm -rf "$root" "$bin"' EXIT
-printf '#!/bin/sh\nexit 0\n' > "$bin/docker-entrypoint.sh"; chmod +x "$bin/docker-entrypoint.sh"
-PGDATA="$root/pgdata" BUILDHOUND_DB_INSTANCE=test BUILDHOUND_DB_MAJOR=16 BUILDHOUND_DB_ALLOW_INIT=true PATH="$bin:$PATH" sh deploy/dokploy/volume-guard.sh
+
+root=$(mktemp -d)
+bin=$(mktemp -d)
+trap 'rm -rf "$root" "$bin"' EXIT
+
+cat > "$bin/docker-entrypoint.sh" <<'EOF'
+#!/bin/sh
+mkdir -p "$PGDATA"
+touch "$PGDATA/PG_VERSION"
+EOF
+chmod +x "$bin/docker-entrypoint.sh"
+
+run_guard() {
+  PGDATA="$root/pgdata" \
+    BUILDHOUND_DB_INSTANCE="${1:-test}" \
+    BUILDHOUND_DB_MAJOR="${2:-16}" \
+    BUILDHOUND_DB_ALLOW_INIT="${3:-false}" \
+    PATH="$bin:$PATH" \
+    sh deploy/dokploy/volume-guard.sh
+}
+
+expect_exit() {
+  expected=$1
+  shift
+  set +e
+  run_guard "$@" >/dev/null 2>&1
+  actual=$?
+  set -e
+  test "$actual" -eq "$expected"
+}
+
+expect_exit 71 test 16 false
+run_guard test 16 true
 test "$(cat "$root/.buildhound-volume")" = 'instance=test major=16'
-PGDATA="$root/pgdata" BUILDHOUND_DB_INSTANCE=test BUILDHOUND_DB_MAJOR=16 BUILDHOUND_DB_ALLOW_INIT=false PATH="$bin:$PATH" sh deploy/dokploy/volume-guard.sh
-if PGDATA="$root/pgdata" BUILDHOUND_DB_INSTANCE=other BUILDHOUND_DB_MAJOR=16 BUILDHOUND_DB_ALLOW_INIT=false PATH="$bin:$PATH" sh deploy/dokploy/volume-guard.sh 2>/dev/null; then exit 1; fi
+test -f "$root/pgdata/PG_VERSION"
+run_guard test 16 false
+
+expect_exit 70 other 16 false
+expect_exit 70 test 17 false
+
+rm -rf "$root/pgdata"
+mkdir -p "$root/pgdata"
+expect_exit 73 test 16 false
+run_guard test 16 true
+test -f "$root/pgdata/PG_VERSION"
+
+rm "$root/.buildhound-volume"
+expect_exit 72 test 16 false
+
+rm -rf "$root/pgdata"
+touch "$root/pgdata"
+expect_exit 74 test 16 false
+
 printf 'volume guard validated\n'

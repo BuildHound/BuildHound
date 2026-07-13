@@ -22,8 +22,9 @@ these environment-specific results.
 1. Label exactly one database node and the Traefik node; create the encrypted ingress
    network, PGDATA volume, and scoped external secrets.
 2. Set `BUILDHOUND_DB_ALLOW_INIT=true` for the first deployment only. After the marker is
-   written, remove it. The guard refuses empty, foreign, wrong-instance, and wrong-major
-   volumes.
+   written, wait for database readiness and prove authenticated restart persistence before
+   removing it. The guard refuses empty, foreign, wrong-instance, and wrong-major volumes;
+   even a marked-but-empty PGDATA requires explicit re-initialization.
 3. Render and validate with `docker stack config -c deploy/dokploy/stack.yaml` and
    `deploy/dokploy/validate-stack.sh`. Deploy exact image digests explicitly.
 4. Reject `storage: IN-MEMORY` in logs. Verify authenticated DB read/write, restart
@@ -31,13 +32,15 @@ these environment-specific results.
 5. Bootstrap with `openssl rand -hex 32`, then remove bootstrap values after first boot.
 
 The backup service streams `pg_dump --format=custom` through `age` to S3. Only the public
-recipient is online. Configure bucket versioning and lifecycle to preserve at least 14
+recipient is online. Mount its `pgpass` secret for UID/GID 10001 with mode `0400` so libpq
+will accept it. Configure bucket versioning and lifecycle to preserve at least 14
 production or 7 staging recovery points. Alert when the last successful object exceeds 24
 hours, a task fails, or disk pressure rises. Production and staging use separate Hetzner
 projects and keys.
 
-Quarterly, run `restore.sh` with the offline key into a fresh, explicitly initialized
-volume; validate SQL, start an unrouted current-image canary so Flyway runs, verify through
+Quarterly, run `restore.sh` as UID/GID 10001 with the offline age key, S3 credentials, and
+a `pgpass` mount whose mode is `0400`, restoring into a fresh, explicitly initialized
+volume. Validate SQL, start an unrouted current-image canary so Flyway runs, verify through
 the API, then switch routing while retaining the old volume. Record measured RPO and RTO;
 the provisional acceptance targets are 24 hours and 4 hours. Take a fresh verified backup
 before migrations and roll forward if backward compatibility is not proven.
@@ -59,7 +62,10 @@ Every later backup must match the currently successful compose release ID exactl
 
 Review deployment is default-off. A protected-base manual workflow must bind approval to
 the exact current SHA, re-query the PR, reject forks, resolve its own image digests, and use
-only ephemeral credentials. Set a fixed `MAX_ACTIVE` in the review environment. Prove
+only ephemeral credentials. Private GHCR resolution authenticates in Actions, and every
+eligible Dokploy worker must have pull credentials. Set a fixed `MAX_ACTIVE` and set
+`BUILDHOUND_REVIEW_TTL_HOURS` to a base-10 value between 1 and 87600 in the review
+environment. Prove
 review cannot reach staging/production before enabling it. Cleanup removes the concrete
 route before the Stack, rechecks PR state, verifies ownership metadata and exact returned
 IDs, and the scheduled reconciler repeats this for closed, unlabelled, or expired reviews.
