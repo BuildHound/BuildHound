@@ -103,7 +103,8 @@ Commit names/placeholders only; the owner supplies values out of band:
   least-privilege API credentials for those roles;
 - production/staging site and dashboard FQDNs, review DNS suffixes, and the Traefik-node DNS
   target used for HTTP-01;
-- unique DB-node labels/instance identities and the Traefik-node label;
+- the `role=db` DB-node label, its immutable Swarm node ID, unique DB instance identities,
+  and the Traefik-node label;
 - GHCR server/site/backup/guarded-PostgreSQL package names and worker pull credential if
   packages remain private;
 - separate production/staging Hetzner project, endpoint, region, bucket, and backup-service

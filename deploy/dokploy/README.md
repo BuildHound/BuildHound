@@ -27,10 +27,16 @@ these environment-specific results.
 
 ## Long-lived stack
 
-1. Label exactly one database node and the Traefik node; create the encrypted ingress
-   network, PGDATA volume, and scoped external secrets. Build and deploy the
-   digest-addressed `deploy/dokploy/db/Dockerfile` image so the trusted volume guard is
-   available on every worker; raw Dokploy delivery never depends on a checkout-local file.
+1. Label exactly one database node with `role=db` and set Dokploy
+   `BUILDHOUND_DB_NODE_ID` to that node's immutable Swarm ID, obtained with
+   `docker node ls --filter 'node.label=role=db' --format '{{.ID}}'`. From a Swarm manager,
+   export the same value and run `deploy/dokploy/verify-db-node.sh` before every deployment.
+   The preflight fails unless the label identifies exactly one Ready/Active node with that
+   ID; both Stack services also require the ID so relabelling cannot move PGDATA or backup
+   credentials. Label the Traefik node, create the encrypted ingress network, PGDATA volume,
+   and scoped external secrets. Build and deploy the digest-addressed
+   `deploy/dokploy/db/Dockerfile` image so the trusted volume guard is available on every
+   worker; raw Dokploy delivery never depends on a checkout-local file.
 2. Set `BUILDHOUND_DB_ALLOW_INIT=true` for the first deployment only. After the marker is
    written, wait for database readiness and prove authenticated restart persistence before
    removing it. The guard refuses empty, foreign, wrong-instance, and wrong-major volumes;

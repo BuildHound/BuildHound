@@ -35,7 +35,8 @@ Dokploy environment secret pending a separate server plan.
   secrets/configs, domain labels, digest references, and registry pulls; do not assume `${VAR}`
   interpolation. Scope secrets to consumers. If Stack mode exposes only one merged secret
   environment, production waits for server `*_FILE` support.
-- Pin each DB to exactly one labelled node; `PGDATA` is the only durable local volume. A
+- Pin each DB to the sole node labelled `role=db` and also constrain it by immutable Swarm
+  node ID; `PGDATA` is the only durable local volume. A
   minimal marker guard allows one explicit initialization, then rejects empty, foreign,
   mismatched-instance, or wrong-major volumes. Restore is a one-shot runbook operation, not
   a persistent DB start mode.
@@ -65,8 +66,10 @@ Dokploy environment secret pending a separate server plan.
 
 ## Test strategy
 
-- Validate fixtures with `docker stack config`; assert digests, placement, update policy,
-  private networks, read-only/tmpfs, no dangerous mounts/ports, and no rendered secrets.
+- Validate fixtures with `docker stack config`; assert digests, service-specific placement,
+  update policy, private networks, read-only/tmpfs, no dangerous mounts/ports, and no
+  rendered secrets. Before every deployment, fail unless exactly one Ready/Active Swarm node
+  carries `role=db` and its ID matches the configured placement constraint.
 - In ephemeral Swarm, initialize once, ingest, redeploy/restart, and prove persistence;
   empty/foreign/mismatched/wrong-major volumes fail closed and startup races recover.
 - Stage through public TLS: verify assets, liveness, authenticated read/write, restart
