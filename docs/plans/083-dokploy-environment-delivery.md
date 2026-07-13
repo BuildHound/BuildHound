@@ -44,9 +44,11 @@ capacity allocator/global inventory service.
   external network. Site/server are read-only with tmpfs. Fixed reservations and a constant
   `MAX_ACTIVE` replace allocation machinery. Reviews stay disabled until negative network
   tests prove isolation from staging/production while retaining ingress.
-- Derive deterministic names and exact FQDNs from repository/PR. Wildcard DNS is only a
-  prerequisite; create ordinary concrete routes/certificates idempotently and reuse them
-  across pushes. Treat Dokploy as source of truth: list only the review environment, verify
+- Derive the deterministic review name `mr<PR number>`. Its exact site FQDN is
+  `mr<PR number>.<review DNS suffix>` and its dashboard FQDN is
+  `mr<PR number>.dashboard.<review DNS suffix>`. Wildcard DNS is only a prerequisite;
+  create ordinary concrete routes/certificates idempotently and reuse them across pushes.
+  Treat Dokploy as source of truth: list only the review environment, verify
   repository/PR/SHA ownership metadata, then mutate exact returned IDs.
 - Close/unlabel removes routes before Stack after a final PR-state check. A non-cancellable
   reconciler deletes verified closed, unlabelled, or expired reviews and old PR image tags.
