@@ -48,14 +48,19 @@ capacity allocator/global inventory service.
   tests prove isolation from staging/production while retaining ingress.
 - Derive the deterministic review name `mr<PR number>`. Its exact site FQDN is
   `mr<PR number>.<review DNS suffix>` and its dashboard FQDN is
-  `mr<PR number>.dashboard.<review DNS suffix>`. Wildcard DNS is only a prerequisite;
-  create ordinary concrete routes/certificates idempotently and reuse them across pushes.
-  Keep that public name stable while deriving a separate repository-scoped internal ID for
-  Dokploy's application name and Traefik router/service/middleware keys, preventing another
-  repository's same-numbered PR from colliding on a shared provider. Because the public host
-  intentionally omits repository identity, require a review DNS suffix unique to this
-  repository on any shared ingress provider. Treat Dokploy as source of truth: list only the
-  review environment, verify
+  `mr<PR number>.dashboard.<review DNS suffix>`. Wildcard DNS and two pre-warmed wildcard
+  certificates are prerequisites: one covers a single label below the review suffix and one
+  covers a single label below its dashboard subdomain. Global Traefik configuration requests
+  those certificates through Lego's Hetzner DNS-01 provider using `HETZNER_API_TOKEN`.
+  Review Stacks create ordinary concrete routers with TLS enabled but no certificate resolver
+  or ACME domain labels, so they select the pre-warmed wildcard certificates instead of
+  issuing per-PR certificates. Explicitly render the trusted external ingress-network name and
+  select that network on each multi-network Traefik service. Keep the public name stable while
+  deriving a separate repository-scoped internal ID for Dokploy's application name and
+  Traefik router/service/middleware keys, preventing another repository's same-numbered PR
+  from colliding on a shared provider. Because the public host intentionally omits repository
+  identity, require a review DNS suffix unique to this repository on any shared ingress
+  provider. Treat Dokploy as source of truth: list only the review environment, verify
   repository/PR/SHA ownership metadata, then mutate exact returned IDs.
 - Close/unlabel removes routes before Stack after a final PR-state check. A non-cancellable
   reconciler deletes verified closed, unlabelled, or expired reviews and old PR image tags.
@@ -70,9 +75,12 @@ capacity allocator/global inventory service.
   ceiling, stale events, exact-ID teardown, and orphan reconciliation.
 - Prove fork/unprivileged jobs receive no deploy secret; privileged jobs use protected content,
   revalidate SHA, suppress secrets, and cannot clean outside the review environment.
-- Rehearse one PR through create, push rejection, reapproval/update, TLS + authenticated
-  ingest/read, immediate cleanup, scheduled cleanup, and negative network checks. Rehearse
-  staging→production with one identical BOM and all 081/082 gates.
+- Assert the trusted review manifest cannot select an ACME resolver or leave its external
+  ingress network unresolved. Before deployment, verify the live certificate store serves a
+  publicly trusted certificate matching both review wildcard depths.
+- Rehearse one PR through create, push rejection, reapproval/update, wildcard TLS +
+  authenticated ingest/read, immediate cleanup, scheduled cleanup, and negative network
+  checks. Rehearse staging→production with one identical BOM and all 081/082 gates.
 
 ## Risks
 
@@ -88,5 +96,6 @@ non-cancellable teardown, and scheduled reconciliation.
 - No rebuild/moving tag participates; migration-incompatible rollback fails closed and uses
   roll-forward.
 - Review stays default-off until exact-SHA/network gates pass, then one same-repository PR
-  completes reapproval/update and immediate/scheduled cleanup with no surviving state.
+  completes reapproval/update using Hetzner DNS-01 wildcard TLS and immediate/scheduled
+  cleanup with no surviving state.
 - No concrete ID, domain, credential, token, or generated value is committed or printed.
