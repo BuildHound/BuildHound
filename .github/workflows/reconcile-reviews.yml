@@ -20,6 +20,7 @@ jobs:
           DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
           DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
           ENVIRONMENT_ID: ${{ secrets.DOKPLOY_ENVIRONMENT_ID }}
+          DNS_SUFFIX: ${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}
           TTL_HOURS: ${{ vars.BUILDHOUND_REVIEW_TTL_HOURS }}
         run: |
           : "${TTL_HOURS:?BUILDHOUND_REVIEW_TTL_HOURS must be set}"

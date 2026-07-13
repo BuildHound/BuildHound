@@ -15,9 +15,9 @@ administration as part of the deployment trust boundary: changing this URL redir
 those tokens are sent. If that administration must be less trusted, define the same
 `DOKPLOY_URL` variable separately in each GitHub Environment instead.
 
-The client targets Dokploy's documented `x-api-key` API (`compose.update`,
-`compose.create`, `compose.isolatedDeployment`, `compose.deploy`, and Application update/
-deploy; checked 2026-07-12). Before production, record the installed Dokploy version and verify in staging: Stack
+The client targets Dokploy's documented `x-api-key` API (`compose.create`, `compose.update`,
+`compose.one`, `compose.deploy`, `compose.cleanQueues`, `compose.stop`, `compose.delete`, and
+Application update/deploy; checked against v0.29.12 on 2026-07-13). Before production, record the installed Dokploy version and verify in staging: Stack
 `env_file`, external secret scoping, `deploy.labels`, digest pulls on every worker,
 Compose/Application deploy endpoints, isolated review networking, and idempotent domain IDs.
 Also verify separate least-privilege tokens, Hetzner versioning/lifecycle/noncurrent-version
@@ -109,25 +109,74 @@ eligible Dokploy worker must have pull credentials. Set a fixed `MAX_ACTIVE` and
 dashboard. DNS must resolve both `*.<review DNS suffix>` and
 `*.dashboard.<review DNS suffix>` to Traefik. Each repository sharing a Traefik provider
 must use a unique review DNS suffix because the intentionally short public host does not
-contain repository identity. The public name remains `mr10`, while Dokploy's application
-name and Traefik identifiers use an automatically generated, repository-scoped internal ID.
+contain repository identity. The public name remains `mr10`; Traefik identifiers use an
+automatically generated repository-scoped prefix, and Dokploy appends its required
+six-character suffix to that prefix for the actual Stack application name.
+Until review image publication is moved out of the PR-controlled workflow, permit only an
+owner-authored, docs-only controlled smoke PR: the current image job has package-level write
+authority. Immediately before that dispatch, re-run the manager-side network inspection and
+set the review Environment's isolation gate; reset the gate after cleanup. Do not enable
+arbitrary review PRs under this temporary exception. The controlled update rehearsal must use
+a new head SHA and must not retry the same SHA after a pre-mutation failure: without a
+per-attempt identity in the Dokploy ownership metadata, cleanup cannot distinguish that failure
+from a failed redeploy of an already healthy same-SHA review. Add that identity before allowing
+repeated manual or arbitrary review deploys.
+Before enabling reviews, pre-warm one certificate covering `*.<review DNS suffix>` and one
+covering `*.dashboard.<review DNS suffix>` through Traefik's Lego Hetzner DNS-01 resolver.
+Prefer Lego's `HETZNER_API_TOKEN_FILE` backed by a root-only read-only mount on Dokploy's
+standalone Traefik container (a Swarm secret applies only when Traefik is itself a Swarm
+service). Never put this DNS-write credential in GitHub or a review Stack. Review routers set
+TLS without selecting an ACME resolver or domain, so Traefik serves the pre-warmed wildcard
+instead of issuing per-PR certificates. Set `DOKPLOY_REVIEW_INGRESS_NETWORK` to the exact
+`buildhound-review-ingress` external overlay. Dokploy's standalone Traefik can join it only
+when it is attachable, so create it with
+`docker network create --driver overlay --attachable --opt encrypted buildhound-review-ingress`.
+Connect only Traefik and review workloads, and verify its live ID, overlay driver, Swarm scope,
+`Attachable=true`, encrypted option, and membership from a manager before setting
+`BUILDHOUND_REVIEW_NETWORK_ISOLATION_VERIFIED=true`. It must
+contain no Dokploy control-plane, staging, or production services. The renderer rejects every
+other network name and pins both multi-network services to this dedicated overlay.
 Before enabling reviews, verify the review environment has
 no legacy `review-<repository>-<PR>` resources; reviews are default-off, so drain any such
-test resources with the old client rather than allowing duplicate ownership. Set
+test resources with the old client rather than allowing duplicate ownership. Cleanup first
+removes waiting Dokploy jobs, requires the Compose to remain non-running across a settling
+check, and—once enqueue was attempted—requires either exact-SHA terminal evidence or a longer
+queue-drain/non-running observation when a cancelled waiting job produced no deployment row.
+It uses Dokploy's error-propagating Stack stop, waits until both HTTPS probes return 404,
+and only then deletes the Compose record and its package versions, preserving a reconciliation
+anchor while public revocation converges. Because an untrusted workload can forge a 404, the
+controlled rehearsal also requires a direct manager check that the exact Stack/services are
+absent and the dedicated ingress has returned to Traefik-only membership. If enqueue or
+polling leaves deployment state active or unknown, the client preserves the exact-owned Compose
+anchor instead of racing an active Dokploy worker; remove the label and let cleanup reconcile
+it after the job reaches a terminal state. Set
 `BUILDHOUND_REVIEW_TTL_HOURS` to a base-10 value between 1 and 87600 in the review
 environment. Prove
 review cannot reach staging/production before enabling it. Cleanup removes the concrete
-route before the Stack, rechecks PR state, verifies ownership metadata and exact returned
-IDs, and the scheduled reconciler repeats this for closed, unlabelled, or expired reviews.
+Stack, waits for public 404 convergence, keeps the exact ownership record through image
+cleanup, and deletes that record only after garbage collection succeeds. It rechecks PR state,
+verifies ownership metadata and exact returned IDs, and the scheduled reconciler repeats this
+for closed, unlabelled, or expired reviews.
 
 Use a separate protected-main `review-cleanup` Environment for close/unlabel and scheduled
 teardown. It carries the same secret names as `review`, but its Dokploy token is restricted
-to listing and deleting resources in the review environment and it has no human approval
-gate, so teardown is immediate. The approval-gated `review` Environment remains deploy-only.
+to the review environment and it has no human approval gate, so teardown is immediate. On
+deploy-step failure, an always-evaluated dependent job also binds to `review-cleanup`; it
+does not reuse the approval-gated deploy credential. On
+Dokploy v0.29.12 cleanup needs service read/delete plus deployment read/create permission:
+deployment evidence needs read, while the error-propagating `compose.stop` operation is
+guarded as a deployment mutation. A
+list/delete-only token cannot safely run this flow. Use an environment-specific custom-role
+token and do not fall back to the repository-wide administration token before arbitrary PRs
+are enabled. Dokploy v0.29.12 grants a newly created service to the creator member, so the
+deploy and cleanup credentials must belong to that same least-privilege member, or the deploy
+flow must explicitly grant the cleanup member access to the exact new service before broader
+enablement. The approval-gated `review` Environment remains deploy-only.
 
 Trusted cleanup also removes superseded and closed-review GHCR versions. It considers only
 the fixed server/site packages, requires the version to have exactly one full-SHA tag for the
 named PR, and verifies a successful trusted review-image workflow run for that exact
 repository/PR/SHA before deleting the numeric package-version ID. Shared, ambiguous, or unverifiable versions are preserved and
-fail the job; prefix-only deletion is never used. Stack teardown remains immediate on
-close/unlabel and is backstopped by the scheduled reconciler.
+fail the job; prefix-only deletion is never used. Public Stack revocation precedes image
+cleanup; the stopped Compose record remains as the scheduled reconciler's retry anchor until
+image cleanup succeeds.

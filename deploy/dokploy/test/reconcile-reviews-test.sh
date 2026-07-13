@@ -18,7 +18,7 @@ case "$command" in
   list-reviews)
     printf '%s\n' "$REVIEWS_JSON"
     ;;
-  delete-review)
+  revoke-review)
     pr=
     while [ "$#" -gt 0 ]; do
       if [ "$1" = --pr ]; then pr=$2; break; fi
@@ -26,6 +26,8 @@ case "$command" in
     done
     printf '%s\n' "$pr" >> "$DELETE_LOG"
     if [ "${FAIL_DELETE_PR:-}" = "$pr" ]; then exit 1; fi
+    ;;
+  delete-review)
     ;;
   *)
     exit 2
@@ -98,6 +100,7 @@ run_reconcile() {
     TTL_HOURS="$ttl" \
     GITHUB_REPOSITORY=BuildHound/BuildHound \
     ENVIRONMENT_ID=review \
+    DNS_SUFFIX=review.buildhound.dev \
     REVIEWS_JSON="$reviews" \
     PR_STATES="$states" \
     PR_LABELS="$labels" \
@@ -146,8 +149,6 @@ assert_deletes 6
 
 image_cleanup_retry=$(review 7 '"fresh"')
 if run_reconcile 1 "[$image_cleanup_retry]" '{"7":"closed"}' '{}' '' '' 7; then exit 1; fi
-assert_deletes ''
-run_reconcile 1 "[$image_cleanup_retry]" '{"7":"closed"}' '{}'
 assert_deletes 7
 
 printf 'review reconciliation validated\n'

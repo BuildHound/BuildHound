@@ -2,7 +2,7 @@
 set -eu
 
 : "${TTL_HOURS:?BUILDHOUND_REVIEW_TTL_HOURS must be set}"
-: "${GITHUB_REPOSITORY:?}" "${ENVIRONMENT_ID:?}"
+: "${GITHUB_REPOSITORY:?}" "${ENVIRONMENT_ID:?}" "${DNS_SUFFIX:?BUILDHOUND_REVIEW_DNS_SUFFIX must be set}"
 case "$TTL_HOURS" in
   ''|0*|*[!0-9]*)
     echo "BUILDHOUND_REVIEW_TTL_HOURS must be a positive base-10 integer" >&2
@@ -121,18 +121,27 @@ while IFS= read -r review; do
     fi
   fi
 
-  # Remove exact-owned images first. If that fails, keep the compose discoverable so
-  # the next reconciliation run can retry instead of orphaning package versions.
-  if ! REVIEW_PR="$pr" deploy/dokploy/delete-review-images.sh; then
-    warn_review "$pr" "exact-owned GHCR cleanup failed; preserving review for retry"
+  # Revoke public execution but retain ownership until package garbage collection succeeds.
+  if ! python3 deploy/dokploy/dokploy.py revoke-review \
+    --base-repo "$GITHUB_REPOSITORY" \
+    --pr "$pr" \
+    --environment-id "$ENVIRONMENT_ID" \
+    --dns-suffix "$DNS_SUFFIX" \
+    --expected-compose-id "$compose_id" \
+    --expected-sha "$sha"; then
+    warn_review "$pr" "Dokploy revocation failed; later reviews will still be reconciled"
+    had_error=true
+  elif ! REVIEW_PR="$pr" deploy/dokploy/delete-review-images.sh; then
+    warn_review "$pr" "Stack revoked but exact-owned GHCR cleanup failed"
     had_error=true
   elif ! python3 deploy/dokploy/dokploy.py delete-review \
     --base-repo "$GITHUB_REPOSITORY" \
     --pr "$pr" \
     --environment-id "$ENVIRONMENT_ID" \
+    --dns-suffix "$DNS_SUFFIX" \
     --expected-compose-id "$compose_id" \
     --expected-sha "$sha"; then
-    warn_review "$pr" "Dokploy deletion failed; later reviews will still be reconciled"
+    warn_review "$pr" "GHCR cleanup succeeded but Dokploy record deletion failed"
     had_error=true
   fi
 done < "$entries"

@@ -22,6 +22,8 @@ jobs:
       (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'deploy' && 'review' || 'review-cleanup' }}
+    outputs:
+      deploy_outcome: ${{ steps.deploy_status.outputs.outcome }}
     steps:
       - uses: actions/checkout@v4
         with: {ref: "${{ github.event.repository.default_branch }}"}
@@ -64,6 +66,31 @@ jobs:
           active=$(python3 deploy/dokploy/dokploy.py count-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" --exclude-pr "$PR")
           [[ "$active" =~ ^[0-9]+$ ]]
           (( active < MAX ))
+      - name: Verify pre-warmed wildcard TLS
+        if: env.REVIEW_ACTION == 'deploy'
+        env:
+          DNS_SUFFIX: "${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}"
+          INGRESS_NETWORK: "${{ vars.DOKPLOY_REVIEW_INGRESS_NETWORK }}"
+        run: |
+          python3 - "$DNS_SUFFIX" "$INGRESS_NETWORK" <<'PY'
+          import re
+          import sys
+          suffix, network = sys.argv[1:]
+          label = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+          if len(suffix) > 253 or len(suffix.split(".")) < 2 or suffix != suffix.lower() or any(not label.fullmatch(part) for part in suffix.split(".")):
+              raise SystemExit("invalid review DNS suffix")
+          if network != "buildhound-review-ingress":
+              raise SystemExit("unexpected review ingress network")
+          PY
+          while IFS='|' read -r host wildcard; do
+            certificate=$(timeout 20 openssl s_client -connect "$host:443" -servername "$host" -verify_hostname "$host" -verify_return_error </dev/null 2>/dev/null | openssl x509 -outform PEM)
+            test -n "$certificate"
+            openssl x509 -noout -checkhost "$host" <<<"$certificate"
+            openssl x509 -noout -ext subjectAltName <<<"$certificate" | tr ',' '\n' | sed 's/^[[:space:]]*//' | grep -Fx "DNS:$wildcard"
+          done <<EOF
+          certificate-check.$DNS_SUFFIX|*.$DNS_SUFFIX
+          certificate-check.dashboard.$DNS_SUFFIX|*.dashboard.$DNS_SUFFIX
+          EOF
       - uses: docker/login-action@v3
         if: env.REVIEW_ACTION == 'deploy'
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
@@ -75,20 +102,13 @@ jobs:
           DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}"
           ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"
           DNS_SUFFIX: "${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}"
+          INGRESS_NETWORK: "${{ vars.DOKPLOY_REVIEW_INGRESS_NETWORK }}"
           GH_TOKEN: "${{ github.token }}"
           NETWORK_OK: "${{ vars.BUILDHOUND_REVIEW_NETWORK_ISOLATION_VERIFIED }}"
           PR: "${{ env.REVIEW_PR }}"
           SHA: "${{ env.REVIEW_SHA }}"
         run: |
           test "$NETWORK_OK" = true
-          python3 - "$DNS_SUFFIX" <<'PY'
-          import re
-          import sys
-          suffix = sys.argv[1]
-          label = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
-          if len(suffix) > 253 or len(suffix.split(".")) < 2 or suffix != suffix.lower() or any(not label.fullmatch(part) for part in suffix.split(".")):
-              raise SystemExit("invalid review DNS suffix")
-          PY
           server="$IMAGE_REGISTRY_PREFIX/buildhound-server:pr-$PR-$SHA"
           site="$IMAGE_REGISTRY_PREFIX/buildhound-site:pr-$PR-$SHA"
           server_digest=$(docker buildx imagetools inspect "$server" --format '{{json .Manifest.Digest}}' | tr -d '"')
@@ -106,12 +126,15 @@ jobs:
           test "$state" = open
           test "$head_sha" = "$SHA"
           gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review
-          result=$(python3 deploy/dokploy/dokploy.py deploy-review --base-repo "$GITHUB_REPOSITORY" --head-repo "$head_repo" --pr "$PR" --sha "$head_sha" --state "$state" --label-present --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --server-image "$server@$server_digest" --site-image "$site@$site_digest")
+          result=$(python3 deploy/dokploy/dokploy.py deploy-review --base-repo "$GITHUB_REPOSITORY" --head-repo "$head_repo" --pr "$PR" --sha "$head_sha" --state "$state" --label-present --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --ingress-network "$INGRESS_NETWORK" --server-image "$server@$server_digest" --site-image "$site@$site_digest")
 
           review_name=$(jq -er .name <<<"$result")
+          compose_id=$(jq -er .composeId <<<"$result")
           deployment_id=$(jq -er .deploymentId <<<"$result")
           [[ "$review_name" =~ ^[a-z0-9-]{1,63}$ ]]
+          [[ "$compose_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]]
           [[ "$deployment_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]]
+          echo "compose_id=$compose_id" >> "$GITHUB_OUTPUT"
           echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
           site_host="$review_name.$DNS_SUFFIX"
           dashboard_host="$review_name.dashboard.$DNS_SUFFIX"
@@ -127,8 +150,12 @@ jobs:
           site_url="https://$site_host"
           dashboard_url="https://$dashboard_host"
           common=(--silent --show-error --fail --retry 30 --retry-delay 5 --retry-max-time 300 --retry-all-errors --connect-timeout 10 --max-time 20 --write-out '%{http_code}')
-          status=$(curl "${common[@]}" --output /dev/null "$site_url/")
+          status=$(curl "${common[@]}" --dump-header /tmp/review-site-headers --output /dev/null "$site_url/")
           test "$status" = 200
+          tr -d '\r' < /tmp/review-site-headers | grep -Fxi 'X-Robots-Tag: noindex, nofollow'
+          status=$(curl "${common[@]}" --dump-header /tmp/review-dashboard-headers --output /dev/null "$dashboard_url/health")
+          test "$status" = 200
+          tr -d '\r' < /tmp/review-dashboard-headers | grep -Fxi 'X-Robots-Tag: noindex, nofollow'
 
           build_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
           now_ms=$(python3 -c 'import time; print(int(time.time() * 1000))')
@@ -147,6 +174,14 @@ jobs:
           status=$(curl "${common[@]}" --output /tmp/review-read.json --header "Authorization: Bearer $BUILDHOUND_REVIEW_TOKEN" "$dashboard_url/v1/builds/$build_id")
           test "$status" = 200
           jq -e --arg id "$build_id" '.buildId == $id' /tmp/review-read.json > /dev/null
+      - id: deploy_status
+        name: Capture deploy step outcome
+        if: ${{ always() }}
+        env:
+          OUTCOME: "${{ steps.deploy.outcome }}"
+        run: |
+          case "$OUTCOME" in success|failure|cancelled|skipped) ;; *) exit 1;; esac
+          echo "outcome=$OUTCOME" >> "$GITHUB_OUTPUT"
       - name: Delete superseded exact-owned review images
         if: env.REVIEW_ACTION == 'deploy'
         env:
@@ -160,6 +195,7 @@ jobs:
           DOKPLOY_URL: "${{ vars.DOKPLOY_URL }}"
           DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}"
           ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"
+          DNS_SUFFIX: "${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}"
           GH_TOKEN: "${{ github.token }}"
           PR: "${{ env.REVIEW_PR }}"
         run: |
@@ -185,18 +221,52 @@ jobs:
             fi
           fi
 
-          # Keep the compose as a scheduled-reconciliation retry anchor until image cleanup succeeds.
+          if [ "$review_count" -eq 1 ]; then
+            python3 deploy/dokploy/dokploy.py revoke-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha"
+          fi
+          # Keep the stopped Compose as a retry anchor until package cleanup succeeds.
           REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh
           if [ "$review_count" -eq 1 ]; then
-            # GHCR cleanup can be slow; close the relabel/reopen race immediately before Stack deletion.
-            data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$PR")
-            state=$(jq -er '.state | select(type == "string")' <<<"$data")
-            if [ "$state" = open ]; then
-              labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name')
-              if grep -Fx deploy-review <<<"$labels" >/dev/null; then
-                echo "::notice::Review became eligible again; preserving Stack"
-                exit 0
-              fi
+            python3 deploy/dokploy/dokploy.py delete-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha"
+          fi
+  reconcile_failed_review:
+    needs: review
+    if: ${{ always() && needs.review.outputs.deploy_outcome == 'failure' }}
+    runs-on: ubuntu-latest
+    environment: review-cleanup
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.event.repository.default_branch }}"}
+      - name: Reconcile failed exact-owned review
+        env:
+          DOKPLOY_URL: "${{ vars.DOKPLOY_URL }}"
+          DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}"
+          ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"
+          DNS_SUFFIX: "${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}"
+          GH_TOKEN: "${{ github.token }}"
+          PR: "${{ env.REVIEW_PR }}"
+          SHA: "${{ env.REVIEW_SHA }}"
+        run: |
+          python3 deploy/dokploy/dokploy.py list-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" > /tmp/failed-reviews.json
+          review_count=$(jq -er --argjson pr "$PR" '[.[] | select(.pr == $pr)] | length' /tmp/failed-reviews.json)
+          test "$review_count" -le 1
+          cleanup_attempted_review=false
+          keep_sha=
+          if [ "$review_count" -eq 1 ]; then
+            review=$(jq -cer --argjson pr "$PR" '.[] | select(.pr == $pr)' /tmp/failed-reviews.json)
+            compose_id=$(jq -er .composeId <<<"$review")
+            deployed_sha=$(jq -er .sha <<<"$review")
+            [[ "$compose_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]]
+            [[ "$deployed_sha" =~ ^[0-9a-f]{40}$ ]]
+            if [ "$deployed_sha" = "$SHA" ]; then
+              cleanup_attempted_review=true
+              python3 deploy/dokploy/dokploy.py revoke-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha"
+            else
+              keep_sha="$deployed_sha"
+              echo "::notice::A different review SHA is persisted; preserving its Stack and images"
             fi
-            python3 deploy/dokploy/dokploy.py delete-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha"
+          fi
+          KEEP_SHA="$keep_sha" REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh
+          if [ "$cleanup_attempted_review" = true ]; then
+            python3 deploy/dokploy/dokploy.py delete-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha"
           fi
