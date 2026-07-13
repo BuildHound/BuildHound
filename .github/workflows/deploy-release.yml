@@ -60,7 +60,7 @@ jobs:
           OBJECT: ${{ inputs.backup_object }}
           DB_INSTANCE: ${{ secrets.BUILDHOUND_DB_INSTANCE }}
           AGE_RECIPIENT: ${{ vars.BUILDHOUND_AGE_RECIPIENT }}
-          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
           DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
         run: |
@@ -94,7 +94,7 @@ jobs:
           test $(( now_epoch - started_epoch )) -le 86400
       - name: Explicit Dokploy deploy
         env:
-          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
           DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
           SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}

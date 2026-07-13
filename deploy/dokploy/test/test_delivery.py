@@ -108,7 +108,14 @@ class DeliveryTest(unittest.TestCase):
     client=d.Client('https://dokploy.test','token')
     redirect=next(handler for handler in client.opener.handlers if type(handler).__name__ == 'NoRedirect')
     self.assertIsNone(redirect.redirect_request(None,None,302,'Found',{},'https://attacker.test'))
-  def test_review_name_is_deterministic(self): self.assertEqual(d.review_name('BuildHound/BuildHound',42),'review-buildhound-buildhound-42')
+  def test_review_name_is_deterministic(self):
+    self.assertEqual(d.review_name(42),'mr42')
+    with self.assertRaises(ValueError): d.review_name(0)
+  def test_review_provider_id_is_repo_scoped(self):
+    provider_id=d.review_provider_id('BuildHound/BuildHound',42)
+    self.assertEqual(provider_id,d.review_provider_id('buildhound/buildhound',42))
+    self.assertNotEqual(provider_id,d.review_provider_id('Another/Repository',42))
+    self.assertRegex(provider_id,r'^bh-[0-9a-f]{24}-mr42$')
   def test_review_retry_updates_owned_compose(self):
     calls=[]
     class Fake:
@@ -116,7 +123,7 @@ class DeliveryTest(unittest.TestCase):
       def __init__(self,*_): pass
       def request(self,method,path,body=None):
         calls.append((method,path,body))
-        if path.startswith('/api/environment.one'): return {'compose':[{'name':'review-buildhound-buildhound-42','composeId':'c1','description':'{"repository":"BuildHound/BuildHound","pr":42,"sha":"'+'a'*40+'"}'}]}
+        if path.startswith('/api/environment.one'): return {'compose':[{'name':'mr42','composeId':'c1','description':'{"repository":"BuildHound/BuildHound","pr":42,"sha":"'+'a'*40+'"}'}]}
         if path == '/api/compose.deploy': Fake.deployed=True; return {}
         if path.startswith('/api/deployment.allByCompose') and Fake.deployed: return [{'deploymentId':'new-review','title':'a'*40,'status':'done'}]
         if path.startswith('/api/deployment.allByCompose'): return [{'deploymentId':'old-review','title':'old','status':'done'}]
@@ -125,6 +132,26 @@ class DeliveryTest(unittest.TestCase):
     env={'DOKPLOY_URL':'https://dokploy.test','DOKPLOY_TOKEN':'token','BUILDHOUND_REVIEW_DB_PASSWORD':'db','BUILDHOUND_REVIEW_TOKEN':'review'}
     with mock.patch.object(d,'Client',Fake), mock.patch.object(sys,'argv',argv), mock.patch.dict(os.environ,env,clear=False): self.assertEqual(d.main(),0)
     self.assertIn('/api/compose.update',[x[1] for x in calls]); self.assertNotIn('/api/compose.create',[x[1] for x in calls])
+  def test_review_create_separates_public_name_from_provider_id(self):
+    calls=[]
+    class Fake:
+      deployed=False
+      def __init__(self,*_): pass
+      def request(self,method,path,body=None):
+        calls.append((method,path,body))
+        if path.startswith('/api/environment.one'): return {'compose':[]}
+        if path == '/api/compose.create': return {'composeId':'c1'}
+        if path == '/api/compose.deploy': Fake.deployed=True; return {}
+        if path.startswith('/api/deployment.allByCompose') and Fake.deployed: return [{'deploymentId':'new-review','title':'a'*40,'status':'done'}]
+        return {}
+    argv=['dokploy.py','deploy-review','--base-repo','BuildHound/BuildHound','--head-repo','BuildHound/BuildHound','--sha','a'*40,'--state','open','--environment-id','e1','--dns-suffix','reviews.test','--pr','42','--label-present','--server-image','ghcr.io/x/server@sha256:'+'1'*64,'--site-image','ghcr.io/x/site@sha256:'+'2'*64]
+    env={'DOKPLOY_URL':'https://dokploy.test','DOKPLOY_TOKEN':'token','BUILDHOUND_REVIEW_DB_PASSWORD':'db','BUILDHOUND_REVIEW_TOKEN':'review'}
+    with mock.patch.object(d,'Client',Fake), mock.patch.object(sys,'argv',argv), mock.patch.dict(os.environ,env,clear=False): self.assertEqual(d.main(),0)
+    create=next(body for method,path,body in calls if method == 'POST' and path == '/api/compose.create')
+    provider_id=d.review_provider_id('BuildHound/BuildHound',42)
+    self.assertEqual(create['name'],'mr42'); self.assertEqual(create['appName'],provider_id)
+    self.assertIn(f'traefik.http.routers.{provider_id}-site',create['composeFile'])
+    self.assertNotIn('traefik.http.routers.mr42-site',create['composeFile'])
   def test_release_updates_exact_resources_before_deploy(self):
     checksum=hashlib.sha256((Path(__file__).parents[1]/'stack.yaml').read_bytes()).hexdigest()
     guard_checksum=hashlib.sha256((Path(__file__).parents[1]/'volume-guard.sh').read_bytes()).hexdigest()

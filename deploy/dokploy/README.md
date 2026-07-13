@@ -7,6 +7,14 @@ environments. Never use verbose HTTP tracing.
 
 ## Capability gate
 
+Set the shared GitHub Actions repository variable `DOKPLOY_URL` to the complete HTTPS
+origin, for example `https://dokploy.example.com`. Keep `DOKPLOY_TOKEN` as a separate
+GitHub Environment secret in `review`, `review-cleanup`, `staging`, and `production` so
+each environment can use the narrowest available token. Treat repository Actions-variable
+administration as part of the deployment trust boundary: changing this URL redirects where
+those tokens are sent. If that administration must be less trusted, define the same
+`DOKPLOY_URL` variable separately in each GitHub Environment instead.
+
 The client targets Dokploy's documented `x-api-key` API (`compose.update`,
 `compose.create`, `compose.isolatedDeployment`, `compose.deploy`, and Application update/
 deploy; checked 2026-07-12). Before production, record the installed Dokploy version and verify in staging: Stack
@@ -90,6 +98,16 @@ only ephemeral credentials. Configure the `review`, `staging`, and `production` 
 Environments to allow deployments only from protected `main`; each workflow also rejects a
 dispatch whose `GITHUB_REF` is not the default branch. Private GHCR resolution authenticates in Actions, and every
 eligible Dokploy worker must have pull credentials. Set a fixed `MAX_ACTIVE` and set
+`BUILDHOUND_REVIEW_DNS_SUFFIX` to the suffix only. PR 10 then uses
+`mr10.<review DNS suffix>` for the site and `mr10.dashboard.<review DNS suffix>` for the
+dashboard. DNS must resolve both `*.<review DNS suffix>` and
+`*.dashboard.<review DNS suffix>` to Traefik. Each repository sharing a Traefik provider
+must use a unique review DNS suffix because the intentionally short public host does not
+contain repository identity. The public name remains `mr10`, while Dokploy's application
+name and Traefik identifiers use an automatically generated, repository-scoped internal ID.
+Before enabling reviews, verify the review environment has
+no legacy `review-<repository>-<PR>` resources; reviews are default-off, so drain any such
+test resources with the old client rather than allowing duplicate ownership. Set
 `BUILDHOUND_REVIEW_TTL_HOURS` to a base-10 value between 1 and 87600 in the review
 environment. Prove
 review cannot reach staging/production before enabling it. Cleanup removes the concrete
