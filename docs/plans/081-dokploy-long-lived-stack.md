@@ -27,8 +27,10 @@ Dokploy environment secret pending a separate server plan.
 - Add a trusted Stack manifest and runbook under `deploy/dokploy/`. Use no `build:`,
   `container_name`, host ports, `depends_on`, floating images, or top-level `restart:`.
   Digest-addressed single replicas use fixed pilot resource/log bounds, stop-first updates,
-  and `failure_action: pause`. Publish tested server/backup images in a non-cancelling job,
-  handle GHCR worker authentication, and prove an explicit manual Dokploy deploy.
+  and `failure_action: pause`. Publish tested server/backup images plus a minimal guarded
+  PostgreSQL wrapper image in a non-cancelling job, handle GHCR worker authentication, and
+  prove an explicit manual Dokploy deploy. Baking the guard into that digest avoids remote
+  raw-Stack dependence on a checkout-local config file.
 - Treat installed-version behavior as an early staging gate: verify Stack `env_file`, external
   secrets/configs, domain labels, digest references, and registry pulls; do not assume `${VAR}`
   interpolation. Scope secrets to consumers. If Stack mode exposes only one merged secret

@@ -3,7 +3,22 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [buildhound-server/**, site/**, deploy/dokploy/backup/**, .github/workflows/publish-deploy-images.yml]
+    paths:
+      - build.gradle.kts
+      - settings.gradle.kts
+      - gradle.properties
+      - gradlew
+      - gradle/**
+      - .dockerignore
+      - buildhound-commons/**
+      - buildhound-server/**
+      - buildhound-report/**
+      - buildhound-gradle-plugin/build.gradle.kts
+      - buildhound-internal-adapters/build.gradle.kts
+      - docs/api/openapi.yaml
+      - site/**
+      - deploy/dokploy/**
+      - .github/workflows/publish-deploy-images.yml
 permissions: {contents: read, packages: write}
 env:
   IMAGE_REGISTRY_PREFIX: ghcr.io/buildhound
@@ -13,7 +28,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    strategy: {fail-fast: false, matrix: {image: [server, site, backup]}}
+    strategy: {fail-fast: false, matrix: {image: [server, site, backup, db]}}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
@@ -23,7 +38,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.image == 'server' && 'buildhound-server/Dockerfile' || matrix.image == 'site' && 'site/Dockerfile' || 'deploy/dokploy/backup/Dockerfile' }}
+          file: ${{ matrix.image == 'server' && 'buildhound-server/Dockerfile' || matrix.image == 'site' && 'site/Dockerfile' || matrix.image == 'backup' && 'deploy/dokploy/backup/Dockerfile' || 'deploy/dokploy/db/Dockerfile' }}
           push: true
           tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-${{ matrix.image }}:${{ github.sha }}
           provenance: true
@@ -41,7 +56,9 @@ jobs:
         with: {pattern: "image-*", merge-multiple: true}
       - name: Build canonical release BOM
         run: |
-          migration=$(find buildhound-server/src/main/resources/db/migration -type f -name 'V*__*.sql' -printf '%f\n' | sort -V | tail -1 | sed 's/\.sql$//')
-          python3 deploy/dokploy/render-release.py --source-commit "$GITHUB_SHA" --server-image "$(cat image-server.txt)" --site-image "$(cat image-site.txt)" --backup-image "$(cat image-backup.txt)" --postgres-image 'timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888' --manifest deploy/dokploy/stack.yaml --migration-id "$migration"
+          python3 deploy/dokploy/render-release.py --source-commit "$GITHUB_SHA" --server-image "$(cat image-server.txt)" --site-image "$(cat image-site.txt)" --backup-image "$(cat image-backup.txt)" --postgres-image "$(cat image-db.txt)" --manifest deploy/dokploy/stack.yaml --volume-guard deploy/dokploy/volume-guard.sh --migrations-dir buildhound-server/src/main/resources/db/migration
+          python3 deploy/dokploy/dokploy.py release-id release.json >/dev/null
+          mkdir release-artifact
+          cp release.json deploy/dokploy/stack.yaml deploy/dokploy/volume-guard.sh release-artifact/
       - uses: actions/upload-artifact@v4
-        with: {name: "release-${{ github.sha }}", path: release.json, retention-days: 90}
+        with: {name: "release-${{ github.sha }}", path: release-artifact, retention-days: 90}

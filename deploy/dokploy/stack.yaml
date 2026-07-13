@@ -39,13 +39,14 @@ services:
         - traefik.http.routers.buildhound.rule=Host(`${BUILDHOUND_DASHBOARD_HOST}`)
         - traefik.http.routers.buildhound.entrypoints=websecure
         - traefik.http.routers.buildhound.tls.certresolver=letsencrypt
-        - traefik.http.routers.buildhound.middlewares=buildhound-ratelimit
+        - traefik.http.routers.buildhound.middlewares=buildhound-ratelimit,buildhound-robots
         - traefik.http.middlewares.buildhound-ratelimit.ratelimit.average=10
         - traefik.http.middlewares.buildhound-ratelimit.ratelimit.burst=20
+        - traefik.http.middlewares.buildhound-robots.headers.customresponseheaders.X-Robots-Tag=${BUILDHOUND_ROBOTS_HEADER:-all}
         - traefik.http.services.buildhound.loadbalancer.server.port=8080
 
   db:
-    image: timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
+    image: ${BUILDHOUND_POSTGRES_IMAGE}
     entrypoint: [/opt/buildhound/volume-guard.sh]
     environment:
       POSTGRES_DB: buildhound
@@ -56,10 +57,6 @@ services:
       BUILDHOUND_DB_ALLOW_INIT: ${BUILDHOUND_DB_ALLOW_INIT:-false}
       BUILDHOUND_DB_MAJOR: "16"
     secrets: [db_password]
-    configs:
-      - source: volume_guard
-        target: /opt/buildhound/volume-guard.sh
-        mode: 0555
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks: [private]
@@ -136,10 +133,6 @@ networks:
 volumes:
   pgdata:
     name: ${BUILDHOUND_PGDATA_VOLUME}
-
-configs:
-  volume_guard:
-    file: ./volume-guard.sh
 
 secrets:
   db_password: {external: true, name: "${BUILDHOUND_DB_PASSWORD_SECRET}"}

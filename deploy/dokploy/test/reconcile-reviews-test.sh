@@ -36,6 +36,14 @@ EOF
 cat > "$bin/gh" <<'EOF'
 #!/bin/sh
 set -eu
+case "$*" in
+  "api repos/BuildHound/BuildHound --jq .owner.type") printf 'Organization\n'; exit 0 ;;
+  "api repos/BuildHound/BuildHound/actions/workflows/review-images.yml --jq .id") printf '99\n'; exit 0 ;;
+  *"packages/container/buildhound-server/versions"*|*"packages/container/buildhound-site/versions"*)
+    if [ "${FAIL_IMAGE_PR:-}" = "${REVIEW_PR:-}" ]; then exit 1; fi
+    printf '[[]]\n'; exit 0
+    ;;
+esac
 url=$2
 case "$url" in
   */pulls/*)
@@ -84,6 +92,7 @@ run_reconcile() {
   labels=$4
   fail_delete=${5:-}
   fail_gh=${6:-}
+  fail_image=${7:-}
   : > "$delete_log"
   PATH="$bin:$PATH" \
     TTL_HOURS="$ttl" \
@@ -94,6 +103,7 @@ run_reconcile() {
     PR_LABELS="$labels" \
     FAIL_DELETE_PR="$fail_delete" \
     GH_FAIL_PR="$fail_gh" \
+    FAIL_IMAGE_PR="$fail_image" \
     sh deploy/dokploy/reconcile-reviews.sh
 }
 
@@ -133,5 +143,11 @@ failed_lookup=$(review 5 '"fresh"')
 later_closed=$(review 6 '"fresh"')
 if run_reconcile 1 "[$failed_lookup,$later_closed]" '{"5":"open","6":"closed"}' '{"5":["deploy-review"]}' '' 5; then exit 1; fi
 assert_deletes 6
+
+image_cleanup_retry=$(review 7 '"fresh"')
+if run_reconcile 1 "[$image_cleanup_retry]" '{"7":"closed"}' '{}' '' '' 7; then exit 1; fi
+assert_deletes ''
+run_reconcile 1 "[$image_cleanup_retry]" '{"7":"closed"}' '{}'
+assert_deletes 7
 
 printf 'review reconciliation validated\n'

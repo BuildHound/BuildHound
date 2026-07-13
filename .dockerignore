@@ -12,4 +12,8 @@ deploy/*
 deploy/dokploy/*
 !deploy/dokploy/backup/
 !deploy/dokploy/backup/*.sh
+!deploy/dokploy/db/
+!deploy/dokploy/db/Dockerfile
+!deploy/dokploy/db/*.sh
+!deploy/dokploy/volume-guard.sh
 *.md

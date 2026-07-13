@@ -1,9 +1,41 @@
 #!/bin/bash
 set -euo pipefail
 : "${BUILDHOUND_SITE_URL:?}" "${BUILDHOUND_DASHBOARD_URL:?}" "${BUILDHOUND_READ_TOKEN:?}" "${BUILDHOUND_INGEST_TOKEN:?}"
+python3 - "$BUILDHOUND_SITE_URL" "$BUILDHOUND_DASHBOARD_URL" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+for label, value in zip(("site URL", "dashboard URL"), sys.argv[1:]):
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise SystemExit(f"{label} must be an exact HTTPS origin") from None
+    invalid = (
+        parsed.scheme != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != ""
+        or parsed.query != ""
+        or parsed.fragment != ""
+        or any(character.isspace() or ord(character) < 32 for character in value)
+        or port == 0
+    )
+    host = parsed.hostname or ""
+    canonical_netloc = f"[{host}]" if ":" in host else host
+    if port is not None:
+        canonical_netloc += f":{port}"
+    if invalid or value != f"https://{canonical_netloc}":
+        raise SystemExit(f"{label} must be an exact HTTPS origin")
+PY
 payload=buildhound-commons/src/jvmTest/resources/golden/build-payload-v1-ci-env.json
-build_id=$(jq -r .buildId "$payload")
+request_payload=$(mktemp)
+trap 'rm -f "$request_payload"' EXIT
+new_build_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
+jq --arg build_id "$new_build_id" '.buildId = $build_id' "$payload" > "$request_payload"
+build_id=$(jq -er .buildId "$request_payload")
 curl -fsS "$BUILDHOUND_SITE_URL/" | grep -q 'Track every Gradle build'
 curl -fsS "$BUILDHOUND_DASHBOARD_URL/health" | grep -qx ok
-curl -fsS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $BUILDHOUND_INGEST_TOKEN" -H 'Content-Type: application/json' --data-binary "@$payload" "$BUILDHOUND_DASHBOARD_URL/v1/builds" | grep -qx 202
+curl -fsS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $BUILDHOUND_INGEST_TOKEN" -H 'Content-Type: application/json' --data-binary "@$request_payload" "$BUILDHOUND_DASHBOARD_URL/v1/builds" | grep -qx 202
 curl -fsS -H "Authorization: Bearer $BUILDHOUND_READ_TOKEN" "$BUILDHOUND_DASHBOARD_URL/v1/builds/$build_id" | jq -e --arg id "$build_id" '.buildId == $id' >/dev/null

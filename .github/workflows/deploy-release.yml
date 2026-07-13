@@ -7,8 +7,9 @@ on:
       source_run_id: {description: Successful main-branch publish workflow run ID, required: true}
       staging_run_id: {description: Successful staging deployment run ID for production, required: false}
       backup_object: {description: Fresh encrypted backup object key, required: true}
-      bootstrap_bom: {description: First staging BOM after a verified manual deployment, type: boolean, default: false}
-permissions: {contents: read, actions: read}
+      bootstrap_bom: {description: First BOM after a verified manual deployment; production also requires staging proof and compatibility attestation, type: boolean, default: false}
+      rollback_compatibility_attested: {description: Required only when the candidate migration is older than or cannot be compared with the current deployment, type: boolean, default: false}
+permissions: {contents: read, actions: read, deployments: read}
 concurrency:
   group: deploy-${{ inputs.target }}
   cancel-in-progress: false
@@ -17,22 +18,26 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.target }}
     steps:
-      - uses: actions/checkout@v4
-        with: {ref: "${{ github.event.repository.default_branch }}"}
+      - name: Enforce protected default-branch dispatch
+        run: test "$GITHUB_REF" = "refs/heads/${{ github.event.repository.default_branch }}"
       - uses: actions/download-artifact@v4
-        with: {name: "${{ inputs.release_artifact }}", run-id: "${{ inputs.source_run_id }}", github-token: "${{ github.token }}"}
+        with: {name: "${{ inputs.release_artifact }}", run-id: "${{ inputs.source_run_id }}", github-token: "${{ github.token }}", path: /tmp/release}
       - name: Verify trusted publish provenance
-        env: {GH_TOKEN: "${{ github.token }}", RUN: "${{ inputs.source_run_id }}"}
+        env: {GH_TOKEN: "${{ github.token }}", RUN: "${{ inputs.source_run_id }}", RELEASE: /tmp/release/release.json}
         run: |
           run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$RUN")
+          source_sha=$(jq -er .sourceCommit "$RELEASE")
+          printf '%s\n' "$source_sha" | grep -Eq '^[0-9a-f]{40}$'
           test "$(jq -r .conclusion <<<"$run")" = success
           test "$(jq -r .head_branch <<<"$run")" = "${{ github.event.repository.default_branch }}"
           test "$(jq -r .name <<<"$run")" = 'Publish deployment images'
-          test "$(jq -r .head_sha <<<"$run")" = "$(jq -r .sourceCommit release.json)"
+          test "$(jq -r .head_sha <<<"$run")" = "$source_sha"
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.event.repository.default_branch }}"}
       - name: Validate release and production gates
         env: {TARGET: "${{ inputs.target }}", STAGING_RUN: "${{ inputs.staging_run_id }}", GH_TOKEN: "${{ github.token }}"}
         run: |
-          id=$(python3 deploy/dokploy/dokploy.py release-id release.json)
+          id=$(python3 deploy/dokploy/dokploy.py release-id /tmp/release/release.json)
           if [ "$TARGET" = production ]; then
             test -n "$STAGING_RUN"
             run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$STAGING_RUN")
@@ -70,9 +75,15 @@ jobs:
           test "$(jq -r .VersionId /tmp/backup-head.json)" != null
           test "$(jq -r '.Metadata["buildhound-db-instance"]' /tmp/backup-head.json)" = "$DB_INSTANCE"
           test "$(jq -r '.Metadata["age-recipient-sha256"]' /tmp/backup-head.json)" = "$(printf '%s' "$AGE_RECIPIENT" | sha256sum | cut -d' ' -f1)"
+          test "$(jq -r '.Metadata["buildhound-backup-complete"]' /tmp/backup-head.json)" = true
           if [ '${{ inputs.bootstrap_bom }}' = true ]; then
-            test '${{ inputs.target }}' = staging
             test "$(jq -r '.Metadata["buildhound-release-id"]' /tmp/backup-head.json)" = manual
+            python3 deploy/dokploy/dokploy.py require-manual-current --compose-id "$COMPOSE_ID"
+            if [ '${{ inputs.target }}' = production ]; then
+              test '${{ inputs.rollback_compatibility_attested }}' = true
+            else
+              test '${{ inputs.target }}' = staging
+            fi
           else
             current=$(python3 deploy/dokploy/dokploy.py current-release-id --compose-id "$COMPOSE_ID")
             test "$(jq -r '.Metadata["buildhound-release-id"]' /tmp/backup-head.json)" = "$current"
@@ -87,7 +98,16 @@ jobs:
           DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
           SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
-        run: python3 deploy/dokploy/dokploy.py deploy-release release.json --compose-id "$COMPOSE_ID" --site-application-id "$SITE_APPLICATION_ID" > deployment-evidence.json
+        run: |
+          compatibility=()
+          bootstrap=()
+          if [ '${{ inputs.rollback_compatibility_attested }}' = true ]; then
+            compatibility+=(--rollback-compatible)
+          fi
+          if [ '${{ inputs.bootstrap_bom }}' = true ]; then
+            bootstrap+=(--bootstrap-manual-current)
+          fi
+          python3 deploy/dokploy/dokploy.py deploy-release /tmp/release/release.json --manifest /tmp/release/stack.yaml --volume-guard /tmp/release/volume-guard.sh --compose-id "$COMPOSE_ID" --site-application-id "$SITE_APPLICATION_ID" "${compatibility[@]}" "${bootstrap[@]}" > deployment-evidence.json
       - name: Verify public site and authenticated data path
         env:
           BUILDHOUND_SITE_URL: ${{ vars.BUILDHOUND_SITE_URL }}
