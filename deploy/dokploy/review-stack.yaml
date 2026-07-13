@@ -2,6 +2,9 @@ version: "3.8"
 services:
   site:
     image: ${BUILDHOUND_SITE_IMAGE}
+    user: "101:101"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       BUILDHOUND_SITE_DASHBOARD_URL: https://${BUILDHOUND_REVIEW_DASHBOARD_HOST}
       BUILDHOUND_SITE_NOINDEX: "true"
@@ -22,9 +25,13 @@ services:
         - traefik.http.routers.${BUILDHOUND_REVIEW_NAME}-site.rule=Host(`${BUILDHOUND_REVIEW_SITE_HOST}`)
         - traefik.http.routers.${BUILDHOUND_REVIEW_NAME}-site.entrypoints=websecure
         - traefik.http.routers.${BUILDHOUND_REVIEW_NAME}-site.tls.certresolver=letsencrypt
+        - traefik.http.routers.${BUILDHOUND_REVIEW_NAME}-site.middlewares=${BUILDHOUND_REVIEW_NAME}-noindex
         - traefik.http.services.${BUILDHOUND_REVIEW_NAME}-site.loadbalancer.server.port=8080
   server:
     image: ${BUILDHOUND_SERVER_IMAGE}
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       BUILDHOUND_DB_URL: jdbc:postgresql://db:5432/buildhound
       BUILDHOUND_DB_USER: buildhound

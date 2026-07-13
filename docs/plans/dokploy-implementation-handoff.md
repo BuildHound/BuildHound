@@ -104,7 +104,8 @@ Commit names/placeholders only; the owner supplies values out of band:
 - production/staging site and dashboard FQDNs, review DNS suffixes, and the Traefik-node DNS
   target used for HTTP-01;
 - unique DB-node labels/instance identities and the Traefik-node label;
-- GHCR server/site/backup package names and worker pull credential if packages remain private;
+- GHCR server/site/backup/guarded-PostgreSQL package names and worker pull credential if
+  packages remain private;
 - separate production/staging Hetzner project, endpoint, region, bucket, and backup-service
   credentials;
 - production/staging age recipients plus the offline private-key escrow owner/procedure;
@@ -137,8 +138,10 @@ Commit names/placeholders only; the owner supplies values out of band:
 
 ### 081
 
-- `deploy/dokploy/stack.yaml`, backup-toolbox files, validation/smoke scripts, and runbook;
-- server/backup image publish jobs and explicit manual deployment instructions;
+- `deploy/dokploy/stack.yaml`, backup-toolbox/guarded-PostgreSQL image files,
+  validation/smoke scripts, and runbook;
+- server/backup/guarded-PostgreSQL image publish jobs and explicit manual deployment
+  instructions;
 - `docs/self-hosting.md` and `docs/architecture.md` decision/log updates;
 - no server Kotlin/configuration change.
 

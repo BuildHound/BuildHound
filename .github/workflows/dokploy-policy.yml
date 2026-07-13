@@ -1,10 +1,10 @@
 name: Dokploy policy
 on:
   pull_request:
-    paths: [deploy/dokploy/**, site/**, .github/workflows/**]
+    paths: [deploy/dokploy/**, site/**, .dockerignore, .github/workflows/**]
   push:
     branches: [main]
-    paths: [deploy/dokploy/**, site/**, .github/workflows/**]
+    paths: [deploy/dokploy/**, site/**, .dockerignore, .github/workflows/**]
 permissions: {contents: read}
 jobs:
   policy:
@@ -14,6 +14,51 @@ jobs:
       - run: python3 -m unittest discover -s deploy/dokploy/test -v
       - run: sh site/test/site-test.sh
       - run: sh deploy/dokploy/test/volume-guard-test.sh
+      - run: bash deploy/dokploy/test/backup-loop-test.sh
+      - run: bash deploy/dokploy/test/restore-test.sh
+      - run: bash deploy/dokploy/test/verify-release-test.sh
+      - run: bash deploy/dokploy/test/delete-review-images-test.sh
       - run: sh deploy/dokploy/test/reconcile-reviews-test.sh
+      - name: Validate long-lived Stack policy
+        env:
+          BUILDHOUND_SERVER_IMAGE: ghcr.io/buildhound/server@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          BUILDHOUND_BACKUP_IMAGE: ghcr.io/buildhound/backup@sha256:2222222222222222222222222222222222222222222222222222222222222222
+          BUILDHOUND_POSTGRES_IMAGE: ghcr.io/buildhound/db@sha256:3333333333333333333333333333333333333333333333333333333333333333
+          BUILDHOUND_DB_PASSWORD: <redacted>
+          BUILDHOUND_BOOTSTRAP_TOKEN: <redacted>
+          BUILDHOUND_DB_INSTANCE: ci
+          BUILDHOUND_DB_NODE: ci
+          BUILDHOUND_DB_PASSWORD_SECRET: ci-db
+          BUILDHOUND_PGDATA_VOLUME: ci-pgdata
+          BUILDHOUND_PGPASS_SECRET: ci-pgpass
+          BUILDHOUND_S3_CREDENTIALS_SECRET: ci-s3
+          BUILDHOUND_AGE_RECIPIENT: age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqs9e2p
+          BUILDHOUND_S3_ENDPOINT: https://s3.example.test
+          BUILDHOUND_S3_BUCKET: ci
+          BUILDHOUND_DASHBOARD_HOST: dashboard.example.test
+          DOKPLOY_INGRESS_NETWORK: ingress
+        run: deploy/dokploy/validate-stack.sh
+      - name: Render trusted review Stack
+        env:
+          BUILDHOUND_SERVER_IMAGE: ghcr.io/buildhound/server@sha256:1111111111111111111111111111111111111111111111111111111111111111
+          BUILDHOUND_SITE_IMAGE: ghcr.io/buildhound/site@sha256:2222222222222222222222222222222222222222222222222222222222222222
+          BUILDHOUND_REVIEW_DB_PASSWORD: dummy
+          BUILDHOUND_REVIEW_TOKEN: dummy
+          BUILDHOUND_REPOSITORY: BuildHound/BuildHound
+          BUILDHOUND_PR_NUMBER: "20"
+          BUILDHOUND_HEAD_SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          BUILDHOUND_REVIEW_NAME: review-buildhound-buildhound-20
+          BUILDHOUND_REVIEW_SITE_HOST: review-buildhound-buildhound-20.example.test
+          BUILDHOUND_REVIEW_DASHBOARD_HOST: dashboard-review-buildhound-buildhound-20.example.test
+          DOKPLOY_REVIEW_INGRESS_NETWORK: ingress
+        run: docker stack config -c deploy/dokploy/review-stack.yaml >/dev/null
+      - name: Build deployment support images
+        run: |
+          docker build -f site/Dockerfile -t buildhound-site:policy .
+          docker build -f deploy/dokploy/backup/Dockerfile -t buildhound-backup:policy .
+          docker build -f deploy/dokploy/db/Dockerfile -t buildhound-db:policy .
+          BUILDHOUND_SITE_TEST_IMAGE=buildhound-site:policy sh site/test/site-test.sh
+      - name: ShellCheck deployment scripts
+        run: find deploy/dokploy site -type f -name '*.sh' -print0 | xargs -0 shellcheck
       - name: Validate shell syntax
         run: find deploy/dokploy site -type f -name '*.sh' -exec sh -n {} \;

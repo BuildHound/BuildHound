@@ -19,14 +19,16 @@ capacity allocator/global inventory service.
 
 - Keep Dokploy API behavior in tested scripts under `deploy/dokploy/`; workflows orchestrate
   them. Trusted CI resolves digests and publishes digest-addressed `release.json` containing
-  source commit, server/site/backup/PostgreSQL digests, manifest/config checksums, and migration
-  identity. Its digest is the release ID; mutable tags are aliases only. Plans 081/082 remain
+  source commit, server/site/backup/PostgreSQL digests, manifest/config checksums, and the
+  complete numerically ordered Flyway migration IDs/source checksums. Its digest is the
+  release ID; mutable tags are aliases only. Plans 081/082 remain
   manually deployable.
 - Staging explicitly deploys one BOM and records its digest/returned deployment IDs.
   Production accepts only that staging-proven BOM, requires protected-environment approval
   and a fresh backup, and never rebuilds. Use distinct narrowest-available review, staging,
-  and production Dokploy credentials. Previous-BOM rollback requires migration compatibility;
-  otherwise pause and roll forward.
+  and production Dokploy credentials. A forward deployment must reproduce the current
+  migration-history prefix exactly; previous-BOM rollback requires explicit migration
+  compatibility attestation. Otherwise pause and roll forward.
 - Build same-repository PR images in an unprivileged job with no Dokploy, environment,
   backup, or object-store secret and only package permission for
   `pr-<N>-<full-head-sha>`. Fork PRs receive CI only.

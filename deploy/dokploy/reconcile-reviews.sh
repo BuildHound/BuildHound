@@ -121,7 +121,12 @@ while IFS= read -r review; do
     fi
   fi
 
-  if ! python3 deploy/dokploy/dokploy.py delete-review \
+  # Remove exact-owned images first. If that fails, keep the compose discoverable so
+  # the next reconciliation run can retry instead of orphaning package versions.
+  if ! REVIEW_PR="$pr" deploy/dokploy/delete-review-images.sh; then
+    warn_review "$pr" "exact-owned GHCR cleanup failed; preserving review for retry"
+    had_error=true
+  elif ! python3 deploy/dokploy/dokploy.py delete-review \
     --base-repo "$GITHUB_REPOSITORY" \
     --pr "$pr" \
     --environment-id "$ENVIRONMENT_ID" \
