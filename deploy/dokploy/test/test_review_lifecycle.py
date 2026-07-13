@@ -55,7 +55,7 @@ class ReviewLifecycleTest(unittest.TestCase):
                 calls.append((method, path, body))
                 if path.startswith("/api/environment.one"):
                     return {"compose": [{
-                        "name": "review-buildhound-buildhound-42",
+                        "name": "mr42",
                         "composeId": "compose-42",
                         "description": json.dumps({"repository": "BuildHound/BuildHound", "pr": 42, "sha": "b" * 40}),
                     }]}
@@ -137,16 +137,16 @@ class ReviewLifecycleTest(unittest.TestCase):
         self.assertEqual(output.getvalue().strip(), "1")
 
     def test_review_hosts_reject_non_dns_input_and_overlong_labels(self):
-        name = dokploy.review_name("BuildHound/BuildHound", 42)
+        name = dokploy.review_name(42)
         self.assertEqual(
             dokploy.review_hosts(name, "reviews.example.test"),
-            (f"{name}.reviews.example.test", f"dashboard-{name}.reviews.example.test"),
+            ("mr42.reviews.example.test", "mr42.dashboard.reviews.example.test"),
         )
         for suffix in ("reviews.example.test/path", "Reviews.example.test", "localhost", "reviews..test"):
             with self.subTest(suffix=suffix), self.assertRaises(ValueError):
                 dokploy.review_hosts(name, suffix)
         with self.assertRaises(ValueError):
-            dokploy.review_hosts("r" * 60, "reviews.example.test")
+            dokploy.review_hosts("r" * 64, "reviews.example.test")
 
     def test_trusted_stack_hardens_both_public_services_and_both_routers(self):
         stack = (ROOT / "deploy/dokploy/review-stack.yaml").read_text()
@@ -157,7 +157,7 @@ class ReviewLifecycleTest(unittest.TestCase):
         for service in (site, server):
             self.assertIn("cap_drop: [ALL]", service)
             self.assertIn('security_opt: ["no-new-privileges:true"]', service)
-            self.assertRegex(service, r"routers\.\$\{BUILDHOUND_REVIEW_NAME\}-(?:site|server)\.middlewares=\$\{BUILDHOUND_REVIEW_NAME\}-noindex")
+            self.assertRegex(service, r"routers\.\$\{BUILDHOUND_REVIEW_PROVIDER_ID\}-(?:site|server)\.middlewares=\$\{BUILDHOUND_REVIEW_PROVIDER_ID\}-noindex")
 
     def test_workflow_revalidates_smokes_and_tears_down_without_pr_code(self):
         workflow = (ROOT / ".github/workflows/review-environment.yml").read_text()

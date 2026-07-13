@@ -94,13 +94,27 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertLess(login, inspect)
         self.assertIn("if: env.REVIEW_ACTION == 'deploy'", workflow[login:inspect])
 
-    def test_deploy_script_does_not_interpolate_dokploy_secrets(self):
-        workflow = self.read(".github/workflows/deploy-release.yml")
-        self.assertIn("DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}", workflow)
-        self.assertIn("DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}", workflow)
-        self.assertIn('current-release-id --compose-id "$COMPOSE_ID"', workflow)
-        self.assertNotIn("DOKPLOY_URL='${{ secrets.DOKPLOY_URL }}'", workflow)
-        self.assertNotIn("DOKPLOY_TOKEN='${{ secrets.DOKPLOY_TOKEN }}'", workflow)
+    def test_review_smoke_uses_derived_hosts(self):
+        workflow = self.read(".github/workflows/review-environment.yml")
+        self.assertIn('site_host="$review_name.$DNS_SUFFIX"', workflow)
+        self.assertIn('dashboard_host="$review_name.dashboard.$DNS_SUFFIX"', workflow)
+        self.assertNotIn('dashboard_host="dashboard-$review_name.$DNS_SUFFIX"', workflow)
+
+    def test_workflows_scope_dokploy_configuration(self):
+        for path in (
+            ".github/workflows/deploy-release.yml",
+            ".github/workflows/review-environment.yml",
+            ".github/workflows/reconcile-reviews.yml",
+        ):
+            with self.subTest(path=path):
+                workflow = self.read(path)
+                self.assertIn("${{ vars.DOKPLOY_URL }}", workflow)
+                self.assertIn("${{ secrets.DOKPLOY_TOKEN }}", workflow)
+                self.assertNotIn("${{ secrets.DOKPLOY_URL }}", workflow)
+                self.assertNotIn("DOKPLOY_URL='${{ vars.DOKPLOY_URL }}'", workflow)
+                self.assertNotIn("DOKPLOY_TOKEN='${{ secrets.DOKPLOY_TOKEN }}'", workflow)
+        deploy = self.read(".github/workflows/deploy-release.yml")
+        self.assertIn('current-release-id --compose-id "$COMPOSE_ID"', deploy)
 
     def test_production_bootstrap_requires_staging_proof_manual_current_and_attestation(self):
         workflow = self.read(".github/workflows/deploy-release.yml")

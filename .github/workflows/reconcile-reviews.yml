@@ -17,7 +17,7 @@ jobs:
       - name: Delete closed, unlabelled, or expired owned reviews
         env:
           GH_TOKEN: ${{ github.token }}
-          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
           DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
           ENVIRONMENT_ID: ${{ secrets.DOKPLOY_ENVIRONMENT_ID }}
           TTL_HOURS: ${{ vars.BUILDHOUND_REVIEW_TTL_HOURS }}

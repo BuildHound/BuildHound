@@ -142,9 +142,16 @@ def require_migration_compatibility(current: tuple[str, str | None, str | None] 
     if previous_index is None or migration_history_sha256(history[:previous_index + 1]) != previous_history_sha256:
         raise ValueError("migration history before the candidate was rewritten")
 
-def review_name(repo: str, number: int) -> str:
-    slug = re.sub(r"[^a-z0-9-]", "-", repo.lower()).strip("-")
-    return f"review-{slug}-{number}"
+def review_name(number: int) -> str:
+    if number <= 0:
+        raise ValueError("positive PR number required")
+    return f"mr{number}"
+
+def review_provider_id(repo: str, number: int) -> str:
+    identifier = f"bh-{hashlib.sha256(repo.lower().encode()).hexdigest()[:24]}-{review_name(number)}"
+    if len(identifier) > 63:
+        raise ValueError("derived review provider ID is invalid")
+    return identifier
 
 def require_review(args):
     if args.pr <= 0 or not REPOSITORY.fullmatch(args.base_repo): raise ValueError("valid repository and positive PR number required")
@@ -156,7 +163,7 @@ def review_hosts(name: str, suffix: str) -> tuple[str, str]:
     labels = suffix.split(".")
     if suffix != suffix.lower() or len(suffix) > 253 or len(labels) < 2 or any(not HOST_LABEL.fullmatch(label) for label in labels):
         raise ValueError("invalid review DNS suffix")
-    site_host, dashboard_host = f"{name}.{suffix}", f"dashboard-{name}.{suffix}"
+    site_host, dashboard_host = f"{name}.{suffix}", f"{name}.dashboard.{suffix}"
     for host in (site_host, dashboard_host):
         if len(host) > 253 or any(not HOST_LABEL.fullmatch(label) for label in host.split(".")):
             raise ValueError("derived review host is invalid")
@@ -244,12 +251,13 @@ def main() -> int:
         if app.get("dockerImage") != release["siteImage"]: raise ValueError("deployed site image differs from release")
         print(json.dumps({"releaseId":rid,"migrationId":release["migrationId"],"migrationHistorySha256":release.get("migrationHistorySha256"),"composeDeploymentId":compose_deployment,"siteDeploymentId":site_deployment},separators=(",",":"))); return 0
     if args.command == "deploy-review":
-        require_review(args); name=review_name(args.base_repo,args.pr)
+        require_review(args); name=review_name(args.pr)
+        provider_id=review_provider_id(args.base_repo,args.pr)
         site_host, dashboard_host = review_hosts(name, args.dns_suffix)
         if not DIGEST.fullmatch(args.server_image) or not DIGEST.fullmatch(args.site_image): raise ValueError("review images must be resolved digests")
         db_password=os.environ["BUILDHOUND_REVIEW_DB_PASSWORD"]; token=os.environ["BUILDHOUND_REVIEW_TOKEN"]
         compose=Path(__file__).with_name("review-stack.yaml").read_text()
-        replacements={"${BUILDHOUND_SERVER_IMAGE}":args.server_image,"${BUILDHOUND_SITE_IMAGE}":args.site_image,"${BUILDHOUND_REVIEW_DB_PASSWORD}":db_password,"${BUILDHOUND_REVIEW_TOKEN}":token,"${BUILDHOUND_REPOSITORY}":args.base_repo,"${BUILDHOUND_PR_NUMBER}":str(args.pr),"${BUILDHOUND_HEAD_SHA}":args.sha,"${BUILDHOUND_REVIEW_NAME}":name,"${BUILDHOUND_REVIEW_SITE_HOST}":site_host,"${BUILDHOUND_REVIEW_DASHBOARD_HOST}":dashboard_host}
+        replacements={"${BUILDHOUND_SERVER_IMAGE}":args.server_image,"${BUILDHOUND_SITE_IMAGE}":args.site_image,"${BUILDHOUND_REVIEW_DB_PASSWORD}":db_password,"${BUILDHOUND_REVIEW_TOKEN}":token,"${BUILDHOUND_REPOSITORY}":args.base_repo,"${BUILDHOUND_PR_NUMBER}":str(args.pr),"${BUILDHOUND_HEAD_SHA}":args.sha,"${BUILDHOUND_REVIEW_PROVIDER_ID}":provider_id,"${BUILDHOUND_REVIEW_SITE_HOST}":site_host,"${BUILDHOUND_REVIEW_DASHBOARD_HOST}":dashboard_host}
         for old,new in replacements.items(): compose=compose.replace(old,new)
         description=json.dumps({"repository":args.base_repo,"pr":args.pr,"sha":args.sha},separators=(",",":"))
         environment=client.request("GET",f"/api/environment.one?environmentId={args.environment_id}")
@@ -265,7 +273,7 @@ def main() -> int:
             client.request("POST","/api/compose.update",{"composeId":compose_id,"description":description,"composeType":"stack","composeFile":compose})
         else:
             old_deployments=set()
-            result=client.request("POST","/api/compose.create",{"environmentId":args.environment_id,"name":name,"appName":name,"description":description,"composeType":"stack","composeFile":compose})
+            result=client.request("POST","/api/compose.create",{"environmentId":args.environment_id,"name":name,"appName":provider_id,"description":description,"composeType":"stack","composeFile":compose})
             compose_id=result["composeId"]
             client.request("POST","/api/compose.isolatedDeployment",{"composeId":compose_id})
         client.request("POST","/api/compose.deploy",{"composeId":compose_id,"title":args.sha})
@@ -279,7 +287,7 @@ def main() -> int:
             except json.JSONDecodeError: continue
             if metadata.get("repository")==args.base_repo and isinstance(metadata.get("pr"),int) and (args.command != "count-reviews" or args.exclude_pr is None or metadata["pr"] != args.exclude_pr): found.append({"pr":metadata["pr"],"sha":metadata.get("sha"),"createdAt":item.get("createdAt"),"composeId":item.get("composeId")})
         print(len(found) if args.command=="count-reviews" else json.dumps(found,separators=(",",":"))); return 0
-    name=review_name(args.base_repo,args.pr)
+    name=review_name(args.pr)
     environment=client.request("GET",f"/api/environment.one?environmentId={args.environment_id}")
     items=environment.get("compose",[])
     matches=[]

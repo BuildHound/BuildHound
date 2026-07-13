@@ -54,7 +54,7 @@ jobs:
       - name: Enforce active ceiling
         if: env.REVIEW_ACTION == 'deploy'
         env:
-          DOKPLOY_URL: "${{ secrets.DOKPLOY_URL }}"
+          DOKPLOY_URL: "${{ vars.DOKPLOY_URL }}"
           DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}"
           ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"
           MAX: "${{ vars.BUILDHOUND_REVIEW_MAX_ACTIVE }}"
@@ -71,7 +71,7 @@ jobs:
         id: deploy
         if: env.REVIEW_ACTION == 'deploy'
         env:
-          DOKPLOY_URL: "${{ secrets.DOKPLOY_URL }}"
+          DOKPLOY_URL: "${{ vars.DOKPLOY_URL }}"
           DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}"
           ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"
           DNS_SUFFIX: "${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}"
@@ -114,7 +114,7 @@ jobs:
           [[ "$deployment_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]]
           echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
           site_host="$review_name.$DNS_SUFFIX"
-          dashboard_host="dashboard-$review_name.$DNS_SUFFIX"
+          dashboard_host="$review_name.dashboard.$DNS_SUFFIX"
           python3 - "$site_host" "$dashboard_host" <<'PY'
           import re
           import sys
@@ -157,7 +157,7 @@ jobs:
       - name: Delete exact owned review
         if: env.REVIEW_ACTION == 'delete'
         env:
-          DOKPLOY_URL: "${{ secrets.DOKPLOY_URL }}"
+          DOKPLOY_URL: "${{ vars.DOKPLOY_URL }}"
           DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}"
           ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"
           GH_TOKEN: "${{ github.token }}"
