@@ -19,20 +19,5 @@ jobs:
           ENVIRONMENT_ID: ${{ secrets.DOKPLOY_ENVIRONMENT_ID }}
           TTL_HOURS: ${{ vars.BUILDHOUND_REVIEW_TTL_HOURS }}
         run: |
-          python3 deploy/dokploy/dokploy.py list-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" > /tmp/reviews.json
-          jq -c '.[]' /tmp/reviews.json | while read -r review; do
-            pr=$(jq -r .pr <<<"$review"); created=$(jq -r .createdAt <<<"$review")
-            delete=false; ttl_delete=false
-            data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$pr" 2>/dev/null) || delete=true
-            if [ "$delete" = false ]; then
-              test "$(jq -r .state <<<"$data")" = open || delete=true
-              gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' | grep -Fx deploy-review >/dev/null || delete=true
-            fi
-            age=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
-            if [ "$age" -gt $(( TTL_HOURS * 3600 )) ]; then delete=true; ttl_delete=true; fi
-            if [ "$delete" = true ]; then
-              data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$pr" 2>/dev/null) || true
-              if [ "$ttl_delete" = false ] && [ -n "$data" ] && [ "$(jq -r .state <<<"$data")" = open ] && gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' | grep -Fx deploy-review >/dev/null; then continue; fi
-              python3 deploy/dokploy/dokploy.py delete-review --base-repo "$GITHUB_REPOSITORY" --pr "$pr" --environment-id "$ENVIRONMENT_ID" --expected-compose-id "$(jq -r .composeId <<<"$review")" --expected-sha "$(jq -r .sha <<<"$review")"
-            fi
-          done
+          : "${TTL_HOURS:?BUILDHOUND_REVIEW_TTL_HOURS must be set}"
+          deploy/dokploy/reconcile-reviews.sh

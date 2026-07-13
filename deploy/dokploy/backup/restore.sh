@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-: "${BACKUP_OBJECT:?}" "${AGE_KEY_FILE:?}" "${PGHOST:?}" "${PGDATABASE:?}" "${PGUSER:?}" "${PGPASSFILE:?}"
+: "${BACKUP_OBJECT:?}" "${AGE_KEY_FILE:?}" "${S3_ENDPOINT:?}" "${S3_BUCKET:?}" "${PGHOST:?}" "${PGDATABASE:?}" "${PGUSER:?}" "${PGPASSFILE:?}"
 # shellcheck source=/dev/null
 . /run/secrets/s3_credentials
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY

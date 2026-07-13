@@ -14,5 +14,6 @@ jobs:
       - run: python3 -m unittest discover -s deploy/dokploy/test -v
       - run: sh site/test/site-test.sh
       - run: sh deploy/dokploy/test/volume-guard-test.sh
+      - run: sh deploy/dokploy/test/reconcile-reviews-test.sh
       - name: Validate shell syntax
         run: find deploy/dokploy site -type f -name '*.sh' -exec sh -n {} \;

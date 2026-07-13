@@ -55,11 +55,17 @@ jobs:
           OBJECT: ${{ inputs.backup_object }}
           DB_INSTANCE: ${{ secrets.BUILDHOUND_DB_INSTANCE }}
           AGE_RECIPIENT: ${{ vars.BUILDHOUND_AGE_RECIPIENT }}
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
+          COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
         run: |
           case "$OBJECT" in *.dump.age) ;; *) exit 1;; esac
           aws --endpoint-url "$ENDPOINT" s3api head-object --bucket "$BUCKET" --key "$OBJECT" > /tmp/backup-head.json
           modified=$(jq -r .LastModified /tmp/backup-head.json)
-          test $(( $(date -u +%s) - $(date -u -d "$modified" +%s) )) -le 86400
+          now_epoch=$(date -u +%s)
+          modified_epoch=$(date -u -d "$modified" +%s)
+          test "$modified_epoch" -le $(( now_epoch + 300 ))
+          test $(( now_epoch - modified_epoch )) -le 86400
           test "$(jq -r '.ContentLength > 0' /tmp/backup-head.json)" = true
           test "$(jq -r .VersionId /tmp/backup-head.json)" != null
           test "$(jq -r '.Metadata["buildhound-db-instance"]' /tmp/backup-head.json)" = "$DB_INSTANCE"
@@ -68,11 +74,13 @@ jobs:
             test '${{ inputs.target }}' = staging
             test "$(jq -r '.Metadata["buildhound-release-id"]' /tmp/backup-head.json)" = manual
           else
-            current=$(DOKPLOY_URL='${{ secrets.DOKPLOY_URL }}' DOKPLOY_TOKEN='${{ secrets.DOKPLOY_TOKEN }}' python3 deploy/dokploy/dokploy.py current-release-id --compose-id '${{ secrets.DOKPLOY_COMPOSE_ID }}')
+            current=$(python3 deploy/dokploy/dokploy.py current-release-id --compose-id "$COMPOSE_ID")
             test "$(jq -r '.Metadata["buildhound-release-id"]' /tmp/backup-head.json)" = "$current"
           fi
-          completed=$(jq -r '.Metadata["completed-at"]' /tmp/backup-head.json)
-          test $(( $(date -u -d "$modified" +%s) - $(date -u -d "$completed" +%s) )) -le 300
+          started=$(jq -er '.Metadata["started-at"]' /tmp/backup-head.json)
+          started_epoch=$(date -u -d "$started" +%s)
+          test "$started_epoch" -le "$modified_epoch"
+          test $(( now_epoch - started_epoch )) -le 86400
       - name: Explicit Dokploy deploy
         env:
           DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
