@@ -38,7 +38,7 @@ services:
         - traefik.enable=true
         - traefik.http.routers.buildhound.rule=Host(`${BUILDHOUND_DASHBOARD_HOST}`)
         - traefik.http.routers.buildhound.entrypoints=websecure
-        - traefik.http.routers.buildhound.tls.certresolver=letsencrypt
+        - traefik.http.routers.buildhound.tls.certresolver=letsencrypt-dns-hetzner
         - traefik.http.routers.buildhound.middlewares=buildhound-ratelimit,buildhound-robots
         - traefik.http.middlewares.buildhound-ratelimit.ratelimit.average=10
         - traefik.http.middlewares.buildhound-ratelimit.ratelimit.burst=20

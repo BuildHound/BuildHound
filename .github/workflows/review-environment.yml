@@ -1,32 +1,34 @@
 name: Review environment
 on:
-  workflow_dispatch:
-    inputs:
-      pr: {description: Pull request number, required: true, type: number}
-      head_sha: {description: Exact approved 40-character head SHA, required: true}
-      action: {description: Action, required: true, type: choice, options: [deploy, delete]}
   pull_request_target:
-    types: [closed, unlabeled]
-permissions: {contents: read, pull-requests: read, actions: read, packages: write}
+    branches: [main]
+    types: [labeled, synchronize, reopened, closed, unlabeled]
+permissions: {contents: read, pull-requests: read, actions: read}
 env:
   IMAGE_REGISTRY_PREFIX: ghcr.io/buildhound
-  REVIEW_ACTION: ${{ github.event_name == 'workflow_dispatch' && inputs.action || 'delete' }}
-  REVIEW_PR: ${{ github.event_name == 'workflow_dispatch' && inputs.pr || github.event.pull_request.number }}
-  REVIEW_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.head_sha || github.event.pull_request.head.sha }}
-concurrency: {group: review-environment-global, cancel-in-progress: false}
+  REVIEW_ACTION: ${{ (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')) && 'delete' || 'deploy' }}
+  REVIEW_PR: ${{ github.event.pull_request.number }}
+  REVIEW_SHA: ${{ github.event.pull_request.head.sha }}
 jobs:
   review:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
       github.event.action == 'closed' ||
-      (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')
+      (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review') ||
+      (github.event.action == 'labeled' && github.event.label.name == 'deploy-review') ||
+      ((github.event.action == 'synchronize' || github.event.action == 'reopened') &&
+       contains(github.event.pull_request.labels.*.name, 'deploy-review'))
     runs-on: ubuntu-latest
-    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'deploy' && 'review' || 'review-cleanup' }}
+    environment: ${{ (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')) && 'review-cleanup' || 'review' }}
+    concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
+    permissions: {contents: read, pull-requests: read, actions: read, packages: write}
     outputs:
       deploy_outcome: ${{ steps.deploy_status.outputs.outcome }}
+      publish_outcome: ${{ steps.deploy_status.outputs.publish_outcome }}
     steps:
       - uses: actions/checkout@v4
-        with: {ref: "${{ github.event.repository.default_branch }}"}
+        with:
+          ref: "${{ github.sha }}"
+          persist-credentials: false
       - name: Require the protected default branch workflow
         env:
           DEFAULT_BRANCH: "${{ github.event.repository.default_branch }}"
@@ -63,7 +65,7 @@ jobs:
           PR: "${{ env.REVIEW_PR }}"
         run: |
           [[ "$MAX" =~ ^[1-9][0-9]*$ ]]
-          active=$(python3 deploy/dokploy/dokploy.py count-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" --exclude-pr "$PR")
+          active=$(bash deploy/dokploy/dokploy.sh count-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" --exclude-pr "$PR")
           [[ "$active" =~ ^[0-9]+$ ]]
           (( active < MAX ))
       - name: Verify pre-warmed wildcard TLS
@@ -91,15 +93,102 @@ jobs:
           certificate-check.$DNS_SUFFIX|*.$DNS_SUFFIX
           certificate-check.dashboard.$DNS_SUFFIX|*.dashboard.$DNS_SUFFIX
           EOF
+      - name: Check out the exact untrusted review source
+        if: env.REVIEW_ACTION == 'deploy'
+        uses: actions/checkout@v4
+        with:
+          ref: "${{ env.REVIEW_SHA }}"
+          path: review-source
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+        if: env.REVIEW_ACTION == 'deploy'
+      - name: Build review server without registry credentials
+        if: env.REVIEW_ACTION == 'deploy'
+        uses: docker/build-push-action@v6
+        with:
+          context: review-source
+          file: review-source/buildhound-server/Dockerfile
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-server:pr-${{ env.REVIEW_PR }}-${{ env.REVIEW_SHA }}
+      - name: Build review site without registry credentials
+        if: env.REVIEW_ACTION == 'deploy'
+        uses: docker/build-push-action@v6
+        with:
+          context: review-source
+          file: review-source/site/Dockerfile
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-site:pr-${{ env.REVIEW_PR }}-${{ env.REVIEW_SHA }}
+      - name: Revalidate exact review source before publishing
+        if: env.REVIEW_ACTION == 'deploy'
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          PR: "${{ env.REVIEW_PR }}"
+          SHA: "${{ env.REVIEW_SHA }}"
+        run: |
+          data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$PR")
+          test "$(jq -r .head.repo.full_name <<<"$data")" = "$GITHUB_REPOSITORY"
+          test "$(jq -r .state <<<"$data")" = open
+          test "$(jq -r .head.sha <<<"$data")" = "$SHA"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review
       - uses: docker/login-action@v3
         if: env.REVIEW_ACTION == 'deploy'
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - id: publish
+        name: Publish exact review images and record push digests
+        if: env.REVIEW_ACTION == 'deploy'
+        env:
+          PR: "${{ env.REVIEW_PR }}"
+          SHA: "${{ env.REVIEW_SHA }}"
+        run: |
+          server="$IMAGE_REGISTRY_PREFIX/buildhound-server:pr-$PR-$SHA"
+          site="$IMAGE_REGISTRY_PREFIX/buildhound-site:pr-$PR-$SHA"
+          [[ "$server" =~ ^ghcr\.io/buildhound/buildhound-server:pr-[1-9][0-9]*-[0-9a-f]{40}$ ]]
+          [[ "$site" =~ ^ghcr\.io/buildhound/buildhound-site:pr-[1-9][0-9]*-[0-9a-f]{40}$ ]]
+
+          push_digest() {
+            local image=$1 log=$2 digest count
+            docker push "$image" >"$log" || return 1
+            digest=$(sed -nE 's/^.*digest: (sha256:[0-9a-f]{64}).*$/\1/p' "$log") || return 1
+            count=$(printf '%s\n' "$digest" | sed '/^$/d' | wc -l | tr -d ' ') || return 1
+            test "$count" = 1 || return 1
+            printf '%s\n' "$digest"
+          }
+
+          server_digest=$(push_digest "$server" /tmp/review-server-push.log) || exit 1
+          site_digest=$(push_digest "$site" /tmp/review-site-push.log) || exit 1
+          [[ "$server_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$site_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p /tmp/review-images
+          jq -cn --arg repository "$GITHUB_REPOSITORY" --argjson pr "$PR" \
+            --arg headSha "$SHA" --arg runId "$GITHUB_RUN_ID" \
+            --arg serverImage "$IMAGE_REGISTRY_PREFIX/buildhound-server" --arg serverDigest "$server_digest" \
+            --arg siteImage "$IMAGE_REGISTRY_PREFIX/buildhound-site" --arg siteDigest "$site_digest" '
+            {
+              schema:1,
+              repository:$repository,
+              pr:$pr,
+              headSha:$headSha,
+              runId:$runId,
+              images:{
+                server:{image:$serverImage,digest:$serverDigest},
+                site:{image:$siteImage,digest:$siteDigest}
+              }
+            }
+          ' > /tmp/review-images/review-images.json
       - name: Deploy and verify trusted review manifest
         id: deploy
         if: env.REVIEW_ACTION == 'deploy'
         env:
           DOKPLOY_URL: "${{ vars.DOKPLOY_URL }}"
           DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}"
+          DOKPLOY_GIT_PROVIDER_ID: "${{ secrets.DOKPLOY_GIT_PROVIDER_ID }}"
+          DOKPLOY_REGISTRY_ID: "${{ secrets.DOKPLOY_REGISTRY_ID }}"
           ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"
           DNS_SUFFIX: "${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}"
           INGRESS_NETWORK: "${{ vars.DOKPLOY_REVIEW_INGRESS_NETWORK }}"
@@ -107,12 +196,13 @@ jobs:
           NETWORK_OK: "${{ vars.BUILDHOUND_REVIEW_NETWORK_ISOLATION_VERIFIED }}"
           PR: "${{ env.REVIEW_PR }}"
           SHA: "${{ env.REVIEW_SHA }}"
+          ATTEMPT_ID: "${{ github.run_id }}.${{ github.run_attempt }}"
         run: |
           test "$NETWORK_OK" = true
-          server="$IMAGE_REGISTRY_PREFIX/buildhound-server:pr-$PR-$SHA"
-          site="$IMAGE_REGISTRY_PREFIX/buildhound-site:pr-$PR-$SHA"
-          server_digest=$(docker buildx imagetools inspect "$server" --format '{{json .Manifest.Digest}}' | tr -d '"')
-          site_digest=$(docker buildx imagetools inspect "$site" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          server=$(jq -er .images.server.image /tmp/review-images/review-images.json)
+          site=$(jq -er .images.site.image /tmp/review-images/review-images.json)
+          server_digest=$(jq -er .images.server.digest /tmp/review-images/review-images.json)
+          site_digest=$(jq -er .images.site.digest /tmp/review-images/review-images.json)
           BUILDHOUND_REVIEW_DB_PASSWORD=$(openssl rand -hex 32); export BUILDHOUND_REVIEW_DB_PASSWORD
           BUILDHOUND_REVIEW_TOKEN=$(openssl rand -hex 32); export BUILDHOUND_REVIEW_TOKEN
           echo "::add-mask::$BUILDHOUND_REVIEW_DB_PASSWORD"; echo "::add-mask::$BUILDHOUND_REVIEW_TOKEN"
@@ -126,7 +216,7 @@ jobs:
           test "$state" = open
           test "$head_sha" = "$SHA"
           gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review
-          result=$(python3 deploy/dokploy/dokploy.py deploy-review --base-repo "$GITHUB_REPOSITORY" --head-repo "$head_repo" --pr "$PR" --sha "$head_sha" --state "$state" --label-present --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --ingress-network "$INGRESS_NETWORK" --server-image "$server@$server_digest" --site-image "$site@$site_digest")
+          result=$(bash deploy/dokploy/dokploy.sh deploy-review --base-repo "$GITHUB_REPOSITORY" --head-repo "$head_repo" --pr "$PR" --sha "$head_sha" --state "$state" --label-present --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --ingress-network "$INGRESS_NETWORK" --server-image "$server@$server_digest" --site-image "$site@$site_digest" --attempt-id "$ATTEMPT_ID")
 
           review_name=$(jq -er .name <<<"$result")
           compose_id=$(jq -er .composeId <<<"$result")
@@ -174,14 +264,39 @@ jobs:
           status=$(curl "${common[@]}" --output /tmp/review-read.json --header "Authorization: Bearer $BUILDHOUND_REVIEW_TOKEN" "$dashboard_url/v1/builds/$build_id")
           test "$status" = 200
           jq -e --arg id "$build_id" '.buildId == $id' /tmp/review-read.json > /dev/null
+
+          mkdir -p /tmp/review-attestation
+          jq -cn --arg attemptId "$ATTEMPT_ID" --arg repository "$GITHUB_REPOSITORY" --argjson pr "$PR" \
+            --arg headSha "$SHA" --arg serverImage "$server@$server_digest" \
+            --arg siteImage "$site@$site_digest" --arg composeId "$compose_id" \
+            --arg deploymentId "$deployment_id" --arg runId "$GITHUB_RUN_ID" '
+            {
+              schema:1,
+              attemptId:$attemptId,
+              repository:$repository,
+              pr:$pr,
+              headSha:$headSha,
+              serverImage:$serverImage,
+              siteImage:$siteImage,
+              composeId:$composeId,
+              deploymentId:$deploymentId,
+              runId:$runId
+            }
+          ' > /tmp/review-attestation/review.json
+      - uses: actions/upload-artifact@v4
+        if: env.REVIEW_ACTION == 'deploy' && steps.deploy.outcome == 'success'
+        with: {name: review-attestation, path: /tmp/review-attestation/review.json, retention-days: 90}
       - id: deploy_status
         name: Capture deploy step outcome
         if: ${{ always() }}
         env:
           OUTCOME: "${{ steps.deploy.outcome }}"
+          PUBLISH_OUTCOME: "${{ steps.publish.outcome }}"
         run: |
           case "$OUTCOME" in success|failure|cancelled|skipped) ;; *) exit 1;; esac
+          case "$PUBLISH_OUTCOME" in success|failure|cancelled|skipped) ;; *) exit 1;; esac
           echo "outcome=$OUTCOME" >> "$GITHUB_OUTPUT"
+          echo "publish_outcome=$PUBLISH_OUTCOME" >> "$GITHUB_OUTPUT"
       - name: Delete superseded exact-owned review images
         if: env.REVIEW_ACTION == 'deploy'
         env:
@@ -199,11 +314,12 @@ jobs:
           GH_TOKEN: "${{ github.token }}"
           PR: "${{ env.REVIEW_PR }}"
         run: |
-          python3 deploy/dokploy/dokploy.py list-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" > /tmp/reviews.json
+          bash deploy/dokploy/dokploy.sh list-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" > /tmp/reviews.json
           review_count=$(jq -er --argjson pr "$PR" '[.[] | select(.pr == $pr)] | length' /tmp/reviews.json)
           test "$review_count" -le 1
           if [ "$review_count" -eq 1 ]; then
             review=$(jq -cer --argjson pr "$PR" '.[] | select(.pr == $pr)' /tmp/reviews.json)
+            attempt_id=$(jq -r '.attemptId // empty' <<<"$review")
             compose_id=$(jq -er .composeId <<<"$review")
             deployed_sha=$(jq -er .sha <<<"$review")
             [[ "$compose_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]]
@@ -222,21 +338,35 @@ jobs:
           fi
 
           if [ "$review_count" -eq 1 ]; then
-            python3 deploy/dokploy/dokploy.py revoke-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha"
+            attempt_args=()
+            if [ -n "$attempt_id" ]; then attempt_args+=(--expected-attempt-id "$attempt_id"); fi
+            bash deploy/dokploy/dokploy.sh revoke-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" "${attempt_args[@]}"
           fi
           # Keep the stopped Compose as a retry anchor until package cleanup succeeds.
           REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh
           if [ "$review_count" -eq 1 ]; then
-            python3 deploy/dokploy/dokploy.py delete-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha"
+            bash deploy/dokploy/dokploy.sh delete-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" "${attempt_args[@]}"
           fi
   reconcile_failed_review:
     needs: review
-    if: ${{ always() && needs.review.outputs.deploy_outcome == 'failure' }}
+    if: >-
+      ${{ always() &&
+          (needs.review.result == 'cancelled' ||
+           needs.review.outputs.deploy_outcome == 'cancelled' ||
+           needs.review.outputs.publish_outcome == 'cancelled' ||
+           needs.review.outputs.deploy_outcome == 'failure' ||
+           needs.review.outputs.publish_outcome == 'failure' ||
+           (needs.review.result == 'failure' &&
+            needs.review.outputs.deploy_outcome == 'success')) }}
     runs-on: ubuntu-latest
     environment: review-cleanup
+    concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
+    permissions: {contents: read, pull-requests: read, actions: read, packages: write}
     steps:
       - uses: actions/checkout@v4
-        with: {ref: "${{ github.event.repository.default_branch }}"}
+        with:
+          ref: "${{ github.sha }}"
+          persist-credentials: false
       - name: Reconcile failed exact-owned review
         env:
           DOKPLOY_URL: "${{ vars.DOKPLOY_URL }}"
@@ -246,21 +376,23 @@ jobs:
           GH_TOKEN: "${{ github.token }}"
           PR: "${{ env.REVIEW_PR }}"
           SHA: "${{ env.REVIEW_SHA }}"
+          ATTEMPT_ID: "${{ github.run_id }}.${{ github.run_attempt }}"
         run: |
-          python3 deploy/dokploy/dokploy.py list-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" > /tmp/failed-reviews.json
+          bash deploy/dokploy/dokploy.sh list-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" > /tmp/failed-reviews.json
           review_count=$(jq -er --argjson pr "$PR" '[.[] | select(.pr == $pr)] | length' /tmp/failed-reviews.json)
           test "$review_count" -le 1
           cleanup_attempted_review=false
           keep_sha=
           if [ "$review_count" -eq 1 ]; then
             review=$(jq -cer --argjson pr "$PR" '.[] | select(.pr == $pr)' /tmp/failed-reviews.json)
+            attempt_id=$(jq -r '.attemptId // empty' <<<"$review")
             compose_id=$(jq -er .composeId <<<"$review")
             deployed_sha=$(jq -er .sha <<<"$review")
             [[ "$compose_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]]
             [[ "$deployed_sha" =~ ^[0-9a-f]{40}$ ]]
-            if [ "$deployed_sha" = "$SHA" ]; then
+            if [ "$deployed_sha" = "$SHA" ] && [ "$attempt_id" = "$ATTEMPT_ID" ]; then
               cleanup_attempted_review=true
-              python3 deploy/dokploy/dokploy.py revoke-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha"
+              bash deploy/dokploy/dokploy.sh revoke-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" --expected-attempt-id "$attempt_id"
             else
               keep_sha="$deployed_sha"
               echo "::notice::A different review SHA is persisted; preserving its Stack and images"
@@ -268,5 +400,39 @@ jobs:
           fi
           KEEP_SHA="$keep_sha" REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh
           if [ "$cleanup_attempted_review" = true ]; then
-            python3 deploy/dokploy/dokploy.py delete-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha"
+            bash deploy/dokploy/dokploy.sh delete-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" --expected-attempt-id "$attempt_id"
           fi
+  record_review_status:
+    needs: review
+    if: ${{ always() && needs.review.result == 'success' && needs.review.outputs.deploy_outcome == 'success' }}
+    runs-on: ubuntu-latest
+    permissions: {actions: read, contents: read, statuses: write}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {name: review-attestation, path: /tmp/review}
+      - name: Validate attestation and record successful exact-SHA review
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          PR: "${{ env.REVIEW_PR }}"
+          SHA: "${{ env.REVIEW_SHA }}"
+          ATTEMPT_ID: "${{ github.run_id }}.${{ github.run_attempt }}"
+        run: |
+          jq -e -s --arg attemptId "$ATTEMPT_ID" --arg repository "$GITHUB_REPOSITORY" --arg runId "$GITHUB_RUN_ID" \
+            --argjson pr "$PR" --arg headSha "$SHA" '
+            length == 1 and
+            .[0] as $proof |
+            ($proof | type) == "object" and
+            ($proof | keys) == ["attemptId","composeId","deploymentId","headSha","pr","repository","runId","schema","serverImage","siteImage"] and
+            $proof.schema == 1 and $proof.repository == $repository and
+            $proof.runId == $runId and $proof.attemptId == $attemptId and
+            $proof.pr == $pr and $proof.headSha == $headSha and
+            ($proof.composeId | type) == "string" and ($proof.composeId | test("^[A-Za-z0-9_-]{1,128}\\z")) and
+            ($proof.deploymentId | type) == "string" and ($proof.deploymentId | test("^[A-Za-z0-9_-]{1,128}\\z")) and
+            ($proof.serverImage | type) == "string" and ($proof.serverImage | test("@sha256:[0-9a-f]{64}\\z")) and
+            ($proof.siteImage | type) == "string" and ($proof.siteImage | test("@sha256:[0-9a-f]{64}\\z"))
+          ' /tmp/review/review.json >/dev/null
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/$SHA" \
+            -f state=success \
+            -f context="buildhound/review-deployed/pr-$PR" \
+            -f description='Protected review deployment passed' \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null

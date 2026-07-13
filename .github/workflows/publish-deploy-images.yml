@@ -1,33 +1,54 @@
 name: Publish deployment images
 on:
-  workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - build.gradle.kts
-      - settings.gradle.kts
-      - gradle.properties
-      - gradlew
-      - gradle/**
-      - .dockerignore
-      - buildhound-commons/**
-      - buildhound-server/**
-      - buildhound-report/**
-      - buildhound-gradle-plugin/build.gradle.kts
-      - buildhound-internal-adapters/build.gradle.kts
-      - docs/api/openapi.yaml
-      - site/**
-      - deploy/dokploy/**
-      - .github/workflows/publish-deploy-images.yml
-permissions: {contents: read, packages: write}
+permissions: {contents: read, pull-requests: read}
 env:
   IMAGE_REGISTRY_PREFIX: ghcr.io/buildhound
 concurrency:
-  group: publish-deploy-${{ github.sha }}
+  group: publish-deploy-main
+  queue: max
   cancel-in-progress: false
 jobs:
-  publish:
+  qualify:
     runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.pr.outputs.deploy }}
+    steps:
+      - id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          pulls=$(gh api "repos/${GITHUB_REPOSITORY}/commits/$GITHUB_SHA/pulls")
+          count=$(jq -er --arg repository "$GITHUB_REPOSITORY" --arg base "$DEFAULT_BRANCH" --arg sha "$GITHUB_SHA" '
+            [.[] | select(
+              .merged_at != null and .merge_commit_sha == $sha and
+              .head.repo.full_name == $repository and .base.repo.full_name == $repository and
+              .base.ref == $base
+            )] | length
+          ' <<<"$pulls")
+          if [ "$count" -ne 1 ]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pr=$(jq -er --arg repository "$GITHUB_REPOSITORY" --arg base "$DEFAULT_BRANCH" --arg sha "$GITHUB_SHA" '
+            [.[] | select(
+              .merged_at != null and .merge_commit_sha == $sha and
+              .head.repo.full_name == $repository and .base.repo.full_name == $repository and
+              .base.ref == $base
+            )][0].number
+          ' <<<"$pulls")
+          if gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' | grep -Fx deploy-review; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+  publish:
+    needs: qualify
+    if: needs.qualify.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    permissions: {contents: read, packages: write}
     strategy: {fail-fast: false, matrix: {image: [server, site, backup, db]}}
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +71,7 @@ jobs:
   release:
     needs: publish
     runs-on: ubuntu-latest
+    permissions: {actions: read, contents: read}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -57,7 +79,7 @@ jobs:
       - name: Build canonical release BOM
         run: |
           python3 deploy/dokploy/render-release.py --source-commit "$GITHUB_SHA" --server-image "$(cat image-server.txt)" --site-image "$(cat image-site.txt)" --backup-image "$(cat image-backup.txt)" --postgres-image "$(cat image-db.txt)" --manifest deploy/dokploy/stack.yaml --volume-guard deploy/dokploy/volume-guard.sh --migrations-dir buildhound-server/src/main/resources/db/migration
-          python3 deploy/dokploy/dokploy.py release-id release.json >/dev/null
+          bash deploy/dokploy/dokploy.sh release-id release.json >/dev/null
           mkdir release-artifact
           cp release.json deploy/dokploy/stack.yaml deploy/dokploy/volume-guard.sh release-artifact/
       - uses: actions/upload-artifact@v4

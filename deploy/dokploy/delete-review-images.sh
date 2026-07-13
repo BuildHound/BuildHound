@@ -21,9 +21,6 @@ case "$owner_type" in
   User) package_scope="users/$owner" ;;
   *) echo "unsupported package owner type" >&2; exit 65 ;;
 esac
-workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/review-images.yml" --jq .id)
-case "$workflow_id" in ''|0*|*[!0-9]*) echo "invalid review-image workflow identity" >&2; exit 65;; esac
-
 had_error=false
 for package in buildhound-server buildhound-site; do
   if versions=$(gh api --paginate --slurp "$package_scope/packages/container/$package/versions?per_page=100"); then
@@ -34,7 +31,7 @@ for package in buildhound-server buildhound-site; do
     continue
   fi
   candidates=$(mktemp)
-  printf '%s\n' "$versions" | jq -c --arg pattern "^pr-${REVIEW_PR}-[0-9a-f]{40}$" '
+  printf '%s\n' "$versions" | jq -c --arg pattern "^pr-${REVIEW_PR}-[0-9a-f]{40}\\z" '
     .[][] |
     select(.metadata.container.tags | type == "array") |
     . as $version |
@@ -62,22 +59,6 @@ for package in buildhound-server buildhound-site; do
     fi
     sha=${tag##*-}
     if [ -n "${KEEP_SHA:-}" ] && [ "$sha" = "$KEEP_SHA" ]; then
-      continue
-    fi
-    if runs=$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?event=pull_request&head_sha=$sha&status=success&per_page=100"); then
-      :
-    else
-      echo "unable to verify $package workflow provenance; preserving image" >&2
-      had_error=true
-      continue
-    fi
-    if ! printf '%s\n' "$runs" | jq -e --arg sha "$sha" --arg repo "$GITHUB_REPOSITORY" '
-      .[] | .workflow_runs[]? |
-      select(.head_sha == $sha and .event == "pull_request" and .conclusion == "success") |
-      select(.head_repository.full_name == $repo)
-    ' >/dev/null; then
-      echo "unverified $package repository/SHA workflow provenance; preserving image" >&2
-      had_error=true
       continue
     fi
     if pulls=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/pulls"); then

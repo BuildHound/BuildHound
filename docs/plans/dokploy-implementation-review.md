@@ -55,7 +55,9 @@ all eligible workers; concrete domains/certificates; review-to-long-lived negati
 tests; Hetzner versioning/lifecycle behavior; an encrypted fresh-volume restore; measured
 RPO/RTO; authenticated persistence/ceiling/429 checks; and the V2 mark recognition/collision
 decision. GitHub must also have protected-main-only `review`, `review-cleanup`, `staging`,
-and `production` Environments; cleanup uses a no-approval list/delete-only review token.
+and `production` Environments. Cleanup remains approval-free, but its dedicated token needs
+service read/delete plus deployment read/create for the guarded Dokploy v0.29.12 stop/delete
+flow; it must not reuse a broader deployment token.
 These are fail-closed launch gates, not deferred code substitutions.
 
 One reviewed residual is explicitly accepted within the reconciled plan boundary: the
