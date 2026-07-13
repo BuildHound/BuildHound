@@ -69,7 +69,8 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.buildhound.db == ${BUILDHOUND_DB_NODE}
+          - node.labels.role == db
+          - node.id == ${BUILDHOUND_DB_NODE_ID}
       update_config: {order: stop-first, failure_action: pause}
       resources:
         reservations: {cpus: "0.5", memory: 512M}
@@ -109,7 +110,8 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.buildhound.db == ${BUILDHOUND_DB_NODE}
+          - node.labels.role == db
+          - node.id == ${BUILDHOUND_DB_NODE_ID}
       update_config: {order: stop-first, failure_action: pause}
       resources:
         reservations: {cpus: "0.1", memory: 64M}

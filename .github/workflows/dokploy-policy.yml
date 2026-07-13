@@ -27,7 +27,7 @@ jobs:
           BUILDHOUND_DB_PASSWORD: <redacted>
           BUILDHOUND_BOOTSTRAP_TOKEN: <redacted>
           BUILDHOUND_DB_INSTANCE: ci
-          BUILDHOUND_DB_NODE: ci
+          BUILDHOUND_DB_NODE_ID: ci-db-node
           BUILDHOUND_DB_PASSWORD_SECRET: ci-db
           BUILDHOUND_PGDATA_VOLUME: ci-pgdata
           BUILDHOUND_PGPASS_SECRET: ci-pgpass
