@@ -87,11 +87,11 @@ Plan 086 supersedes the earlier same-node placement decision: review services us
 remain on `role=db`. The isolated review overlay may cross hosts and is not encrypted in this
 Dokploy version. Readiness stays with bounded URL plus authenticated ingest/read smoke because
 v0.29.12's `docker:read` permission also authorizes Docker mutations outside the exact review.
-Dokploy v0.29.12 also defaults Traefik to `api.insecure:true`; review labels remain disabled until
-an operator uses Dokploy's UI/admin API to set and read back `api.insecure:false` (preferably
-`api.dashboard:false` with no unprotected `api@internal` router), reloads Traefik, and records the
-protected attestation. The automatic review token remains least privilege rather than receiving
-owner/admin access for live global-config reads.
+Dokploy v0.29.12 also defaults Traefik to `api.insecure:true`. The owner accepts the resulting
+unauthenticated configuration exposure to isolated review containers and removes the blocking
+attestation because the setting is not required for routing or TLS. The automatic review token
+remains least privilege rather than receiving owner/admin access for global-config reads or
+mutations.
 
 ## Validation
 

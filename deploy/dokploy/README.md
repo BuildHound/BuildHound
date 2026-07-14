@@ -239,13 +239,11 @@ reactivated at the same SHA; every activation writes a fresh TTL timestamp.
 Dokploy v0.29.12 defaults Traefik's static API setting to `api.insecure: true`. Because isolated
 deployment attaches standalone Traefik to every review application network, that default exposes
 the unauthenticated Traefik API internally to untrusted PR containers even when port 8080 is not
-published on the host. Before setting
-`BUILDHOUND_REVIEW_TRAEFIK_API_INSECURE_DISABLED=true` in the protected `review` Environment,
-use Dokploy's web UI or admin API to set `api.insecure: false` and preferably
-`api.dashboard: false`, remove any unprotected `api@internal` router, read the full static
-configuration back, and reload Traefik through Dokploy. Reset the attestation after any Dokploy
-or Traefik configuration/version change. The automatic review token must remain least-privilege;
-do not grant it owner/admin access merely to read this global configuration live.
+published on the host. The owner accepts this configuration-disclosure risk; it is not a routing,
+TLS, or certificate-issuance prerequisite. The review workflow therefore has no
+`BUILDHOUND_REVIEW_TRAEFIK_API_INSECURE_DISABLED` attestation. Future hardening may set
+`api.insecure: false` through Dokploy's web UI or admin API, but automatic review CI must remain
+least-privilege and receives no owner/admin access to inspect or mutate global Traefik state.
 The long-lived dashboard router requests certificates only through Traefik's
 `letsencrypt-dns-hetzner` resolver; that resolver must use Lego's Hetzner DNS-01 provider.
 Before enabling reviews, pre-warm one certificate covering `*.<review DNS suffix>` and one

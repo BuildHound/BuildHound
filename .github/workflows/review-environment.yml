@@ -68,11 +68,6 @@ jobs:
           active=$(bash deploy/dokploy/dokploy.sh count-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" --exclude-pr "$PR")
           [[ "$active" =~ ^[0-9]+$ ]]
           (( active < MAX ))
-      - name: Require secured shared Traefik API
-        if: env.REVIEW_ACTION == 'deploy'
-        env:
-          TRAEFIK_API_INSECURE_DISABLED: "${{ vars.BUILDHOUND_REVIEW_TRAEFIK_API_INSECURE_DISABLED }}"
-        run: test "$TRAEFIK_API_INSECURE_DISABLED" = true
       - name: Verify pre-warmed wildcard TLS
         if: env.REVIEW_ACTION == 'deploy'
         env:

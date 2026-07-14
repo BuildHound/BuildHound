@@ -99,13 +99,10 @@ capacity allocator/global inventory service.
   this repository on any shared ingress
   provider. Treat Dokploy as source of truth: list only the review environment, verify
   repository/PR/SHA ownership metadata, then mutate exact returned IDs.
-- Before enabling review labels, use Dokploy's UI or admin API to set and read back Traefik
-  `api.insecure: false`, preferably `api.dashboard: false`, remove any unprotected
-  `api@internal` router, and reload Traefik. Dokploy v0.29.12 otherwise exposes its
-  unauthenticated API inside every isolated review network. Record the protected
-  `BUILDHOUND_REVIEW_TRAEFIK_API_INSECURE_DISABLED=true` operator attestation and reset it
-  after any relevant configuration or version change; do not grant the automatic review token
-  owner/admin access for this global preflight.
+- Plan 086 records the owner's acceptance of Dokploy v0.29.12's unauthenticated Traefik
+  configuration exposure inside isolated review networks. It is not a routing prerequisite;
+  no blocking attestation remains. Do not grant the automatic review token owner/admin access
+  to inspect or mutate global Traefik state.
 - Each review deployment persists a validated `<run ID>.<run attempt>` in its ownership metadata
   and deployment title, plus a fresh `activatedAt` used for TTL. Failure cleanup acts only on
   that exact attempt. An active same-SHA redeploy is rejected before mutation; a stopped retired
@@ -181,7 +178,7 @@ separate principal.
   fresh backup, explicit deploy, and site/application/data-path checks.
 - No rebuild/moving tag participates; migration-incompatible rollback fails closed and uses
   roll-forward.
-- Once exact-SHA, persisted-isolation, manager-file scrub, and secured-Traefik-API gates pass, one same-repository PR completes
+- Once exact-SHA, persisted-isolation, and manager-file scrub gates pass, one same-repository PR completes
   label-triggered creation, synchronize/reopened redeploy, and unlabel/close cleanup using
   Hetzner DNS-01 wildcard TLS. No running or public review state survives cleanup; one verified,
   scrubbed retired anchor remains tracked for reuse until Dokploy supports exact network deletion.
