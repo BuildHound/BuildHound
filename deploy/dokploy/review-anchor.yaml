@@ -5,4 +5,4 @@ services:
     deploy:
       replicas: 0
       placement:
-        constraints: [node.labels.buildhound.traefik == true]
+        constraints: [node.labels.role == review]

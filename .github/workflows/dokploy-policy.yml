@@ -43,7 +43,10 @@ jobs:
           BUILDHOUND_S3_BUCKET: ci
           BUILDHOUND_DASHBOARD_HOST: dashboard.example.test
           DOKPLOY_INGRESS_NETWORK: ingress
-        run: deploy/dokploy/validate-stack.sh
+        run: |
+          for app_role in staging prod; do
+            BUILDHOUND_APP_ROLE="$app_role" deploy/dokploy/validate-stack.sh
+          done
       - name: Render trusted review Stack
         env:
           BUILDHOUND_SERVER_IMAGE: ghcr.io/buildhound/server@sha256:1111111111111111111111111111111111111111111111111111111111111111

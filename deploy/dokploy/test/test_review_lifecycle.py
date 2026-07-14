@@ -24,9 +24,8 @@ class ReviewPolicyTest(unittest.TestCase):
         self.assertNotIn("dokploy-network", stack)
         self.assertNotIn("external: true", stack)
         self.assertNotIn("DOKPLOY_REVIEW_INGRESS_NETWORK", stack)
-        self.assertEqual(
-            stack.count("constraints: [node.labels.buildhound.traefik == true]"), 3
-        )
+        self.assertEqual(stack.count("constraints: [node.labels.role == review]"), 3)
+        self.assertNotIn("node.labels.buildhound.traefik", stack)
 
     def test_workflow_uses_label_driven_lifecycle_and_protected_base_code(self):
         workflow = (ROOT / ".github/workflows/review-environment.yml").read_text()
@@ -88,6 +87,7 @@ class ReviewPolicyTest(unittest.TestCase):
             "- name: Validate attestation and record successful exact-SHA review"
         )
         self.assertLess(smoke, status)
+        self.assertIn("--retry-max-time 300", workflow[mutation:status])
         self.assertIn('context="buildhound/review-deployed/pr-$PR"', workflow[status:])
         self.assertIn('statuses/$SHA', workflow[status:])
         self.assertIn("environment: review-cleanup", reconciler)
@@ -100,6 +100,7 @@ class ReviewPolicyTest(unittest.TestCase):
         client = (ROOT / "deploy/dokploy/lib/review.sh").read_text()
         self.assertIn("settings.getDokployVersion", client)
         self.assertIn("_review_supported_dokploy_version=v0.29.12", client)
+        self.assertNotIn("docker.getStackContainersByAppName", client)
         cli = (ROOT / "deploy/dokploy/dokploy.sh").read_text()
         cli_review = cli.index("cmd_deploy_review()")
         cli_gate = cli.index("_review_require_supported_dokploy_version", cli_review)
@@ -123,6 +124,7 @@ class ReviewPolicyTest(unittest.TestCase):
         anchor = (ROOT / "deploy/dokploy/review-anchor.yaml").read_text()
         self.assertIn("@sha256:", anchor)
         self.assertIn("replicas: 0", anchor)
+        self.assertIn("constraints: [node.labels.role == review]", anchor)
         self.assertNotIn("environment:", anchor)
 
     def test_review_lifecycle_never_mutates_dokploy_outside_its_api(self):

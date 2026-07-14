@@ -14,7 +14,7 @@ services:
     tmpfs: ["/tmp:size=32m,mode=1777"]
     deploy:
       placement:
-        constraints: [node.labels.buildhound.traefik == true]
+        constraints: [node.labels.role == review]
       resources:
         reservations: {cpus: "0.05", memory: 32M}
         limits: {cpus: "0.5", memory: 128M}
@@ -44,7 +44,7 @@ services:
     tmpfs: ["/tmp:size=64m"]
     deploy:
       placement:
-        constraints: [node.labels.buildhound.traefik == true]
+        constraints: [node.labels.role == review]
       resources:
         reservations: {cpus: "0.1", memory: 128M}
         limits: {cpus: "1", memory: 1G}
@@ -64,7 +64,7 @@ services:
       POSTGRES_PASSWORD: ${BUILDHOUND_REVIEW_DB_PASSWORD}
     deploy:
       placement:
-        constraints: [node.labels.buildhound.traefik == true]
+        constraints: [node.labels.role == review]
       resources:
         reservations: {cpus: "0.1", memory: 128M}
         limits: {cpus: "1", memory: 1G}

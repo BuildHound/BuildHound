@@ -60,7 +60,7 @@ Repository tests cannot claim success for installed-version or external-system f
 production and reviews disabled until `deploy/dokploy/README.md` records: the installed
 Dokploy version/API responses and returned deployment IDs; secret scoping; GHCR pulls on
 all eligible workers; concrete domains/certificates; Dokploy-isolated review routing;
-exactly one Ready/Active `buildhound.traefik=true` node hosting standalone Traefik;
+Ready/Active `role=review` workers and successful URL plus authenticated ingest/read smoke;
 Hetzner versioning/lifecycle behavior; an encrypted fresh-volume restore; measured
 RPO/RTO; authenticated persistence/ceiling/429 checks; and the V2 mark recognition/collision
 decision. GitHub must also have protected-main-only `review`, `review-cleanup`, `staging`,
@@ -82,6 +82,11 @@ and installed-version secret scope. Dokploy's isolated application network is no
 an outbound-egress firewall. Because v0.29.12 `compose.delete` can orphan that external network,
 one tracked stopped Compose/network anchor remains per historical PR until Dokploy supports an
 exact network-aware deletion lifecycle; retired anchors do not count toward active capacity.
+Plan 086 supersedes the earlier same-node placement decision: review services use
+`role=review`, long-lived application services use `role=staging` or `role=prod`, and DB/backup
+remain on `role=db`. The isolated review overlay may cross hosts and is not encrypted in this
+Dokploy version. Readiness stays with bounded URL plus authenticated ingest/read smoke because
+v0.29.12's `docker:read` permission also authorizes Docker mutations outside the exact review.
 Dokploy v0.29.12 also defaults Traefik to `api.insecure:true`; review labels remain disabled until
 an operator uses Dokploy's UI/admin API to set and read back `api.insecure:false` (preferably
 `api.dashboard:false` with no unprotected `api@internal` router), reloads Traefik, and records the

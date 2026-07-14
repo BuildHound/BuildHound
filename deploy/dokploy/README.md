@@ -55,16 +55,20 @@ deployment evidence.
    export the same value and run `deploy/dokploy/verify-db-node.sh` before every deployment.
    The preflight fails unless the label identifies exactly one Ready/Active node with that
    ID; both Stack services also require the ID so relabelling cannot move PGDATA or backup
-   credentials. Label the Traefik node, create the encrypted ingress network, PGDATA volume,
-   and scoped external secrets. Build and deploy the digest-addressed
+   credentials. Label eligible application workers `role=staging` or `role=prod` for their
+   environment, create the encrypted ingress network, PGDATA volume, and scoped external
+   secrets. The release client constrains both the server Stack service and the separate site
+   Application to the role derived from the trusted deployment target. Build and deploy the digest-addressed
    `deploy/dokploy/db/Dockerfile` image so the trusted volume guard is available on every
    worker; raw Dokploy delivery never depends on a checkout-local file.
 2. Set `BUILDHOUND_DB_ALLOW_INIT=true` for the first deployment only. After the marker is
    written, wait for database readiness and prove authenticated restart persistence before
    removing it. The guard refuses empty, foreign, wrong-instance, and wrong-major volumes;
    even a marked-but-empty PGDATA requires explicit re-initialization.
-3. Render and validate with `docker stack config -c deploy/dokploy/stack.yaml` and
-   `deploy/dokploy/validate-stack.sh`. Deploy exact image digests explicitly.
+3. Render and validate with `BUILDHOUND_APP_ROLE=staging` or
+   `BUILDHOUND_APP_ROLE=prod`, `docker stack config -c deploy/dokploy/stack.yaml`, and
+   `deploy/dokploy/validate-stack.sh`. The delivery workflow passes the same trusted mapping
+   to `deploy-release --app-role`; deploy exact image digests explicitly.
 4. Set `BUILDHOUND_ROBOTS_HEADER=noindex, nofollow` in staging and `all` in production.
    Reject `storage: IN-MEMORY` in logs. Verify authenticated DB read/write, restart
    persistence, a ceiling-sized public ingest returning 202, and a Traefik 429 response.
@@ -159,8 +163,9 @@ does not persist a registry ID on a Compose; the client instead resolves
 `DOKPLOY_REGISTRY_ID`, verifies that its registry hostname matches the private image host, and
 runs Dokploy's credential test against the exact local or remote manager selected by the
 Compose to refresh that manager's Docker login. Dokploy deploys raw Stacks with
-`--with-registry-auth`, so workers receive that pull authorization. Review Composes are
-constrained to the local manager and use the same preflight there. The separately managed site
+`--with-registry-auth`, so workers receive that pull authorization. Review Composes constrain
+all services to `role=review`; the same manager credential preflight supplies worker pull
+authorization. The separately managed site
 remains a Docker-source Application. On Dokploy v0.29.12, attaching any of `registryId`,
 `buildRegistryId`, or `rollbackRegistryId` makes that Application re-tag and push its source
 image; this is incompatible with the protected digest reference and is not needed for pulls.
@@ -253,11 +258,15 @@ instead of issuing per-PR certificates. With isolated deployments enabled, Dokpl
 network from the Compose application name, adds it to each service, and connects its standalone
 Traefik. The trusted Stack deliberately defines no `dokploy-network`, external ingress network,
 other network block, or `traefik.swarm.network` override. Dokploy's injected application network
-is consequently the only network on every service. Through Dokploy's API or web UI, configure and
-verify exactly one Ready/Active Swarm node with `buildhound.traefik=true`, and ensure that node
-hosts standalone Traefik. All three review services are constrained there. Zero matching nodes
-leave tasks pending; multiple matching nodes permit cross-node traffic over Dokploy v0.29.12's
-unencrypted isolated overlay. Do not replace this operator check with host Docker or SSH mutation.
+is consequently the only network on every service. Through Dokploy's API or web UI, configure
+the eligible review workers with `role=review`; all three review services use that constraint.
+A successful Dokploy deployment row is only submission evidence. The protected workflow then
+requires both public endpoints plus authenticated ingest/read smoke before recording success;
+failure invokes exact-attempt cleanup. Do not grant the automatic token `docker:read` merely to
+inspect task state: Dokploy v0.29.12 also uses that permission for cross-container restart, stop,
+kill, removal, and file upload operations. Traefik may route to a different review worker across
+the version's unencrypted isolated overlay; this is an accepted residual, not a same-node
+guarantee. Do not replace the API and public smoke checks with host Docker or SSH mutation.
 Before enabling the label trigger, verify the review environment has
 no legacy `review-<repository>-<PR>` resources; remove any such test resources through Dokploy's
 web UI rather than allowing duplicate ownership. Cleanup first

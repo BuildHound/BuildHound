@@ -505,6 +505,11 @@ jobs:
           bootstrap=()
           predecessor=()
           proof=()
+          case "$TARGET" in
+            staging) app_role=staging ;;
+            production) app_role=prod ;;
+            *) echo "::error::Unsupported deployment target"; exit 1 ;;
+          esac
           if [ "$ROLLBACK_COMPATIBLE" = true ]; then compatibility+=(--rollback-compatible); fi
           if [ "$BOOTSTRAP" = true ]; then bootstrap+=(--bootstrap-manual-current); fi
           if [ "$TARGET" = production ]; then proof+=(--proven-release-id "$VALIDATED_RELEASE_ID"); fi
@@ -541,6 +546,7 @@ jobs:
             --volume-guard /tmp/release/volume-guard.sh \
             --compose-id "$COMPOSE_ID" \
             --site-application-id "$SITE_APPLICATION_ID" \
+            --app-role "$app_role" \
             "${proof[@]}" "${compatibility[@]}" "${bootstrap[@]}" \
             "${predecessor[@]}" > deployment-evidence.json
       - name: Verify public site and authenticated data path

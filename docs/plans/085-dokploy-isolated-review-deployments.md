@@ -1,5 +1,9 @@
 # 085 — Dokploy-managed isolated review deployments
 
+> Placement update (2026-07-14): plan 086 supersedes the same-node
+> `buildhound.traefik` constraint. All review services and retained anchors use
+> `role=review`; bounded public and authenticated data-path smoke gates success.
+
 ## Source
 
 Owner direction (2026-07-14) after the first PR review smoke: mutate Dokploy only through

@@ -26,7 +26,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.labels.buildhound.traefik == true
+          - node.labels.role == ${BUILDHOUND_APP_ROLE}
       update_config:
         order: stop-first
         failure_action: pause

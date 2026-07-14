@@ -1,5 +1,9 @@
 # 083 — Dokploy release delivery and review lifecycle
 
+> Placement update (2026-07-14): plan 086 supersedes the `buildhound.traefik` constraint.
+> Review workloads use `role=review`; staging and production application workloads use
+> `role=staging` and `role=prod`; database/backup workloads use `role=db`.
+
 ## Source
 
 Deployment request (2026-07-10), reconciled on 2026-07-12. Plans 081–082 own manually
