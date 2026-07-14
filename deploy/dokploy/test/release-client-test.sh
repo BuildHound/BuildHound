@@ -102,6 +102,38 @@ write_v2() {
       migrationHistory:$migrationHistory,migrationHistorySha256:$migrationHistorySha256}' > "$file"
 }
 
+write_v3() {
+  local file=$1 history=$2 migration_id history_sha
+  if [[ $# -ge 3 ]]; then
+    migration_id=$3
+  else
+    migration_id=$(jq -er '.[-1].id' <<< "$history")
+  fi
+  if [[ $# -ge 4 ]]; then
+    history_sha=$4
+  else
+    history_sha=$(history_hash "$history")
+  fi
+  jq -n \
+    --arg sourceCommit "$SOURCE_SHA" \
+    --arg serverImage "$SERVER_IMAGE" \
+    --arg siteImage "$SITE_IMAGE" \
+    --arg backupImage "$BACKUP_IMAGE" \
+    --arg postgresImage "$POSTGRES_IMAGE" \
+    --arg productionManifestSha256 "$H5" \
+    --arg stagingManifestSha256 "$H9" \
+    --arg volumeGuardSha256 "$H6" \
+    --arg migrationId "$migration_id" \
+    --argjson migrationHistory "$history" \
+    --arg migrationHistorySha256 "$history_sha" \
+    '{schema:3,sourceCommit:$sourceCommit,serverImage:$serverImage,siteImage:$siteImage,
+      backupImage:$backupImage,postgresImage:$postgresImage,
+      productionManifestSha256:$productionManifestSha256,
+      stagingManifestSha256:$stagingManifestSha256,
+      volumeGuardSha256:$volumeGuardSha256,migrationId:$migrationId,
+      migrationHistory:$migrationHistory,migrationHistorySha256:$migrationHistorySha256}' > "$file"
+}
+
 current_full() {
   jq -cn --arg releaseId "$1" --arg migrationId "$2" --arg migrationHistorySha256 "$3" \
     '{releaseId:$releaseId,migrationId:$migrationId,migrationHistorySha256:$migrationHistorySha256}'
@@ -154,8 +186,11 @@ HISTORY_2_10=$(jq -cn --arg h7 "$H7" --arg h8 "$H8" \
 V2="$tmp/release-v2.json"
 write_v1 "$V1"
 write_v2 "$V2" "$HISTORY_2_10"
+V3="$tmp/release-v3.json"
+write_v3 "$V3" "$HISTORY_2_10"
 assert_ok "schema 1 release accepted" release_validate "$V1"
 assert_ok "schema 2 release accepted with numeric order" release_validate "$V2"
+assert_ok "schema 3 release accepts target manifests" release_validate "$V3"
 
 canonical=$(canonical_json "$V2")
 expected_id="sha256:$(printf '%s\n' "$canonical" | sha256_stdin)"
@@ -164,6 +199,17 @@ assert_eq "schema 1 title is legacy migration-bound form" \
   "$(release_id "$V1")|V1__initial" "$(release_title "$V1")"
 assert_eq "schema 2 title includes history hash and source lineage" \
   "$expected_id|V10__later|$(history_hash "$HISTORY_2_10")|$SOURCE_SHA" "$(release_title "$V2")"
+assert_eq "schema 3 title includes history hash and source lineage" \
+  "$(release_id "$V3")|V10__later|$(history_hash "$HISTORY_2_10")|$SOURCE_SHA" \
+  "$(release_title "$V3")"
+
+v3_id=$(release_id "$V3")
+jq --arg hash "$H0" '.stagingManifestSha256 = $hash' "$V3" > "$tmp/staging-manifest-change.json"
+assert_ok "schema 3 accepts a changed valid staging manifest hash" \
+  release_validate "$tmp/staging-manifest-change.json"
+if [[ $(release_id "$tmp/staging-manifest-change.json") == "$v3_id" ]]; then
+  fail "staging manifest hash did not change the release ID"
+fi
 
 jq '.extra = true' "$V2" > "$tmp/extra.json"
 assert_fails "extra release key rejected" release_validate "$tmp/extra.json"
@@ -181,6 +227,10 @@ jq '.manifestSha256 = "ABC"' "$V2" > "$tmp/manifest.json"
 assert_fails "invalid manifest checksum rejected" release_validate "$tmp/manifest.json"
 jq --arg value "$H5"$'\n' '.manifestSha256 = $value' "$V2" > "$tmp/manifest-newline.json"
 assert_fails "checksum with trailing newline rejected" release_validate "$tmp/manifest-newline.json"
+jq '.productionManifestSha256 = "ABC"' "$V3" > "$tmp/production-manifest.json"
+assert_fails "invalid production manifest checksum rejected" release_validate "$tmp/production-manifest.json"
+jq '.stagingManifestSha256 = "ABC"' "$V3" > "$tmp/staging-manifest.json"
+assert_fails "invalid staging manifest checksum rejected" release_validate "$tmp/staging-manifest.json"
 jq '.volumeGuardSha256 = "ABC"' "$V2" > "$tmp/guard.json"
 assert_fails "invalid guard checksum rejected" release_validate "$tmp/guard.json"
 jq '.migrationId = "1_initial"' "$V2" > "$tmp/migration.json"
@@ -308,6 +358,10 @@ FORWARD="$tmp/forward.json"
 write_v2 "$FORWARD" "$FORWARD_HISTORY"
 assert_ok "forward migration accepts unchanged history prefix" \
   require_migration_compatibility "$CURRENT_FULL" "$FORWARD" false
+FORWARD_V3="$tmp/forward-v3.json"
+write_v3 "$FORWARD_V3" "$FORWARD_HISTORY"
+assert_ok "schema 3 forward migration accepts unchanged history prefix" \
+  require_migration_compatibility "$CURRENT_FULL" "$FORWARD_V3" false
 
 REWRITTEN_HISTORY=$(jq -cn --arg h0 "$H0" --arg h8 "$H8" --arg h9 "$H9" \
   '[{id:"V1__initial",sha256:$h0},{id:"V2__current",sha256:$h8},{id:"V3__next",sha256:$h9}]')

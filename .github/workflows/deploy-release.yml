@@ -418,10 +418,16 @@ jobs:
           PROVEN_RELEASE_ID: ${{ needs.resolve.outputs.proven_release_id }}
         run: |
           set -euo pipefail
-          test "$(find /tmp/release -type f | wc -l | tr -d ' ')" = 3
+          test "$(find /tmp/release -type f | wc -l | tr -d ' ')" = 4
           test -f /tmp/release/release.json
           test -f /tmp/release/stack.yaml
+          test -f /tmp/release/staging-stack.yaml
           test -f /tmp/release/volume-guard.sh
+          test "$(jq -er .schema /tmp/release/release.json)" = 3
+          test "$(sha256sum /tmp/release/stack.yaml | cut -d' ' -f1)" = \
+            "$(jq -er .productionManifestSha256 /tmp/release/release.json)"
+          test "$(sha256sum /tmp/release/staging-stack.yaml | cut -d' ' -f1)" = \
+            "$(jq -er .stagingManifestSha256 /tmp/release/release.json)"
           id=$(bash deploy/dokploy/dokploy.sh release-id /tmp/release/release.json)
           test "$(jq -er .sourceCommit /tmp/release/release.json)" = "$SOURCE_COMMIT"
           test "$RELEASE_ARTIFACT" = "release-$SOURCE_COMMIT"
@@ -502,8 +508,14 @@ jobs:
           predecessor=()
           proof=()
           case "$TARGET" in
-            staging) app_role=staging ;;
-            production) app_role=prod ;;
+            staging)
+              app_role=staging
+              manifest=/tmp/release/staging-stack.yaml
+              ;;
+            production)
+              app_role=prod
+              manifest=/tmp/release/stack.yaml
+              ;;
             *) echo "::error::Unsupported deployment target"; exit 1 ;;
           esac
           if [ "$ROLLBACK_COMPATIBLE" = true ]; then compatibility+=(--rollback-compatible); fi
@@ -538,7 +550,7 @@ jobs:
           fi
           bash deploy/dokploy/dokploy.sh deploy-release /tmp/release/release.json \
             --base-repo "$GITHUB_REPOSITORY" \
-            --manifest /tmp/release/stack.yaml \
+            --manifest "$manifest" \
             --volume-guard /tmp/release/volume-guard.sh \
             --compose-id "$COMPOSE_ID" \
             --site-application-id "$SITE_APPLICATION_ID" \

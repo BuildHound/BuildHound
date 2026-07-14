@@ -54,12 +54,11 @@ services:
     environment:
       POSTGRES_DB: buildhound
       POSTGRES_USER: buildhound
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_PASSWORD: ${BUILDHOUND_DB_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
       BUILDHOUND_DB_INSTANCE: ${BUILDHOUND_DB_INSTANCE}
       BUILDHOUND_DB_ALLOW_INIT: ${BUILDHOUND_DB_ALLOW_INIT:-false}
       BUILDHOUND_DB_MAJOR: "16"
-    secrets: [db_password]
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks: [private]
@@ -87,25 +86,16 @@ services:
       PGHOST: db
       PGDATABASE: buildhound
       PGUSER: buildhound
-      PGPASSFILE: /run/secrets/pgpass
+      PGPASSWORD: ${BUILDHOUND_DB_PASSWORD}
       AGE_RECIPIENT: ${BUILDHOUND_AGE_RECIPIENT}
       S3_ENDPOINT: ${BUILDHOUND_S3_ENDPOINT}
       S3_BUCKET: ${BUILDHOUND_S3_BUCKET}
-      S3_CREDENTIALS_FILE: /run/secrets/s3_credentials
+      AWS_ACCESS_KEY_ID: ${BUILDHOUND_S3_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${BUILDHOUND_S3_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${BUILDHOUND_S3_REGION}
       BACKUP_INTERVAL_SECONDS: ${BUILDHOUND_BACKUP_INTERVAL_SECONDS:-82800}
       BUILDHOUND_DB_INSTANCE: ${BUILDHOUND_DB_INSTANCE}
       BUILDHOUND_RELEASE_ID: ${BUILDHOUND_RELEASE_ID:-manual}
-    secrets:
-      - source: pgpass
-        target: pgpass
-        uid: "10001"
-        gid: "10001"
-        mode: 0400
-      - source: s3_credentials
-        target: s3_credentials
-        uid: "10001"
-        gid: "10001"
-        mode: 0400
     networks: [private, backup_egress]
     read_only: true
     volumes:
@@ -142,8 +132,3 @@ networks:
 volumes:
   pgdata:
     name: ${BUILDHOUND_PGDATA_VOLUME}
-
-secrets:
-  db_password: {external: true, name: "${BUILDHOUND_DB_PASSWORD_SECRET}"}
-  pgpass: {external: true, name: "${BUILDHOUND_PGPASS_SECRET}"}
-  s3_credentials: {external: true, name: "${BUILDHOUND_S3_CREDENTIALS_SECRET}"}

@@ -31,17 +31,27 @@ release_validate() {
       "migrationId", "postgresImage", "schema", "serverImage", "siteImage",
       "sourceCommit", "volumeGuardSha256"
     ];
+    def v3_keys: [
+      "backupImage", "migrationHistory", "migrationHistorySha256", "migrationId",
+      "postgresImage", "productionManifestSha256", "schema", "serverImage",
+      "siteImage", "sourceCommit", "stagingManifestSha256", "volumeGuardSha256"
+    ];
     . as $root
       | type == "object"
-      and (.schema == 1 or .schema == 2)
-      and (keys == (if .schema == 1 then v1_keys else v2_keys end))
+      and (.schema == 1 or .schema == 2 or .schema == 3)
+      and (keys == (if .schema == 1 then v1_keys elif .schema == 2 then v2_keys else v3_keys end))
       and (.sourceCommit | type == "string" and test("^[0-9a-f]{40}\\z"))
       and all(["serverImage", "siteImage", "backupImage", "postgresImage"][];
         . as $key
         | ($root[$key] | type == "string"
            and test("^[a-z0-9./_-]+(:[a-z0-9._-]+)?@sha256:[0-9a-f]{64}\\z"))
       )
-      and (.manifestSha256 | type == "string" and test("^[0-9a-f]{64}\\z"))
+      and (if .schema < 3 then
+        (.manifestSha256 | type == "string" and test("^[0-9a-f]{64}\\z"))
+      else
+        (.productionManifestSha256 | type == "string" and test("^[0-9a-f]{64}\\z")) and
+        (.stagingManifestSha256 | type == "string" and test("^[0-9a-f]{64}\\z"))
+      end)
       and (.volumeGuardSha256 | type == "string" and test("^[0-9a-f]{64}\\z"))
       and (.migrationId | type == "string" and test("^V[0-9]+__[A-Za-z0-9_.-]+\\z"))
   ' "$file" >/dev/null; then
@@ -61,10 +71,20 @@ release_validate() {
     fi
   done
 
-  value=$(jq -er '.manifestSha256 | select(type == "string")' "$file") || true
-  if ! is_sha256 "$value"; then
-    die "invalid manifest checksum"
-    return 1
+  if [[ $schema -lt 3 ]]; then
+    value=$(jq -er '.manifestSha256 | select(type == "string")' "$file") || true
+    if ! is_sha256 "$value"; then
+      die "invalid manifest checksum"
+      return 1
+    fi
+  else
+    for key in productionManifestSha256 stagingManifestSha256; do
+      value=$(jq -er --arg key "$key" '.[$key] | select(type == "string")' "$file") || true
+      if ! is_sha256 "$value"; then
+        die "invalid target manifest checksum"
+        return 1
+      fi
+    done
   fi
   value=$(jq -er '.volumeGuardSha256 | select(type == "string")' "$file") || true
   if ! is_sha256 "$value"; then
@@ -77,7 +97,7 @@ release_validate() {
     return 1
   fi
 
-  if [[ $schema == 2 ]]; then
+  if [[ $schema -ge 2 ]]; then
     if ! jq -e '
       def normalized_version:
         capture("^V(?<version>[0-9]+)__[A-Za-z0-9_.-]+\\z").version
@@ -144,7 +164,7 @@ release_title() {
   schema=$(jq -er '.schema' "$file") || return 1
   id=$(release_id "$file") || return 1
   migration=$(jq -er '.migrationId' "$file") || return 1
-  if [[ $schema == 2 ]]; then
+  if [[ $schema -ge 2 ]]; then
     history_hash=$(jq -er '.migrationHistorySha256' "$file") || return 1
     source_commit=$(jq -er '.sourceCommit' "$file") || return 1
     printf '%s|%s|%s|%s\n' "$id" "$migration" "$history_hash" "$source_commit"
@@ -467,7 +487,7 @@ require_migration_compatibility() {
   fi
 
   schema=$(jq -er '.schema' "$release_file") || return 1
-  if [[ $schema != 2 ]]; then
+  if [[ $schema -lt 2 ]]; then
     die "candidate release lacks full migration history"
     return 1
   fi

@@ -80,9 +80,9 @@ jobs:
         with: {pattern: "image-*", merge-multiple: true}
       - name: Build canonical release BOM
         run: |
-          python3 deploy/dokploy/render-release.py --source-commit "$GITHUB_SHA" --server-image "$(cat image-server.txt)" --site-image "$(cat image-site.txt)" --backup-image "$(cat image-backup.txt)" --postgres-image "$(cat image-db.txt)" --manifest deploy/dokploy/stack.yaml --volume-guard deploy/dokploy/volume-guard.sh --migrations-dir buildhound-server/src/main/resources/db/migration
+          python3 deploy/dokploy/render-release.py --source-commit "$GITHUB_SHA" --server-image "$(cat image-server.txt)" --site-image "$(cat image-site.txt)" --backup-image "$(cat image-backup.txt)" --postgres-image "$(cat image-db.txt)" --production-manifest deploy/dokploy/stack.yaml --staging-manifest deploy/dokploy/staging-stack.yaml --volume-guard deploy/dokploy/volume-guard.sh --migrations-dir buildhound-server/src/main/resources/db/migration
           bash deploy/dokploy/dokploy.sh release-id release.json >/dev/null
           mkdir release-artifact
-          cp release.json deploy/dokploy/stack.yaml deploy/dokploy/volume-guard.sh release-artifact/
+          cp release.json deploy/dokploy/stack.yaml deploy/dokploy/staging-stack.yaml deploy/dokploy/volume-guard.sh release-artifact/
       - uses: actions/upload-artifact@v4
         with: {name: "release-${{ github.sha }}", path: release-artifact, retention-days: 90}

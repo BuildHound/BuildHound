@@ -32,11 +32,13 @@ assert_status() {
 }
 
 manifest=$test_root/stack.yaml
+production_manifest=$test_root/production-stack.yaml
 guard=$test_root/volume-guard.sh
 release=$test_root/release.json
 # Intentional literal release-template placeholders.
 # shellcheck disable=SC2016
 printf 'services:\n  server:\n    image: ${BUILDHOUND_SERVER_IMAGE}\n    deploy:\n      placement:\n        constraints:\n          - node.labels.role == ${BUILDHOUND_APP_ROLE}\n  backup:\n    image: ${BUILDHOUND_BACKUP_IMAGE}\n  db:\n    image: ${BUILDHOUND_POSTGRES_IMAGE}\n    labels:\n      release: ${BUILDHOUND_RELEASE_ID:-manual}\n\n' > "$manifest"
+printf 'services:\n  production: {}\n' > "$production_manifest"
 printf '#!/bin/sh\nexit 0\n' > "$guard"
 
 SERVER_IMAGE="ghcr.io/buildhound/server@sha256:$(printf '1%.0s' {1..64})"
@@ -48,6 +50,7 @@ MIGRATION_SHA=$(printf '5%.0s' {1..64})
 HISTORY=$(jq -cn --arg sha "$MIGRATION_SHA" '[{id:"V1__initial",sha256:$sha}]')
 HISTORY_HASH=$(printf '%s\n' "$HISTORY" | sha256_stdin)
 MANIFEST_HASH=$(sha256_file "$manifest")
+PRODUCTION_MANIFEST_HASH=$(sha256_file "$production_manifest")
 GUARD_HASH=$(sha256_file "$guard")
 export SERVER_IMAGE SITE_IMAGE HISTORY_HASH
 
@@ -57,18 +60,20 @@ jq -cn \
   --arg site "$SITE_IMAGE" \
   --arg backup "$BACKUP_IMAGE" \
   --arg postgres "$POSTGRES_IMAGE" \
-  --arg manifest "$MANIFEST_HASH" \
+  --arg productionManifest "$PRODUCTION_MANIFEST_HASH" \
+  --arg stagingManifest "$MANIFEST_HASH" \
   --arg guard "$GUARD_HASH" \
   --argjson history "$HISTORY" \
   --arg historyHash "$HISTORY_HASH" '
   {
-    schema:2,
+    schema:3,
     sourceCommit:$source,
     serverImage:$server,
     siteImage:$site,
     backupImage:$backup,
     postgresImage:$postgres,
-    manifestSha256:$manifest,
+    productionManifestSha256:$productionManifest,
+    stagingManifestSha256:$stagingManifest,
     volumeGuardSha256:$guard,
     migrationId:"V1__initial",
     migrationHistory:$history,
@@ -83,6 +88,10 @@ export TEST_MANIFEST_SOURCE=$manifest
 RID=$(main release-id "$release")
 [[ $RID =~ ^sha256:[0-9a-f]{64}$ ]] || fail_test 'release-id returned an invalid digest'
 TITLE=$(release_title "$release")
+assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role prod
+grep -F 'release manifest checksum differs from trusted stack' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'production accepted the staging manifest'
 DRIFT_RID="sha256:$(printf '6%.0s' {1..64})"
 DRIFT_TITLE="$DRIFT_RID|V1__initial|$HISTORY_HASH|$SOURCE_SHA"
 export RID TITLE DRIFT_RID DRIFT_TITLE SOURCE_SHA

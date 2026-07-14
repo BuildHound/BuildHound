@@ -3,6 +3,10 @@
 > Placement update (2026-07-14): plan 086 supersedes the application/Traefik colocation
 > decision. Staging application workloads use `role=staging`, production application
 > workloads use `role=prod`, and database/backup workloads remain on `role=db`.
+>
+> Credential update (2026-07-14): plan 087 permits protected environment credentials in
+> staging because pinned Dokploy cannot create the required external Swarm secrets through
+> its supported control plane. Production remains external-secret-backed.
 
 ## Source
 

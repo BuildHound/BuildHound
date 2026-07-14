@@ -1,9 +1,29 @@
 #!/usr/bin/env bash
+# Staging credentials are ordinary environment values; never let inherited xtrace print them.
+set +x
 set -euo pipefail
 umask 077
-: "${AGE_RECIPIENT:?}" "${S3_ENDPOINT:?}" "${S3_BUCKET:?}" "${PGPASSFILE:?}" "${BUILDHOUND_DB_INSTANCE:?}" "${BUILDHOUND_RELEASE_ID:?}"
-# shellcheck source=/dev/null
-. "${S3_CREDENTIALS_FILE:-/run/secrets/s3_credentials}"
+: "${AGE_RECIPIENT:?}" "${S3_ENDPOINT:?}" "${S3_BUCKET:?}" "${BUILDHOUND_DB_INSTANCE:?}" "${BUILDHOUND_RELEASE_ID:?}"
+
+if [ -n "${PGPASSFILE:-}" ] && [ -n "${PGPASSWORD:-}" ]; then
+  printf 'configure exactly one PostgreSQL password source\n' >&2
+  exit 64
+elif [ -n "${PGPASSFILE:-}" ]; then
+  [ -r "$PGPASSFILE" ] || { printf 'PostgreSQL password file is not readable\n' >&2; exit 66; }
+elif [ -z "${PGPASSWORD:-}" ]; then
+  printf 'PostgreSQL password source is required\n' >&2
+  exit 64
+fi
+
+if [ -n "${S3_CREDENTIALS_FILE:-}" ]; then
+  if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+    printf 'configure exactly one S3 credential source\n' >&2
+    exit 64
+  fi
+  [ -r "$S3_CREDENTIALS_FILE" ] || { printf 'S3 credential file is not readable\n' >&2; exit 66; }
+  # shellcheck source=/dev/null
+  . "$S3_CREDENTIALS_FILE"
+fi
 : "${AWS_ACCESS_KEY_ID:?}" "${AWS_SECRET_ACCESS_KEY:?}"
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"

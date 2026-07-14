@@ -29,10 +29,15 @@ creation, Dokploy upgrades, application code, and schema migrations.
   `app_role=prod`, then rechecks the selected checksum before any Dokploy mutation.
   Both targets retain one canonical release ID and identical image digests.
 - Keep credential values solely in the protected staging Dokploy environment. Disable
-  xtrace and never print the environment or rendered Stack. Accept explicitly that
-  staging credentials are visible to principals able to read Dokploy environment or
-  Swarm service specifications; they must be staging-only, least-privilege, and
-  independently rotatable. No production credential may enter this path.
+  xtrace in credential-consuming scripts and never print the environment or rendered
+  Stack from repository automation. Dokploy v0.29.12 nevertheless embeds every resolved
+  Stack variable in its `docker stack deploy` command; a failed command is retained in an
+  `ExecError`, logged by the deployment queue, and may be forwarded to configured build-error
+  notifications. The owner explicitly accepted this additional staging-only exposure on
+  2026-07-14 when authorizing commit and publication after review. Disable staging build-error
+  notifications, restrict Dokploy log access and retention, and rotate the database and S3
+  credentials after any failed deployment. Credentials must be staging-only,
+  least-privilege, and independently rotatable. No production credential may enter this path.
 - Use the staging manifest for the one-time manual `Manual deployment` anchor and for
   every automated staging release. Production remains manual-only and secret-backed.
 
@@ -52,6 +57,8 @@ creation, Dokploy upgrades, application code, and schema migrations.
 
 - A raw manual staging deployment needs no pre-created Swarm secret objects.
 - The staging backup emits a completed encrypted object marked `manual` without
-  exposing credential values in repository files or deployment logs.
+  exposing credential values in repository files or GitHub Actions logs; the accepted
+  Dokploy command-error log and notification exposure remains governed by the mitigations
+  above.
 - Automatic staging uses only the BOM-bound staging manifest; production cannot select
   it and retains the plan-081 external-secret model.
