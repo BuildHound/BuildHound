@@ -25,7 +25,7 @@ style references.
   return those credentials to the protected runner, so confine those responses to trapped
   private files and never print, resend, or store them in shell variables.
 - Enforce review -> staging -> production: `deploy-review` label events create/update reviews,
-  unlabel/close events delete them, a qualifying labelled merge starts staging automatically
+  unlabel/close events retire them, a qualifying labelled merge starts staging automatically
   from the successful main publisher through `workflow_run`, and production remains manual.
   Staging requires a successful reviewed-PR smoke attestation bound to the release source merge
   commit. Its schema-2 Dokploy title persists that source commit, and the pre-mutation gate
@@ -55,10 +55,15 @@ style references.
   Application auto-deploy off so refresh hooks cannot bypass the promotion workflow.
 - Preserve exact deployment-title polling and its distinct terminal-failure/uncertain-state
   outcomes. Cleanup must still drain queues, prove quiescence, stop the Stack, wait for both
-  public 404s, retain the ownership anchor through package cleanup, and verify deletion.
+  public 404s, update the ownership anchor to a pinned zero-replica manifest, deploy and poll that
+  inert definition, verify the manager-side materialized file through Dokploy's API, stop again,
+  then run package cleanup and verify the anchor's idle isolated `retired:true` state. Preserve
+  `activatedAt` throughout cleanup. Dokploy v0.29.12 `compose.delete` is not used
+  because it can orphan the external isolated network.
 - Persist the exact GitHub run-attempt identity in review ownership and deployment evidence.
-  Failure and scheduled cleanup may revoke only that attempt; same-SHA reruns fail before mutation,
-  while scheduled reconciliation removes exact failed/cancelled attempts left by force-cancellation.
+  Failure and scheduled cleanup may revoke only that attempt; active same-SHA reruns fail before
+  mutation, while retired anchors may be reactivated and scheduled reconciliation retires exact
+  failed/cancelled attempts left by force-cancellation.
 - Keep stdout machine-readable for commands consumed by workflows; diagnostics go to stderr
   and contain no secrets, rendered manifests, request bodies, or API response bodies.
 - Keep API headers, canonical request/response JSON, and rendered manifests in private
@@ -102,4 +107,5 @@ the protected Environment runner and deploy token is part of the credential trus
 All existing Dokploy CLI behavior and security properties pass through the shell client; no
 deployment workflow invokes `dokploy.py`; the Python client is removed; clean-context infra
 and security/privacy reviews have no unresolved blocker; the controlled review smoke succeeds
-and cleans up with the isolation gate reset.
+and cleans up with Dokploy's persisted isolated-deployment setting plus scrubbed tracked retirement
+verified.

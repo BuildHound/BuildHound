@@ -56,8 +56,9 @@ jobs:
           BUILDHOUND_REVIEW_PROVIDER_ID: bh-123456789abcdef012345678-mr20
           BUILDHOUND_REVIEW_SITE_HOST: mr20.example.test
           BUILDHOUND_REVIEW_DASHBOARD_HOST: mr20.dashboard.example.test
-          DOKPLOY_REVIEW_INGRESS_NETWORK: buildhound-review-ingress
-        run: docker stack config -c deploy/dokploy/review-stack.yaml >/dev/null
+        run: |
+          docker stack config -c deploy/dokploy/review-stack.yaml >/dev/null
+          docker stack config -c deploy/dokploy/review-anchor.yaml >/dev/null
       - name: Build deployment support images
         run: |
           docker build -f site/Dockerfile -t buildhound-site:policy .

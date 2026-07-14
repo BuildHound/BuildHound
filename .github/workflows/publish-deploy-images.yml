@@ -6,7 +6,9 @@ permissions: {contents: read, pull-requests: read}
 env:
   IMAGE_REGISTRY_PREFIX: ghcr.io/buildhound
 concurrency:
-  group: publish-deploy-main
+  # Share the review lifecycle lock so an exact-owned review package version
+  # cannot acquire a release tag between GC verification and deletion.
+  group: review-environment-global
   queue: max
   cancel-in-progress: false
 jobs:

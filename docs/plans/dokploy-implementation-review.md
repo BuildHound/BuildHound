@@ -1,4 +1,4 @@
-# Dokploy plans 081–083 — overarching implementation review
+# Dokploy plans 081–085 — overarching implementation review
 
 ## Scope and ordering
 
@@ -30,9 +30,11 @@ required for an operator to deploy the long-lived Stack manually.
 - Review images build without deployment/object-store secrets. A protected-base dispatch
   revalidates repository/label/exact SHA, resolves image digests, generates masked ephemeral
   credentials, enforces a global serialized active ceiling, and requires the recorded
-  network-isolation gate. The trusted Stack pins UIDs/capabilities, the client waits for the
+  Dokploy isolated-deployment setting. The trusted Stack pins UIDs/capabilities, the client
+  verifies that setting through the API before deployment and waits for the
   exact deployment, and HTTPS smoke proves a fresh authenticated write/read. Close/unlabel
-  and hourly reconciliation verify exact ownership in the fixed review environment; GHCR
+  and hourly reconciliation verify exact ownership, stop public execution, scrub the stored
+  Compose, and retain one idle isolated `retired:true` anchor in the fixed review environment; GHCR
   cleanup proves the full-SHA tag's PR association before deleting an unshared numeric
   version. Review has no volume, backup, or S3 credential.
 
@@ -45,31 +47,49 @@ promotion-provenance, migration, ephemeral-credential, cleanup-race, runtime-con
 active-ceiling, deployment-evidence, and reconciler findings were corrected. The
 implementation now targets the documented Dokploy `x-api-key` endpoints rather than an
 inferred API shape.
+The final plan-085 pass found and corrected two additional ordering races: the exact Dokploy
+version gate now precedes the registry credential test that refreshes manager login state, and
+GHCR cleanup re-reads the exact numeric version immediately before deletion while the trusted
+main publisher shares its concurrency lock. Follow-up review found no blocker. The remaining
+duplicated jq ownership parser is accepted as a low-priority maintainability issue; both copies
+are covered by the lifecycle tests and must remain schema-identical until extracted.
 
 ## Environment gates still requiring operator evidence
 
 Repository tests cannot claim success for installed-version or external-system facts. Keep
 production and reviews disabled until `deploy/dokploy/README.md` records: the installed
 Dokploy version/API responses and returned deployment IDs; secret scoping; GHCR pulls on
-all eligible workers; concrete domains/certificates; review-to-long-lived negative network
-tests; Hetzner versioning/lifecycle behavior; an encrypted fresh-volume restore; measured
+all eligible workers; concrete domains/certificates; Dokploy-isolated review routing;
+exactly one Ready/Active `buildhound.traefik=true` node hosting standalone Traefik;
+Hetzner versioning/lifecycle behavior; an encrypted fresh-volume restore; measured
 RPO/RTO; authenticated persistence/ceiling/429 checks; and the V2 mark recognition/collision
 decision. GitHub must also have protected-main-only `review`, `review-cleanup`, `staging`,
 and `production` Environments. Cleanup remains approval-free, but its dedicated token needs
-service read/delete plus deployment read/create for the guarded Dokploy v0.29.12 stop/delete
-flow; it must not reuse a broader deployment token.
+service read/create plus deployment read/create for the guarded Dokploy v0.29.12 update,
+materialized scrub deployment, stop, and retire flow; it must not reuse a broader deployment token. Verify the node prerequisite only through
+Dokploy's API/UI; no host Docker/SSH mutation is part of this workflow.
 These are fail-closed launch gates, not deferred code substitutions.
 
 One reviewed residual is explicitly accepted within the reconciled plan boundary: the
 server has no `BUILDHOUND_DB_PASSWORD_FILE` support, so its per-review random password is
-manager-visible in Dokploy even though it is short-lived, masked in Actions, unique per
-deployment, and deleted with the review resource. Eliminating that visibility requires the
+manager-visible in Dokploy while the review is active even though it is masked in Actions and
+unique per deployment. Retirement updates the Compose to a pinned zero-replica credential-free
+definition, deploys it, verifies the manager-side materialized file through Dokploy's API, and
+stops it again before registry cleanup. Eliminating active-time visibility requires the
 separate server `*_FILE` plan named in the handoff; this PR does not smuggle that server
-change into infrastructure work. Review deployment remains disabled behind the isolation
-probe until the owner accepts both the installed-version secret scope and network result.
+change into infrastructure work. Review deployment remains fail-closed on isolation readback
+and installed-version secret scope. Dokploy's isolated application network is not recorded as
+an outbound-egress firewall. Because v0.29.12 `compose.delete` can orphan that external network,
+one tracked stopped Compose/network anchor remains per historical PR until Dokploy supports an
+exact network-aware deletion lifecycle; retired anchors do not count toward active capacity.
+Dokploy v0.29.12 also defaults Traefik to `api.insecure:true`; review labels remain disabled until
+an operator uses Dokploy's UI/admin API to set and read back `api.insecure:false` (preferably
+`api.dashboard:false` with no unprotected `api@internal` router), reloads Traefik, and records the
+protected attestation. The automatic review token remains least privilege rather than receiving
+owner/admin access for live global-config reads.
 
 ## Validation
 
 The repository validation set is `./gradlew build`, long-lived and review Stack rendering,
-Python delivery tests, volume-guard tests, shell/static site policy checks, container image
+Dokploy shell-client tests, volume-guard tests, shell/static site policy checks, container image
 builds, a read-only non-root live-site header/render smoke, ShellCheck, and `git diff --check`.

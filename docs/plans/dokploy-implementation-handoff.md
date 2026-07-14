@@ -48,7 +48,7 @@ Implement one plan at a time and update its plan if implementation diverges:
    backup/restore, alerts, and persistence gates.
 2. **082 second:** standalone V2 site, production/staging Applications, and manual deploy.
 3. **083 last:** immutable BOM automation, staging-to-production promotion, then review
-   lifecycle after exact-SHA and network isolation gates pass.
+   lifecycle after exact-SHA and persisted Dokploy-isolation gates pass.
 
 081 and 082 must each work manually before 083. Review automation is never allowed to block
 shipping safe long-lived environments.
@@ -63,14 +63,14 @@ Deferred work needs a new next-free plan and separate plan commit:
 ## What to retain from each source branch
 
 From Claude: Stack-mode/placement constraints, Dokploy environment-delivery staging probe,
-GHCR private-by-default handling, explicit deploy API calls, DNS/HTTP-01/Traefik mechanics,
+GHCR private-by-default handling, explicit deploy API calls, DNS-01/Traefik mechanics,
 edge 429 test, per-environment Hetzner-project isolation, nginx-unprivileged integration,
 and mandatory V2 visual direction.
 
 From Codex: client-side backup encryption, empty/foreign-volume fail-closed behavior,
 in-memory persistence gate, digest/BOM promotion, stop-first plus pause behavior, read-only
 roots, public payload-ceiling test, strict site URL validation, protected-base review
-manifests, exact ownership checks, and orphan reconciliation.
+manifests, exact ownership checks, and tracked review retirement/reconciliation.
 
 Discard: the JVM probe and `/dev/tcp`; three-mode DB entrypoint; Restic writer/pruner unless
 already operationally standard; moving-tag deployment; shared whole-`.env` injection;
@@ -85,7 +85,8 @@ Before committing to manifests or workflows, verify against the installed Dokplo
 2. Project/environment-scoped token permissions and separate review/staging/production users.
 3. Private GHCR pulls on every eligible Swarm worker.
 4. Compose/Application deploy API endpoints and the fact that registry pushes do not deploy.
-5. Isolated-deployment/network support sufficient to deny review → staging/production paths.
+5. Isolated-deployment support and its narrower per-application boundary. Treat outbound
+   review → public staging/production denial as separate network-policy work.
 6. Idempotent domain listing/creation/deletion and returned resource IDs.
 7. Hetzner versioning, lifecycle, access-policy, failed multipart, and noncurrent-version
    behavior; credentials are Cloud-project-wide, not bucket-scoped.
@@ -102,9 +103,10 @@ Commit names/placeholders only; the owner supplies values out of band:
 - Dokploy base URL, project ID, production/staging/review environment IDs, and distinct
   least-privilege API credentials for those roles;
 - production/staging site and dashboard FQDNs, review DNS suffixes, and the Traefik-node DNS
-  target used for HTTP-01;
+  target served by the pre-warmed Hetzner DNS-01 wildcard certificates;
 - the `role=db` DB-node label, its immutable Swarm node ID, unique DB instance identities,
-  and the Traefik-node label;
+  and exactly one Ready/Active `buildhound.traefik=true` node colocated with standalone Traefik,
+  verified through Dokploy API/UI;
 - GHCR server/site/backup/guarded-PostgreSQL package names and worker pull credential if
   packages remain private;
 - separate production/staging Hetzner project, endpoint, region, bucket, and backup-service
@@ -168,11 +170,19 @@ Commit names/placeholders only; the owner supplies values out of band:
 - No long-lived deploy that logs in-memory mode, silently initializes an unexpected volume,
   fails restart persistence, or places DB on a non-unique node.
 - No review deploy unless approval names the exact current head SHA, a push invalidates it,
-  the privileged job uses only protected-base code, and review cannot reach staging/prod.
+  the privileged job uses only protected-base code, and Dokploy isolation persists on readback.
 - No fork review, PR-controlled manifest, host bind, Docker socket, privileged/host network,
   S3 secret, production data, or shared long-lived credential in review.
 - No cleanup by prefix alone. Scope to the fixed review environment, verify repository/PR
-  ownership metadata, mutate returned IDs, and recheck PR state immediately before deletion.
+  ownership metadata, mutate returned IDs, and recheck PR state immediately before retirement.
+- Do not call v0.29.12 `compose.delete` for isolated reviews: stop and scrub the exact Compose,
+  deploy the pinned zero-replica anchor, verify its manager-side materialized file and
+  `isolatedDeployment:true`, stop again, remove exact-owned images, then retain a tracked
+  `retired:true` Compose/network anchor for reuse.
+- Before reviews, use only Dokploy's UI/admin API to set and read back Traefik
+  `api.insecure:false` (preferably `api.dashboard:false` with no unprotected `api@internal`
+  router), reload it, and set the protected review attestation. Never grant automatic review CI
+  the owner/admin token needed to inspect global Traefik configuration.
 - No secret, environment ID, domain, bucket, password, token, or generated value in committed
   files, workflow output, job summaries, PR comments, or verbose HTTP traces.
 

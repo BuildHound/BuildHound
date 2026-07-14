@@ -1,0 +1,8 @@
+version: "3.8"
+services:
+  anchor:
+    image: timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
+    deploy:
+      replicas: 0
+      placement:
+        constraints: [node.labels.buildhound.traefik == true]

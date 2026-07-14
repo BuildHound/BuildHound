@@ -298,6 +298,8 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         reconcile = self.read("deploy/dokploy/reconcile-reviews.sh")
         self.assertIn('tags == [$tag]', cleanup)
         self.assertIn('commits/$sha/pulls', cleanup)
+        self.assertIn("HEAD_REF_FORCE_PUSHED_EVENT", cleanup)
+        self.assertIn("beforeCommit{oid}", cleanup)
         self.assertNotIn('actions/workflows/$workflow_id/runs', cleanup)
         self.assertIn("packages: write", review)
         self.assertIn("delete-review-images.sh", review)
@@ -330,24 +332,31 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('KEEP_SHA="$keep_sha" REVIEW_PR="$PR"', failed_cleanup)
         self.assertIn('if [ "$cleanup_attempted_review" = true ]; then', failed_cleanup)
         sha_match = failed_cleanup.index(exact_attempt)
-        compose_revoke = failed_cleanup.index("revoke-review")
+        compose_scrub = failed_cleanup.index("scrub-review")
         image_cleanup = failed_cleanup.index("delete-review-images.sh")
-        delete_guard = failed_cleanup.index('if [ "$cleanup_attempted_review" = true ]; then')
-        compose_delete = failed_cleanup.index("delete-review --base-repo")
-        self.assertLess(sha_match, compose_revoke)
-        self.assertLess(compose_revoke, failed_cleanup.index('keep_sha="$deployed_sha"'))
-        self.assertLess(compose_revoke, image_cleanup)
-        self.assertLess(image_cleanup, delete_guard)
-        self.assertLess(delete_guard, compose_delete)
+        retire_guard = failed_cleanup.index('if [ "$cleanup_attempted_review" = true ]; then')
+        compose_retire = failed_cleanup.index("retire-review --base-repo")
+        self.assertLess(sha_match, compose_scrub)
+        self.assertLess(compose_scrub, failed_cleanup.index('keep_sha="$deployed_sha"'))
+        self.assertLess(compose_scrub, image_cleanup)
+        self.assertLess(image_cleanup, retire_guard)
+        self.assertLess(retire_guard, compose_retire)
 
-        delete_step = review.split("- name: Delete exact owned review", 1)[1]
-        first_recheck = delete_step.index('data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$PR")')
-        compose_revoke = delete_step.index("bash deploy/dokploy/dokploy.sh revoke-review")
-        image_cleanup = delete_step.index('REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh')
-        compose_delete = delete_step.index("bash deploy/dokploy/dokploy.sh delete-review")
-        self.assertLess(first_recheck, compose_revoke)
-        self.assertLess(compose_revoke, image_cleanup)
-        self.assertLess(image_cleanup, compose_delete)
+        post_success_cleanup = review_job.split(
+            "- name: Delete superseded exact-owned review images", 1
+        )[1].split("- name: Retire exact owned review", 1)[0]
+        self.assertIn("steps.deploy.outcome == 'success'", post_success_cleanup)
+        self.assertIn("if ! deploy/dokploy/delete-review-images.sh; then", post_success_cleanup)
+        self.assertIn("::warning::Superseded review-image cleanup failed", post_success_cleanup)
+
+        retire_step = review.split("- name: Retire exact owned review", 1)[1]
+        first_recheck = retire_step.index('data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$PR")')
+        compose_scrub = retire_step.index("bash deploy/dokploy/dokploy.sh scrub-review")
+        image_cleanup = retire_step.index('REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh')
+        compose_retire = retire_step.index("bash deploy/dokploy/dokploy.sh retire-review")
+        self.assertLess(first_recheck, compose_scrub)
+        self.assertLess(compose_scrub, image_cleanup)
+        self.assertLess(image_cleanup, compose_retire)
 
     def test_reconciler_is_executable_and_fail_closed(self):
         path = ROOT / "deploy/dokploy/reconcile-reviews.sh"

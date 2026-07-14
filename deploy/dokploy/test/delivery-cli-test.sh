@@ -117,6 +117,7 @@ INTEGRATION_CALLS=0
 
 dokploy_require_integrations() {
   INTEGRATION_CALLS=$((INTEGRATION_CALLS + 1))
+  printf 'integration\n' >> "$test_root/review-call-order"
   printf '%s\n' "${3-}" >> "$test_root/integration-targets"
   [[ $# -eq 3 && $1 == BuildHound/BuildHound && $2 == ghcr.io &&
      $DOKPLOY_REGISTRY_ID == registry1 && $DOKPLOY_GIT_PROVIDER_ID == provider1 ]] || return 96
@@ -507,11 +508,15 @@ grep -F 'registry isolation differs' "$test_root/status-stderr" >/dev/null || \
   fail_test 'final registry drift was not rejected explicitly'
 
 deploy_review() {
-  [[ $# -eq 12 && $1 == BuildHound/BuildHound && $2 == BuildHound/BuildHound &&
+  [[ $# -eq 11 && $1 == BuildHound/BuildHound && $2 == BuildHound/BuildHound &&
      $3 == 42 && $4 == "$SOURCE_SHA" && $5 == open && $6 == true && $7 == env1 &&
-     $8 == reviews.example.test && $9 == buildhound-review-ingress &&
-     ${10} == "$SERVER_IMAGE" && ${11} == "$SITE_IMAGE" && ${12} == 12345.1 ]] || return 91
+     $8 == reviews.example.test && $9 == "$SERVER_IMAGE" &&
+     ${10} == "$SITE_IMAGE" && ${11} == 12345.1 ]] || return 91
   printf '{"name":"mr42","composeId":"c42","deploymentId":"d42"}\n'
+}
+_review_require_supported_dokploy_version() {
+  printf 'version\n' >> "$test_root/review-call-order"
+  [[ ${VERSION_OK:-true} == true ]]
 }
 list_reviews() {
   [[ $# -eq 2 && $1 == BuildHound/BuildHound && $2 == env1 ]] || return 92
@@ -526,38 +531,61 @@ revoke_review() {
      $4 == reviews.example.test && $5 == c42 && $6 == "$SOURCE_SHA" && $7 == 12345.1 ]] || return 94
   printf '{"revoked": "mr42"}\n'
 }
-delete_review() {
+scrub_review() {
   [[ $# -eq 7 && $1 == BuildHound/BuildHound && $2 == 42 && $3 == env1 &&
      $4 == reviews.example.test && $5 == c42 && $6 == "$SOURCE_SHA" && $7 == 12345.1 ]] || return 95
-  printf '{"deleted": "mr42"}\n'
+  printf '{"scrubbed": "mr42", "deploymentId": "d43"}\n'
+}
+retire_review() {
+  [[ $# -eq 7 && $1 == BuildHound/BuildHound && $2 == 42 && $3 == env1 &&
+     $4 == reviews.example.test && $5 == c42 && $6 == "$SOURCE_SHA" && $7 == 12345.1 ]] || return 96
+  printf '{"retired": "mr42"}\n'
 }
 
 INTEGRATION_CALLS=0
+: > "$test_root/review-call-order"
 if main deploy-review --base-repo BuildHound/BuildHound --head-repo BuildHound/BuildHound \
     --pr 42 --sha "$SOURCE_SHA" --state closed --label-present --environment-id env1 \
-    --dns-suffix reviews.example.test --ingress-network buildhound-review-ingress \
-    --server-image "$SERVER_IMAGE" --site-image "$SITE_IMAGE" --attempt-id 12345.1 >/dev/null 2>&1; then
+    --dns-suffix reviews.example.test --server-image "$SERVER_IMAGE" \
+    --site-image "$SITE_IMAGE" --attempt-id 12345.1 >/dev/null 2>&1; then
   fail_test 'ineligible review input was accepted'
 fi
 [[ $INTEGRATION_CALLS -eq 0 ]] || fail_test 'ineligible review input reached integration APIs'
+test ! -s "$test_root/review-call-order" || fail_test 'ineligible review input reached the version API'
+
+VERSION_OK=false
+if main deploy-review --base-repo BuildHound/BuildHound \
+    --head-repo BuildHound/BuildHound --pr 42 --sha "$SOURCE_SHA" --state open \
+    --label-present --environment-id env1 --dns-suffix reviews.example.test \
+    --server-image "$SERVER_IMAGE" --site-image "$SITE_IMAGE" --attempt-id 12345.1 \
+    >/dev/null 2>&1; then
+  fail_test 'unsupported Dokploy version reached the review integration preflight'
+fi
+VERSION_OK=true
+assert_eq "$(< "$test_root/review-call-order")" version
+: > "$test_root/review-call-order"
 
 review_result=$(main deploy-review --base-repo BuildHound/BuildHound \
   --head-repo BuildHound/BuildHound --pr 42 --sha "$SOURCE_SHA" --state open \
   --label-present --environment-id env1 --dns-suffix reviews.example.test \
-  --ingress-network buildhound-review-ingress --server-image "$SERVER_IMAGE" \
-  --site-image "$SITE_IMAGE" --attempt-id 12345.1)
+  --server-image "$SERVER_IMAGE" --site-image "$SITE_IMAGE" --attempt-id 12345.1)
 jq -e '.name == "mr42" and .composeId == "c42" and .deploymentId == "d42"' \
   >/dev/null <<< "$review_result"
+assert_eq "$(< "$test_root/review-call-order")" $'version\nintegration'
 assert_eq "$(main list-reviews --base-repo BuildHound/BuildHound --environment-id env1)" '[{"pr":42}]'
 assert_eq "$(main count-reviews --base-repo BuildHound/BuildHound --environment-id env1 --exclude-pr 42)" 1
 assert_eq "$(main revoke-review --base-repo BuildHound/BuildHound --pr 42 --environment-id env1 \
   --dns-suffix reviews.example.test --expected-compose-id c42 --expected-sha "$SOURCE_SHA" \
   --expected-attempt-id 12345.1)" \
   '{"revoked": "mr42"}'
-assert_eq "$(main delete-review --base-repo BuildHound/BuildHound --pr 42 --environment-id env1 \
+assert_eq "$(main scrub-review --base-repo BuildHound/BuildHound --pr 42 --environment-id env1 \
   --dns-suffix reviews.example.test --expected-compose-id c42 --expected-sha "$SOURCE_SHA" \
   --expected-attempt-id 12345.1)" \
-  '{"deleted": "mr42"}'
+  '{"scrubbed": "mr42", "deploymentId": "d43"}'
+assert_eq "$(main retire-review --base-repo BuildHound/BuildHound --pr 42 --environment-id env1 \
+  --dns-suffix reviews.example.test --expected-compose-id c42 --expected-sha "$SOURCE_SHA" \
+  --expected-attempt-id 12345.1)" \
+  '{"retired": "mr42"}'
 
 if find "$test_root" -maxdepth 1 -type d -name 'buildhound-release.*' | grep -q .; then
   fail_test 'deploy-release left a private workspace behind'
