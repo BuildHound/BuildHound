@@ -32,7 +32,8 @@ Commands:
   count-reviews --base-repo REPO --environment-id ID [--exclude-pr PR]
   list-reviews --base-repo REPO --environment-id ID
   revoke-review [OPTIONS]
-  delete-review [OPTIONS]
+  scrub-review [OPTIONS]
+  retire-review [OPTIONS]
 EOF
   return 2
 }
@@ -586,17 +587,17 @@ cmd_deploy_release() (
 
 cmd_deploy_review() {
   local base_repo='' head_repo='' pr='' sha='' state='' label_present=false
-  local environment_id='' dns_suffix='' ingress_network='' server_image='' site_image=''
+  local environment_id='' dns_suffix='' server_image='' site_image=''
   local attempt_id=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --label-present) label_present=true; shift ;;
-      --base-repo|--head-repo|--pr|--sha|--state|--environment-id|--dns-suffix|--ingress-network|--server-image|--site-image|--attempt-id)
+      --base-repo|--head-repo|--pr|--sha|--state|--environment-id|--dns-suffix|--server-image|--site-image|--attempt-id)
         if [ "$#" -lt 2 ]; then usage; return 2; fi
         case "$1" in
           --base-repo) base_repo=$2 ;; --head-repo) head_repo=$2 ;; --pr) pr=$2 ;;
           --sha) sha=$2 ;; --state) state=$2 ;; --environment-id) environment_id=$2 ;;
-          --dns-suffix) dns_suffix=$2 ;; --ingress-network) ingress_network=$2 ;;
+          --dns-suffix) dns_suffix=$2 ;;
           --server-image) server_image=$2 ;; --site-image) site_image=$2 ;;
           --attempt-id) attempt_id=$2 ;;
         esac
@@ -607,14 +608,12 @@ cmd_deploy_review() {
   done
   if [ -z "$base_repo" ] || [ -z "$head_repo" ] || [ -z "$pr" ] || [ -z "$sha" ] ||
      [ -z "$state" ] || [ -z "$environment_id" ] || [ -z "$dns_suffix" ] ||
-     [ -z "$ingress_network" ] || [ -z "$server_image" ] || [ -z "$site_image" ] ||
-     [ -z "$attempt_id" ]; then
+     [ -z "$server_image" ] || [ -z "$site_image" ] || [ -z "$attempt_id" ]; then
     usage
     return 2
   fi
   review_validate_deploy_args "$base_repo" "$head_repo" "$pr" "$sha" "$state" "$label_present" \
-    "$environment_id" "$dns_suffix" "$ingress_network" "$server_image" "$site_image" \
-    "$attempt_id" || return 1
+    "$environment_id" "$dns_suffix" "$server_image" "$site_image" "$attempt_id" || return 1
   require_api_environment || return 1
   local server_registry site_registry
   server_registry=$(image_registry_host "$server_image") || return 1
@@ -623,11 +622,13 @@ cmd_deploy_review() {
     fail "review images do not share one registry"
     return 1
   fi
+  # The registry credential test refreshes manager login state, so pin the
+  # installed Dokploy behavior before that first review-related mutation.
+  _review_require_supported_dokploy_version || return 1
   # Review Composes are constrained to the Dokploy manager (serverId null).
   dokploy_require_integrations "$base_repo" "$server_registry" "" || return 1
   deploy_review "$base_repo" "$head_repo" "$pr" "$sha" "$state" "$label_present" \
-    "$environment_id" "$dns_suffix" "$ingress_network" "$server_image" "$site_image" \
-    "$attempt_id"
+    "$environment_id" "$dns_suffix" "$server_image" "$site_image" "$attempt_id"
 }
 
 cmd_list_or_count_reviews() {
@@ -654,7 +655,7 @@ cmd_list_or_count_reviews() {
   fi
 }
 
-cmd_revoke_or_delete_review() {
+cmd_review_cleanup() {
   local command=$1 base_repo='' pr='' environment_id='' dns_suffix=''
   local compose_id='' sha='' attempt_id=''
   shift
@@ -678,11 +679,19 @@ cmd_revoke_or_delete_review() {
     return 2
   fi
   require_api_environment || return 1
-  if [ "$command" = revoke ]; then
-    revoke_review "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id"
-  else
-    delete_review "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id"
-  fi
+  case "$command" in
+    revoke)
+      revoke_review "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id"
+      ;;
+    scrub)
+      require_command docker || return 1
+      scrub_review "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id"
+      ;;
+    retire)
+      require_command docker || return 1
+      retire_review "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id"
+      ;;
+  esac
 }
 
 main() {
@@ -699,8 +708,9 @@ main() {
     deploy-review) cmd_deploy_review "$@" ;;
     count-reviews) cmd_list_or_count_reviews count "$@" ;;
     list-reviews) cmd_list_or_count_reviews list "$@" ;;
-    revoke-review) cmd_revoke_or_delete_review revoke "$@" ;;
-    delete-review) cmd_revoke_or_delete_review delete "$@" ;;
+    revoke-review) cmd_review_cleanup revoke "$@" ;;
+    scrub-review) cmd_review_cleanup scrub "$@" ;;
+    retire-review) cmd_review_cleanup retire "$@" ;;
     *) usage ;;
   esac
 }

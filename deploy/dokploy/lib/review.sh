@@ -8,7 +8,21 @@ source "$_review_lib_dir/common.sh"
 # shellcheck disable=SC1091
 source "$_review_lib_dir/api.sh"
 _review_stack_template=$_review_lib_dir/../review-stack.yaml
-readonly _review_lib_dir _review_stack_template
+_review_anchor_template=$_review_lib_dir/../review-anchor.yaml
+_review_anchor_image=timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
+_review_supported_dokploy_version=v0.29.12
+readonly _review_lib_dir _review_stack_template _review_anchor_template _review_anchor_image
+readonly _review_supported_dokploy_version
+
+_review_require_supported_dokploy_version() {
+  local response
+  response=$(dokploy_api GET settings.getDokployVersion) || return 1
+  if ! jq -e --arg expected "$_review_supported_dokploy_version" \
+      'type == "string" and . == $expected' <<< "$response" >/dev/null; then
+    die "review lifecycle requires Dokploy $_review_supported_dokploy_version"
+    return 1
+  fi
+}
 
 _review_valid_positive_integer() {
   local value=${1-}
@@ -119,20 +133,30 @@ _review_owned_items() {
       (.description // "{}") as $description |
       (if ($description | type) == "string"
        then (try ($description | fromjson) catch null)
-       else null end) as $metadata |
+      else null end) as $metadata |
       if (($metadata | type) == "object") and
-         ((($metadata | keys | sort) == ["pr", "repository", "sha"]) or
-          (($metadata | keys | sort) == ["attemptId", "pr", "repository", "sha"])) and
+         (($metadata | has("repository")) and ($metadata | has("pr")) and
+          ($metadata | has("sha"))) and
+         (($metadata | keys) - ["activatedAt", "attemptId", "pr", "repository", "retired", "sha"] == []) and
          (($metadata.repository | type) == "string") and
          ($metadata.repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\z")) and
          (($metadata.pr | type) == "number") and
          ($metadata.pr > 0) and ($metadata.pr == ($metadata.pr | floor)) and
          (($metadata.sha | type) == "string") and
          ($metadata.sha | test("^[0-9a-f]{40}\\z")) and
+         ((($metadata | has("retired")) | not) or
+          (($metadata.retired | type) == "boolean")) and
+         ((($metadata | has("activatedAt")) | not) or
+          (($metadata.activatedAt | type) == "string" and
+           ($metadata.activatedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z")))) and
          ((($metadata | has("attemptId")) | not) or
           (($metadata.attemptId | type) == "string" and
            ($metadata.attemptId | test("^[1-9][0-9]{0,19}\\.[1-9][0-9]{0,9}\\z"))))
-      then $metadata + {attemptId:($metadata.attemptId // null)}
+      then $metadata + {
+        activatedAt:($metadata.activatedAt // null),
+        attemptId:($metadata.attemptId // null),
+        retired:($metadata.retired // false)
+      }
       else error("review ownership metadata is invalid")
       end;
     if type != "object" or (.compose | type) != "array" or
@@ -152,6 +176,8 @@ _review_owned_items() {
   ' <<< "$environment"
 }
 
+# Dokploy v0.29.12 persists the isolation toggle through compose.update.
+# compose.isolatedDeployment only renders a preview and must not be used here.
 _review_update_body() {
   local compose_id=$1 description=$2 compose_file=$3 output=$4
   jq -cn --arg composeId "$compose_id" --arg description "$description" \
@@ -169,7 +195,7 @@ _review_update_body() {
       composePath: "./docker-compose.yml",
       suffix: "",
       randomize: false,
-      isolatedDeployment: false,
+      isolatedDeployment: true,
       isolatedDeploymentsVolume: false,
       triggerType: "push",
       watchPaths: [],
@@ -227,13 +253,59 @@ _review_require_exact_compose() {
   fi
 }
 
+# Dokploy v0.29.12's compose.update is database-only. This verifier reads the
+# materialized manager-side file through compose.getConvertedCompose, then uses
+# the local Compose parser to compare its normalized structure fail-closed.
+_review_require_materialized_anchor() {
+  local compose_id=$1 app_name=$2 workdir=$3 response_file yaml_file json_file
+  response_file=$workdir/converted.json
+  yaml_file=$workdir/materialized.yaml
+  json_file=$workdir/materialized.json
+  dokploy_api GET "compose.getConvertedCompose?composeId=$compose_id" > "$response_file" || return 1
+  if ! jq -er 'select(type == "string" and length > 0)' "$response_file" > "$yaml_file"; then
+    die "Dokploy returned invalid materialized review Compose evidence"
+    return 1
+  fi
+  if ! command docker compose --file "$yaml_file" config --format json > "$json_file" 2>/dev/null; then
+    die "unable to normalize materialized review Compose evidence"
+    return 1
+  fi
+  if ! jq -e --arg appName "$app_name" --arg image "$_review_anchor_image" '
+    (type == "object") and
+    ((keys - ["name", "networks", "services"]) == []) and
+    (.services | type) == "object" and (.services | keys) == ["anchor"] and
+    (.services.anchor | type) == "object" and
+    ((.services.anchor | keys) - ["command", "deploy", "entrypoint", "image", "networks"] == []) and
+    .services.anchor.command == null and .services.anchor.entrypoint == null and
+    .services.anchor.image == $image and
+    (.services.anchor.networks | type) == "object" and
+    (.services.anchor.networks | keys) == [$appName] and
+    .services.anchor.networks[$appName] == null and
+    (.services.anchor.deploy | type) == "object" and
+    ((.services.anchor.deploy | keys) - ["placement", "replicas", "resources"] == []) and
+    .services.anchor.deploy.replicas == 0 and
+    (.services.anchor.deploy.resources // {}) == {} and
+    (.services.anchor.deploy.placement | type) == "object" and
+    (.services.anchor.deploy.placement | keys) == ["constraints"] and
+    .services.anchor.deploy.placement.constraints == ["node.labels.buildhound.traefik == true"] and
+    (.networks | type) == "object" and (.networks | keys) == [$appName] and
+    (.networks[$appName] | type) == "object" and
+    ((.networks[$appName] | keys) - ["external", "ipam", "name"] == []) and
+    .networks[$appName].external == true and .networks[$appName].name == $appName and
+    (.networks[$appName].ipam // {}) == {}
+  ' "$json_file" >/dev/null; then
+    die "Dokploy did not materialize the exact inert isolated review anchor"
+    return 1
+  fi
+}
+
 _review_render_stack() {
   local output=$1 server_image=$2 site_image=$3 repository=$4 pr=$5 sha=$6
-  local provider_id=$7 site_host=$8 dashboard_host=$9 ingress=${10} grep_rc
+  local provider_id=$7 site_host=$8 dashboard_host=$9 grep_rc
   if ! REVIEW_SERVER_IMAGE=$server_image REVIEW_SITE_IMAGE=$site_image \
     REVIEW_REPOSITORY=$repository REVIEW_PR=$pr REVIEW_SHA=$sha \
     REVIEW_PROVIDER_ID=$provider_id REVIEW_SITE_HOST=$site_host \
-    REVIEW_DASHBOARD_HOST=$dashboard_host REVIEW_INGRESS=$ingress \
+    REVIEW_DASHBOARD_HOST=$dashboard_host \
     jq -jRs '
       split("${BUILDHOUND_SERVER_IMAGE}") | join(env.REVIEW_SERVER_IMAGE) |
       split("${BUILDHOUND_SITE_IMAGE}") | join(env.REVIEW_SITE_IMAGE) |
@@ -244,8 +316,7 @@ _review_render_stack() {
       split("${BUILDHOUND_HEAD_SHA}") | join(env.REVIEW_SHA) |
       split("${BUILDHOUND_REVIEW_PROVIDER_ID}") | join(env.REVIEW_PROVIDER_ID) |
       split("${BUILDHOUND_REVIEW_SITE_HOST}") | join(env.REVIEW_SITE_HOST) |
-      split("${BUILDHOUND_REVIEW_DASHBOARD_HOST}") | join(env.REVIEW_DASHBOARD_HOST) |
-      split("${DOKPLOY_REVIEW_INGRESS_NETWORK}") | join(env.REVIEW_INGRESS)
+      split("${BUILDHOUND_REVIEW_DASHBOARD_HOST}") | join(env.REVIEW_DASHBOARD_HOST)
     ' "$_review_stack_template" > "$output"; then
     die "unable to render trusted review manifest"
     return 1
@@ -371,10 +442,13 @@ _review_wait_for_routes_gone() {
 
 _review_revoke_compose() (
   local compose_id=$1 name=$2 dns_suffix=$3 expected_sha=${4-} expected_attempt_id=${5-}
+  local expected_title_override=${6-}
   local body deployments matching_count active_count checks check workdir compose_file
   local expected_title=''
 
-  if [[ -n $expected_attempt_id ]]; then
+  if [[ -n $expected_title_override ]]; then
+    expected_title=$expected_title_override
+  elif [[ -n $expected_attempt_id ]]; then
     expected_title=$expected_sha'|'$expected_attempt_id
   elif [[ -n $expected_sha ]]; then
     expected_title=$expected_sha
@@ -470,10 +544,10 @@ _review_cleanup_failed_attempt() {
 
 review_validate_deploy_args() {
   local base_repo=${1-} head_repo=${2-} pr=${3-} sha=${4-} state=${5-}
-  local label_present=${6-} environment_id=${7-} dns_suffix=${8-} ingress=${9-}
-  local server_image=${10-} site_image=${11-} attempt_id=${12-} name
+  local label_present=${6-} environment_id=${7-} dns_suffix=${8-}
+  local server_image=${9-} site_image=${10-} attempt_id=${11-} name
 
-  if [[ $# -ne 12 ]] || ! _review_valid_repository "$base_repo" ||
+  if [[ $# -ne 11 ]] || ! _review_valid_repository "$base_repo" ||
      ! _review_valid_positive_integer "$pr"; then
     die "valid repository and positive PR number required"
     return 1
@@ -483,7 +557,6 @@ review_validate_deploy_args() {
   if [[ $head_repo != "$base_repo" ]]; then die "fork reviews are forbidden"; return 1; fi
   if [[ $state != open || $label_present != true ]]; then die "PR is not currently eligible"; return 1; fi
   if ! _review_valid_object_id "$environment_id"; then die "valid review environment ID required"; return 1; fi
-  if [[ $ingress != buildhound-review-ingress ]]; then die "unexpected review ingress network"; return 1; fi
   if ! _review_valid_digest "$server_image" || ! _review_valid_digest "$site_image"; then
     die "review images must be resolved digests"
     return 1
@@ -500,14 +573,15 @@ review_validate_deploy_args() {
 
 deploy_review() (
   local base_repo=${1-} head_repo=${2-} pr=${3-} sha=${4-} state=${5-}
-  local label_present=${6-} environment_id=${7-} dns_suffix=${8-} ingress=${9-}
-  local server_image=${10-} site_image=${11-} attempt_id=${12-}
+  local label_present=${6-} environment_id=${7-} dns_suffix=${8-}
+  local server_image=${9-} site_image=${10-} attempt_id=${11-}
   local name provider_id hosts site_host dashboard_host workdir compose_file update_file old_file body_file
   local persisted_file create_result_file description environment owned count compose_id body deployment_id rc
-  local existing_sha title
+  local activated_at existing_sha existing_retired title
   local mutation_possible=false deploy_may_be_active=false terminal=false
 
   review_validate_deploy_args "$@" || return 1
+  _review_require_supported_dokploy_version || return 1
   name=$(review_name "$pr") || return 1
   provider_id=$(review_provider_id "$base_repo" "$pr") || return 1
   hosts=$(review_hosts "$name" "$dns_suffix") || return 1
@@ -527,10 +601,17 @@ deploy_review() (
   persisted_file=$workdir/persisted.json
   create_result_file=$workdir/create-result.json
   _review_render_stack "$compose_file" "$server_image" "$site_image" "$base_repo" "$pr" "$sha" \
-    "$provider_id" "$site_host" "$dashboard_host" "$ingress" || return 1
-  description=$(jq -cn --arg attemptId "$attempt_id" --arg repository "$base_repo" \
+    "$provider_id" "$site_host" "$dashboard_host" || return 1
+  activated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ') || return 1
+  if [[ ! $activated_at =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    die "unable to determine review activation time"
+    return 1
+  fi
+  description=$(jq -cn --arg activatedAt "$activated_at" --arg attemptId "$attempt_id" \
+    --arg repository "$base_repo" \
     --argjson pr "$pr" --arg sha "$sha" \
-    '{attemptId:$attemptId,repository:$repository,pr:$pr,sha:$sha}') || return 1
+    '{activatedAt:$activatedAt,attemptId:$attemptId,repository:$repository,
+      pr:$pr,retired:false,sha:$sha}') || return 1
 
   environment=$(dokploy_api GET "environment.one?environmentId=$environment_id") || return 1
   owned=$(_review_owned_items "$environment" "$name" "$base_repo" "$pr" "") || return 1
@@ -544,7 +625,11 @@ deploy_review() (
     compose_id=$(jq -er '.[0].composeId | select(type == "string" and test("^[A-Za-z0-9_-]{1,128}\\z"))' <<< "$owned") || return 1
     if ! _review_valid_object_id "$compose_id"; then die "owned review has an invalid Compose ID"; return 1; fi
     existing_sha=$(jq -er '.[0].description | fromjson | .sha | select(type == "string")' <<< "$owned") || return 1
-    if [[ $existing_sha == "$sha" ]]; then
+    existing_retired=$(jq -er '
+      .[0].description | fromjson | (.retired // false) |
+      select(type == "boolean") | if . then "true" else "false" end
+    ' <<< "$owned") || return 1
+    if [[ $existing_sha == "$sha" && $existing_retired != true ]]; then
       die "same-SHA review redeploys are unsupported; push a new commit"
       return 1
     fi
@@ -647,20 +732,30 @@ list_reviews() {
       (.description // "{}") as $description |
       (if ($description | type) == "string"
        then (try ($description | fromjson) catch null)
-       else null end) as $metadata |
+      else null end) as $metadata |
       if (($metadata | type) == "object") and
-         ((($metadata | keys | sort) == ["pr", "repository", "sha"]) or
-          (($metadata | keys | sort) == ["attemptId", "pr", "repository", "sha"])) and
+         (($metadata | has("repository")) and ($metadata | has("pr")) and
+          ($metadata | has("sha"))) and
+         (($metadata | keys) - ["activatedAt", "attemptId", "pr", "repository", "retired", "sha"] == []) and
          (($metadata.repository | type) == "string") and
          ($metadata.repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\z")) and
          (($metadata.pr | type) == "number") and
          ($metadata.pr > 0) and ($metadata.pr == ($metadata.pr | floor)) and
          (($metadata.sha | type) == "string") and
          ($metadata.sha | test("^[0-9a-f]{40}\\z")) and
+         ((($metadata | has("retired")) | not) or
+          (($metadata.retired | type) == "boolean")) and
+         ((($metadata | has("activatedAt")) | not) or
+          (($metadata.activatedAt | type) == "string" and
+           ($metadata.activatedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z")))) and
          ((($metadata | has("attemptId")) | not) or
           (($metadata.attemptId | type) == "string" and
            ($metadata.attemptId | test("^[1-9][0-9]{0,19}\\.[1-9][0-9]{0,9}\\z"))))
-      then $metadata + {attemptId:($metadata.attemptId // null)}
+      then $metadata + {
+        activatedAt:($metadata.activatedAt // null),
+        attemptId:($metadata.attemptId // null),
+        retired:($metadata.retired // false)
+      }
       else error("review ownership metadata is invalid")
       end;
     if type != "object" or (.compose | type) != "array" or any(.compose[]; type != "object")
@@ -669,7 +764,8 @@ list_reviews() {
       .compose[] as $item |
       ($item | review_metadata) as $metadata |
       select($metadata.repository == $repository and ($exclude == null or $metadata.pr != $exclude)) |
-      {attemptId:$metadata.attemptId,pr:$metadata.pr,sha:$metadata.sha,
+      {activatedAt:($metadata.activatedAt // $item.createdAt),attemptId:$metadata.attemptId,
+       pr:$metadata.pr,retired:$metadata.retired,sha:$metadata.sha,
        createdAt:$item.createdAt,composeId:$item.composeId}
     ]
     end
@@ -682,10 +778,10 @@ list_reviews() {
 count_reviews() {
   local reviews
   reviews=$(list_reviews "$@") || return 1
-  jq -er 'length' <<< "$reviews"
+  jq -er '[.[] | select(.retired == false)] | length' <<< "$reviews"
 }
 
-_review_find_exact_record() {
+_review_get_exact_record() {
   local base_repo=$1 pr=$2 environment_id=$3 compose_id=$4 sha=$5 attempt_id=$6
   local name environment matches count
   name=$(review_name "$pr") || return 1
@@ -698,6 +794,13 @@ _review_find_exact_record() {
     die "review ownership is missing or ambiguous"
     return 1
   fi
+  jq -cer --arg composeId "$compose_id" \
+    '.[] | select(has("serverId") and .composeId == $composeId and .serverId == null)' \
+    <<< "$matches"
+}
+
+_review_find_exact_record() {
+  _review_get_exact_record "$@" >/dev/null
 }
 
 _review_validate_cleanup_args() {
@@ -721,30 +824,118 @@ revoke_review() {
   local attempt_id=${7-} name
   [[ $# -eq 7 ]] || { die "revoke_review requires seven arguments"; return 1; }
   _review_validate_cleanup_args "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id" || return 1
+  _review_require_supported_dokploy_version || return 1
   _review_find_exact_record "$base_repo" "$pr" "$environment_id" "$compose_id" "$sha" "$attempt_id" || return 1
   name=$(review_name "$pr") || return 1
   _review_revoke_compose "$compose_id" "$name" "$dns_suffix" "$sha" "$attempt_id" || return 1
   jq -jrn --arg revoked "$name" '"{\"revoked\": " + ($revoked | tojson) + "}\n"'
 }
 
-delete_review() {
+scrub_review() (
   local base_repo=${1-} pr=${2-} environment_id=${3-} dns_suffix=${4-} compose_id=${5-} sha=${6-}
-  local attempt_id=${7-} name body environment
-  [[ $# -eq 7 ]] || { die "delete_review requires seven arguments"; return 1; }
+  local attempt_id=${7-} name provider_id record metadata description workdir anchor_file update_file
+  local persisted_file old_file app_name title body deployment_id retired scrub_epoch
+  [[ $# -eq 7 ]] || { die "scrub_review requires seven arguments"; return 1; }
   _review_validate_cleanup_args "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id" || return 1
-  _review_find_exact_record "$base_repo" "$pr" "$environment_id" "$compose_id" "$sha" "$attempt_id" || return 1
+  _review_require_supported_dokploy_version || return 1
+  record=$(_review_get_exact_record "$base_repo" "$pr" "$environment_id" "$compose_id" "$sha" "$attempt_id") || return 1
   name=$(review_name "$pr") || return 1
+  provider_id=$(review_provider_id "$base_repo" "$pr") || return 1
+  metadata=$(jq -cer '.description | fromjson' <<< "$record") || return 1
+  retired=$(jq -er '(.retired // false) | select(type == "boolean") | if . then "true" else "false" end' <<< "$metadata") || return 1
+  description=$(jq -c --argjson retired "$retired" '. + {retired:$retired}' <<< "$metadata") || return 1
+
   _review_revoke_compose "$compose_id" "$name" "$dns_suffix" "$sha" "$attempt_id" || return 1
-  body=$(jq -cn --arg composeId "$compose_id" '{composeId:$composeId,deleteVolumes:true}') || return 1
-  dokploy_api POST compose.delete "$body" >/dev/null || return 1
-  environment=$(dokploy_api GET "environment.one?environmentId=$environment_id") || return 1
-  if ! _review_environment_shape <<< "$environment"; then
-    die "Dokploy returned an invalid review environment"
+
+  umask 077
+  workdir=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/buildhound-review-scrub.XXXXXX") || return 1
+  BUILDHOUND_REVIEW_SCRUB_WORKDIR=$workdir
+  trap 'if [[ -n ${BUILDHOUND_REVIEW_SCRUB_WORKDIR-} ]]; then rm -rf -- "$BUILDHOUND_REVIEW_SCRUB_WORKDIR"; fi' EXIT
+  trap 'if [[ -n ${BUILDHOUND_REVIEW_SCRUB_WORKDIR-} ]]; then rm -rf -- "$BUILDHOUND_REVIEW_SCRUB_WORKDIR"; fi; exit 129' HUP
+  trap 'if [[ -n ${BUILDHOUND_REVIEW_SCRUB_WORKDIR-} ]]; then rm -rf -- "$BUILDHOUND_REVIEW_SCRUB_WORKDIR"; fi; exit 130' INT
+  trap 'if [[ -n ${BUILDHOUND_REVIEW_SCRUB_WORKDIR-} ]]; then rm -rf -- "$BUILDHOUND_REVIEW_SCRUB_WORKDIR"; fi; exit 143' TERM
+  anchor_file=$workdir/anchor.yaml
+  update_file=$workdir/update.json
+  persisted_file=$workdir/compose.json
+  old_file=$workdir/old.json
+  cp -- "$_review_anchor_template" "$anchor_file" || return 1
+  _review_old_deployments "$compose_id" "$old_file" || return 1
+  _review_update_body "$compose_id" "$description" "$anchor_file" "$update_file" || return 1
+  dokploy_api POST compose.update "$(< "$update_file")" >/dev/null || return 1
+  dokploy_api GET "compose.one?composeId=$compose_id" > "$persisted_file" || return 1
+  if ! _review_require_exact_compose "$persisted_file" "$update_file" \
+      "$environment_id" "$name" "$provider_id" ||
+     ! jq -e '.composeStatus == "idle"' "$persisted_file" >/dev/null; then
+    die "Dokploy did not persist the inert isolated review anchor"
     return 1
   fi
-  if ! jq -e --arg composeId "$compose_id" 'all(.compose[]; .composeId != $composeId)' >/dev/null <<< "$environment"; then
-    die "Dokploy still reports the deleted review Compose or returned invalid state"
+  app_name=$(jq -er '.appName | select(type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,62}\\z"))' "$persisted_file") || return 1
+
+  scrub_epoch=$(date -u +%s) || return 1
+  [[ $scrub_epoch =~ ^[0-9]{1,20}$ ]] || { die "unable to derive scrub deployment title"; return 1; }
+  title="scrub|$sha|${attempt_id:-legacy}|$scrub_epoch|$$"
+  body=$(jq -cn --arg composeId "$compose_id" --arg title "$title" \
+    '{composeId:$composeId,title:$title}') || return 1
+  if ! dokploy_api POST compose.deploy "$body" >/dev/null; then
+    die "inert review scrub deployment could not be queued"
     return 1
   fi
-  jq -jrn --arg deleted "$name" '"{\"deleted\": " + ($deleted | tojson) + "}\n"'
-}
+  deployment_id=$(_review_wait_for_deployment "$compose_id" "$old_file" "$title") || return 1
+  _review_require_materialized_anchor "$compose_id" "$app_name" "$workdir" || return 1
+  _review_revoke_compose "$compose_id" "$name" "$dns_suffix" "" "" "$title" || return 1
+  dokploy_api GET "compose.one?composeId=$compose_id" > "$persisted_file" || return 1
+  if ! _review_require_exact_compose "$persisted_file" "$update_file" \
+      "$environment_id" "$name" "$provider_id" ||
+     ! jq -e '.composeStatus == "idle"' "$persisted_file" >/dev/null; then
+    die "Dokploy did not preserve the stopped inert isolated review anchor"
+    return 1
+  fi
+  jq -jrn --arg scrubbed "$name" --arg deploymentId "$deployment_id" \
+    '"{\"scrubbed\": " + ($scrubbed | tojson) + ", \"deploymentId\": " + ($deploymentId | tojson) + "}\n"'
+)
+
+retire_review() (
+  local base_repo=${1-} pr=${2-} environment_id=${3-} dns_suffix=${4-} compose_id=${5-} sha=${6-}
+  local attempt_id=${7-} name provider_id record metadata description retired workdir anchor_file
+  local update_file persisted_file app_name
+  [[ $# -eq 7 ]] || { die "retire_review requires seven arguments"; return 1; }
+  _review_validate_cleanup_args "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id" || return 1
+  _review_require_supported_dokploy_version || return 1
+  record=$(_review_get_exact_record "$base_repo" "$pr" "$environment_id" "$compose_id" "$sha" "$attempt_id") || return 1
+  name=$(review_name "$pr") || return 1
+  provider_id=$(review_provider_id "$base_repo" "$pr") || return 1
+  metadata=$(jq -cer '.description | fromjson' <<< "$record") || return 1
+  retired=$(jq -er '(.retired // false) | select(type == "boolean") | if . then "true" else "false" end' <<< "$metadata") || return 1
+
+  umask 077
+  workdir=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/buildhound-review-retire.XXXXXX") || return 1
+  BUILDHOUND_REVIEW_RETIRE_WORKDIR=$workdir
+  trap 'if [[ -n ${BUILDHOUND_REVIEW_RETIRE_WORKDIR-} ]]; then rm -rf -- "$BUILDHOUND_REVIEW_RETIRE_WORKDIR"; fi' EXIT
+  trap 'if [[ -n ${BUILDHOUND_REVIEW_RETIRE_WORKDIR-} ]]; then rm -rf -- "$BUILDHOUND_REVIEW_RETIRE_WORKDIR"; fi; exit 129' HUP
+  trap 'if [[ -n ${BUILDHOUND_REVIEW_RETIRE_WORKDIR-} ]]; then rm -rf -- "$BUILDHOUND_REVIEW_RETIRE_WORKDIR"; fi; exit 130' INT
+  trap 'if [[ -n ${BUILDHOUND_REVIEW_RETIRE_WORKDIR-} ]]; then rm -rf -- "$BUILDHOUND_REVIEW_RETIRE_WORKDIR"; fi; exit 143' TERM
+  anchor_file=$workdir/anchor.yaml
+  update_file=$workdir/update.json
+  persisted_file=$workdir/compose.json
+  cp -- "$_review_anchor_template" "$anchor_file" || return 1
+  description=$(jq -c '. + {retired:true}' <<< "$metadata") || return 1
+  _review_update_body "$compose_id" "$description" "$anchor_file" "$update_file" || return 1
+  dokploy_api GET "compose.one?composeId=$compose_id" > "$persisted_file" || return 1
+  app_name=$(jq -er '.appName | select(type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,62}\\z"))' "$persisted_file") || return 1
+  if ! jq -e '.composeStatus == "idle"' "$persisted_file" >/dev/null ||
+     ! _review_require_materialized_anchor "$compose_id" "$app_name" "$workdir"; then
+    die "review anchor is not safely scrubbed and stopped"
+    return 1
+  fi
+  if [[ $retired != true ]]; then
+    dokploy_api POST compose.update "$(< "$update_file")" >/dev/null || return 1
+  fi
+  dokploy_api GET "compose.one?composeId=$compose_id" > "$persisted_file" || return 1
+  if ! _review_require_exact_compose "$persisted_file" "$update_file" \
+      "$environment_id" "$name" "$provider_id" ||
+     ! jq -e '.composeStatus == "idle"' "$persisted_file" >/dev/null; then
+    die "Dokploy did not preserve the retired isolated review anchor"
+    return 1
+  fi
+  jq -jrn --arg retired "$name" '"{\"retired\": " + ($retired | tojson) + "}\n"'
+)

@@ -12,8 +12,9 @@ services:
       BUILDHOUND_SITE_ROBOTS: noindex, nofollow
     read_only: true
     tmpfs: ["/tmp:size=32m,mode=1777"]
-    networks: [review, ingress]
     deploy:
+      placement:
+        constraints: [node.labels.buildhound.traefik == true]
       resources:
         reservations: {cpus: "0.05", memory: 32M}
         limits: {cpus: "0.5", memory: 128M}
@@ -27,7 +28,6 @@ services:
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.tls=true
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.middlewares=${BUILDHOUND_REVIEW_PROVIDER_ID}-noindex
         - traefik.http.services.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.loadbalancer.server.port=8080
-        - traefik.swarm.network=${DOKPLOY_REVIEW_INGRESS_NETWORK}
   server:
     image: ${BUILDHOUND_SERVER_IMAGE}
     user: "10001:10001"
@@ -42,8 +42,9 @@ services:
       BUILDHOUND_HOST_RPM: "300"
     read_only: true
     tmpfs: ["/tmp:size=64m"]
-    networks: [review, ingress]
     deploy:
+      placement:
+        constraints: [node.labels.buildhound.traefik == true]
       resources:
         reservations: {cpus: "0.1", memory: 128M}
         limits: {cpus: "1", memory: 1G}
@@ -55,18 +56,15 @@ services:
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.middlewares=${BUILDHOUND_REVIEW_PROVIDER_ID}-noindex
         - traefik.http.middlewares.${BUILDHOUND_REVIEW_PROVIDER_ID}-noindex.headers.customresponseheaders.X-Robots-Tag=noindex, nofollow
         - traefik.http.services.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.loadbalancer.server.port=8080
-        - traefik.swarm.network=${DOKPLOY_REVIEW_INGRESS_NETWORK}
   db:
     image: timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
     environment:
       POSTGRES_DB: buildhound
       POSTGRES_USER: buildhound
       POSTGRES_PASSWORD: ${BUILDHOUND_REVIEW_DB_PASSWORD}
-    networks: [review]
     deploy:
+      placement:
+        constraints: [node.labels.buildhound.traefik == true]
       resources:
         reservations: {cpus: "0.1", memory: 128M}
         limits: {cpus: "1", memory: 1G}
-networks:
-  review: {driver: overlay, internal: true, driver_opts: {encrypted: "true"}}
-  ingress: {external: true, name: "${DOKPLOY_REVIEW_INGRESS_NETWORK}"}

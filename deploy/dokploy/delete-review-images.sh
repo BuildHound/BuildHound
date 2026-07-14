@@ -21,6 +21,99 @@ case "$owner_type" in
   User) package_scope="users/$owner" ;;
   *) echo "unsupported package owner type" >&2; exit 65 ;;
 esac
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
+force_push_history=$tmpdir/force-push-history
+force_push_history_state=unloaded
+# GraphQL variables are intentionally literal inside this single-quoted query.
+# shellcheck disable=SC2016
+force_push_query='query($owner:String!,$name:String!,$pr:Int!,$endCursor:String){
+  repository(owner:$owner,name:$name){
+    nameWithOwner
+    pullRequest(number:$pr){
+      number
+      baseRepository{nameWithOwner}
+      headRepository{nameWithOwner}
+      timelineItems(first:100,after:$endCursor,itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]){
+        pageCount
+        nodes{... on HeadRefForcePushedEvent{id beforeCommit{oid}}}
+        pageInfo{hasNextPage endCursor}
+      }
+    }
+  }
+}'
+
+load_force_push_history() {
+  case "$force_push_history_state" in
+    loaded) return 0 ;;
+    failed) return 1 ;;
+  esac
+
+  if history=$(gh api graphql --paginate --slurp \
+      -f owner="$owner" -f name="$repo_name" -F pr="$REVIEW_PR" \
+      -f query="$force_push_query"); then
+    :
+  else
+    force_push_history_state=failed
+    return 1
+  fi
+  if ! printf '%s\n' "$history" | jq -er --arg repo "$GITHUB_REPOSITORY" \
+      --argjson pr "$REVIEW_PR" '
+    type == "array" and length > 0 and
+    all(.[];
+      (has("errors") | not) and
+      (.data.repository | type) == "object" and
+      .data.repository.nameWithOwner == $repo and
+      (.data.repository.pullRequest | type) == "object" and
+      .data.repository.pullRequest.number == $pr and
+      .data.repository.pullRequest.baseRepository.nameWithOwner == $repo and
+      .data.repository.pullRequest.headRepository.nameWithOwner == $repo and
+      (.data.repository.pullRequest.timelineItems | type) == "object" and
+      (.data.repository.pullRequest.timelineItems.nodes | type) == "array" and
+      (.data.repository.pullRequest.timelineItems.pageCount | type) == "number" and
+      .data.repository.pullRequest.timelineItems.pageCount >= 0 and
+      .data.repository.pullRequest.timelineItems.pageCount ==
+        (.data.repository.pullRequest.timelineItems.nodes | length) and
+      all(.data.repository.pullRequest.timelineItems.nodes[];
+        (type == "object") and
+        (.id | type) == "string" and (.id | length) > 0 and
+        ((.beforeCommit == null) or
+         ((.beforeCommit | type) == "object" and
+          (.beforeCommit.oid | type) == "string" and
+          (.beforeCommit.oid | test("^[0-9a-f]{40}\\z"))))
+      ) and
+      (.data.repository.pullRequest.timelineItems.pageInfo | type) == "object" and
+      (.data.repository.pullRequest.timelineItems.pageInfo.hasNextPage | type) == "boolean" and
+      ((.data.repository.pullRequest.timelineItems.pageInfo.endCursor == null) or
+       ((.data.repository.pullRequest.timelineItems.pageInfo.endCursor | type) == "string" and
+        (.data.repository.pullRequest.timelineItems.pageInfo.endCursor | length) > 0))) and
+    all(.[0:-1][];
+      .data.repository.pullRequest.timelineItems.pageInfo.hasNextPage == true and
+      (.data.repository.pullRequest.timelineItems.pageInfo.endCursor | type) == "string" and
+      (.data.repository.pullRequest.timelineItems.pageInfo.endCursor | length) > 0) and
+    .[-1].data.repository.pullRequest.timelineItems.pageInfo.hasNextPage == false and
+    ([.[].data.repository.pullRequest.timelineItems.nodes[].id] | length) ==
+      ([.[].data.repository.pullRequest.timelineItems.nodes[].id] | unique | length)
+  ' >/dev/null; then
+    force_push_history_state=failed
+    return 1
+  fi
+  if ! printf '%s\n' "$history" | jq -r '
+      .[].data.repository.pullRequest.timelineItems.nodes[] |
+      .beforeCommit.oid? // empty
+    ' > "$force_push_history"; then
+    force_push_history_state=failed
+    return 1
+  fi
+  force_push_history_state=loaded
+}
+
+force_push_history_contains() {
+  load_force_push_history || return 1
+  grep -Fx "$1" "$force_push_history" >/dev/null
+}
+
 had_error=false
 for package in buildhound-server buildhound-site; do
   if versions=$(gh api --paginate --slurp "$package_scope/packages/container/$package/versions?per_page=100"); then
@@ -30,7 +123,7 @@ for package in buildhound-server buildhound-site; do
     had_error=true
     continue
   fi
-  candidates=$(mktemp)
+  candidates=$tmpdir/$package-candidates
   printf '%s\n' "$versions" | jq -c --arg pattern "^pr-${REVIEW_PR}-[0-9a-f]{40}\\z" '
     .[][] |
     select(.metadata.container.tags | type == "array") |
@@ -61,18 +154,30 @@ for package in buildhound-server buildhound-site; do
     if [ -n "${KEEP_SHA:-}" ] && [ "$sha" = "$KEEP_SHA" ]; then
       continue
     fi
-    if pulls=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/pulls"); then
-      :
-    else
-      echo "unable to verify $package PR provenance; preserving image" >&2
+    verified=false
+    if pulls=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/pulls") &&
+       printf '%s\n' "$pulls" | jq -e --arg repo "$GITHUB_REPOSITORY" --argjson pr "$REVIEW_PR" '
+         .[] |
+         select(.number == $pr and .head.repo.full_name == $repo and .base.repo.full_name == $repo)
+       ' >/dev/null; then
+      verified=true
+    elif force_push_history_contains "$sha"; then
+      verified=true
+    fi
+    if [ "$verified" != true ]; then
+      echo "unverified $package repository/PR/SHA provenance; preserving image" >&2
       had_error=true
       continue
     fi
-    if ! printf '%s\n' "$pulls" | jq -e --arg repo "$GITHUB_REPOSITORY" --argjson pr "$REVIEW_PR" '
-      .[] |
-      select(.number == $pr and .head.repo.full_name == $repo and .base.repo.full_name == $repo)
-    ' >/dev/null; then
-      echo "unverified $package repository/PR/SHA provenance; preserving image" >&2
+    if live=$(gh api "$package_scope/packages/container/$package/versions/$id") &&
+       printf '%s\n' "$live" | jq -e --argjson id "$id" --arg tag "$tag" '
+         type == "object" and .id == $id and
+         (.metadata.container.tags | type) == "array" and
+         .metadata.container.tags == [$tag]
+       ' >/dev/null; then
+      :
+    else
+      echo "verified $package review image changed before deletion; preserving image" >&2
       had_error=true
       continue
     fi
@@ -81,7 +186,6 @@ for package in buildhound-server buildhound-site; do
       had_error=true
     fi
   done < "$candidates"
-  rm -f "$candidates"
 done
 
 if [ "$had_error" = true ]; then

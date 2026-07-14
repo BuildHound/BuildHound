@@ -43,18 +43,30 @@ while IFS= read -r review; do
     had_error=true
     continue
   fi
-  if ! created=$(printf '%s\n' "$review" | jq -er '.createdAt | select(type == "string" and length > 0)'); then
-    warn_review "$pr" "missing createdAt; preserving review"
+  if ! retired=$(printf '%s\n' "$review" | jq -er '
+    .retired | select(type == "boolean") | if . then "true" else "false" end
+  '); then
+    warn_review "$pr" "invalid review lifecycle metadata; preserving review"
     had_error=true
     continue
   fi
-  if ! created_epoch=$(date -u -d "$created" +%s 2>/dev/null); then
-    warn_review "$pr" "invalid createdAt; preserving review"
+  if [ "$retired" = true ]; then
+    continue
+  fi
+  if ! activated=$(printf '%s\n' "$review" | jq -er '
+    (.activatedAt // .createdAt) | select(type == "string" and length > 0)
+  '); then
+    warn_review "$pr" "missing activation time; preserving review"
     had_error=true
     continue
   fi
-  if [ "$created_epoch" -gt $((now_epoch + 300)) ]; then
-    warn_review "$pr" "createdAt is in the future; preserving review"
+  if ! activated_epoch=$(date -u -d "$activated" +%s 2>/dev/null); then
+    warn_review "$pr" "invalid activation time; preserving review"
+    had_error=true
+    continue
+  fi
+  if [ "$activated_epoch" -gt $((now_epoch + 300)) ]; then
+    warn_review "$pr" "activation time is in the future; preserving review"
     had_error=true
     continue
   fi
@@ -73,7 +85,6 @@ while IFS= read -r review; do
     had_error=true
     continue
   fi
-
   if ! data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$pr" 2>/dev/null); then
     warn_review "$pr" "GitHub PR lookup failed; preserving review"
     had_error=true
@@ -85,11 +96,11 @@ while IFS= read -r review; do
     continue
   fi
 
-  delete=false
-  ttl_delete=false
-  attempt_delete=false
+  retire=false
+  ttl_retire=false
+  attempt_retire=false
   if [ "$state" != open ]; then
-    delete=true
+    retire=true
   else
     if ! labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' 2>/dev/null); then
       warn_review "$pr" "GitHub label lookup failed; preserving review"
@@ -97,11 +108,11 @@ while IFS= read -r review; do
       continue
     fi
     if ! printf '%s\n' "$labels" | grep -Fx deploy-review >/dev/null; then
-      delete=true
+      retire=true
     fi
   fi
 
-  if [ "$delete" = false ] && [ -n "$attempt_id" ]; then
+  if [ "$retire" = false ] && [ -n "$attempt_id" ]; then
     case "$attempt_id" in
       *.*) run_id=${attempt_id%%.*}; run_attempt=${attempt_id#*.} ;;
       *) run_id=; run_attempt= ;;
@@ -140,8 +151,8 @@ while IFS= read -r review; do
         if [ "$(printf '%s\n' "$run" | jq -r .conclusion)" = success ]; then
           :
         else
-          delete=true
-          attempt_delete=true
+          retire=true
+          attempt_retire=true
         fi
         ;;
       *)
@@ -152,12 +163,12 @@ while IFS= read -r review; do
     esac
   fi
 
-  age=$((now_epoch - created_epoch))
+  age=$((now_epoch - activated_epoch))
   if [ "$age" -gt "$ttl_seconds" ]; then
-    delete=true
-    ttl_delete=true
+    retire=true
+    ttl_retire=true
   fi
-  if [ "$delete" != true ]; then
+  if [ "$retire" != true ]; then
     continue
   fi
 
@@ -171,7 +182,7 @@ while IFS= read -r review; do
     had_error=true
     continue
   fi
-  if [ "$ttl_delete" = false ] && [ "$attempt_delete" = false ] && [ "$state" = open ]; then
+  if [ "$ttl_retire" = false ] && [ "$attempt_retire" = false ] && [ "$state" = open ]; then
     if ! labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' 2>/dev/null); then
       warn_review "$pr" "final GitHub label check failed; preserving review"
       had_error=true
@@ -182,7 +193,7 @@ while IFS= read -r review; do
     fi
   fi
 
-  # Revoke public execution but retain ownership until package garbage collection succeeds.
+  # Materialize the credential-free anchor before package garbage collection.
   if [ -n "$attempt_id" ]; then
     attempt_args="--expected-attempt-id $attempt_id"
   else
@@ -191,35 +202,35 @@ while IFS= read -r review; do
   # attempt_id is validated above and contains no shell metacharacters. The
   # branch avoids eval and preserves compatibility with legacy records.
   if [ -n "$attempt_args" ]; then
-    revoke_ok=false
-    if bash deploy/dokploy/dokploy.sh revoke-review \
+    scrub_ok=false
+    if bash deploy/dokploy/dokploy.sh scrub-review \
       --base-repo "$GITHUB_REPOSITORY" --pr "$pr" --environment-id "$ENVIRONMENT_ID" \
       --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$sha" \
-      --expected-attempt-id "$attempt_id"; then revoke_ok=true; fi
+      --expected-attempt-id "$attempt_id"; then scrub_ok=true; fi
   else
-    revoke_ok=false
-    if bash deploy/dokploy/dokploy.sh revoke-review \
+    scrub_ok=false
+    if bash deploy/dokploy/dokploy.sh scrub-review \
       --base-repo "$GITHUB_REPOSITORY" --pr "$pr" --environment-id "$ENVIRONMENT_ID" \
       --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$sha"; then
-      revoke_ok=true
+      scrub_ok=true
     fi
   fi
-  if [ "$revoke_ok" != true ]; then
-    warn_review "$pr" "Dokploy revocation failed; later reviews will still be reconciled"
+  if [ "$scrub_ok" != true ]; then
+    warn_review "$pr" "Dokploy scrub failed; later reviews will still be reconciled"
     had_error=true
   elif ! REVIEW_PR="$pr" deploy/dokploy/delete-review-images.sh; then
-    warn_review "$pr" "Stack revoked but exact-owned GHCR cleanup failed"
+    warn_review "$pr" "Stack was scrubbed but exact-owned GHCR cleanup failed"
     had_error=true
-  elif [ -n "$attempt_id" ] && ! bash deploy/dokploy/dokploy.sh delete-review \
+  elif [ -n "$attempt_id" ] && ! bash deploy/dokploy/dokploy.sh retire-review \
     --base-repo "$GITHUB_REPOSITORY" --pr "$pr" --environment-id "$ENVIRONMENT_ID" \
     --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$sha" \
     --expected-attempt-id "$attempt_id"; then
-    warn_review "$pr" "GHCR cleanup succeeded but Dokploy record deletion failed"
+    warn_review "$pr" "GHCR cleanup succeeded but Dokploy anchor retirement failed"
     had_error=true
-  elif [ -z "$attempt_id" ] && ! bash deploy/dokploy/dokploy.sh delete-review \
+  elif [ -z "$attempt_id" ] && ! bash deploy/dokploy/dokploy.sh retire-review \
     --base-repo "$GITHUB_REPOSITORY" --pr "$pr" --environment-id "$ENVIRONMENT_ID" \
     --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$sha"; then
-    warn_review "$pr" "GHCR cleanup succeeded but Dokploy record deletion failed"
+    warn_review "$pr" "GHCR cleanup succeeded but Dokploy anchor retirement failed"
     had_error=true
   fi
 done < "$entries"

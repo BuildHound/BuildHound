@@ -1,6 +1,6 @@
 # Dokploy deployment
 
-This directory is the trusted deployment boundary for plans 081–083. All committed values
+This directory is the trusted deployment boundary for plans 081–085. All committed values
 are variable names or immutable public image references; operators enter domains, IDs,
 credentials, recipients, schedules, and node labels through protected Dokploy/GitHub
 environments. Never use verbose HTTP tracing.
@@ -26,8 +26,9 @@ Store `DOKPLOY_TOKEN` only in each Environment; store
 An unset protection rule or Environment secret is a rollout blocker, not permission to use a
 repository-wide credential.
 
-The client targets Dokploy's documented `x-api-key` API (`compose.create`, `compose.update`,
-`compose.one`, `compose.deploy`, `compose.cleanQueues`, `compose.stop`, `compose.delete`, and
+The review lifecycle first requires `settings.getDokployVersion` to return exactly `v0.29.12`.
+The client then targets Dokploy's documented `x-api-key` API (`compose.create`, `compose.update`,
+`compose.one`, `compose.deploy`, `compose.cleanQueues`, `compose.stop`, and
 Application update/deploy; checked against v0.29.12 on 2026-07-13). Before production, record the installed Dokploy version and verify in staging: Stack
 `env_file`, external secret scoping, `deploy.labels`, digest pulls on every worker,
 Compose/Application deploy endpoints, isolated review networking, and idempotent domain IDs.
@@ -114,7 +115,7 @@ manifest/config rather than whatever is currently in the checkout. Promotion is 
 ordered. Adding the `deploy-review` label automatically triggers a protected-base review of
 that exact PR head without a human Environment approval gate;
 `synchronize` or `reopened` redeploys while the label remains, and removing the label or closing
-the PR deletes the review. A successful review must pass wildcard TLS, public site/health, and
+the PR retires the review. A successful review must pass wildcard TLS, public site/health, and
 authenticated ingest/read smoke before it records exact-SHA status and a run-scoped attestation.
 After a qualifying labelled PR is merged, completion of the trusted main-branch image publisher
 triggers staging through `workflow_run`. Staging accepts only the matching successful review
@@ -204,7 +205,7 @@ image names, and digests. The deploy step consumes only those digest references 
 the PR once more immediately before Dokploy mutation. A mutable SHA tag is never deployment
 authority. A successful smoke records the exact-SHA
 `buildhound/review-deployed/pr-<PR>` status consumed by automatic staging after merge. Removing
-`deploy-review` or closing the PR selects the automatic `review-cleanup` path and deletes the
+`deploy-review` or closing the PR selects the automatic `review-cleanup` path and retires the
 exact-owned review. Configure the `review`,
 `staging`, and `production` GitHub Environments to allow deployments only from protected `main`;
 the protected workflows also reject execution outside the default-branch context. Every eligible
@@ -219,13 +220,27 @@ must use a unique review DNS suffix because the intentionally short public host 
 contain repository identity. The public name remains `mr10`; Traefik identifiers use an
 automatically generated repository-scoped prefix, and Dokploy appends its required
 six-character suffix to that prefix for the actual Stack application name.
-Immediately before the first label-triggered review, re-run the manager-side network inspection
-and set the review Environment's isolation gate; reset the gate after cleanup. Every deployed
+The client enables Dokploy's **Isolated Deployments** option through `compose.update`, reads the
+Compose back, and refuses to deploy unless `isolatedDeployment` is exactly `true`. Do not create
+or attach a review network through Docker/Swarm commands. The legacy
+`DOKPLOY_REVIEW_INGRESS_NETWORK` and `BUILDHOUND_REVIEW_NETWORK_ISOLATION_VERIFIED` variables are
+unused and may be removed from the GitHub Environments. Every deployed
 review records the validated `<run ID>.<run attempt>` in both ownership metadata and its
 deployment title. Failure cleanup and the scheduled reconciler act only on that exact attempt;
-the reconciler validates its GitHub run evidence and removes completed non-successful attempts
-that force-cancellation may leave behind. Same-SHA redeploys are rejected before mutation because
-they cannot safely replace a healthy review; push a new commit for the controlled update rehearsal.
+the reconciler validates its GitHub run evidence and retires completed non-successful attempts
+that force-cancellation may leave behind. Same-SHA redeploys of an active review are rejected
+before mutation because they cannot safely replace a healthy review. A retired anchor may be
+reactivated at the same SHA; every activation writes a fresh TTL timestamp.
+Dokploy v0.29.12 defaults Traefik's static API setting to `api.insecure: true`. Because isolated
+deployment attaches standalone Traefik to every review application network, that default exposes
+the unauthenticated Traefik API internally to untrusted PR containers even when port 8080 is not
+published on the host. Before setting
+`BUILDHOUND_REVIEW_TRAEFIK_API_INSECURE_DISABLED=true` in the protected `review` Environment,
+use Dokploy's web UI or admin API to set `api.insecure: false` and preferably
+`api.dashboard: false`, remove any unprotected `api@internal` router, read the full static
+configuration back, and reload Traefik through Dokploy. Reset the attestation after any Dokploy
+or Traefik configuration/version change. The automatic review token must remain least-privilege;
+do not grant it owner/admin access merely to read this global configuration live.
 The long-lived dashboard router requests certificates only through Traefik's
 `letsencrypt-dns-hetzner` resolver; that resolver must use Lego's Hetzner DNS-01 provider.
 Before enabling reviews, pre-warm one certificate covering `*.<review DNS suffix>` and one
@@ -234,46 +249,56 @@ Prefer Lego's `HETZNER_API_TOKEN_FILE` backed by a root-only read-only mount on 
 standalone Traefik container (a Swarm secret applies only when Traefik is itself a Swarm
 service). Never put this DNS-write credential in GitHub or a review Stack. Review routers set
 TLS without selecting an ACME resolver or domain, so Traefik serves the pre-warmed wildcard
-instead of issuing per-PR certificates. Set `DOKPLOY_REVIEW_INGRESS_NETWORK` to the exact
-`buildhound-review-ingress` external overlay. Dokploy's standalone Traefik can join it only
-when it is attachable, so create it with
-`docker network create --driver overlay --attachable --opt encrypted buildhound-review-ingress`.
-Connect only Traefik and review workloads, and verify its live ID, overlay driver, Swarm scope,
-`Attachable=true`, encrypted option, and membership from a manager before setting
-`BUILDHOUND_REVIEW_NETWORK_ISOLATION_VERIFIED=true`. It must
-contain no Dokploy control-plane, staging, or production services. The renderer rejects every
-other network name and pins both multi-network services to this dedicated overlay.
+instead of issuing per-PR certificates. With isolated deployments enabled, Dokploy creates a
+network from the Compose application name, adds it to each service, and connects its standalone
+Traefik. The trusted Stack deliberately defines no `dokploy-network`, external ingress network,
+other network block, or `traefik.swarm.network` override. Dokploy's injected application network
+is consequently the only network on every service. Through Dokploy's API or web UI, configure and
+verify exactly one Ready/Active Swarm node with `buildhound.traefik=true`, and ensure that node
+hosts standalone Traefik. All three review services are constrained there. Zero matching nodes
+leave tasks pending; multiple matching nodes permit cross-node traffic over Dokploy v0.29.12's
+unencrypted isolated overlay. Do not replace this operator check with host Docker or SSH mutation.
 Before enabling the label trigger, verify the review environment has
-no legacy `review-<repository>-<PR>` resources; drain any such
-test resources with the old client rather than allowing duplicate ownership. Cleanup first
+no legacy `review-<repository>-<PR>` resources; remove any such test resources through Dokploy's
+web UI rather than allowing duplicate ownership. Cleanup first
 removes waiting Dokploy jobs, requires the Compose to remain non-running across a settling
 check, and—once enqueue was attempted—requires either exact-SHA terminal evidence or a longer
 queue-drain/non-running observation when a cancelled waiting job produced no deployment row.
-It uses Dokploy's error-propagating Stack stop, waits until both HTTPS probes return 404,
-and only then deletes the Compose record and its package versions, preserving a reconciliation
-anchor while public revocation converges. Because an untrusted workload can forge a 404, the
-controlled rehearsal also requires a direct manager check that the exact Stack/services are
-absent and the dedicated ingress has returned to Traefik-only membership. If enqueue or
+It uses Dokploy's error-propagating Stack stop and waits until both HTTPS probes return 404.
+Because an untrusted workload can forge a 404, cleanup then updates the Compose to the pinned,
+zero-replica `review-anchor.yaml` Stack and verifies the complete isolated database state through
+`compose.one`. A database update alone is not a scrub in Dokploy v0.29.12, so cleanup deploys that
+inert definition under a unique title, waits for exactly one new successful deployment, reads and
+semantically verifies the manager-side materialized file through `compose.getConvertedCompose`,
+and stops the inert Stack again. Only then does it remove exact-owned package versions, mark
+ownership metadata `retired:true`, and verify the final state. The activation timestamp is
+preserved throughout cleanup so a failed registry cleanup remains immediately eligible for the
+next reconciliation attempt. If enqueue or
 polling leaves deployment state active or unknown, the client preserves the exact-owned Compose
 anchor instead of racing an active Dokploy worker; remove the label and let cleanup reconcile
 it after the job reaches a terminal state. Set
 `BUILDHOUND_REVIEW_TTL_HOURS` to a base-10 value between 1 and 87600 in the review
 environment. Prove
-review cannot reach staging/production before enabling it. Cleanup removes the concrete
-Stack, waits for public 404 convergence, keeps the exact ownership record through image
-cleanup, and deletes that record only after garbage collection succeeds. It rechecks PR state,
-verifies ownership metadata and exact returned IDs, and the scheduled reconciler repeats this
-for closed, unlabelled, expired, failed, or cancelled exact-attempt reviews.
+Dokploy isolation and public routing with the review smoke. This option separates Dokploy
+applications; it is not an outbound firewall and must not be claimed as proof that a review
+cannot call a public staging/production endpoint. Dokploy v0.29.12 `compose.delete` is intentionally
+not called because it can leave the external isolated application network orphaned. Cleanup
+removes public execution but retains one scrubbed, stopped Compose/network anchor per historical
+PR for later reuse. Retired anchors do not count toward `MAX_ACTIVE` and scheduled reconciliation
+skips them. Final anchor deletion is deferred until Dokploy exposes a supported exact lifecycle
+that also removes its isolated network; operators must account for this bounded-per-PR accumulation.
+The client rechecks PR state and verifies ownership metadata and exact returned IDs throughout.
 
 Use a separate protected-main `review-cleanup` Environment for close/unlabel and scheduled
 teardown. It carries the same secret names as `review`, but its Dokploy token is restricted
 to the review environment and it has no human approval gate, so teardown is immediate. On
 deploy-step failure, an always-evaluated dependent job also binds to `review-cleanup`; it
 does not reuse the review-deploy credential. On
-Dokploy v0.29.12 cleanup needs service read/delete plus deployment read/create permission:
-deployment evidence needs read, while the error-propagating `compose.stop` operation is
-guarded as a deployment mutation. A
-list/delete-only token cannot safely run this flow. Use an environment-specific custom-role
+Dokploy v0.29.12 cleanup needs service read/create plus deployment read/create permission:
+deployment evidence needs read, while `compose.update` and `compose.getConvertedCompose` are
+guarded by service create, and the scrub deployment plus the
+error-propagating `compose.stop` operation is guarded as a deployment mutation. A read-only token
+cannot safely run this flow. Use an environment-specific custom-role
 token and do not fall back to the repository-wide administration token before arbitrary PRs
 are enabled. Dokploy v0.29.12 grants a newly created service to the creator member, so the
 deploy and cleanup credentials must belong to that same least-privilege member, or the deploy
@@ -283,9 +308,16 @@ enablement. The automatic `review` Environment remains deploy-only and has no hu
 Trusted cleanup also removes superseded and closed-review GHCR versions. It considers only
 the fixed server/site packages, requires the version to have exactly one full-SHA tag for the
 named PR, and verifies that exact SHA's repository/PR association before deleting the numeric
-package-version ID. Because package write was removed from PR CI and tagging exists only in
+package-version ID. It re-reads and reasserts that the numeric version still carries only that
+single tag immediately before deletion, and the trusted main publisher shares the review
+lifecycle concurrency lock so repository workflows cannot retag it in between. When GitHub's
+commit-to-PR endpoint no longer associates a displaced
+force-pushed head, cleanup accepts only an exact `HeadRefForcePushedEvent.beforeCommit` from that
+same repository and PR, with fail-closed cursor pagination. Because package write was removed from PR CI and tagging exists only in
 protected-base delivery code, cleanup never trusts a mutable tag prefix alone. Shared,
 ambiguous, or unverifiable versions are preserved and
-fail the job; prefix-only deletion is never used. Public Stack revocation precedes image
-cleanup; the stopped Compose record remains as the scheduled reconciler's retry anchor until
-image cleanup succeeds.
+fail strict teardown; prefix-only deletion is never used. Superseded-image collection after a
+healthy deploy is warning-only so housekeeping cannot revoke a successful review, while
+close/unlabel, failed-attempt, and TTL cleanup remain strict. Manager-side materialized scrubbing
+precedes image cleanup; the stopped Compose remains the scheduled reconciler's retry anchor until
+image cleanup succeeds, then becomes the scrubbed retired anchor described above.

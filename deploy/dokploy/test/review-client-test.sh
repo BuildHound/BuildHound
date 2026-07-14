@@ -13,7 +13,7 @@ export REPO=BuildHound/BuildHound
 export SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export ATTEMPT=12345.1
 export TITLE="$SHA|$ATTEMPT"
-export OWNERSHIP='{"attemptId":"12345.1","repository":"BuildHound/BuildHound","pr":42,"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+export OWNERSHIP='{"activatedAt":"2026-07-13T12:00:00Z","attemptId":"12345.1","repository":"BuildHound/BuildHound","pr":42,"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
 export PROVIDER=bh-2e4f87f1c5b0890580d952d3-mr42
 export BUILDHOUND_REVIEW_DB_PASSWORD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 export BUILDHOUND_REVIEW_TOKEN=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -44,11 +44,15 @@ reset_fake() {
 }
 
 fake_owned_environment() {
+  local description=$OWNERSHIP
   if [[ -f $TEST_ROOT/deleted ]]; then
     printf '{"compose":[]}\n'
     return
   fi
-  jq -cn --arg description "$OWNERSHIP" '
+  if [[ -f $TEST_ROOT/compose-state.json ]]; then
+    description=$(jq -er .description "$TEST_ROOT/compose-state.json")
+  fi
+  jq -cn --arg description "$description" '
     {compose:[{name:"mr42",composeId:"c1",serverId:null,description:$description,
                createdAt:"2026-07-13T12:00:00Z"}]}
   '
@@ -65,16 +69,24 @@ fake_persisted_compose() {
   jq -c --arg appName "$app_name" '
     . + {
       environmentId:"env1",name:"mr42",appName:$appName,serverId:null,composeStatus:"idle",
+      isolatedDeployment:(if has("isolatedDeployment") then .isolatedDeployment else true end),
       domains:[],mounts:[],backups:[],github:null,gitlab:null,bitbucket:null,gitea:null,server:null,
       environment:{environmentId:"env1",env:null,project:{env:null}}
     }
-  ' "$TEST_ROOT/update.json"
+  ' "$TEST_ROOT/compose-state.json"
 }
 
 dokploy_api() {
   local method=${1-} path=${2-} body=${3-}
   printf '%s|%s\n' "$method" "$path" >> "$TEST_ROOT/calls.log"
   case "$method|$path" in
+    'GET|settings.getDokployVersion')
+      if [[ $FAKE_MODE == version_drift ]]; then
+        printf '"v0.29.13"\n'
+      else
+        printf '"v0.29.12"\n'
+      fi
+      ;;
     'GET|environment.one?environmentId=env1')
       case "$FAKE_MODE" in
         ambiguity)
@@ -93,12 +105,29 @@ dokploy_api() {
             {compose:[
               {composeId:"c1",createdAt:"one",description:({repository:"BuildHound/BuildHound",pr:42,sha:$sha}|tojson)},
               {composeId:"c2",createdAt:"two",description:({repository:"BuildHound/BuildHound",pr:43,sha:$sha}|tojson)},
+              {composeId:"c4",createdAt:"four",description:({repository:"BuildHound/BuildHound",pr:44,retired:true,sha:$sha}|tojson)},
               {composeId:"c3",createdAt:"three",description:({repository:"Another/Repo",pr:44,sha:$sha}|tojson)}
             ]}
           '
           ;;
-        cleanup|route_mixed|delete|running|no_row)
+        retired)
+          jq -cn --arg sha "$SHA" '
+            {compose:[{
+              name:"mr42",composeId:"c1",serverId:null,createdAt:"one",
+              description:({attemptId:"12344.1",repository:"BuildHound/BuildHound",pr:42,retired:true,sha:$sha}|tojson)
+            }]}
+          '
+          ;;
+        cleanup|route_mixed|scrub|scrub_drift|scrub_failed|retire_unscrubbed|running|no_row)
           fake_owned_environment
+          ;;
+        legacy_isolation)
+          jq -cn --arg sha "$SHA" '
+            {compose:[{
+              name:"mr42",composeId:"c1",serverId:null,createdAt:"one",
+              description:({repository:"BuildHound/BuildHound",pr:42,sha:$sha}|tojson)
+            }]}
+          '
           ;;
         *)
           if [[ -f $TEST_ROOT/created ]]; then fake_owned_environment; else printf '{"compose":[]}\n'; fi
@@ -111,14 +140,27 @@ dokploy_api() {
       printf '{"composeId":"c1"}\n'
       ;;
     'POST|compose.update')
-      printf '%s\n' "$body" > "$TEST_ROOT/update.json"
+      if jq -e 'has("composeFile")' >/dev/null <<< "$body"; then
+        printf '%s\n' "$body" > "$TEST_ROOT/update.json"
+        printf '%s\n' "$body" > "$TEST_ROOT/compose-state.json"
+      elif [[ -f $TEST_ROOT/compose-state.json ]]; then
+        jq -c --argjson patch "$body" '. * $patch' "$TEST_ROOT/compose-state.json" \
+          > "$TEST_ROOT/compose-state.next.json"
+        mv -- "$TEST_ROOT/compose-state.next.json" "$TEST_ROOT/compose-state.json"
+      else
+        printf '%s\n' "$body" > "$TEST_ROOT/compose-state.json"
+      fi
       printf '{}\n'
       ;;
     'GET|compose.one?composeId=c1')
       if [[ $FAKE_MODE == hidden && ! -f $TEST_ROOT/cleanup_started ]]; then
         fake_persisted_compose | jq -c '.command="curl attacker.invalid"'
+      elif [[ $FAKE_MODE == isolation_drift && ! -f $TEST_ROOT/cleanup_started ]]; then
+        fake_persisted_compose | jq -c '.isolatedDeployment=false'
+      elif [[ $FAKE_MODE == legacy_isolation && ! -f $TEST_ROOT/compose-state.json ]]; then
+        printf '{"composeId":"c1","composeStatus":"idle","isolatedDeployment":false}\n'
       else
-        if [[ -f $TEST_ROOT/update.json ]]; then
+        if [[ -f $TEST_ROOT/compose-state.json ]]; then
           fake_persisted_compose
         else
           printf '{"composeId":"c1","composeStatus":"idle"}\n'
@@ -127,12 +169,17 @@ dokploy_api() {
       ;;
     'POST|compose.deploy')
       : > "$TEST_ROOT/deploy_started"
+      jq -er .title <<< "$body" > "$TEST_ROOT/deploy-title"
+      if [[ -f $TEST_ROOT/compose-state.json ]] &&
+         jq -e '.composeFile | contains("services:\n  anchor:")' "$TEST_ROOT/compose-state.json" >/dev/null; then
+        : > "$TEST_ROOT/materialized-anchor"
+      fi
       printf '{}\n'
       ;;
     'GET|deployment.allByCompose?composeId=c1')
       if [[ ! -f $TEST_ROOT/deploy_started ]]; then
         case "$FAKE_MODE" in
-          cleanup|route_mixed|delete)
+          cleanup|route_mixed|scrub|scrub_drift|scrub_failed|retire_unscrubbed)
             printf '[{"deploymentId":"d1","title":"%s","status":"done"}]\n' "$TITLE"
             ;;
           running)
@@ -142,7 +189,17 @@ dokploy_api() {
           *) printf '[]\n' ;;
         esac
       else
+        deployed_title=$(< "$TEST_ROOT/deploy-title")
         case "$FAKE_MODE" in
+          scrub_failed)
+            printf '[{"deploymentId":"d1","title":"%s","status":"done"},{"deploymentId":"d2","title":"%s","status":"failed"}]\n' "$TITLE" "$deployed_title"
+            ;;
+          scrub|scrub_drift)
+            printf '[{"deploymentId":"d1","title":"%s","status":"done"},{"deploymentId":"d2","title":"%s","status":"success"}]\n' "$TITLE" "$deployed_title"
+            ;;
+          legacy_isolation)
+            printf '[{"deploymentId":"d2","title":"%s","status":"success"}]\n' "$deployed_title"
+            ;;
           terminal|terminal_cleanup_fail) printf '[{"deploymentId":"d1","title":"%s","status":"failed"}]\n' "$TITLE" ;;
           terminal_invalid_id) printf '[{"title":"%s","status":"failed"}]\n' "$TITLE" ;;
           uncertain)
@@ -150,6 +207,43 @@ dokploy_api() {
             ;;
           *) printf '[{"deploymentId":"d1","title":"%s","status":"success"}]\n' "$TITLE" ;;
         esac
+      fi
+      ;;
+    'GET|compose.getConvertedCompose?composeId=c1')
+      if [[ ! -f $TEST_ROOT/materialized-anchor || $FAKE_MODE == scrub_drift || $FAKE_MODE == retire_unscrubbed ]]; then
+        printf '%s\n' 'version: "3.8"
+services:
+  anchor:
+    image: timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
+    environment:
+      LEAKED: secret
+    networks:
+      - bh-2e4f87f1c5b0890580d952d3-mr42-Ab12Cd
+    deploy:
+      replicas: 0
+      placement:
+        constraints:
+          - node.labels.buildhound.traefik == true
+networks:
+  bh-2e4f87f1c5b0890580d952d3-mr42-Ab12Cd:
+    name: bh-2e4f87f1c5b0890580d952d3-mr42-Ab12Cd
+    external: true' | jq -Rs .
+      else
+        printf '%s\n' 'version: "3.8"
+services:
+  anchor:
+    image: timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
+    networks:
+      - bh-2e4f87f1c5b0890580d952d3-mr42-Ab12Cd
+    deploy:
+      replicas: 0
+      placement:
+        constraints:
+          - node.labels.buildhound.traefik == true
+networks:
+  bh-2e4f87f1c5b0890580d952d3-mr42-Ab12Cd:
+    name: bh-2e4f87f1c5b0890580d952d3-mr42-Ab12Cd
+    external: true' | jq -Rs .
       fi
       ;;
     'POST|compose.cleanQueues')
@@ -161,10 +255,6 @@ dokploy_api() {
       ;;
     'POST|compose.stop')
       : > "$TEST_ROOT/stopped"
-      printf '{}\n'
-      ;;
-    'POST|compose.delete')
-      : > "$TEST_ROOT/deleted"
       printf '{}\n'
       ;;
     *)
@@ -202,11 +292,18 @@ fi
 
 deploy_args=(
   "$REPO" "$REPO" 42 "$SHA" open true env1 reviews.example.test
-  buildhound-review-ingress
   "ghcr.io/buildhound/server@sha256:$(printf '1%.0s' {1..64})"
   "ghcr.io/buildhound/site@sha256:$(printf '2%.0s' {1..64})"
   "$ATTEMPT"
 )
+
+reset_fake version_drift
+if deploy_review "${deploy_args[@]}" >/dev/null 2> "$TEST_ROOT/error.log"; then
+  fail 'unsupported Dokploy version was accepted'
+fi
+grep -F 'review lifecycle requires Dokploy v0.29.12' "$TEST_ROOT/error.log" >/dev/null
+assert_log_lacks 'GET|environment.one?environmentId=env1'
+assert_log_lacks 'POST|compose.create'
 
 reset_fake success
 result=$(deploy_review "${deploy_args[@]}")
@@ -215,7 +312,7 @@ jq -e --arg provider "$PROVIDER" '
 ' >/dev/null <<< "$result"
 jq -e --arg password "$BUILDHOUND_REVIEW_DB_PASSWORD" --arg token "$BUILDHOUND_REVIEW_TOKEN" '
   .sourceType == "raw" and .composeType == "stack" and .command == "" and .env == "" and
-  .autoDeploy == false and .randomize == false and .isolatedDeployment == false and
+  .autoDeploy == false and .randomize == false and .isolatedDeployment == true and
   .githubId == null and .gitlabId == null and .bitbucketId == null and .giteaId == null and
   (.composeFile | contains($password)) and (.composeFile | contains($token))
 ' "$TEST_ROOT/update.json" >/dev/null
@@ -224,6 +321,12 @@ jq -e '.description | fromjson | .attemptId == "12345.1" and .repository == "Bui
 assert_log_has 'POST|compose.update'
 assert_log_has 'POST|compose.deploy'
 assert_log_lacks 'POST|compose.stop'
+update_call=$(grep -nFx 'POST|compose.update' "$TEST_ROOT/calls.log" | cut -d: -f1)
+readback_call=$(grep -nFx 'GET|compose.one?composeId=c1' "$TEST_ROOT/calls.log" | cut -d: -f1)
+deploy_call=$(grep -nFx 'POST|compose.deploy' "$TEST_ROOT/calls.log" | cut -d: -f1)
+create_call=$(grep -nFx 'POST|compose.create' "$TEST_ROOT/calls.log" | cut -d: -f1)
+(( create_call < update_call && update_call < readback_call && readback_call < deploy_call )) || \
+  fail 'review isolation was not persisted and verified before deploy'
 
 reset_fake ambiguity
 if deploy_review "${deploy_args[@]}" >/dev/null 2>&1; then fail 'ambiguous ownership accepted'; fi
@@ -237,11 +340,18 @@ fi
 grep -F 'same-SHA review redeploys are unsupported' "$TEST_ROOT/error.log" >/dev/null
 assert_log_lacks 'POST|compose.update'
 
-bad_args=("${deploy_args[@]}")
-bad_args[8]=dokploy-network
-reset_fake success
-if deploy_review "${bad_args[@]}" >/dev/null 2>&1; then fail 'unapproved ingress accepted'; fi
-assert_log_lacks 'GET|environment.one'
+reset_fake retired
+result=$(deploy_review "${deploy_args[@]}")
+jq -e '.name == "mr42" and .composeId == "c1" and .deploymentId == "d1"' \
+  >/dev/null <<< "$result"
+assert_log_lacks 'POST|compose.create'
+assert_log_has 'POST|compose.update'
+assert_log_has 'POST|compose.deploy'
+jq -e '
+  .description | fromjson |
+  .attemptId == "12345.1" and .retired == false and
+  (.activatedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+' "$TEST_ROOT/update.json" >/dev/null
 
 reset_fake hidden
 if deploy_review "${deploy_args[@]}" >/dev/null 2>&1; then fail 'hidden persisted state accepted'; fi
@@ -249,6 +359,14 @@ assert_log_lacks 'POST|compose.deploy'
 assert_log_has 'POST|compose.cleanQueues'
 assert_log_has 'POST|compose.stop'
 [[ ! -f $TEST_ROOT/deleted ]] || fail 'failed deployment cleanup deleted its ownership record'
+
+reset_fake isolation_drift
+if deploy_review "${deploy_args[@]}" >/dev/null 2>&1; then
+  fail 'persisted isolated-deployment drift was accepted'
+fi
+assert_log_lacks 'POST|compose.deploy'
+assert_log_has 'POST|compose.cleanQueues'
+assert_log_has 'POST|compose.stop'
 
 reset_fake appname_newline
 if deploy_review "${deploy_args[@]}" >/dev/null 2>&1; then
@@ -303,7 +421,9 @@ assert_log_lacks 'POST|compose.stop'
 
 reset_fake list_good
 reviews=$(list_reviews "$REPO" env1 42)
-jq -e 'length == 1 and .[0].pr == 43 and .[0].composeId == "c2" and .[0].attemptId == null' \
+jq -e 'length == 2 and .[0].pr == 43 and .[0].composeId == "c2" and
+       .[0].attemptId == null and .[0].retired == false and
+       .[1].pr == 44 and .[1].composeId == "c4" and .[1].retired == true' \
   >/dev/null <<< "$reviews"
 assert_eq "$(count_reviews "$REPO" env1 42)" 1
 
@@ -347,18 +467,80 @@ test "$(grep -c '^POST|compose.cleanQueues$' "$TEST_ROOT/calls.log")" -eq 6 || \
   fail 'no-row cleanup did not repeatedly drain the queue'
 assert_log_has 'POST|compose.stop'
 
-reset_fake delete
-result=$(delete_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT")
-assert_eq "$result" '{"deleted": "mr42"}'
-jq -e '.deleted == "mr42"' >/dev/null <<< "$result"
-assert_log_has 'POST|compose.delete'
-[[ -f $TEST_ROOT/deleted ]] || fail 'delete did not reach fake Dokploy'
+reset_fake scrub
+result=$(scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT")
+jq -e '.scrubbed == "mr42" and .deploymentId == "d2"' >/dev/null <<< "$result"
+assert_log_lacks 'POST|compose.delete'
+assert_log_has 'GET|compose.getConvertedCompose?composeId=c1'
+jq -e --arg password "$BUILDHOUND_REVIEW_DB_PASSWORD" --arg token "$BUILDHOUND_REVIEW_TOKEN" '
+  .isolatedDeployment == true and
+  (.composeFile | contains("services:\n  anchor:")) and
+  (.composeFile | contains($password) | not) and (.composeFile | contains($token) | not) and
+  (.description | fromjson |
+    .retired == false and .activatedAt == "2026-07-13T12:00:00Z")
+' "$TEST_ROOT/compose-state.json" >/dev/null
+test "$(grep -c '^POST|compose.deploy$' "$TEST_ROOT/calls.log")" -eq 1 || \
+  fail 'scrub did not materialize the inert manager-side file'
+test "$(grep -c '^POST|compose.stop$' "$TEST_ROOT/calls.log")" -eq 2 || \
+  fail 'scrub did not stop before and after inert materialization'
+
+result=$(retire_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT")
+assert_eq "$result" '{"retired": "mr42"}'
+jq -e '
+  .isolatedDeployment == true and
+  (.description | fromjson |
+    .retired == true and .activatedAt == "2026-07-13T12:00:00Z")
+' "$TEST_ROOT/compose-state.json" >/dev/null
+updates=$(grep -c '^POST|compose.update$' "$TEST_ROOT/calls.log")
+result=$(retire_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT")
+assert_eq "$result" '{"retired": "mr42"}'
+test "$(grep -c '^POST|compose.update$' "$TEST_ROOT/calls.log")" -eq "$updates" || \
+  fail 'idempotent retirement rewrote an already-retired anchor'
+
+reset_fake scrub_drift
+if scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
+  fail 'scrub accepted unexpected manager-side materialization'
+fi
+
+reset_fake scrub_failed
+if scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
+  fail 'scrub accepted a failed inert deployment'
+fi
+
+reset_fake retire_unscrubbed
+if retire_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
+  fail 'retirement accepted a credential-bearing manager-side file'
+fi
+assert_log_lacks 'POST|compose.update'
+
+reset_fake legacy_isolation
+result=$(scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" '')
+jq -e '.scrubbed == "mr42"' >/dev/null <<< "$result"
+result=$(retire_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" '')
+assert_eq "$result" '{"retired": "mr42"}'
+jq -e '
+  .isolatedDeployment == true and
+  (.description | fromjson |
+    .retired == true and (has("attemptId") | not) and (has("activatedAt") | not))
+' "$TEST_ROOT/compose-state.json" >/dev/null
+legacy_description=$(jq -er .description "$TEST_ROOT/compose-state.json")
+legacy_environment=$(jq -cn --arg description "$legacy_description" '
+  {compose:[{name:"mr42",composeId:"c1",serverId:null,description:$description}]}
+')
+_review_owned_items "$legacy_environment" mr42 "$REPO" 42 "$SHA" '' >/dev/null || \
+  fail 'legacy retirement poisoned ownership metadata'
 
 if find "$TEST_ROOT" -maxdepth 1 -type d -name 'buildhound-review.*' | grep -q .; then
   fail 'review client left a private workspace behind'
 fi
 if find "$TEST_ROOT" -maxdepth 1 -type d -name 'buildhound-review-revoke.*' | grep -q .; then
   fail 'review revocation left a private workspace behind'
+fi
+if find "$TEST_ROOT" -maxdepth 1 -type d -name 'buildhound-review-retire.*' | grep -q .; then
+  fail 'review retirement left a private workspace behind'
+fi
+if find "$TEST_ROOT" -maxdepth 1 -type d -name 'buildhound-review-scrub.*' | grep -q .; then
+  fail 'review scrub left a private workspace behind'
 fi
 
 printf 'review shell client validated\n'

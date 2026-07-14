@@ -6,7 +6,7 @@ on:
 permissions: {contents: read, pull-requests: read, actions: read}
 env:
   IMAGE_REGISTRY_PREFIX: ghcr.io/buildhound
-  REVIEW_ACTION: ${{ (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')) && 'delete' || 'deploy' }}
+  REVIEW_ACTION: ${{ (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')) && 'retire' || 'deploy' }}
   REVIEW_PR: ${{ github.event.pull_request.number }}
   REVIEW_SHA: ${{ github.event.pull_request.head.sha }}
 jobs:
@@ -45,7 +45,7 @@ jobs:
         run: |
           [[ "$PR" =~ ^[1-9][0-9]*$ ]]
           [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$ACTION" = deploy || "$ACTION" = delete ]]
+          [[ "$ACTION" = deploy || "$ACTION" = retire ]]
           data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$PR")
           if [ "$ACTION" = deploy ]; then
             test "$(jq -r .head.repo.full_name <<<"$data")" = "$GITHUB_REPOSITORY"
@@ -68,21 +68,23 @@ jobs:
           active=$(bash deploy/dokploy/dokploy.sh count-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" --exclude-pr "$PR")
           [[ "$active" =~ ^[0-9]+$ ]]
           (( active < MAX ))
+      - name: Require secured shared Traefik API
+        if: env.REVIEW_ACTION == 'deploy'
+        env:
+          TRAEFIK_API_INSECURE_DISABLED: "${{ vars.BUILDHOUND_REVIEW_TRAEFIK_API_INSECURE_DISABLED }}"
+        run: test "$TRAEFIK_API_INSECURE_DISABLED" = true
       - name: Verify pre-warmed wildcard TLS
         if: env.REVIEW_ACTION == 'deploy'
         env:
           DNS_SUFFIX: "${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}"
-          INGRESS_NETWORK: "${{ vars.DOKPLOY_REVIEW_INGRESS_NETWORK }}"
         run: |
-          python3 - "$DNS_SUFFIX" "$INGRESS_NETWORK" <<'PY'
+          python3 - "$DNS_SUFFIX" <<'PY'
           import re
           import sys
-          suffix, network = sys.argv[1:]
+          suffix = sys.argv[1]
           label = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
           if len(suffix) > 253 or len(suffix.split(".")) < 2 or suffix != suffix.lower() or any(not label.fullmatch(part) for part in suffix.split(".")):
               raise SystemExit("invalid review DNS suffix")
-          if network != "buildhound-review-ingress":
-              raise SystemExit("unexpected review ingress network")
           PY
           while IFS='|' read -r host wildcard; do
             certificate=$(timeout 20 openssl s_client -connect "$host:443" -servername "$host" -verify_hostname "$host" -verify_return_error </dev/null 2>/dev/null | openssl x509 -outform PEM)
@@ -191,14 +193,11 @@ jobs:
           DOKPLOY_REGISTRY_ID: "${{ secrets.DOKPLOY_REGISTRY_ID }}"
           ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"
           DNS_SUFFIX: "${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}"
-          INGRESS_NETWORK: "${{ vars.DOKPLOY_REVIEW_INGRESS_NETWORK }}"
           GH_TOKEN: "${{ github.token }}"
-          NETWORK_OK: "${{ vars.BUILDHOUND_REVIEW_NETWORK_ISOLATION_VERIFIED }}"
           PR: "${{ env.REVIEW_PR }}"
           SHA: "${{ env.REVIEW_SHA }}"
           ATTEMPT_ID: "${{ github.run_id }}.${{ github.run_attempt }}"
         run: |
-          test "$NETWORK_OK" = true
           server=$(jq -er .images.server.image /tmp/review-images/review-images.json)
           site=$(jq -er .images.site.image /tmp/review-images/review-images.json)
           server_digest=$(jq -er .images.server.digest /tmp/review-images/review-images.json)
@@ -216,7 +215,7 @@ jobs:
           test "$state" = open
           test "$head_sha" = "$SHA"
           gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review
-          result=$(bash deploy/dokploy/dokploy.sh deploy-review --base-repo "$GITHUB_REPOSITORY" --head-repo "$head_repo" --pr "$PR" --sha "$head_sha" --state "$state" --label-present --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --ingress-network "$INGRESS_NETWORK" --server-image "$server@$server_digest" --site-image "$site@$site_digest" --attempt-id "$ATTEMPT_ID")
+          result=$(bash deploy/dokploy/dokploy.sh deploy-review --base-repo "$GITHUB_REPOSITORY" --head-repo "$head_repo" --pr "$PR" --sha "$head_sha" --state "$state" --label-present --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --server-image "$server@$server_digest" --site-image "$site@$site_digest" --attempt-id "$ATTEMPT_ID")
 
           review_name=$(jq -er .name <<<"$result")
           compose_id=$(jq -er .composeId <<<"$result")
@@ -298,14 +297,17 @@ jobs:
           echo "outcome=$OUTCOME" >> "$GITHUB_OUTPUT"
           echo "publish_outcome=$PUBLISH_OUTCOME" >> "$GITHUB_OUTPUT"
       - name: Delete superseded exact-owned review images
-        if: env.REVIEW_ACTION == 'deploy'
+        if: env.REVIEW_ACTION == 'deploy' && steps.deploy.outcome == 'success'
         env:
           GH_TOKEN: "${{ github.token }}"
           REVIEW_PR: "${{ env.REVIEW_PR }}"
           KEEP_SHA: "${{ env.REVIEW_SHA }}"
-        run: deploy/dokploy/delete-review-images.sh
-      - name: Delete exact owned review
-        if: env.REVIEW_ACTION == 'delete'
+        run: |
+          if ! deploy/dokploy/delete-review-images.sh; then
+            echo "::warning::Superseded review-image cleanup failed; the next deploy or strict retirement will retry it"
+          fi
+      - name: Retire exact owned review
+        if: env.REVIEW_ACTION == 'retire'
         env:
           DOKPLOY_URL: "${{ vars.DOKPLOY_URL }}"
           DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}"
@@ -326,7 +328,7 @@ jobs:
             [[ "$deployed_sha" =~ ^[0-9a-f]{40}$ ]]
           fi
 
-          # Recheck eligibility immediately before deleting any exact-owned resource.
+          # Recheck eligibility immediately before retiring any exact-owned resource.
           data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$PR")
           state=$(jq -er '.state | select(type == "string")' <<<"$data")
           if [ "$state" = open ]; then
@@ -340,12 +342,12 @@ jobs:
           if [ "$review_count" -eq 1 ]; then
             attempt_args=()
             if [ -n "$attempt_id" ]; then attempt_args+=(--expected-attempt-id "$attempt_id"); fi
-            bash deploy/dokploy/dokploy.sh revoke-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" "${attempt_args[@]}"
+            bash deploy/dokploy/dokploy.sh scrub-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" "${attempt_args[@]}"
           fi
-          # Keep the stopped Compose as a retry anchor until package cleanup succeeds.
+          # Manager-side credential-bearing state is scrubbed before strict package cleanup.
           REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh
           if [ "$review_count" -eq 1 ]; then
-            bash deploy/dokploy/dokploy.sh delete-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" "${attempt_args[@]}"
+            bash deploy/dokploy/dokploy.sh retire-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" "${attempt_args[@]}"
           fi
   reconcile_failed_review:
     needs: review
@@ -392,7 +394,7 @@ jobs:
             [[ "$deployed_sha" =~ ^[0-9a-f]{40}$ ]]
             if [ "$deployed_sha" = "$SHA" ] && [ "$attempt_id" = "$ATTEMPT_ID" ]; then
               cleanup_attempted_review=true
-              bash deploy/dokploy/dokploy.sh revoke-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" --expected-attempt-id "$attempt_id"
+              bash deploy/dokploy/dokploy.sh scrub-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" --expected-attempt-id "$attempt_id"
             else
               keep_sha="$deployed_sha"
               echo "::notice::A different review SHA is persisted; preserving its Stack and images"
@@ -400,7 +402,7 @@ jobs:
           fi
           KEEP_SHA="$keep_sha" REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh
           if [ "$cleanup_attempted_review" = true ]; then
-            bash deploy/dokploy/dokploy.sh delete-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" --expected-attempt-id "$attempt_id"
+            bash deploy/dokploy/dokploy.sh retire-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" --expected-attempt-id "$attempt_id"
           fi
   record_review_status:
     needs: review
