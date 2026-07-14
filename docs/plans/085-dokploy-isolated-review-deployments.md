@@ -42,13 +42,10 @@ The pre-warmed Hetzner DNS-01 wildcard certificates remain unchanged.
   API or web UI, operators must verify exactly one Ready/Active node has that label and that it
   hosts standalone Traefik. This prevents review traffic from traversing Dokploy v0.29.12's
   unencrypted isolated overlay between hosts without introducing host-side mutation.
-- Before enabling the label trigger, use Dokploy's UI or admin API to set and read back
-  `api.insecure: false`, preferably `api.dashboard: false`, remove any unprotected
-  `api@internal` router, and reload Traefik. Dokploy v0.29.12 otherwise exposes its
-  unauthenticated API to every isolated review network. Protect review deployment with the
-  `BUILDHOUND_REVIEW_TRAEFIK_API_INSECURE_DISABLED=true` operator attestation, resetting it
-  whenever Dokploy or Traefik configuration/version changes. Do not grant the automatic review
-  token owner/admin access for a live global-config read.
+- Plan 086 records the owner's acceptance of Dokploy v0.29.12's unauthenticated Traefik
+  configuration exposure to every attached isolated review network. It does not gate routing,
+  and the blocking attestation is removed. Do not grant the automatic review token owner/admin
+  access for a live global-config read or mutation.
 - Do not call v0.29.12 `compose.delete` for an isolated review: it removes the Stack and
   disconnects Traefik but can leave the external application-name network orphaned. Close,
   unlabel, TTL, and failed-attempt cleanup instead stop the Stack, wait for both routes to return
@@ -115,8 +112,7 @@ the isolated network.
 - Cleanup leaves no running or publicly routed review workload, retains no review credential in
   either Dokploy's database definition or manager-side materialized file, and verifies one tracked reusable retired anchor instead of orphaning
   an external network. Retired anchors neither count as active nor re-enter reconciliation.
-- Operator evidence confirms exactly one Ready/Active `buildhound.traefik=true` node colocated
-  with standalone Traefik, and confirms the insecure Traefik API is disabled, before the label
-  trigger is enabled.
+- Plan 086 supersedes the old placement and insecure-API gates with `role=review` placement
+  plus explicit owner acceptance of the configuration-disclosure risk.
 - Clean-context infrastructure and security/privacy reviews have no unresolved blocker.
 - PR 24's review deploy and both public smoke URLs pass before staging is attempted.

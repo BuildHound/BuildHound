@@ -180,10 +180,9 @@ Commit names/placeholders only; the owner supplies values out of band:
   deploy the pinned zero-replica anchor, verify its manager-side materialized file and
   `isolatedDeployment:true`, stop again, remove exact-owned images, then retain a tracked
   `retired:true` Compose/network anchor for reuse.
-- Before reviews, use only Dokploy's UI/admin API to set and read back Traefik
-  `api.insecure:false` (preferably `api.dashboard:false` with no unprotected `api@internal`
-  router), reload it, and set the protected review attestation. Never grant automatic review CI
-  the owner/admin token needed to inspect global Traefik configuration.
+- Plan 086 records accepted exposure from Traefik `api.insecure:true` and removes the review
+  attestation because it is unrelated to routing. Never grant automatic review CI the
+  owner/admin token needed to inspect or mutate global Traefik configuration.
 - No secret, environment ID, domain, bucket, password, token, or generated value in committed
   files, workflow output, job summaries, PR comments, or verbose HTTP traces.
 
