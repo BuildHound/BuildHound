@@ -290,6 +290,14 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('actions/workflows/deploy-release.yml', release)
         self.assertIn('test "$(jq -r .workflow_id <<<"$run")" = "$workflow_id"', release)
         self.assertIn('test "$(jq -r .event <<<"$run")" = workflow_run', release)
+        self.assertIn(
+            'test "$(jq -r .head_repository.full_name <<<"$run")" = "$GITHUB_REPOSITORY"',
+            release,
+        )
+        self.assertIn(
+            'test "$(jq -r .head_sha <<<"$run")" = "$review_sha"', release
+        )
+        self.assertNotIn(".pull_requests[]", release)
         self.assertIn('prefix="https://github.com/${GITHUB_REPOSITORY}/actions/runs/$run_id/job/"', release)
         self.assertIn(
             'compare/${SOURCE_COMMIT}...${latest}', release

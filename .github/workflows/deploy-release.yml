@@ -163,14 +163,10 @@ jobs:
             test "$(jq -r .workflow_id <<<"$run")" = "$workflow_id"
             test "$(jq -r .event <<<"$run")" = pull_request_target
             test "$(jq -r .repository.full_name <<<"$run")" = "$GITHUB_REPOSITORY"
+            test "$(jq -r .head_repository.full_name <<<"$run")" = "$GITHUB_REPOSITORY"
+            test "$(jq -r .head_sha <<<"$run")" = "$review_sha"
             run_attempt=$(jq -er '.run_attempt | select(type == "number" and . > 0 and . == floor)' <<<"$run")
             expected_attempt_id="${review_run_id}.${run_attempt}"
-            jq -e --argjson pr "$review_pr" --arg headSha "$review_sha" --arg base "$DEFAULT_BRANCH" '
-              ((.pull_requests | type) == "array") and
-              ([.pull_requests[] | select(
-                .number == $pr and .head.sha == $headSha and .base.ref == $base
-              )] | length == 1)
-            ' <<<"$run" >/dev/null
             require_artifact "$review_run_id" review-attestation
             mkdir -p "$workdir/review"
             gh run download "$review_run_id" --name review-attestation --dir "$workdir/review"
