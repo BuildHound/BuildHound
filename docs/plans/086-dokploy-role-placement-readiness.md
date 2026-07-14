@@ -13,12 +13,19 @@ Owner follow-up (2026-07-14): `api.insecure` is not a routing prerequisite. Keep
 installed Dokploy/Traefik setting unchanged, remove BuildHound's blocking attestation, and
 accept the unauthenticated configuration-read exposure from isolated review containers.
 
+Live retry follow-up (2026-07-14): after the role fix landed, all three review services
+scheduled on `role=review`, but the site repeatedly exited with
+`mktemp: : Read-only file system`. Docker 29.6.1's Stack converter constructs Swarm mounts
+from `service.volumes`; the separate Compose `service.tmpfs` field survives
+`docker stack config` but is not copied into the service mount specification.
+
 ## Scope
 
 **In:** role-based Swarm constraints for review, staging, and production; exact placement
 of the separate site Application; least-privilege review readiness and exact failed-attempt
 cleanup; removal of the `api.insecure` workflow gate with explicit risk acceptance; policy
-tests, operator docs, and architecture updates.
+tests, operator docs, architecture updates, and Swarm-safe temporary mounts for read-only
+Stack services.
 
 **Out:** staging or production deployment before the preceding environment passes; changes
 to the manual production trigger; Dokploy/Traefik host mutation; and Dokploy upgrades.
@@ -46,6 +53,11 @@ to the manual production trigger; Dokploy/Traefik host mutation; and Dokploy upg
   `api.insecure: true` does not affect routing or certificate selection, but it exposes
   Traefik API/dashboard configuration to untrusted code on each attached review network.
   Record that disclosure as owner-accepted rather than representing a false attestation.
+- Express `/tmp` as long-form `volumes` entries with `type: tmpfs` for the review site and
+  server plus the long-lived server and backup services. Do not use the separate service
+  `tmpfs` field in a Swarm Stack: Docker accepts and renders it but does not translate it
+  into `ContainerSpec.Mounts`. Keep the existing size limits; rely on tmpfs's default
+  writable mode rather than an option the Stack converter does not carry.
 
 ## Test strategy
 
@@ -55,6 +67,9 @@ to the manual production trigger; Dokploy/Traefik host mutation; and Dokploy upg
   authenticated ingest/read, and gates the attestation. Preserve the exact failed/cancelled
   attempt cleanup path and require no Docker-wide permission.
 - Assert the review workflow no longer reads or gates on the Traefik insecure-API variable.
+- Assert every read-only Stack service that writes temporary files uses a converter-facing
+  `volumes` entry with `type: tmpfs` and `target: /tmp`, and that no short-form service
+  `tmpfs` field remains. Exercise the site image with the equivalent Docker tmpfs mount.
 - Render and validate the long-lived Stack for staging and production. Reject any untrusted
   role value and assert server, DB, and backup constraints independently.
 - Verify the exact site Application placement mutation and persisted readback, including
@@ -71,6 +86,9 @@ added merely for readiness. Review traffic may cross the unencrypted isolated ov
 Traefik and the selected review worker differ. With `api.insecure: true`, untrusted review
 containers can read the unauthenticated Traefik API/dashboard configuration on that network;
 the owner accepts this disclosure risk, not arbitrary Traefik or Docker mutation authority.
+`docker stack config` alone is not proof that a service-level `tmpfs` field reaches Swarm;
+regression policy must pin the long-form mount shape or a read-only service can pass config
+validation and then fail at runtime.
 
 ## Exit criteria
 
@@ -80,6 +98,8 @@ the owner accepts this disclosure risk, not arbitrary Traefik or Docker mutation
   failure reconciles the exact owned attempt.
 - No review deployment depends on the removed insecure-API attestation, and operator docs
   state the accepted exposure accurately.
+- Read-only review and long-lived Stack services retain writable, size-bounded `/tmp`
+  mounts after Docker's Stack conversion.
 - Clean-context infrastructure and security/privacy reviews have no unresolved blocker.
 - PR 24 deploys successfully and both review URLs pass before staging is attempted;
   production remains manual and is not attempted until staging passes.
