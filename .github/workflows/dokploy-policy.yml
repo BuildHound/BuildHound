@@ -42,12 +42,14 @@ jobs:
           BUILDHOUND_AGE_RECIPIENT: age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqs9e2p
           BUILDHOUND_S3_ENDPOINT: https://s3.example.test
           BUILDHOUND_S3_BUCKET: ci
+          BUILDHOUND_S3_ACCESS_KEY_ID: <redacted>
+          BUILDHOUND_S3_SECRET_ACCESS_KEY: <redacted>
+          BUILDHOUND_S3_REGION: eu-central
           BUILDHOUND_DASHBOARD_HOST: dashboard.example.test
           DOKPLOY_INGRESS_NETWORK: ingress
         run: |
-          for app_role in staging prod; do
-            BUILDHOUND_APP_ROLE="$app_role" deploy/dokploy/validate-stack.sh
-          done
+          BUILDHOUND_APP_ROLE=staging deploy/dokploy/validate-stack.sh deploy/dokploy/staging-stack.yaml
+          BUILDHOUND_APP_ROLE=prod deploy/dokploy/validate-stack.sh deploy/dokploy/stack.yaml
       - name: Render trusted review Stack
         env:
           BUILDHOUND_SERVER_IMAGE: ghcr.io/buildhound/server@sha256:1111111111111111111111111111111111111111111111111111111111111111

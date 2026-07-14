@@ -38,7 +38,8 @@ def main() -> int:
     parser.add_argument("--site-image", required=True)
     parser.add_argument("--backup-image", required=True)
     parser.add_argument("--postgres-image", required=True)
-    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--production-manifest", required=True)
+    parser.add_argument("--staging-manifest", required=True)
     parser.add_argument("--volume-guard", required=True)
     parser.add_argument("--migrations-dir", required=True)
     parser.add_argument("--output", default="release.json")
@@ -48,13 +49,18 @@ def main() -> int:
 
     history = migration_history(Path(args.migrations_dir))
     value = {
-        "schema": 2,
+        "schema": 3,
         "sourceCommit": args.source_commit,
         "serverImage": args.server_image,
         "siteImage": args.site_image,
         "backupImage": args.backup_image,
         "postgresImage": args.postgres_image,
-        "manifestSha256": hashlib.sha256(Path(args.manifest).read_bytes()).hexdigest(),
+        "productionManifestSha256": hashlib.sha256(
+            Path(args.production_manifest).read_bytes()
+        ).hexdigest(),
+        "stagingManifestSha256": hashlib.sha256(
+            Path(args.staging_manifest).read_bytes()
+        ).hexdigest(),
         "volumeGuardSha256": hashlib.sha256(Path(args.volume_guard).read_bytes()).hexdigest(),
         "migrationId": history[-1]["id"],
         "migrationHistory": history,

@@ -20,6 +20,8 @@ class ReleaseRendererTest(unittest.TestCase):
             (migrations / "V2__earlier.sql").write_text("select 2;\n")
             manifest = root / "stack.yaml"
             manifest.write_text("services: {}\n")
+            staging_manifest = root / "staging-stack.yaml"
+            staging_manifest.write_text("services:\n  staging: {}\n")
             guard = root / "guard.sh"
             guard.write_text("#!/bin/sh\n")
             output = root / "release.json"
@@ -38,8 +40,10 @@ class ReleaseRendererTest(unittest.TestCase):
                     "ghcr.io/x/backup@sha256:" + "3" * 64,
                     "--postgres-image",
                     "ghcr.io/x/db@sha256:" + "4" * 64,
-                    "--manifest",
+                    "--production-manifest",
                     str(manifest),
+                    "--staging-manifest",
+                    str(staging_manifest),
                     "--volume-guard",
                     str(guard),
                     "--migrations-dir",
@@ -51,6 +55,15 @@ class ReleaseRendererTest(unittest.TestCase):
             )
 
             release = json.loads(output.read_text())
+            self.assertEqual(release["schema"], 3)
+            self.assertEqual(
+                release["productionManifestSha256"],
+                hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                release["stagingManifestSha256"],
+                hashlib.sha256(staging_manifest.read_bytes()).hexdigest(),
+            )
             self.assertEqual(
                 [item["id"] for item in release["migrationHistory"]],
                 ["V2__earlier", "V10__later"],

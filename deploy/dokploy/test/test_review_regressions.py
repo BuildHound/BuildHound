@@ -12,30 +12,35 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         return (ROOT / path).read_text()
 
     def test_long_lived_tls_uses_hetzner_dns_challenge_resolver(self):
-        stack = self.read("deploy/dokploy/stack.yaml")
-        self.assertIn(
-            "traefik.http.routers.buildhound.tls.certresolver="
-            "letsencrypt-dns-hetzner",
-            stack,
-        )
-        self.assertNotIn(
-            "traefik.http.routers.buildhound.tls.certresolver=letsencrypt\n",
-            stack,
-        )
+        for path in ("deploy/dokploy/stack.yaml", "deploy/dokploy/staging-stack.yaml"):
+            stack = self.read(path)
+            with self.subTest(path=path):
+                self.assertIn(
+                    "traefik.http.routers.buildhound.tls.certresolver="
+                    "letsencrypt-dns-hetzner",
+                    stack,
+                )
+                self.assertNotIn(
+                    "traefik.http.routers.buildhound.tls.certresolver=letsencrypt\n",
+                    stack,
+                )
 
     def test_long_lived_services_use_environment_specific_placement(self):
-        stack = self.read("deploy/dokploy/stack.yaml")
-        server = stack.split("  server:", 1)[1].split("  db:", 1)[0]
-        db = stack.split("  db:", 1)[1].split("  backup:", 1)[0]
-        backup = stack.split("  backup:", 1)[1].split("\nnetworks:", 1)[0]
-        self.assertIn("node.labels.role == ${BUILDHOUND_APP_ROLE}", server)
-        self.assertNotIn("node.labels.buildhound.traefik", stack)
-        for service in (db, backup):
-            self.assertIn("node.labels.role == db", service)
-            self.assertIn("node.id == ${BUILDHOUND_DB_NODE_ID}", service)
+        for path in ("deploy/dokploy/stack.yaml", "deploy/dokploy/staging-stack.yaml"):
+            stack = self.read(path)
+            server = stack.split("  server:", 1)[1].split("  db:", 1)[0]
+            db = stack.split("  db:", 1)[1].split("  backup:", 1)[0]
+            backup = stack.split("  backup:", 1)[1].split("\nnetworks:", 1)[0]
+            with self.subTest(path=path):
+                self.assertIn("node.labels.role == ${BUILDHOUND_APP_ROLE}", server)
+                self.assertNotIn("node.labels.buildhound.traefik", stack)
+                for service in (db, backup):
+                    self.assertIn("node.labels.role == db", service)
+                    self.assertIn("node.id == ${BUILDHOUND_DB_NODE_ID}", service)
 
     def test_stack_tmpfs_uses_converter_facing_volume_mounts(self):
         stack = self.read("deploy/dokploy/stack.yaml")
+        staging = self.read("deploy/dokploy/staging-stack.yaml")
         review = self.read("deploy/dokploy/review-stack.yaml")
         services = {
             "server": (
@@ -44,6 +49,14 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             ),
             "backup": (
                 stack.split("  backup:", 1)[1].split("\nnetworks:", 1)[0],
+                67108864,
+            ),
+            "staging-server": (
+                staging.split("  server:", 1)[1].split("  db:", 1)[0],
+                67108864,
+            ),
+            "staging-backup": (
+                staging.split("  backup:", 1)[1].split("\nnetworks:", 1)[0],
                 67108864,
             ),
             "review-site": (
@@ -86,6 +99,31 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
                     re.MULTILINE,
                 ),
             )
+
+    def test_staging_uses_env_credentials_without_swarm_secrets(self):
+        staging = self.read("deploy/dokploy/staging-stack.yaml")
+        production = self.read("deploy/dokploy/stack.yaml")
+        staging_db = staging.split("  db:", 1)[1].split("  backup:", 1)[0]
+        staging_backup = staging.split("  backup:", 1)[1].split("\nnetworks:", 1)[0]
+        production_db = production.split("  db:", 1)[1].split("  backup:", 1)[0]
+        production_backup = production.split("  backup:", 1)[1].split("\nnetworks:", 1)[0]
+
+        self.assertNotIn("\nsecrets:", staging)
+        self.assertNotIn("\n    secrets:", staging)
+        self.assertIn("POSTGRES_PASSWORD: ${BUILDHOUND_DB_PASSWORD}", staging_db)
+        self.assertIn("PGPASSWORD: ${BUILDHOUND_DB_PASSWORD}", staging_backup)
+        self.assertIn("AWS_ACCESS_KEY_ID: ${BUILDHOUND_S3_ACCESS_KEY_ID}", staging_backup)
+        self.assertIn("AWS_SECRET_ACCESS_KEY: ${BUILDHOUND_S3_SECRET_ACCESS_KEY}", staging_backup)
+        self.assertIn("AWS_DEFAULT_REGION: ${BUILDHOUND_S3_REGION}", staging_backup)
+        self.assertNotIn("POSTGRES_PASSWORD_FILE", staging)
+        self.assertNotIn("PGPASSFILE", staging)
+        self.assertNotIn("S3_CREDENTIALS_FILE", staging)
+
+        self.assertIn("POSTGRES_PASSWORD_FILE: /run/secrets/db_password", production_db)
+        self.assertIn("PGPASSFILE: /run/secrets/pgpass", production_backup)
+        self.assertIn("S3_CREDENTIALS_FILE: /run/secrets/s3_credentials", production_backup)
+        self.assertNotIn("AWS_ACCESS_KEY_ID:", production)
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY:", production)
 
     def test_backup_gate_uses_only_completed_final_objects(self):
         backup = self.read("deploy/dokploy/backup/backup-loop.sh")
@@ -323,8 +361,8 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             release,
         )
 
-        self.assertIn('staging) app_role=staging ;;', release)
-        self.assertIn('production) app_role=prod ;;', release)
+        self.assertIn("staging)\n              app_role=staging", release)
+        self.assertIn("production)\n              app_role=prod", release)
         self.assertIn('--app-role "$app_role"', release)
         self.assertNotIn("BUILDHOUND_APP_ROLE: ${{", release)
 
@@ -352,14 +390,22 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         publish = self.read(".github/workflows/publish-deploy-images.yml")
         deploy = self.read(".github/workflows/deploy-release.yml")
         stack = self.read("deploy/dokploy/stack.yaml")
+        staging_stack = self.read("deploy/dokploy/staging-stack.yaml")
         db_image = self.read("deploy/dokploy/db/Dockerfile")
         self.assertIn("matrix: {image: [server, site, backup, db]}", publish)
-        self.assertIn("cp release.json deploy/dokploy/stack.yaml deploy/dokploy/volume-guard.sh release-artifact/", publish)
+        self.assertIn(
+            "cp release.json deploy/dokploy/stack.yaml deploy/dokploy/staging-stack.yaml "
+            "deploy/dokploy/volume-guard.sh release-artifact/",
+            publish,
+        )
         self.assertIn("--migrations-dir buildhound-server/src/main/resources/db/migration", publish)
         self.assertNotIn("--migration-id", publish)
-        self.assertIn("--manifest /tmp/release/stack.yaml", deploy)
+        self.assertIn("manifest=/tmp/release/staging-stack.yaml", deploy)
+        self.assertIn("manifest=/tmp/release/stack.yaml", deploy)
+        self.assertIn('--manifest "$manifest"', deploy)
         self.assertIn("--volume-guard /tmp/release/volume-guard.sh", deploy)
         self.assertIn("${BUILDHOUND_POSTGRES_IMAGE}", stack)
+        self.assertIn("${BUILDHOUND_POSTGRES_IMAGE}", staging_stack)
         self.assertNotIn("file: ./volume-guard.sh", stack)
         self.assertIn("COPY --chmod=0555 deploy/dokploy/volume-guard.sh", db_image)
 

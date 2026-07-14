@@ -56,8 +56,10 @@ deployment evidence.
    The preflight fails unless the label identifies exactly one Ready/Active node with that
    ID; both Stack services also require the ID so relabelling cannot move PGDATA or backup
    credentials. Label eligible application workers `role=staging` or `role=prod` for their
-   environment, create the encrypted ingress network, PGDATA volume, and scoped external
-   secrets. The release client constrains both the server Stack service and the separate site
+   environment and create the encrypted ingress network and PGDATA volume. Production also
+   requires scoped external secrets; staging intentionally uses protected Dokploy environment
+   values under the owner-approved plan-087 exception. The release client constrains both the
+   server Stack service and the separate site
    Application to the role derived from the trusted deployment target. Build and deploy the digest-addressed
    `deploy/dokploy/db/Dockerfile` image so the trusted volume guard is available on every
    worker; raw Dokploy delivery never depends on a checkout-local file.
@@ -65,14 +67,30 @@ deployment evidence.
    written, wait for database readiness and prove authenticated restart persistence before
    removing it. The guard refuses empty, foreign, wrong-instance, and wrong-major volumes;
    even a marked-but-empty PGDATA requires explicit re-initialization.
-3. Render and validate with `BUILDHOUND_APP_ROLE=staging` or
-   `BUILDHOUND_APP_ROLE=prod`, `docker stack config -c deploy/dokploy/stack.yaml`, and
+3. Render staging with `BUILDHOUND_APP_ROLE=staging` and
+   `deploy/dokploy/staging-stack.yaml`; render production with `BUILDHOUND_APP_ROLE=prod` and
+   `deploy/dokploy/stack.yaml`. Validate each with `docker stack config` and
    `deploy/dokploy/validate-stack.sh`. The delivery workflow passes the same trusted mapping
-   to `deploy-release --app-role`; deploy exact image digests explicitly.
+   to `deploy-release --app-role`; deploy exact image digests explicitly. Use the staging
+   manifest—not the production manifest—for the one-time raw manual staging deployment.
 4. Set `BUILDHOUND_ROBOTS_HEADER=noindex, nofollow` in staging and `all` in production.
    Reject `storage: IN-MEMORY` in logs. Verify authenticated DB read/write, restart
    persistence, a ceiling-sized public ingest returning 202, and a Traefik 429 response.
 5. Bootstrap with `openssl rand -hex 32`, then remove bootstrap values after first boot.
+
+Staging passes `BUILDHOUND_DB_PASSWORD`, `BUILDHOUND_S3_ACCESS_KEY_ID`,
+`BUILDHOUND_S3_SECRET_ACCESS_KEY`, and `BUILDHOUND_S3_REGION` through its protected Dokploy
+environment. The Stack maps them to PostgreSQL/libpq/AWS variables and declares no Swarm
+secrets. This is a staging-only availability tradeoff: users able to read the Dokploy
+environment or Swarm service specification can read those credentials. Use only staging data
+and staging-scoped Hetzner credentials. Dokploy v0.29.12 also places resolved Stack variables
+in the constructed deployment command; on failure, its `ExecError` can expose that command in
+Dokploy server logs and configured build-error notifications. The owner explicitly accepts
+that staging-only exposure. Disable staging build-error notifications, restrict Dokploy log
+access and retention, keep xtrace disabled, and rotate both credentials after any failed
+deployment.
+Production retains `POSTGRES_PASSWORD_FILE`, `PGPASSFILE`, and the S3 credential file through
+external secrets. Never copy staging environment credentials into production.
 
 The backup service streams `pg_dump --format=custom` through `age` to a non-eligible
 `.partial` S3 key, then uses the AWS CLI's multipart-capable server-side copy to create the
@@ -117,10 +135,12 @@ use the separate service-level `tmpfs` field. Docker 29.6.1 preserves that field
 leaves a read-only service without writable temporary storage. The separate Dokploy site
 Application continues to use its bounded application-level tmpfs setting.
 
-`render-release.py` creates canonical schema-2 `release.json`, binding the Stack,
-volume-guard, and the numerically ordered `{migration ID, source checksum}` set; the release
-artifact carries the exact Stack/guard source snapshots and `dokploy.sh release-id` gives the
-BOM's content digest. Delivery runs the current protected-base client,
+`render-release.py` creates canonical schema-3 `release.json`, binding the staging Stack,
+production Stack, volume guard, and the numerically ordered `{migration ID, source checksum}`
+set; the release artifact carries both exact Stack snapshots plus the guard, and
+`dokploy.sh release-id` gives the BOM's content digest. Delivery selects the staging checksum
+only for `app_role=staging` and the production checksum only for `app_role=prod`. It runs the
+current protected-base client,
 verifies the successful main publish and snapshot checksums, and deploys the artifact's
 manifest/config rather than whatever is currently in the checkout. Promotion is deliberately
 ordered. Adding the `deploy-review` label automatically triggers a protected-base review of
@@ -138,7 +158,7 @@ Review mutation concurrency is acquired at the job level only after the selected
 non-reviewer protection rules pass, allowing close/unlabel cleanup to proceed independently.
 Review, main publication, and release deployment groups use `queue: max` so additional lifecycle
 events wait instead of silently replacing an older pending run.
-Because queued-run ordering is not a promotion guarantee, every schema-2 Dokploy deployment title
+Because queued-run ordering is not a promotion guarantee, every schema-2-or-newer Dokploy deployment title
 also records its source commit. Immediately before a staging or production mutation, delivery
 proves that the candidate is an ancestor of current `main` and compares it with the currently
 deployed source. Staging accepts only identical or forward movement. Production does the same by
