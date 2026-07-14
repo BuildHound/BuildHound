@@ -15,6 +15,9 @@ grep -q 'failure_action: pause' "$rendered"
 grep -q 'order: stop-first' "$rendered"
 grep -q 'internal: true' "$rendered"
 grep -q 'read_only: true' "$rendered"
+if grep -q '^    tmpfs:' "$rendered"; then exit 1; fi
+test "$(grep -c 'type: tmpfs' "$rendered")" -eq 2
+test "$(grep -c 'target: /tmp' "$rendered")" -eq 2
 test "$(grep -c 'node.labels.role == db' "$rendered")" -eq 2
 test "$(grep -c "node.id == $BUILDHOUND_DB_NODE_ID" "$rendered")" -eq 2
 test "$(grep -c "node.labels.role == $BUILDHOUND_APP_ROLE" "$rendered")" -eq 1

@@ -39,7 +39,7 @@ if [ -n "${BUILDHOUND_SITE_TEST_IMAGE:-}" ]; then
   trap cleanup EXIT INT TERM
 
   container=$(docker run -d --read-only --user 101:101 \
-    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+    --mount type=tmpfs,destination=/tmp,tmpfs-size=67108864 \
     -p 127.0.0.1::8080 \
     -e BUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test \
     -e BUILDHOUND_SITE_NOINDEX=true \

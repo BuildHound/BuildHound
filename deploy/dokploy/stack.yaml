@@ -15,8 +15,11 @@ services:
       BUILDHOUND_HOST_RPM: ${BUILDHOUND_HOST_RPM:-600}
     networks: [private, ingress]
     read_only: true
-    tmpfs:
-      - "/tmp:size=64m,mode=1777"
+    volumes:
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 67108864
     healthcheck:
       test: [CMD, curl, -fsS, "http://127.0.0.1:8080/health"]
       interval: 15s
@@ -104,8 +107,11 @@ services:
         mode: 0400
     networks: [private, backup_egress]
     read_only: true
-    tmpfs:
-      - "/tmp:size=64m,mode=1777"
+    volumes:
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 67108864
     deploy:
       replicas: 1
       placement:

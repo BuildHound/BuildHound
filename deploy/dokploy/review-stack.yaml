@@ -11,7 +11,11 @@ services:
       BUILDHOUND_SITE_HOST: ${BUILDHOUND_REVIEW_SITE_HOST}
       BUILDHOUND_SITE_ROBOTS: noindex, nofollow
     read_only: true
-    tmpfs: ["/tmp:size=32m,mode=1777"]
+    volumes:
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 33554432
     deploy:
       placement:
         constraints: [node.labels.role == review]
@@ -41,7 +45,11 @@ services:
       BUILDHOUND_BOOTSTRAP_TOKEN: ${BUILDHOUND_REVIEW_TOKEN}
       BUILDHOUND_HOST_RPM: "300"
     read_only: true
-    tmpfs: ["/tmp:size=64m"]
+    volumes:
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 67108864
     deploy:
       placement:
         constraints: [node.labels.role == review]

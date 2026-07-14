@@ -21,6 +21,8 @@ required for an operator to deploy the long-lived Stack manually.
   volumes fail closed.
 - The site and server/DB Stack are separate Dokploy resources. The site validates a narrow
   HTTPS origin before atomic rendering and runs non-root with a read-only root and tmpfs.
+  Swarm Stack services express `/tmp` as converter-facing long-form `volumes` entries with
+  `type: tmpfs`; Docker's separate service-level `tmpfs` field does not reach Swarm mounts.
 - Production consumes a BOM from a successful main-branch publish run, verifies the same
   release ID from a staging-run attestation, and heads a recent encrypted backup object.
   Deployment evidence binds the complete ordered migration manifest and its cumulative
