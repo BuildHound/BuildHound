@@ -9,16 +9,19 @@ workloads on `role=db`. The failed review returned 404 even though Dokploy repor
 successful deployment because every service still required the nonexistent
 `buildhound.traefik=true` label.
 
+Owner follow-up (2026-07-14): `api.insecure` is not a routing prerequisite. Keep the
+installed Dokploy/Traefik setting unchanged, remove BuildHound's blocking attestation, and
+accept the unauthenticated configuration-read exposure from isolated review containers.
+
 ## Scope
 
 **In:** role-based Swarm constraints for review, staging, and production; exact placement
 of the separate site Application; least-privilege review readiness and exact failed-attempt
-cleanup; policy tests, operator docs, and architecture updates.
+cleanup; removal of the `api.insecure` workflow gate with explicit risk acceptance; policy
+tests, operator docs, and architecture updates.
 
 **Out:** staging or production deployment before the preceding environment passes; changes
-to the manual production trigger; Dokploy/Traefik host mutation; Dokploy upgrades; and the
-separate decision whether BuildHound should require `api.insecure: false`. That setting did
-not cause this routing failure.
+to the manual production trigger; Dokploy/Traefik host mutation; and Dokploy upgrades.
 
 ## Design
 
@@ -39,6 +42,10 @@ not cause this routing failure.
   that permission for container restart, stop, kill, removal, and file upload as well as reads.
 - Supersede plans 081, 083, and 085 wherever they require application/Traefik colocation.
   Keep all Dokploy mutations inside its API; SSH remains read-only diagnosis only.
+- Remove `BUILDHOUND_REVIEW_TRAEFIK_API_INSECURE_DISABLED` and its blocking workflow step.
+  `api.insecure: true` does not affect routing or certificate selection, but it exposes
+  Traefik API/dashboard configuration to untrusted code on each attached review network.
+  Record that disclosure as owner-accepted rather than representing a false attestation.
 
 ## Test strategy
 
@@ -47,6 +54,7 @@ not cause this routing failure.
 - Assert URL smoke follows exact Dokploy deployment evidence, covers both public services plus
   authenticated ingest/read, and gates the attestation. Preserve the exact failed/cancelled
   attempt cleanup path and require no Docker-wide permission.
+- Assert the review workflow no longer reads or gates on the Traefik insecure-API variable.
 - Render and validate the long-lived Stack for staging and production. Reject any untrusted
   role value and assert server, DB, and backup constraints independently.
 - Verify the exact site Application placement mutation and persisted readback, including
@@ -60,7 +68,9 @@ Incorrect or removed node labels make workloads unschedulable and surface as a b
 failure before exact cleanup; the diagnostic is less specific than manager-wide task inspection
 but preserves least privilege. Dokploy v0.29.12's over-broad `docker:read` permission must not be
 added merely for readiness. Review traffic may cross the unencrypted isolated overlay when
-Traefik and the selected review worker differ.
+Traefik and the selected review worker differ. With `api.insecure: true`, untrusted review
+containers can read the unauthenticated Traefik API/dashboard configuration on that network;
+the owner accepts this disclosure risk, not arbitrary Traefik or Docker mutation authority.
 
 ## Exit criteria
 
@@ -68,6 +78,8 @@ Traefik and the selected review worker differ.
   workload and verifies it after Dokploy persistence.
 - A review cannot record success until both URLs and authenticated ingest/read smoke pass;
   failure reconciles the exact owned attempt.
+- No review deployment depends on the removed insecure-API attestation, and operator docs
+  state the accepted exposure accurately.
 - Clean-context infrastructure and security/privacy reviews have no unresolved blocker.
 - PR 24 deploys successfully and both review URLs pass before staging is attempted;
   production remains manual and is not attempted until staging passes.
