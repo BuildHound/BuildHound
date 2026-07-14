@@ -76,15 +76,18 @@ case "${1-} ${2-}" in
     shift
     name=
     dir=
+    repo=
     while [ "$#" -gt 0 ]; do
       case "$1" in
         --name) name=$2; shift 2 ;;
         --dir) dir=$2; shift 2 ;;
+        --repo) repo=$2; shift 2 ;;
         *) printf 'unexpected gh run download argument: %s\n' "$1" >&2; exit 1 ;;
       esac
     done
     [ "$run_id" = "$REVIEW_RUN" ]
     [ "$name" = review-attestation ]
+    [ "$repo" = "$REPOSITORY" ]
     mkdir -p "$dir"
     jq -cn --arg repository "$REPOSITORY" --arg sha "$REVIEW_SHA" \
       --arg server "ghcr.io/buildhound/server@sha256:$(printf '1%.0s' {1..64})" \

@@ -169,7 +169,7 @@ jobs:
             expected_attempt_id="${review_run_id}.${run_attempt}"
             require_artifact "$review_run_id" review-attestation
             mkdir -p "$workdir/review"
-            gh run download "$review_run_id" --name review-attestation --dir "$workdir/review"
+            gh run download "$review_run_id" --repo "$GITHUB_REPOSITORY" --name review-attestation --dir "$workdir/review"
             test "$(find "$workdir/review" -type f | wc -l | tr -d ' ')" = 1
             test -f "$workdir/review/review.json"
             jq -e -s --arg attemptId "$expected_attempt_id" --arg repository "$GITHUB_REPOSITORY" --arg runId "$review_run_id" \
@@ -237,7 +237,7 @@ jobs:
             require_staging_deployment "$run_id"
             require_artifact "$run_id" staging-attestation
             mkdir -p "$workdir/staging"
-            gh run download "$run_id" --name staging-attestation --dir "$workdir/staging"
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name staging-attestation --dir "$workdir/staging"
             test "$(find "$workdir/staging" -type f | wc -l | tr -d ' ')" = 1
             test -f "$workdir/staging/staging.json"
             jq -e -s --arg runId "$run_id" '

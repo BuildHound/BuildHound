@@ -268,6 +268,16 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('context="buildhound/review-deployed/pr-$review_pr"', release)
         self.assertIn("deploy-review", release)
         self.assertIn("review-attestation", release)
+        self.assertIn(
+            'gh run download "$review_run_id" --repo "$GITHUB_REPOSITORY" '
+            '--name review-attestation',
+            release,
+        )
+        self.assertIn(
+            'gh run download "$run_id" --repo "$GITHUB_REPOSITORY" '
+            '--name staging-attestation',
+            release,
+        )
         self.assertIn("inputs.bootstrap_bom", release)
         self.assertIn(
             'expected_attempt_id="${review_run_id}.${run_attempt}"', release
