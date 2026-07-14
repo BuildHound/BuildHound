@@ -223,7 +223,7 @@ services:
       replicas: 0
       placement:
         constraints:
-          - node.labels.buildhound.traefik == true
+          - node.labels.role == review
 networks:
   bh-2e4f87f1c5b0890580d952d3-mr42-Ab12Cd:
     name: bh-2e4f87f1c5b0890580d952d3-mr42-Ab12Cd
@@ -239,7 +239,7 @@ services:
       replicas: 0
       placement:
         constraints:
-          - node.labels.buildhound.traefik == true
+          - node.labels.role == review
 networks:
   bh-2e4f87f1c5b0890580d952d3-mr42-Ab12Cd:
     name: bh-2e4f87f1c5b0890580d952d3-mr42-Ab12Cd

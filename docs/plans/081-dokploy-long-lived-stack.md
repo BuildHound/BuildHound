@@ -1,5 +1,9 @@
 # 081 — Dokploy long-lived stack and encrypted recovery
 
+> Placement update (2026-07-14): plan 086 supersedes the application/Traefik colocation
+> decision. Staging application workloads use `role=staging`, production application
+> workloads use `role=prod`, and database/backup workloads remain on `role=db`.
+
 ## Source
 
 Deployment request (2026-07-10), reconciled direction accepted on 2026-07-12,

@@ -23,6 +23,17 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             stack,
         )
 
+    def test_long_lived_services_use_environment_specific_placement(self):
+        stack = self.read("deploy/dokploy/stack.yaml")
+        server = stack.split("  server:", 1)[1].split("  db:", 1)[0]
+        db = stack.split("  db:", 1)[1].split("  backup:", 1)[0]
+        backup = stack.split("  backup:", 1)[1].split("\nnetworks:", 1)[0]
+        self.assertIn("node.labels.role == ${BUILDHOUND_APP_ROLE}", server)
+        self.assertNotIn("node.labels.buildhound.traefik", stack)
+        for service in (db, backup):
+            self.assertIn("node.labels.role == db", service)
+            self.assertIn("node.id == ${BUILDHOUND_DB_NODE_ID}", service)
+
     def test_backup_secrets_are_private_to_backup_user(self):
         stack = self.read("deploy/dokploy/stack.yaml")
         backup = stack.split("  backup:", 1)[1].split("\nnetworks:", 1)[0]
@@ -256,6 +267,11 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             'require_deployment_progress \\\n                "$selected_predecessor" "$VALIDATED_RELEASE_ID"',
             release,
         )
+
+        self.assertIn('staging) app_role=staging ;;', release)
+        self.assertIn('production) app_role=prod ;;', release)
+        self.assertIn('--app-role "$app_role"', release)
+        self.assertNotIn("BUILDHOUND_APP_ROLE: ${{", release)
 
         staging_attestation = release.index("- name: Record staging attestation")
         self.assertIn(

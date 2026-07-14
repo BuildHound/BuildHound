@@ -287,7 +287,7 @@ _review_require_materialized_anchor() {
     (.services.anchor.deploy.resources // {}) == {} and
     (.services.anchor.deploy.placement | type) == "object" and
     (.services.anchor.deploy.placement | keys) == ["constraints"] and
-    .services.anchor.deploy.placement.constraints == ["node.labels.buildhound.traefik == true"] and
+    .services.anchor.deploy.placement.constraints == ["node.labels.role == review"] and
     (.networks | type) == "object" and (.networks | keys) == [$appName] and
     (.networks[$appName] | type) == "object" and
     ((.networks[$appName] | keys) - ["external", "ipam", "name"] == []) and

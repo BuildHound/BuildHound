@@ -34,7 +34,8 @@ migration after every rebase onto `origin/main`.
   default once a schema change is not proven backward-compatible.
 - Review environments are lean: ephemeral DB, fixed limits, a constant active ceiling, exact
   ownership, and TTL reconciliation. No capacity allocator/global lock is needed.
-- For the pilot, server is pinned with Traefik to avoid a cross-host decrypted ingress hop.
+- Plan 086 supersedes the pilot colocation: review uses `role=review`, staging applications use
+  `role=staging`, production applications use `role=prod`, and DB/backup use `role=db`.
 
 The implementation must add these decisions and measured targets to `docs/architecture.md`
 §7. They are absent from `main` because this branch intentionally commits only plans and
@@ -105,8 +106,8 @@ Commit names/placeholders only; the owner supplies values out of band:
 - production/staging site and dashboard FQDNs, review DNS suffixes, and the Traefik-node DNS
   target served by the pre-warmed Hetzner DNS-01 wildcard certificates;
 - the `role=db` DB-node label, its immutable Swarm node ID, unique DB instance identities,
-  and exactly one Ready/Active `buildhound.traefik=true` node colocated with standalone Traefik,
-  verified through Dokploy API/UI;
+  and eligible Ready/Active `role=review`, `role=staging`, and `role=prod` workers, verified
+  through Dokploy API/UI;
 - GHCR server/site/backup/guarded-PostgreSQL package names and worker pull credential if
   packages remain private;
 - separate production/staging Hetzner project, endpoint, region, bucket, and backup-service
@@ -192,7 +193,9 @@ At minimum, the implementing agent should run:
 
 ```bash
 ./gradlew build
-docker stack config -c deploy/dokploy/stack.yaml
+for app_role in staging prod; do
+  BUILDHOUND_APP_ROLE="$app_role" deploy/dokploy/validate-stack.sh
+done
 git diff --check
 ```
 

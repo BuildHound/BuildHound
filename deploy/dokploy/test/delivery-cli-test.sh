@@ -36,7 +36,7 @@ guard=$test_root/volume-guard.sh
 release=$test_root/release.json
 # Intentional literal release-template placeholders.
 # shellcheck disable=SC2016
-printf 'services:\n  server:\n    image: ${BUILDHOUND_SERVER_IMAGE}\n  backup:\n    image: ${BUILDHOUND_BACKUP_IMAGE}\n  db:\n    image: ${BUILDHOUND_POSTGRES_IMAGE}\n    labels:\n      release: ${BUILDHOUND_RELEASE_ID:-manual}\n\n' > "$manifest"
+printf 'services:\n  server:\n    image: ${BUILDHOUND_SERVER_IMAGE}\n    deploy:\n      placement:\n        constraints:\n          - node.labels.role == ${BUILDHOUND_APP_ROLE}\n  backup:\n    image: ${BUILDHOUND_BACKUP_IMAGE}\n  db:\n    image: ${BUILDHOUND_POSTGRES_IMAGE}\n    labels:\n      release: ${BUILDHOUND_RELEASE_ID:-manual}\n\n' > "$manifest"
 printf '#!/bin/sh\nexit 0\n' > "$guard"
 
 SERVER_IMAGE="ghcr.io/buildhound/server@sha256:$(printf '1%.0s' {1..64})"
@@ -93,17 +93,21 @@ nul_expected=$test_root/nul-expected.yaml
 # NUL is invalid YAML but exercises byte preservation before later YAML validation in Dokploy.
 # shellcheck disable=SC2016
 printf 'left\0${BUILDHOUND_SERVER_IMAGE}\n' > "$nul_manifest"
-render_release_stack "$nul_manifest" "$release" "$RID" "$nul_rendered"
+render_release_stack "$nul_manifest" "$release" "$RID" "$nul_rendered" staging
 printf 'left\0%s\n' "$SERVER_IMAGE" > "$nul_expected"
 cmp -s "$nul_expected" "$nul_rendered" || fail_test 'release renderer dropped a NUL byte'
 
 invalid_utf8_manifest=$test_root/invalid-utf8-stack.yaml
 # shellcheck disable=SC2016
 printf 'left\377${BUILDHOUND_SERVER_IMAGE}\n' > "$invalid_utf8_manifest"
-if render_release_stack "$invalid_utf8_manifest" "$release" "$RID" "$test_root/invalid-rendered.yaml" \
+if render_release_stack "$invalid_utf8_manifest" "$release" "$RID" "$test_root/invalid-rendered.yaml" staging \
     >/dev/null 2>&1; then
   fail_test 'release renderer normalized invalid UTF-8'
 fi
+prod_rendered=$test_root/prod-rendered.yaml
+render_release_stack "$manifest" "$release" "$RID" "$prod_rendered" prod
+grep -F 'node.labels.role == prod' "$prod_rendered" >/dev/null || \
+  fail_test 'release renderer did not bind the production app role'
 
 export DOKPLOY_URL=https://dokploy.example.test
 export DOKPLOY_TOKEN=test-token
@@ -154,7 +158,7 @@ fake_release_compose() {
 }
 
 dokploy_api() {
-  local method=${1-} path=${2-} body=${3-} number auto_deploy
+  local method=${1-} path=${2-} body=${3-} number auto_deploy placement
   number=$(next_call)
   printf '%s|%s\n' "$method" "$path" >> "$test_root/calls"
   if [[ -n $body ]]; then printf '%s\n' "$body" > "$test_root/body-$number.json"; fi
@@ -238,26 +242,30 @@ dokploy_api() {
     'deploy|GET|application.one?applicationId=a1'|'deploy_terminal|GET|application.one?applicationId=a1'|'deploy_registry_drift|GET|application.one?applicationId=a1'|'deploy_predecessor_drift|GET|application.one?applicationId=a1')
       if [[ -f $test_root/application-update-body.json ]]; then
         auto_deploy=$(jq -cr '.autoDeploy' "$test_root/application-update-body.json")
+        placement=$(jq -cr '.placementSwarm' "$test_root/application-update-body.json")
       else
         auto_deploy=${APPLICATION_AUTO_DEPLOY_BEFORE-true}
+        placement=${APPLICATION_PLACEMENT_BEFORE-null}
       fi
       auto_deploy=${APPLICATION_PERSISTED_AUTO_DEPLOY-$auto_deploy}
+      placement=${APPLICATION_PERSISTED_PLACEMENT-$placement}
       if [[ -f $test_root/missing-app-creds ]]; then
-        jq -cn --arg image "$SITE_IMAGE" --argjson autoDeploy "$auto_deploy" \
+        jq -cn --arg image "$SITE_IMAGE" --argjson autoDeploy "$auto_deploy" --argjson placement "$placement" \
           '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:null,
             buildRegistryId:null,rollbackRegistryId:null,registry:null,buildRegistry:null,
-            rollbackRegistry:null,autoDeploy:$autoDeploy,registryUrl:"ghcr.io",username:"",password:""}'
+            rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
+            registryUrl:"ghcr.io",username:"",password:""}'
       elif [[ $FAKE_MODE == deploy_registry_drift && -f $test_root/site-deployed ]]; then
-        jq -cn --arg image "$SITE_IMAGE" --argjson autoDeploy "$auto_deploy" \
+        jq -cn --arg image "$SITE_IMAGE" --argjson autoDeploy "$auto_deploy" --argjson placement "$placement" \
           '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:"registry2",
             buildRegistryId:null,rollbackRegistryId:null,registry:{registryId:"registry2"},
-            buildRegistry:null,rollbackRegistry:null,autoDeploy:$autoDeploy,
+            buildRegistry:null,rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
             registryUrl:"ghcr.io",username:"robot",password:"pull-token"}'
       else
-        jq -cn --arg image "$SITE_IMAGE" --argjson autoDeploy "$auto_deploy" \
+        jq -cn --arg image "$SITE_IMAGE" --argjson autoDeploy "$auto_deploy" --argjson placement "$placement" \
           '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:null,
             buildRegistryId:null,rollbackRegistryId:null,registry:null,buildRegistry:null,
-            rollbackRegistry:null,autoDeploy:$autoDeploy,
+            rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
             registryUrl:"ghcr.io",username:"robot",password:"pull-token"}'
       fi
       ;;
@@ -301,12 +309,22 @@ assert_status 2 main current-release-id --compose-id 'c1&applicationId=attacker'
 assert_status 2 main current-source-commit --compose-id 'c1&applicationId=attacker'
 [[ ! -s $test_root/calls ]] || fail_test 'invalid current-source ID reached the API'
 
+reset_api
+assert_status 2 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+[[ ! -s $test_root/calls ]] || fail_test 'missing app role reached Dokploy APIs'
+assert_status 2 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role production
+grep -F 'app role must be staging or prod' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'invalid app role was not rejected explicitly'
+[[ ! -s $test_root/calls ]] || fail_test 'invalid app role reached Dokploy APIs'
+
 jq --arg image "registry.example.test/buildhound/backup@sha256:$(printf '3%.0s' {1..64})" \
   '.backupImage = $image' "$release" > "$test_root/mixed-registry-release.json"
 reset_api
 assert_status 1 main deploy-release "$test_root/mixed-registry-release.json" \
   --manifest "$manifest" --volume-guard "$guard" --base-repo BuildHound/BuildHound \
-  --compose-id c1 --site-application-id a1
+  --compose-id c1 --site-application-id a1 --app-role staging
 [[ ! -s $test_root/calls ]] || fail_test 'mixed release registry reached Dokploy APIs'
 
 xtrace_secret=xtrace-secret-must-not-appear
@@ -329,7 +347,7 @@ reset_api
 FAKE_MODE=deploy
 : > "$test_root/missing-app-creds"
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging
 grep -F 'lacks Dokploy v0.29 Docker-provider pull credentials' "$test_root/status-stderr" >/dev/null || \
   fail_test 'missing site pull credentials were not rejected explicitly'
 if grep -q '^POST|' "$test_root/calls"; then
@@ -341,7 +359,7 @@ FAKE_MODE=deploy
 COMPOSE_SERVER_ID=server1
 : > "$test_root/missing-app-creds"
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging
 assert_eq "$(cat "$test_root/integration-targets")" server1
 unset COMPOSE_SERVER_ID
 
@@ -349,7 +367,7 @@ reset_api
 FAKE_MODE=deploy
 COMPOSE_SERVER_ID='server1&registryId=attacker'
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging
 [[ ! -s $test_root/integration-targets ]] || fail_test 'invalid Compose server target reached registry preflight'
 if grep -q '^POST|' "$test_root/calls"; then
   fail_test 'invalid Compose server target reached a Dokploy mutation'
@@ -360,7 +378,7 @@ reset_api
 FAKE_MODE=deploy
 COMPOSE_DOMAINS='[{"domainId":"domain1"}]'
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging
 [[ ! -s $test_root/integration-targets ]] || fail_test 'attached Compose domain reached registry preflight'
 if grep -q '^POST|' "$test_root/calls"; then
   fail_test 'attached Compose domain reached a Dokploy mutation'
@@ -372,7 +390,7 @@ FAKE_MODE=deploy
 COMPOSE_SERVER_ID=server1
 COMPOSE_PERSISTED_SERVER_ID=server2
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging
 grep -F 'persisted unexpected release Compose state' "$test_root/status-stderr" >/dev/null || \
   fail_test 'remote Compose target drift was not rejected explicitly'
 if grep -q '^POST|compose.deploy$' "$test_root/calls"; then
@@ -386,7 +404,7 @@ reset_api
 FAKE_MODE=deploy
 COMPOSE_PERSISTED_COMMAND='docker compose -f attacker.yaml up -d'
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging
 grep -F 'persisted unexpected release Compose state' "$test_root/status-stderr" >/dev/null || \
   fail_test 'persisted custom Compose command was not rejected explicitly'
 if grep -q '^POST|compose.deploy$' "$test_root/calls"; then
@@ -398,7 +416,7 @@ reset_api
 FAKE_MODE=deploy
 APPLICATION_PERSISTED_AUTO_DEPLOY=true
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging
 grep -F 'persisted unexpected release Application state' "$test_root/status-stderr" >/dev/null || \
   fail_test 'persisted site auto-deploy was not rejected explicitly'
 if grep -q '^POST|application.deploy$' "$test_root/calls"; then
@@ -408,8 +426,20 @@ unset APPLICATION_PERSISTED_AUTO_DEPLOY
 
 reset_api
 FAKE_MODE=deploy
+APPLICATION_PERSISTED_PLACEMENT='{"Constraints":["node.labels.role==prod"]}'
+assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging
+grep -F 'persisted unexpected release Application state' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'persisted site placement drift was not rejected explicitly'
+if grep -q '^POST|application.deploy$' "$test_root/calls"; then
+  fail_test 'persisted site placement drift reached deployment'
+fi
+unset APPLICATION_PERSISTED_PLACEMENT
+
+reset_api
+FAKE_MODE=deploy
 evidence=$(main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1)
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging)
 jq -e --arg rid "$RID" --arg history "$HISTORY_HASH" '
   . == {
     releaseId:$rid,
@@ -439,7 +469,7 @@ EOF
 )
 assert_eq "$(cat "$test_root/calls")" "$expected_calls"
 
-printf 'services:\n  server:\n    image: %s\n  backup:\n    image: %s\n  db:\n    image: %s\n    labels:\n      release: %s\n\n' \
+printf 'services:\n  server:\n    image: %s\n    deploy:\n      placement:\n        constraints:\n          - node.labels.role == staging\n  backup:\n    image: %s\n  db:\n    image: %s\n    labels:\n      release: %s\n\n' \
   "$SERVER_IMAGE" "$BACKUP_IMAGE" "$POSTGRES_IMAGE" "$RID" > "$test_root/expected-stack.yaml"
 jq -jr '.composeFile' "$test_root/compose-update-body.json" > "$test_root/actual-stack.yaml"
 cmp -s "$test_root/expected-stack.yaml" "$test_root/actual-stack.yaml" || \
@@ -467,7 +497,8 @@ jq -e --arg id c1 '
 ' "$test_root/compose-update-body.json" >/dev/null
 jq -e --arg image "$SITE_IMAGE" '
   . == {applicationId:"a1",dockerImage:$image,sourceType:"docker",autoDeploy:false,registryId:null,
-        buildRegistryId:null,rollbackRegistryId:null}
+        buildRegistryId:null,rollbackRegistryId:null,
+        placementSwarm:{Constraints:["node.labels.role==staging"]}}
 ' "$test_root/body-8.json" >/dev/null
 jq -e --arg title "$TITLE" \
   '. == {composeId:"c1",title:$title}' "$test_root/body-10.json" >/dev/null
@@ -479,7 +510,7 @@ cp -- "$test_root/original-stack.yaml" "$manifest"
 reset_api
 FAKE_MODE=deploy_predecessor_drift
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging \
   --expected-current-release-id "$RID"
 grep -F 'current release changed after backup selection' "$test_root/status-stderr" >/dev/null || \
   fail_test 'predecessor drift was not rejected explicitly'
@@ -492,7 +523,7 @@ cp -- "$test_root/original-stack.yaml" "$manifest"
 reset_api
 FAKE_MODE=deploy_terminal
 assert_status 42 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging
 grep -F 'Dokploy deployment reached a failed terminal state' "$test_root/status-stderr" >/dev/null || \
   fail_test 'terminal release failure lost its distinct diagnostic'
 [[ $(grep -c '^GET|deployment.all?applicationId=a1$' "$test_root/calls") -eq 1 ]] || \
@@ -503,7 +534,7 @@ cp -- "$test_root/original-stack.yaml" "$manifest"
 reset_api
 FAKE_MODE=deploy_registry_drift
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging
 grep -F 'registry isolation differs' "$test_root/status-stderr" >/dev/null || \
   fail_test 'final registry drift was not rejected explicitly'
 

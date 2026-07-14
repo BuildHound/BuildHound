@@ -27,7 +27,7 @@ Commands:
   current-release-state --compose-id ID
   current-source-commit --compose-id ID
   require-manual-current --compose-id ID
-  deploy-release RELEASE --compose-id ID --site-application-id ID [OPTIONS]
+  deploy-release RELEASE --compose-id ID --site-application-id ID --app-role ROLE [OPTIONS]
   deploy-review [OPTIONS]
   count-reviews --base-repo REPO --environment-id ID [--exclude-pr PR]
   list-reviews --base-repo REPO --environment-id ID
@@ -65,6 +65,13 @@ require_release_id() {
       case "${1#sha256:}" in *[!0-9a-f]*) fail "invalid release ID" ;; esac
       ;;
     *) fail "invalid release ID" ;;
+  esac
+}
+
+require_app_role() {
+  case "${1-}" in
+    staging|prod) ;;
+    *) fail "app role must be staging or prod" ;;
   esac
 }
 
@@ -138,8 +145,9 @@ wait_for_deployment() {
 }
 
 render_release_stack() {
-  local manifest=$1 release=$2 rid=$3 output=$4 placeholder
+  local manifest=$1 release=$2 rid=$3 output=$4 app_role=$5 placeholder
   local server_image backup_image postgres_image source_hash roundtrip_hash
+  require_app_role "$app_role" || return 1
   server_image=$(jq -er '.serverImage' "$release") || return 1
   backup_image=$(jq -er '.backupImage' "$release") || return 1
   postgres_image=$(jq -er '.postgresImage' "$release") || return 1
@@ -155,18 +163,20 @@ render_release_stack() {
   fi
   if ! jq -Rjs \
       --arg server "$server_image" --arg backup "$backup_image" \
-      --arg postgres "$postgres_image" --arg release "$rid" '
+      --arg postgres "$postgres_image" --arg release "$rid" --arg appRole "$app_role" '
         gsub("\\$\\{BUILDHOUND_SERVER_IMAGE\\}"; $server)
         | gsub("\\$\\{BUILDHOUND_BACKUP_IMAGE\\}"; $backup)
         | gsub("\\$\\{BUILDHOUND_POSTGRES_IMAGE\\}"; $postgres)
         | gsub("\\$\\{BUILDHOUND_RELEASE_ID:-manual\\}"; $release)
+        | gsub("\\$\\{BUILDHOUND_APP_ROLE\\}"; $appRole)
       ' "$manifest" > "$output"; then
     fail "unable to render trusted release Stack"
     return 1
   fi
   for placeholder in \
       "\${BUILDHOUND_SERVER_IMAGE}" "\${BUILDHOUND_BACKUP_IMAGE}" \
-      "\${BUILDHOUND_POSTGRES_IMAGE}" "\${BUILDHOUND_RELEASE_ID:-manual}"; do
+      "\${BUILDHOUND_POSTGRES_IMAGE}" "\${BUILDHOUND_RELEASE_ID:-manual}" \
+      "\${BUILDHOUND_APP_ROLE}"; do
     if LC_ALL=C grep -Fq -- "$placeholder" "$output"; then
       fail "trusted release Stack contains an unresolved release placeholder"
       return 1
@@ -241,10 +251,10 @@ require_exact_release_compose_state() {
 
 require_exact_release_application_state() {
   local state_file=${1-} original_file=${2-} application_id=${3-}
-  local image=${4-} registry_host=${5-}
-  if [ "$#" -ne 5 ]; then return 2; fi
+  local image=${4-} registry_host=${5-} app_role=${6-}
+  if [ "$#" -ne 6 ]; then return 2; fi
   jq -e --slurpfile original "$original_file" --arg id "$application_id" \
-    --arg image "$image" --arg host "$registry_host" '
+    --arg image "$image" --arg host "$registry_host" --arg appRole "$app_role" '
     . as $actual |
     $original[0] as $before |
     ($before | type) == "object" and
@@ -261,7 +271,8 @@ require_exact_release_application_state() {
     $actual.registryId == null and $actual.buildRegistryId == null and
     $actual.rollbackRegistryId == null and
     $actual.registry == null and $actual.buildRegistry == null and
-    $actual.rollbackRegistry == null
+    $actual.rollbackRegistry == null and
+    $actual.placementSwarm == {Constraints:["node.labels.role==" + $appRole]}
   ' "$state_file" >/dev/null 2>&1
 }
 
@@ -326,7 +337,7 @@ cmd_require_manual_current() {
 cmd_deploy_release() (
   if [ "$#" -lt 1 ]; then usage; return 2; fi
   local release=$1 compose_id='' site_application_id='' proven_release_id='' base_repo=''
-  local expected_current_release_id=''
+  local expected_current_release_id='' app_role=''
   local manifest="$SCRIPT_DIR/stack.yaml" volume_guard="$SCRIPT_DIR/volume-guard.sh"
   local rollback_compatible=false bootstrap_manual_current=false
   local rid title expected manifest_hash guard_hash deployments current
@@ -337,12 +348,13 @@ cmd_deploy_release() (
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --base-repo|--compose-id|--site-application-id|--proven-release-id|--expected-current-release-id|--manifest|--volume-guard)
+      --base-repo|--compose-id|--site-application-id|--app-role|--proven-release-id|--expected-current-release-id|--manifest|--volume-guard)
         if [ "$#" -lt 2 ]; then usage; return 2; fi
         case "$1" in
           --base-repo) base_repo=$2 ;;
           --compose-id) compose_id=$2 ;;
           --site-application-id) site_application_id=$2 ;;
+          --app-role) app_role=$2 ;;
           --proven-release-id) proven_release_id=$2 ;;
           --expected-current-release-id) expected_current_release_id=$2 ;;
           --manifest) manifest=$2 ;;
@@ -355,9 +367,10 @@ cmd_deploy_release() (
       *) usage; return 2 ;;
     esac
   done
-  if [ -z "$base_repo" ] || [ -z "$compose_id" ] || [ -z "$site_application_id" ]; then usage; return 2; fi
+  if [ -z "$base_repo" ] || [ -z "$compose_id" ] || [ -z "$site_application_id" ] || [ -z "$app_role" ]; then usage; return 2; fi
   require_object_id "Compose ID" "$compose_id" || return 2
   require_object_id "site application ID" "$site_application_id" || return 2
+  require_app_role "$app_role" || return 2
   if [ -n "$proven_release_id" ]; then require_release_id "$proven_release_id" || return 2; fi
   if [ -n "$expected_current_release_id" ]; then
     require_release_id "$expected_current_release_id" || return 2
@@ -471,7 +484,7 @@ cmd_deploy_release() (
   old_compose=$(deployment_ids <<<"$deployments") || { fail "invalid Compose deployment evidence"; return 1; }
   deployments=$(dokploy_api GET "deployment.all?applicationId=$site_application_id") || return
   old_site=$(deployment_ids <<<"$deployments") || { fail "invalid site deployment evidence"; return 1; }
-  render_release_stack "$manifest" "$release" "$rid" "$stack_file" || return
+  render_release_stack "$manifest" "$release" "$rid" "$stack_file" "$app_role" || return
   body=$(jq -cn --arg id "$compose_id" --rawfile composeFile "$stack_file" '
     {
       composeId:$id,
@@ -536,13 +549,14 @@ cmd_deploy_release() (
     fail "Dokploy persisted unexpected release Compose state"
     return 1
   }
-  body=$(jq -cn --arg id "$site_application_id" --arg image "$site_image" \
+  body=$(jq -cn --arg id "$site_application_id" --arg image "$site_image" --arg appRole "$app_role" \
     '{applicationId:$id,dockerImage:$image,sourceType:"docker",autoDeploy:false,registryId:null,
-      buildRegistryId:null,rollbackRegistryId:null}') || return
+      buildRegistryId:null,rollbackRegistryId:null,
+      placementSwarm:{Constraints:["node.labels.role==" + $appRole]}}') || return
   dokploy_api POST application.update "$body" >/dev/null || return
   dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
   require_exact_release_application_state "$app_file" "$app_before_file" \
-    "$site_application_id" "$site_image" "$registry_host" || {
+    "$site_application_id" "$site_image" "$registry_host" "$app_role" || {
     fail "Dokploy persisted unexpected release Application state"
     return 1
   }
@@ -571,7 +585,7 @@ cmd_deploy_release() (
   fi
   dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
   require_exact_release_application_state "$app_file" "$app_before_file" \
-    "$site_application_id" "$site_image" "$registry_host" || {
+    "$site_application_id" "$site_image" "$registry_host" "$app_role" || {
     fail "deployed site image, pull credentials, or registry isolation differs from release"
     return 1
   }
