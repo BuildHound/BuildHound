@@ -110,6 +110,13 @@ Build `site/Dockerfile`, run it non-root with read-only root plus bounded tmpfs 
 the exact digest. `BUILDHOUND_SITE_DASHBOARD_URL` must be an HTTPS origin; staging sets
 noindex. `security.txt` is intentionally absent until an owner supplies a monitored contact.
 
+For Swarm Stacks, express bounded `/tmp` mounts under long-form `volumes` with
+`type: tmpfs`; this applies to the review site/server and long-lived server/backup. Do not
+use the separate service-level `tmpfs` field. Docker 29.6.1 preserves that field in
+`docker stack config` output but omits it from the converted Swarm service mounts, which
+leaves a read-only service without writable temporary storage. The separate Dokploy site
+Application continues to use its bounded application-level tmpfs setting.
+
 `render-release.py` creates canonical schema-2 `release.json`, binding the Stack,
 volume-guard, and the numerically ordered `{migration ID, source checksum}` set; the release
 artifact carries the exact Stack/guard source snapshots and `dokploy.sh release-id` gives the

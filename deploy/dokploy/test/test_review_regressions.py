@@ -34,6 +34,43 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             self.assertIn("node.labels.role == db", service)
             self.assertIn("node.id == ${BUILDHOUND_DB_NODE_ID}", service)
 
+    def test_stack_tmpfs_uses_converter_facing_volume_mounts(self):
+        stack = self.read("deploy/dokploy/stack.yaml")
+        review = self.read("deploy/dokploy/review-stack.yaml")
+        services = {
+            "server": (
+                stack.split("  server:", 1)[1].split("  db:", 1)[0],
+                67108864,
+            ),
+            "backup": (
+                stack.split("  backup:", 1)[1].split("\nnetworks:", 1)[0],
+                67108864,
+            ),
+            "review-site": (
+                review.split("  site:", 1)[1].split("  server:", 1)[0],
+                33554432,
+            ),
+            "review-server": (
+                review.split("  server:", 1)[1].split("  db:", 1)[0],
+                67108864,
+            ),
+        }
+        for name, (service, size) in services.items():
+            with self.subTest(service=name):
+                self.assertIn("\n    read_only: true", service)
+                self.assertNotIn("\n    tmpfs:", service)
+                self.assertRegex(
+                    service,
+                    re.compile(
+                        rf"\n    volumes:\s*\n"
+                        rf"      - type: tmpfs\s*\n"
+                        rf"        target: /tmp\s*\n"
+                        rf"        tmpfs:\s*\n"
+                        rf"          size: {size}\s*(?:\n|$)",
+                        re.MULTILINE,
+                    ),
+                )
+
     def test_backup_secrets_are_private_to_backup_user(self):
         stack = self.read("deploy/dokploy/stack.yaml")
         backup = stack.split("  backup:", 1)[1].split("\nnetworks:", 1)[0]
