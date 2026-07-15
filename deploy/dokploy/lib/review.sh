@@ -356,6 +356,29 @@ _review_require_materialized_stack() {
     (.networks[$appName].external == true) and
     ((.networks[$appName].name // $appName) == $appName)
   ' "$json_file" >/dev/null; then
+    # Structural evidence only — service/network/label-key shape, never
+    # environment values or full label strings; 64-hex redaction as backstop.
+    jq -c '{
+      topLevel: (if type == "object" then keys else type end),
+      services: (
+        (.services // {}) | if type == "object" then
+          to_entries | map({
+            name: .key,
+            networks: ((.value.networks // {}) | if type == "object" then keys else type end),
+            volumes: ((.value.volumes // []) | if type == "array" then
+              map(if type == "object" then {type: (.type // null), target: (.target // null)} else {short: true} end)
+            else type end),
+            traefikLabelKeys: ((.value.deploy.labels // {}) | if type == "object" then
+              (keys | map(select(startswith("traefik"))))
+            else type end),
+            swarmNetwork: (((.value.deploy.labels // {})["traefik.swarm.network"]) // null)
+          })
+        else type end),
+      networks: (
+        (.networks // {}) | if type == "object" then
+          to_entries | map({name: .key, external: (.value.external // null)})
+        else type end)
+    }' "$json_file" 2>/dev/null | sed -E 's/[0-9a-f]{64}/[64-hex]/g' >&2 || true
     die "Dokploy did not materialize a routable isolated review stack"
     return 1
   fi
@@ -775,17 +798,6 @@ deploy_review() (
     fi
     return "$rc"
   fi
-  if _review_require_materialized_stack "$compose_id" "$app_name" "$workdir"; then
-    :
-  else
-    rc=$?
-    if ! _review_cleanup_failed_attempt "$base_repo" "$pr" "$sha" "$attempt_id" "$environment_id" "$name" "$dns_suffix" false; then
-      die "review deployment failed and exact-owned cleanup failed"
-      return 1
-    fi
-    return "$rc"
-  fi
-
   title=$sha'|'$attempt_id
   body=$(jq -cn --arg composeId "$compose_id" --arg title "$title" '{composeId:$composeId,title:$title}') || return 1
   deploy_may_be_active=true
@@ -794,6 +806,19 @@ deploy_review() (
     return 1
   fi
   if deployment_id=$(_review_wait_for_deployment "$compose_id" "$old_file" "$title"); then
+    # Dokploy materializes the manager-side converted file on deploy, not on
+    # compose.update (same reason the anchor verifier runs post-deploy), so
+    # the routing verification can only see the real stack here.
+    if _review_require_materialized_stack "$compose_id" "$app_name" "$workdir"; then
+      :
+    else
+      rc=$?
+      if ! _review_cleanup_failed_attempt "$base_repo" "$pr" "$sha" "$attempt_id" "$environment_id" "$name" "$dns_suffix" false; then
+        die "review deployment failed and exact-owned cleanup failed"
+        return 1
+      fi
+      return "$rc"
+    fi
     jq -cn --arg name "$name" --arg composeId "$compose_id" --arg deploymentId "$deployment_id" \
       '{name:$name,composeId:$composeId,deploymentId:$deploymentId}'
     return 0
