@@ -258,7 +258,7 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn("environment: ${{ needs.resolve.outputs.target }}", workflow)
         production_gate = workflow.index("production)\n")
         staging_proof = workflow.index('resolve_staging_proof "$staging_run_id"')
-        backup_gate = workflow.index('if [ "$BOOTSTRAP" = true ]')
+        backup_gate = workflow.index('if [ "$bootstrap" = true ]')
         explicit_deploy = workflow.index("bash deploy/dokploy/dokploy.sh deploy-release")
         self.assertLess(production_gate, staging_proof)
         self.assertLess(staging_proof, backup_gate)
@@ -268,6 +268,19 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('expected=manual', bootstrap)
         self.assertIn('require-manual-current --compose-id "$COMPOSE_ID"', bootstrap)
         self.assertIn('select-backup.sh --object "$BACKUP_OBJECT"', bootstrap)
+        # First automatic staging deploy (plan 088): the bootstrap detector is
+        # gated to staging/automatic, fails closed without the manual anchor,
+        # and the deploy step consumes the step's effective bootstrap output.
+        detector = workflow.index(
+            'state=$(bash deploy/dokploy/dokploy.sh staging-bootstrap-state'
+        )
+        self.assertLess(detector, backup_gate)
+        self.assertIn(
+            '[ "$bootstrap" != true ] && [ "$TARGET" = staging ] && [ "$MODE" = automatic ]',
+            workflow,
+        )
+        self.assertIn('echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"', workflow)
+        self.assertIn("BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}", workflow)
         self.assertIn('if [ "$bootstrap_bom" = true ]; then test "$rollback_compatible" = true; fi', workflow)
         self.assertIn("bootstrap+=(--bootstrap-manual-current)", workflow[backup_gate:])
         self.assertIn('"${bootstrap[@]}"', workflow[backup_gate:])
