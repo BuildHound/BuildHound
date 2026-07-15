@@ -35,7 +35,13 @@ trap 'rm -f "$request_payload"' EXIT
 new_build_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
 jq --arg build_id "$new_build_id" '.buildId = $build_id' "$payload" > "$request_payload"
 build_id=$(jq -er .buildId "$request_payload")
-curl -fsS "$BUILDHOUND_SITE_URL/" | grep -q 'Track every Gradle build'
+# Owner decision (plan 088): staging serves no site yet; the dashboard checks
+# below stay mandatory. Only the exact value "true" skips.
+if [ "${BUILDHOUND_SKIP_SITE_CHECKS-}" = true ]; then
+  printf '%s\n' 'site check skipped (BUILDHOUND_SKIP_SITE_CHECKS=true)' >&2
+else
+  curl -fsS "$BUILDHOUND_SITE_URL/" | grep -q 'Track every Gradle build'
+fi
 curl -fsS "$BUILDHOUND_DASHBOARD_URL/health" | grep -qx ok
 curl -fsS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $BUILDHOUND_INGEST_TOKEN" -H 'Content-Type: application/json' --data-binary "@$request_payload" "$BUILDHOUND_DASHBOARD_URL/v1/builds" | grep -qx 202
 curl -fsS -H "Authorization: Bearer $BUILDHOUND_READ_TOKEN" "$BUILDHOUND_DASHBOARD_URL/v1/builds/$build_id" | jq -e --arg id "$build_id" '.buildId == $id' >/dev/null

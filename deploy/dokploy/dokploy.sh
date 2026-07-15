@@ -28,7 +28,7 @@ Commands:
   current-source-commit --compose-id ID
   require-manual-current --compose-id ID
   staging-bootstrap-state --compose-id ID
-  deploy-release RELEASE --compose-id ID --site-application-id ID --app-role ROLE [OPTIONS]
+  deploy-release RELEASE --compose-id ID (--site-application-id ID | --skip-site) --app-role ROLE [OPTIONS]
   deploy-review [OPTIONS]
   count-reviews --base-repo REPO --environment-id ID [--exclude-pr PR]
   list-reviews --base-repo REPO --environment-id ID
@@ -364,7 +364,7 @@ cmd_deploy_release() (
   local release=$1 compose_id='' site_application_id='' proven_release_id='' base_repo=''
   local expected_current_release_id='' app_role=''
   local manifest="$SCRIPT_DIR/stack.yaml" volume_guard="$SCRIPT_DIR/volume-guard.sh"
-  local rollback_compatible=false bootstrap_manual_current=false
+  local rollback_compatible=false bootstrap_manual_current=false skip_site=false
   local rid title expected manifest_hash guard_hash deployments current
   local old_compose old_site body server_image site_image registry_host release_image image_host key
   local compose_deployment site_deployment rc has_success compose_server_id
@@ -389,12 +389,24 @@ cmd_deploy_release() (
         ;;
       --rollback-compatible) rollback_compatible=true; shift ;;
       --bootstrap-manual-current) bootstrap_manual_current=true; shift ;;
+      --skip-site) skip_site=true; shift ;;
       *) usage; return 2 ;;
     esac
   done
-  if [ -z "$base_repo" ] || [ -z "$compose_id" ] || [ -z "$site_application_id" ] || [ -z "$app_role" ]; then usage; return 2; fi
+  # Owner decision (plan 088 live verification): the staging site Application
+  # is not provisioned yet; --skip-site deploys the compose stack only. The
+  # flag and a site application ID are mutually exclusive so a skipped site
+  # deploy is always an explicit, visible choice — never a fallback.
+  if [ "$skip_site" = true ] && [ -n "$site_application_id" ]; then
+    fail "skip-site conflicts with a site application ID"
+    return 2
+  fi
+  if [ -z "$base_repo" ] || [ -z "$compose_id" ] || [ -z "$app_role" ]; then usage; return 2; fi
+  if [ "$skip_site" != true ] && [ -z "$site_application_id" ]; then usage; return 2; fi
   require_object_id "Compose ID" "$compose_id" || return 2
-  require_object_id "site application ID" "$site_application_id" || return 2
+  if [ "$skip_site" != true ]; then
+    require_object_id "site application ID" "$site_application_id" || return 2
+  fi
   require_app_role "$app_role" || return 2
   if [ -n "$proven_release_id" ]; then require_release_id "$proven_release_id" || return 2; fi
   if [ -n "$expected_current_release_id" ]; then
@@ -488,16 +500,18 @@ cmd_deploy_release() (
     return 1
   }
   dokploy_require_integrations "$base_repo" "$registry_host" "$compose_server_id" || return 1
-  dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_before_file" || return 1
-  if ! jq -e --arg id "$site_application_id" --arg host "$registry_host" '
-    type == "object" and .applicationId == $id and .sourceType == "docker" and
-    has("autoDeploy") and (.autoDeploy | type) == "boolean" and
-    .registryUrl == $host and
-    (.username | type) == "string" and (.username | length) > 0 and
-    (.password | type) == "string" and (.password | length) > 0
-  ' "$app_before_file" >/dev/null; then
-    fail "site Application lacks Dokploy v0.29 Docker-provider pull credentials"
-    return 1
+  if [ "$skip_site" != true ]; then
+    dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_before_file" || return 1
+    if ! jq -e --arg id "$site_application_id" --arg host "$registry_host" '
+      type == "object" and .applicationId == $id and .sourceType == "docker" and
+      has("autoDeploy") and (.autoDeploy | type) == "boolean" and
+      .registryUrl == $host and
+      (.username | type) == "string" and (.username | length) > 0 and
+      (.password | type) == "string" and (.password | length) > 0
+    ' "$app_before_file" >/dev/null; then
+      fail "site Application lacks Dokploy v0.29 Docker-provider pull credentials"
+      return 1
+    fi
   fi
   deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return
   if [ "$bootstrap_manual_current" = true ]; then require_manual_current "$deployments" || return; fi
@@ -517,8 +531,10 @@ cmd_deploy_release() (
   fi
   require_migration_compatibility "$current" "$release" "$rollback_compatible" || return
   old_compose=$(deployment_ids <<<"$deployments") || { fail "invalid Compose deployment evidence"; return 1; }
-  deployments=$(dokploy_api GET "deployment.all?applicationId=$site_application_id") || return
-  old_site=$(deployment_ids <<<"$deployments") || { fail "invalid site deployment evidence"; return 1; }
+  if [ "$skip_site" != true ]; then
+    deployments=$(dokploy_api GET "deployment.all?applicationId=$site_application_id") || return
+    old_site=$(deployment_ids <<<"$deployments") || { fail "invalid site deployment evidence"; return 1; }
+  fi
   render_release_stack "$manifest" "$release" "$rid" "$stack_file" "$app_role" || return
   body=$(jq -cn --arg id "$compose_id" --rawfile composeFile "$stack_file" '
     {
@@ -584,21 +600,25 @@ cmd_deploy_release() (
     fail "Dokploy persisted unexpected release Compose state"
     return 1
   }
-  body=$(jq -cn --arg id "$site_application_id" --arg image "$site_image" --arg appRole "$app_role" \
-    '{applicationId:$id,dockerImage:$image,sourceType:"docker",autoDeploy:false,registryId:null,
-      buildRegistryId:null,rollbackRegistryId:null,
-      placementSwarm:{Constraints:["node.labels.role==" + $appRole]}}') || return
-  dokploy_api POST application.update "$body" >/dev/null || return
-  dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
-  require_exact_release_application_state "$app_file" "$app_before_file" \
-    "$site_application_id" "$site_image" "$registry_host" "$app_role" || {
-    fail "Dokploy persisted unexpected release Application state"
-    return 1
-  }
+  if [ "$skip_site" != true ]; then
+    body=$(jq -cn --arg id "$site_application_id" --arg image "$site_image" --arg appRole "$app_role" \
+      '{applicationId:$id,dockerImage:$image,sourceType:"docker",autoDeploy:false,registryId:null,
+        buildRegistryId:null,rollbackRegistryId:null,
+        placementSwarm:{Constraints:["node.labels.role==" + $appRole]}}') || return
+    dokploy_api POST application.update "$body" >/dev/null || return
+    dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
+    require_exact_release_application_state "$app_file" "$app_before_file" \
+      "$site_application_id" "$site_image" "$registry_host" "$app_role" || {
+      fail "Dokploy persisted unexpected release Application state"
+      return 1
+    }
+  fi
   body=$(jq -cn --arg id "$compose_id" --arg title "$title" '{composeId:$id,title:$title}') || return
   dokploy_api POST compose.deploy "$body" >/dev/null || return
-  body=$(jq -cn --arg id "$site_application_id" --arg title "$title" '{applicationId:$id,title:$title}') || return
-  dokploy_api POST application.deploy "$body" >/dev/null || return
+  if [ "$skip_site" != true ]; then
+    body=$(jq -cn --arg id "$site_application_id" --arg title "$title" '{applicationId:$id,title:$title}') || return
+    dokploy_api POST application.deploy "$body" >/dev/null || return
+  fi
 
   rc=0
   compose_deployment=$(wait_for_deployment "deployment.allByCompose?composeId=$compose_id" "$old_compose" "$title") || rc=$?
@@ -609,28 +629,31 @@ cmd_deploy_release() (
     fail "Compose deployment failed or remained uncertain"
     return 1
   fi
-  rc=0
-  site_deployment=$(wait_for_deployment "deployment.all?applicationId=$site_application_id" "$old_site" "$title") || rc=$?
-  if [ "$rc" -eq 42 ]; then
-    fail "Dokploy deployment reached a failed terminal state"
-    return 42
-  elif [ "$rc" -ne 0 ]; then
-    fail "site deployment failed or remained uncertain"
-    return 1
+  site_deployment=''
+  if [ "$skip_site" != true ]; then
+    rc=0
+    site_deployment=$(wait_for_deployment "deployment.all?applicationId=$site_application_id" "$old_site" "$title") || rc=$?
+    if [ "$rc" -eq 42 ]; then
+      fail "Dokploy deployment reached a failed terminal state"
+      return 42
+    elif [ "$rc" -ne 0 ]; then
+      fail "site deployment failed or remained uncertain"
+      return 1
+    fi
+    dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
+    require_exact_release_application_state "$app_file" "$app_before_file" \
+      "$site_application_id" "$site_image" "$registry_host" "$app_role" || {
+      fail "deployed site image, pull credentials, or registry isolation differs from release"
+      return 1
+    }
   fi
-  dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
-  require_exact_release_application_state "$app_file" "$app_before_file" \
-    "$site_application_id" "$site_image" "$registry_host" "$app_role" || {
-    fail "deployed site image, pull credentials, or registry isolation differs from release"
-    return 1
-  }
   migration=$(jq -er '.migrationId' "$release") || return
   history=$(jq -r '.migrationHistorySha256 // empty' "$release") || return
   jq -cn --arg rid "$rid" \
     --arg migration "$migration" \
     --arg history "$history" \
     --arg compose "$compose_deployment" --arg site "$site_deployment" '
-      {releaseId:$rid,migrationId:$migration,migrationHistorySha256:(if $history == "" then null else $history end),composeDeploymentId:$compose,siteDeploymentId:$site}
+      {releaseId:$rid,migrationId:$migration,migrationHistorySha256:(if $history == "" then null else $history end),composeDeploymentId:$compose,siteDeploymentId:(if $site == "" then null else $site end)}
     '
 )
 

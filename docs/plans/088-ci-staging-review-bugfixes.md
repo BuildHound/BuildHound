@@ -87,6 +87,26 @@ keeps `persist-credentials: false`; no new secrets. Behavior of same-repo gate u
 
 ## Live verification log (Stage A)
 
+- **Review env (check 2): PASSED** — PR #42 labeled deploy green after the
+  post-deploy verifier fix (run 29419762276); site and dashboard URLs 200
+  with correct content; unlabel converged and both URLs returned 404.
+- **Staging bootstrap (check 1), run 29422015761:** resolve accepted the
+  test-PR lineage; bootstrap detection engaged against the manual anchor
+  (attempts 1-2); provisioning gaps fixed operator-side during the attempts:
+  backup bucket versioning enabled (Hetzner supports
+  `put-bucket-versioning`), fresh versioned backup produced, versioned
+  backup selection passed (attempt 3+).
+- **Owner decision (2026-07-15): staging deploys the dashboard stack only.**
+  The staging site Application is not provisioned (no registry pull
+  credentials); site delivery will be fixed in a separate session.
+  Implemented as `deploy-release --skip-site` (mutually exclusive with
+  `--site-application-id`), gated solely by the environment-scoped
+  `BUILDHOUND_SKIP_SITE_DEPLOY` variable (set on `staging`, absent on
+  `production`), with the smoke's site probe skipped via
+  `BUILDHOUND_SKIP_SITE_CHECKS` from the same variable. Dashboard smoke
+  checks remain mandatory. Stage D precondition added: production site
+  Application must be provisioned (or the owner extends the skip decision to
+  production explicitly) before the first production deploy.
 - The 088 merge itself (PR #41, main `8b2028c`) could not produce the
   bootstrap staging deploy: `resolve` requires a successful
   `buildhound/review-deployed/pr-N` status on the merged PR's head, and
