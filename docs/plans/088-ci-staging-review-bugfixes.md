@@ -40,6 +40,29 @@ inversion (089), workflow_run chain removal (090), client shrink (091).
    refusal anyway; pinning removes the drift. Same-repo gate
    (`review-environment.yml:51,132,209`) is unaffected and must not be weakened.
 
+## Implementation divergences (Stage A PR)
+
+1. **Bootstrap detection lives in the deploy job, not `resolve`.** Design 2
+   assumed the resolver could detect "no successful prior release deployment",
+   but `resolve` is deliberately secret-free (deploy-release.yml:59) and never
+   calls `dokploy.sh`. Detection moved to the deploy job's backup-selection
+   step, which already holds `DOKPLOY_TOKEN`: a new
+   `dokploy.sh staging-bootstrap-state` command reports `established` /
+   `bootstrap`, accepting empty release history only behind the plan-087
+   manual anchor (fail-closed otherwise, matching roadmap Stage A negative
+   case (a)). The step publishes the effective flag as a step output the
+   deploy step consumes; resolver semantics are unchanged.
+2. **The swarm-network label had to be added, not merely verified.** The
+   template carried no `traefik.swarm.network` at all, and
+   `test_review_lifecycle.py` explicitly banned it. The label (valued
+   `${BUILDHOUND_REVIEW_NETWORK}`) names the ingress-reachable network — it
+   does not attach one — so the policy test now requires it on both routed
+   services and bans `traefik.docker.network` instead, while the isolation
+   bans (`networks:` blocks, `dokploy-network`, `external: true`) remain.
+   Because Dokploy names the isolated network after the server-side suffixed
+   appName, `deploy_review` reads the appName back after `compose.create` and
+   renders the trusted manifest a second time before `compose.update`.
+
 ## Test strategy
 
 Extend `deploy/dokploy/test/` (dokploy-policy.yml runs them): resolver test for the
