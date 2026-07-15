@@ -12,6 +12,7 @@ import io.ktor.server.testing.testApplication
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class DashboardRoutesTest {
@@ -113,6 +114,9 @@ class DashboardRoutesTest {
         assertEquals(get.status, head.status)
         assertEquals(HttpStatusCode.OK, head.status)
         assertEquals(DashboardAssets.csp, head.headers["Content-Security-Policy"])
+        // Content-Length must match GET's — the size-without-download read is HEAD's whole value.
+        assertNotNull(head.headers["Content-Length"])
+        assertEquals(get.headers["Content-Length"], head.headers["Content-Length"])
         assertEquals("", head.bodyAsText())
         // Spec §5 auth semantics must hold for HEAD exactly as for GET.
         assertEquals(HttpStatusCode.Unauthorized, client.head("/v1/builds").status)

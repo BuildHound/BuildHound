@@ -1,6 +1,7 @@
 package dev.buildhound.server
 
 import io.ktor.client.request.get
+import io.ktor.client.request.head
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -141,6 +142,21 @@ class RateLimitTest {
         assertEquals(HttpStatusCode.Accepted, ingest("tok-a", "00000000-0000-0000-0000-000000000001").status)
         assertEquals(HttpStatusCode.Accepted, ingest("tok-a", "00000000-0000-0000-0000-000000000002").status)
         assertEquals(HttpStatusCode.TooManyRequests, ingest("tok-a", "00000000-0000-0000-0000-000000000003").status)
+    }
+
+    @Test
+    fun `HEAD consumes the same query budget as GET`() = testApplication {
+        application {
+            buildHoundModule(stores("pilot" to "tok-a"), RateLimits(ingestPerMinute = 0, queryPerMinute = 2))
+        }
+
+        // AutoHeadResponse re-routes HEAD to the GET route, so it must share the token bucket —
+        // otherwise HEAD would be a rate-limit-free query flood (plan 088 §3.2 review). This pins
+        // the upstream pipeline ordering a Ktor upgrade could silently change.
+        assertEquals(HttpStatusCode.OK, client.head("/v1/builds") { header("Authorization", "Bearer tok-a") }.status)
+        assertEquals(HttpStatusCode.OK, client.head("/v1/builds") { header("Authorization", "Bearer tok-a") }.status)
+        val throttled = client.get("/v1/builds") { header("Authorization", "Bearer tok-a") }
+        assertEquals(HttpStatusCode.TooManyRequests, throttled.status)
     }
 
     @Test
