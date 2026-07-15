@@ -303,11 +303,17 @@ jobs:
 
   build-windows:
     name: Build & test (Windows)
-    # Blocking since plan 092 (executes plan 021's promote-or-defer): the daemon-locked-GUH
-    # @TempDir failures were the job's only red, and are structurally fixed. OS-sensitive
-    # surfaces guarded here: scrubber, spool paths, VCS exec. Known accepted gaps: the
-    # hung-git and GitExec fixtures are @DisabledOnOs(WINDOWS) (plan 015).
+    # Blocking since plan 092, which supersedes plan 021's statistical promote bar ("green
+    # ~2 weeks of PRs") with a root-cause justification: the daemon-locked-GUH @TempDir
+    # failures — the job's only red — were structurally fixed, not just observed green once
+    # (see the architecture decision log, 2026-07-16). OS-sensitive surfaces guarded here:
+    # scrubber, spool paths, VCS exec. Known accepted gaps: the hung-git and GitExec
+    # fixtures are @DisabledOnOs(WINDOWS) (plan 015). Re-demotable with a one-line revert
+    # if unrelated Windows flakiness surfaces.
     runs-on: windows-latest
+    # Green runs take ~36 min; the leg's known failure mode is a lingering TestKit daemon,
+    # so don't let a hang ride the 360-min platform default now that the job is blocking.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
