@@ -1,8 +1,14 @@
 #!/bin/sh
+# Converge review environments toward the desired state derived from GitHub
+# (plan 089): the desired set is exactly the open PRs carrying deploy-review;
+# every owned, non-retired review outside that set (or past its TTL) is
+# retired. Deployment stays event-driven — a desired PR with no live review is
+# reported, never deployed from here. This script is the single cleanup
+# authority; the cron schedule and the PR-event handlers all run it.
 set -eu
 
 : "${TTL_HOURS:?BUILDHOUND_REVIEW_TTL_HOURS must be set}"
-: "${GITHUB_REPOSITORY:?}" "${DEFAULT_BRANCH:?}" "${ENVIRONMENT_ID:?}" \
+: "${GITHUB_REPOSITORY:?}" "${ENVIRONMENT_ID:?}" \
   "${DNS_SUFFIX:?BUILDHOUND_REVIEW_DNS_SUFFIX must be set}"
 case "$TTL_HOURS" in
   ''|0*|*[!0-9]*)
@@ -17,8 +23,26 @@ fi
 
 reviews=$(mktemp)
 entries=$(mktemp)
-trap 'rm -f "$reviews" "$entries"' EXIT
+desired=$(mktemp)
+trap 'rm -f "$reviews" "$entries" "$desired"' EXIT
 
+# Desired state: open PRs labelled deploy-review. The issues listing filters
+# the label server-side; only real PRs count.
+gh api "repos/${GITHUB_REPOSITORY}/issues?labels=deploy-review&state=open&per_page=100" \
+  --paginate --jq '.[] | select(.pull_request != null) | .number' > "$desired"
+while IFS= read -r desired_pr; do
+  [ -n "$desired_pr" ] || continue
+  case "$desired_pr" in
+    0*|*[!0-9]*)
+      echo "GitHub returned an invalid open PR number" >&2
+      exit 1
+      ;;
+  esac
+done < "$desired"
+
+# Live state: owned reviews in the dedicated review environment. list-reviews
+# fails closed on any compose whose ownership metadata is not a review record,
+# so a converge run can never act on staging or production objects.
 bash deploy/dokploy/dokploy.sh list-reviews \
   --base-repo "$GITHUB_REPOSITORY" \
   --environment-id "$ENVIRONMENT_ID" > "$reviews"
@@ -28,12 +52,18 @@ jq -c '.[]' "$reviews" > "$entries"
 now_epoch=$(date -u +%s)
 ttl_seconds=$((TTL_HOURS * 3600))
 had_error=false
-review_workflow_id=$(gh api \
-  "repos/${GITHUB_REPOSITORY}/actions/workflows/review-environment.yml" --jq .id)
-case "$review_workflow_id" in ''|0*|*[!0-9]*) echo "invalid review workflow ID" >&2; exit 1;; esac
+kept_names=''
+retired_names=''
+kept_count=0
+retired_count=0
+skipped_retired_count=0
 
 warn_review() {
   printf '::warning::Review %s: %s\n' "$1" "$2"
+}
+
+desired_contains() {
+  grep -Fx "$1" "$desired" >/dev/null 2>&1
 }
 
 while IFS= read -r review; do
@@ -51,6 +81,7 @@ while IFS= read -r review; do
     continue
   fi
   if [ "$retired" = true ]; then
+    skipped_retired_count=$((skipped_retired_count + 1))
     continue
   fi
   if ! activated=$(printf '%s\n' "$review" | jq -er '
@@ -85,123 +116,39 @@ while IFS= read -r review; do
     had_error=true
     continue
   fi
-  if ! data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$pr" 2>/dev/null); then
-    warn_review "$pr" "GitHub PR lookup failed; preserving review"
-    had_error=true
-    continue
-  fi
-  if ! state=$(printf '%s\n' "$data" | jq -er '.state | select(type == "string")'); then
-    warn_review "$pr" "GitHub returned invalid PR state; preserving review"
-    had_error=true
-    continue
-  fi
 
-  retire=false
-  ttl_retire=false
-  attempt_retire=false
-  if [ "$state" != open ]; then
-    retire=true
-  else
-    if ! labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' 2>/dev/null); then
-      warn_review "$pr" "GitHub label lookup failed; preserving review"
-      had_error=true
-      continue
-    fi
-    if ! printf '%s\n' "$labels" | grep -Fx deploy-review >/dev/null; then
-      retire=true
-    fi
-  fi
-
-  if [ "$retire" = false ] && [ -n "$attempt_id" ]; then
-    case "$attempt_id" in
-      *.*) run_id=${attempt_id%%.*}; run_attempt=${attempt_id#*.} ;;
-      *) run_id=; run_attempt= ;;
-    esac
-    case "$run_id" in ''|0*|*[!0-9]*) run_id=;; esac
-    case "$run_attempt" in ''|0*|*[!0-9]*|*.*) run_attempt=;; esac
-    if [ -z "$run_id" ] || [ -z "$run_attempt" ]; then
-      warn_review "$pr" "invalid attempt identity; preserving review"
-      had_error=true
-      continue
-    fi
-    if ! run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id/attempts/$run_attempt" 2>/dev/null); then
-      warn_review "$pr" "review attempt lookup failed; preserving review"
-      had_error=true
-      continue
-    fi
-    if ! printf '%s\n' "$run" | jq -e --arg repository "$GITHUB_REPOSITORY" \
-        --arg branch "$DEFAULT_BRANCH" --argjson workflow "$review_workflow_id" \
-        --argjson pr "$pr" --arg sha "$sha" --argjson attempt "$run_attempt" '
-          type == "object" and .workflow_id == $workflow and .run_attempt == $attempt and
-          .event == "pull_request_target" and .repository.full_name == $repository and
-          ((.pull_requests | type) == "array") and
-          ([.pull_requests[] | select(
-            .number == $pr and .head.sha == $sha and .base.ref == $branch
-          )] | length == 1) and
-          (.status | type) == "string"
-        ' >/dev/null; then
-      warn_review "$pr" "review attempt evidence was invalid; preserving review"
-      had_error=true
-      continue
-    fi
-    run_status=$(printf '%s\n' "$run" | jq -er .status)
-    case "$run_status" in
-      queued|in_progress|pending|requested|waiting) : ;;
-      completed)
-        if [ "$(printf '%s\n' "$run" | jq -r .conclusion)" = success ]; then
-          :
-        else
-          retire=true
-          attempt_retire=true
-        fi
-        ;;
-      *)
-        warn_review "$pr" "review attempt status was invalid; preserving review"
-        had_error=true
-        continue
-        ;;
-    esac
-  fi
-
+  ttl_expired=false
   age=$((now_epoch - activated_epoch))
   if [ "$age" -gt "$ttl_seconds" ]; then
-    retire=true
-    ttl_retire=true
+    ttl_expired=true
   fi
-  if [ "$retire" != true ]; then
+  if [ "$ttl_expired" = false ] && desired_contains "$pr"; then
+    kept_count=$((kept_count + 1))
+    kept_names="$kept_names mr$pr"
     continue
   fi
-
-  if ! data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$pr" 2>/dev/null); then
-    warn_review "$pr" "final GitHub PR check failed; preserving review"
-    had_error=true
-    continue
-  fi
-  if ! state=$(printf '%s\n' "$data" | jq -er '.state | select(type == "string")'); then
-    warn_review "$pr" "final GitHub PR state was invalid; preserving review"
-    had_error=true
-    continue
-  fi
-  if [ "$ttl_retire" = false ] && [ "$attempt_retire" = false ] && [ "$state" = open ]; then
-    if ! labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' 2>/dev/null); then
-      warn_review "$pr" "final GitHub label check failed; preserving review"
+  # Not desired: re-check the PR once before retiring so a label or reopen
+  # that raced this run's snapshot is preserved. The next tick converges
+  # anyway; this only avoids churning a just-relabelled environment.
+  if [ "$ttl_expired" = false ]; then
+    if ! pr_state=$(gh api "repos/${GITHUB_REPOSITORY}/issues/$pr" \
+      --jq '{state: .state, labels: [.labels[].name]}' 2>/dev/null); then
+      warn_review "$pr" "GitHub PR lookup failed; preserving review"
       had_error=true
       continue
     fi
-    if printf '%s\n' "$labels" | grep -Fx deploy-review >/dev/null; then
+    if printf '%s\n' "$pr_state" | jq -e '
+      .state == "open" and any(.labels[]; . == "deploy-review")
+    ' >/dev/null; then
+      kept_count=$((kept_count + 1))
+      kept_names="$kept_names mr$pr"
       continue
     fi
   fi
 
-  # Materialize the credential-free anchor before package garbage collection.
+  # Retire: scrub the credential-bearing manager-side file, delete the
+  # exact-owned GHCR images, then mark the anchor retired.
   if [ -n "$attempt_id" ]; then
-    attempt_args="--expected-attempt-id $attempt_id"
-  else
-    attempt_args=
-  fi
-  # attempt_id is validated above and contains no shell metacharacters. The
-  # branch avoids eval and preserves compatibility with legacy records.
-  if [ -n "$attempt_args" ]; then
     scrub_ok=false
     if bash deploy/dokploy/dokploy.sh scrub-review \
       --base-repo "$GITHUB_REPOSITORY" --pr "$pr" --environment-id "$ENVIRONMENT_ID" \
@@ -232,8 +179,32 @@ while IFS= read -r review; do
     --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$sha"; then
     warn_review "$pr" "GHCR cleanup succeeded but Dokploy anchor retirement failed"
     had_error=true
+  else
+    retired_count=$((retired_count + 1))
+    retired_names="$retired_names mr$pr"
   fi
 done < "$entries"
+
+# Report-only: desired PRs with no live, non-retired review. Deployment is
+# event-driven; the notice makes the gap visible in the run log.
+missing_count=0
+missing_names=''
+while IFS= read -r desired_pr; do
+  [ -n "$desired_pr" ] || continue
+  if ! jq -e --argjson pr "$desired_pr" '
+    any(.[]; .pr == $pr and .retired == false)
+  ' "$reviews" >/dev/null; then
+    missing_count=$((missing_count + 1))
+    missing_names="$missing_names mr$desired_pr"
+    printf '::notice::Open labelled PR #%s has no live review environment (deploys are event-driven)\n' "$desired_pr"
+  fi
+done < "$desired"
+
+# Evidence summary (plan 089): counts and review names only — raw Dokploy
+# object ids are secrets and never logged.
+printf '::notice::converge summary: kept=%s retired=%s missing=%s skipped-retired=%s kept-names:%s retired-names:%s missing-names:%s\n' \
+  "$kept_count" "$retired_count" "$missing_count" "$skipped_retired_count" \
+  "${kept_names:- none}" "${retired_names:- none}" "${missing_names:- none}"
 
 if [ "$had_error" = true ]; then
   exit 1

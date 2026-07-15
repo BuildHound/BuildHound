@@ -9,6 +9,7 @@ delete_log="$root/deletes"
 attempt_log="$root/attempts"
 retire_log="$root/retires"
 order_log="$root/order"
+output_log="$root/output"
 real_jq=$(command -v jq)
 export DELETE_LOG="$delete_log" ATTEMPT_LOG="$attempt_log" RETIRE_LOG="$retire_log" ORDER_LOG="$order_log" REAL_JQ="$real_jq"
 
@@ -65,32 +66,23 @@ case "$*" in
     printf 'Organization\n'; exit 0
     ;;
   "api repos/BuildHound/BuildHound/actions/workflows/review-images.yml --jq .id") printf '99\n'; exit 0 ;;
-  "api repos/BuildHound/BuildHound/actions/workflows/review-environment.yml --jq .id") printf '100\n'; exit 0 ;;
   *"packages/container/buildhound-server/versions"*|*"packages/container/buildhound-site/versions"*)
     if [ "${FAIL_IMAGE_PR:-}" = "${REVIEW_PR:-}" ]; then exit 1; fi
     printf '[[]]\n'; exit 0
     ;;
+  *"issues?labels=deploy-review&state=open"*)
+    printf '%s\n' "$DESIRED_PRS" | "$REAL_JQ" -r '.[]'
+    exit 0
+    ;;
 esac
 url=$2
 case "$url" in
-  */actions/runs/*/attempts/*)
-    rest=${url#*/actions/runs/}
-    run_id=${rest%%/*}
-    run_attempt=${url##*/}
-    key="$run_id.$run_attempt"
-    printf '%s\n' "$RUNS_JSON" | "$REAL_JQ" -er --arg key "$key" '.[$key]'
-    ;;
-  */pulls/*)
-    pr=${url##*/}
+  */issues/*)
+    pr=${url##*/issues/}
     if [ "${GH_FAIL_PR:-}" = "$pr" ]; then exit 1; fi
     state=$(printf '%s\n' "$PR_STATES" | "$REAL_JQ" -er --arg pr "$pr" '.[$pr]')
-    printf '{"state":"%s"}\n' "$state"
-    ;;
-  */issues/*/labels)
-    rest=${url#*/issues/}
-    pr=${rest%%/*}
-    if [ "${GH_FAIL_PR:-}" = "$pr" ]; then exit 1; fi
-    printf '%s\n' "$PR_LABELS" | "$REAL_JQ" -r --arg pr "$pr" '.[$pr] // [] | .[]'
+    labels=$(printf '%s\n' "$PR_LABELS" | "$REAL_JQ" -c --arg pr "$pr" '.[$pr] // []')
+    printf '{"state":"%s","labels":%s}\n' "$state" "$labels"
     ;;
   *)
     exit 2
@@ -127,53 +119,35 @@ review() {
   fi
 }
 
-run_evidence() {
-  pr=$1
-  attempt_id=$2
-  status=$3
-  conclusion=$4
-  run_attempt=${attempt_id#*.}
-  # shellcheck disable=SC2016
-  "$real_jq" -cn --arg repository BuildHound/BuildHound --arg sha "$sha" \
-    --arg branch main --arg status "$status" --arg conclusion "$conclusion" \
-    --argjson pr "$pr" --argjson runAttempt "$run_attempt" '
-      {workflow_id:100,run_attempt:$runAttempt,event:"pull_request_target",
-       repository:{full_name:$repository},
-       pull_requests:[{number:$pr,head:{sha:$sha},base:{ref:$branch}}],
-       status:$status,conclusion:(if $conclusion == "null" then null else $conclusion end)}
-    '
-}
-
 run_reconcile() {
   ttl=$1
   reviews=$2
-  states=$3
-  labels=$4
-  fail_delete=${5:-}
-  fail_gh=${6:-}
-  fail_image=${7:-}
-  runs=${8-}
+  desired=$3
+  states=${4:-'{}'}
+  labels=${5:-'{}'}
+  fail_delete=${6:-}
+  fail_gh=${7:-}
+  fail_image=${8:-}
   fail_retire=${9:-}
-  if [ -z "$runs" ]; then runs='{}'; fi
   : > "$delete_log"
   : > "$attempt_log"
   : > "$retire_log"
   : > "$order_log"
+  : > "$output_log"
   PATH="$bin:$PATH" \
     TTL_HOURS="$ttl" \
     GITHUB_REPOSITORY=BuildHound/BuildHound \
-    DEFAULT_BRANCH=main \
     ENVIRONMENT_ID=review \
     DNS_SUFFIX=review.buildhound.dev \
     REVIEWS_JSON="$reviews" \
+    DESIRED_PRS="$desired" \
     PR_STATES="$states" \
     PR_LABELS="$labels" \
     FAIL_DELETE_PR="$fail_delete" \
     GH_FAIL_PR="$fail_gh" \
     FAIL_IMAGE_PR="$fail_image" \
     FAIL_RETIRE_PR="$fail_retire" \
-    RUNS_JSON="$runs" \
-    sh deploy/dokploy/reconcile-reviews.sh
+    sh deploy/dokploy/reconcile-reviews.sh > "$output_log" 2>&1
 }
 
 assert_attempts() {
@@ -212,75 +186,111 @@ assert_order() {
   fi
 }
 
+assert_output_has() {
+  if ! grep -F -- "$1" "$output_log" >/dev/null; then
+    printf 'expected converge output to contain [%s]\n' "$1" >&2
+    cat "$output_log" >&2
+    exit 1
+  fi
+}
+
 for invalid_ttl in '' 0 01 '1+1' 87601 999999; do
-  if run_reconcile "$invalid_ttl" '[]' '{}' '{}'; then exit 1; fi
+  if run_reconcile "$invalid_ttl" '[]' '[]'; then exit 1; fi
   assert_deletes ''
 done
 
+# Invalid metadata preserves the review (fail-open per item, run fails).
 bad_created=$(review 1 null)
 closed=$(review 2 '"fresh"')
-if run_reconcile 1 "[$bad_created,$closed]" '{"1":"closed","2":"closed"}' '{}'; then exit 1; fi
+if run_reconcile 1 "[$bad_created,$closed]" '[]' '{"2":"closed"}'; then exit 1; fi
 assert_deletes 2
 assert_retires '2|'
 assert_order 'scrub:2,image:2,retire:2'
 
+# Two undesired reviews: a scrub failure on the first never blocks the second.
 first=$(review 1 '"fresh"')
 second=$(review 2 '"fresh"')
-if run_reconcile 1 "[$first,$second]" '{"1":"closed","2":"closed"}' '{}' 1; then exit 1; fi
+if run_reconcile 1 "[$first,$second]" '[]' '{"1":"closed","2":"closed"}' '{}' 1; then exit 1; fi
 assert_deletes 1,2
 assert_retires '2|'
 
+# TTL expiry retires even a desired (open + labelled) review, with no
+# pre-retire re-check.
 expired=$(review 3 '"expired"')
-run_reconcile 1 "[$expired]" '{"3":"open"}' '{"3":["deploy-review"]}'
+run_reconcile 1 "[$expired]" '[3]'
 assert_deletes 3
 assert_retires '3|'
 
+# Fresh and desired: kept.
 fresh=$(review 4 '"fresh"')
-run_reconcile 1 "[$fresh]" '{"4":"open"}' '{"4":["deploy-review"]}'
+run_reconcile 1 "[$fresh]" '[4]'
 assert_deletes ''
 assert_retires ''
+assert_output_has 'kept=1'
 
+# Already-retired anchors are skipped, and counted as such.
 retired=$(review 12 '"fresh"' '' true)
-run_reconcile 1 "[$retired]" '{}' '{}'
+run_reconcile 1 "[$retired]" '[]'
 assert_deletes ''
 assert_retires ''
+assert_output_has 'skipped-retired=1'
 
+# Not in the desired snapshot but the re-check says open + labelled (label
+# raced the snapshot): kept. A failing re-check preserves the review.
+raced=$(review 5 '"fresh"')
+run_reconcile 1 "[$raced]" '[]' '{"5":"open"}' '{"5":["deploy-review"]}'
+assert_deletes ''
+assert_retires ''
 failed_lookup=$(review 5 '"fresh"')
 later_closed=$(review 6 '"fresh"')
-if run_reconcile 1 "[$failed_lookup,$later_closed]" '{"5":"open","6":"closed"}' '{"5":["deploy-review"]}' '' 5; then exit 1; fi
+if run_reconcile 1 "[$failed_lookup,$later_closed]" '[]' '{"6":"closed"}' '{}' '' 5; then exit 1; fi
 assert_deletes 6
 assert_retires '6|'
 
+# Open but unlabelled: retired.
+unlabelled=$(review 15 '"fresh"')
+run_reconcile 1 "[$unlabelled]" '[]' '{"15":"open"}' '{"15":[]}'
+assert_deletes 15
+assert_retires '15|'
+
+# Image cleanup failure stops retirement for that review only.
 image_cleanup_retry=$(review 7 '"fresh"')
-if run_reconcile 1 "[$image_cleanup_retry]" '{"7":"closed"}' '{}' '' '' 7; then exit 1; fi
+if run_reconcile 1 "[$image_cleanup_retry]" '[]' '{"7":"closed"}' '{}' '' '' 7; then exit 1; fi
 assert_deletes 7
 assert_retires ''
 
-failed=$(review 8 '"fresh"' 800.1)
-cancelled=$(review 9 '"fresh"' 900.1)
-active=$(review 10 '"fresh"' 1000.1)
-successful=$(review 11 '"fresh"' 1100.1)
-failed_run=$(run_evidence 8 800.1 completed failure)
-cancelled_run=$(run_evidence 9 900.1 completed cancelled)
-active_run=$(run_evidence 10 1000.1 in_progress null)
-successful_run=$(run_evidence 11 1100.1 completed success)
-# shellcheck disable=SC2016
-runs=$("$real_jq" -cn --argjson failed "$failed_run" --argjson cancelled "$cancelled_run" \
-  --argjson active "$active_run" --argjson successful "$successful_run" \
-  '{"800.1":$failed,"900.1":$cancelled,"1000.1":$active,"1100.1":$successful}')
-run_reconcile 1 "[$failed,$cancelled,$active,$successful]" \
-  '{"8":"open","9":"open","10":"open","11":"open"}' \
-  '{"8":["deploy-review"],"9":["deploy-review"],"10":["deploy-review"],"11":["deploy-review"]}' \
-  '' '' '' "$runs"
-assert_deletes 8,9
-assert_attempts '8|800.1,9|900.1'
-assert_retires '8|800.1,9|900.1'
+# Attempt ids ride along into scrub and retire when present.
+with_attempt=$(review 8 '"fresh"' 800.1)
+run_reconcile 1 "[$with_attempt]" '[]' '{"8":"closed"}'
+assert_deletes 8
+assert_attempts '8|800.1'
+assert_retires '8|800.1'
 
+# Retirement failure surfaces but later reviews still converge.
 retire_failure=$(review 13 '"fresh"')
 later_retire=$(review 14 '"fresh"')
-if run_reconcile 1 "[$retire_failure,$later_retire]" \
-  '{"13":"closed","14":"closed"}' '{}' '' '' '' '{}' 13; then exit 1; fi
+if run_reconcile 1 "[$retire_failure,$later_retire]" '[]' \
+  '{"13":"closed","14":"closed"}' '{}' '' '' '' 13; then exit 1; fi
 assert_deletes 13,14
 assert_retires '13|,14|'
+
+# Desired PR with no live review: report-only, never a deploy from here.
+lonely=$(review 16 '"fresh"' '' true)
+run_reconcile 1 "[$lonely]" '[16,17]'
+assert_deletes ''
+assert_retires ''
+assert_output_has 'Open labelled PR #16 has no live review environment'
+assert_output_has 'Open labelled PR #17 has no live review environment'
+assert_output_has 'missing=2'
+
+# Summary evidence line: counts plus review names, never Dokploy ids.
+mixed_keep=$(review 4 '"fresh"')
+mixed_drop=$(review 6 '"fresh"')
+run_reconcile 1 "[$mixed_keep,$mixed_drop]" '[4]' '{"6":"closed"}'
+assert_output_has 'converge summary: kept=1 retired=1 missing=0 skipped-retired=0 kept-names: mr4 retired-names: mr6'
+if grep -F 'compose-' "$output_log" >/dev/null; then
+  printf 'converge output leaked a Dokploy object id\n' >&2
+  exit 1
+fi
 
 printf 'review reconciliation validated\n'
