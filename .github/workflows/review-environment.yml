@@ -25,7 +25,7 @@ jobs:
       deploy_outcome: ${{ steps.deploy_status.outputs.outcome }}
       publish_outcome: ${{ steps.deploy_status.outputs.publish_outcome }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: "${{ github.sha }}"
           persist-credentials: false
@@ -92,7 +92,7 @@ jobs:
           EOF
       - name: Check out the exact untrusted review source
         if: env.REVIEW_ACTION == 'deploy'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: "${{ env.REVIEW_SHA }}"
           path: review-source
@@ -360,7 +360,7 @@ jobs:
     concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
     permissions: {contents: read, pull-requests: read, actions: read, packages: write}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: "${{ github.sha }}"
           persist-credentials: false
