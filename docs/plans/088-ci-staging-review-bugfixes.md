@@ -75,6 +75,17 @@ verification per roadmap Stage A (real labeled PR + staging run).
 All changes are deploy-path only; no plugin/schema surface. Security: every `checkout`
 keeps `persist-credentials: false`; no new secrets. Behavior of same-repo gate unchanged.
 
+## Live verification log (Stage A)
+
+- The 088 merge itself (PR #41, main `8b2028c`) could not produce the
+  bootstrap staging deploy: `resolve` requires a successful
+  `buildhound/review-deployed/pr-N` status on the merged PR's head, and
+  PR #41's own review deploy necessarily ran the pre-fix client from main.
+  Roadmap check 1 therefore executes via this labeled test PR's merge
+  (check order becomes 2 → 1 → 3); recorded here as the divergence rule
+  requires. No Dokploy command was issued by the failed run (resolve is
+  secret-free) — Gate H4 not triggered.
+
 ## Exit criteria
 
 - A labeled same-repo PR produces a review env whose smoke test passes (no 404 loop).
