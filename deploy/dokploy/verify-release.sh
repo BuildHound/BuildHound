@@ -35,14 +35,37 @@ trap 'rm -f "$request_payload"' EXIT
 new_build_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
 jq --arg build_id "$new_build_id" '.buildId = $build_id' "$payload" > "$request_payload"
 build_id=$(jq -er .buildId "$request_payload")
+# The smoke runs immediately after deployment convergence; the stop-first
+# update strategy leaves a short task-rollout window where routes 404. Retry
+# the first contact with each service instead of failing on the race.
+retry_ok=false
+for _ in $(seq 1 20); do
+  if body=$(curl -fsS "$BUILDHOUND_DASHBOARD_URL/health" 2>/dev/null) &&
+     jq -e '.status == "ok"' >/dev/null 2>&1 <<<"$body"; then
+    retry_ok=true
+    break
+  fi
+  sleep 15
+done
+# The server's health contract is JSON (Routes.kt: HealthResponse(status="ok")).
+test "$retry_ok" = true
+
 # Owner decision (plan 088): staging serves no site yet; the dashboard checks
-# below stay mandatory. Only the exact value "true" skips.
+# stay mandatory. Only the exact value "true" skips.
 if [ "${BUILDHOUND_SKIP_SITE_CHECKS-}" = true ]; then
   printf '%s\n' 'site check skipped (BUILDHOUND_SKIP_SITE_CHECKS=true)' >&2
 else
   curl -fsS "$BUILDHOUND_SITE_URL/" | grep -q 'Track every Gradle build'
 fi
-# The server's health contract is JSON (Routes.kt: HealthResponse(status="ok")).
-curl -fsS "$BUILDHOUND_DASHBOARD_URL/health" | jq -e '.status == "ok"' >/dev/null
-curl -fsS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $BUILDHOUND_INGEST_TOKEN" -H 'Content-Type: application/json' --data-binary "@$request_payload" "$BUILDHOUND_DASHBOARD_URL/v1/builds" | grep -qx 202
+
+ingest_ok=false
+for _ in $(seq 1 5); do
+  code=$(curl -fsS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $BUILDHOUND_INGEST_TOKEN" -H 'Content-Type: application/json' --data-binary "@$request_payload" "$BUILDHOUND_DASHBOARD_URL/v1/builds" 2>/dev/null) || code=''
+  if [ "$code" = 202 ]; then
+    ingest_ok=true
+    break
+  fi
+  sleep 10
+done
+test "$ingest_ok" = true
 curl -fsS -H "Authorization: Bearer $BUILDHOUND_READ_TOKEN" "$BUILDHOUND_DASHBOARD_URL/v1/builds/$build_id" | jq -e --arg id "$build_id" '.buildId == $id' >/dev/null
