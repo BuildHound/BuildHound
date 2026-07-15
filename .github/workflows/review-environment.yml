@@ -301,49 +301,20 @@ jobs:
           if ! deploy/dokploy/delete-review-images.sh; then
             echo "::warning::Superseded review-image cleanup failed; the next deploy or strict retirement will retry it"
           fi
-      - name: Retire exact owned review
+      - name: Converge review environments (close/unlabel fast path)
         if: env.REVIEW_ACTION == 'retire'
         env:
           DOKPLOY_URL: "${{ vars.DOKPLOY_URL }}"
           DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}"
           ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"
           DNS_SUFFIX: "${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}"
+          TTL_HOURS: "${{ vars.BUILDHOUND_REVIEW_TTL_HOURS }}"
           GH_TOKEN: "${{ github.token }}"
-          PR: "${{ env.REVIEW_PR }}"
         run: |
-          bash deploy/dokploy/dokploy.sh list-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" > /tmp/reviews.json
-          review_count=$(jq -er --argjson pr "$PR" '[.[] | select(.pr == $pr)] | length' /tmp/reviews.json)
-          test "$review_count" -le 1
-          if [ "$review_count" -eq 1 ]; then
-            review=$(jq -cer --argjson pr "$PR" '.[] | select(.pr == $pr)' /tmp/reviews.json)
-            attempt_id=$(jq -r '.attemptId // empty' <<<"$review")
-            compose_id=$(jq -er .composeId <<<"$review")
-            deployed_sha=$(jq -er .sha <<<"$review")
-            [[ "$compose_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]]
-            [[ "$deployed_sha" =~ ^[0-9a-f]{40}$ ]]
-          fi
-
-          # Recheck eligibility immediately before retiring any exact-owned resource.
-          data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$PR")
-          state=$(jq -er '.state | select(type == "string")' <<<"$data")
-          if [ "$state" = open ]; then
-            labels=$(gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name')
-            if grep -Fx deploy-review <<<"$labels" >/dev/null; then
-              echo "::notice::Review became eligible again; preserving resources"
-              exit 0
-            fi
-          fi
-
-          if [ "$review_count" -eq 1 ]; then
-            attempt_args=()
-            if [ -n "$attempt_id" ]; then attempt_args+=(--expected-attempt-id "$attempt_id"); fi
-            bash deploy/dokploy/dokploy.sh scrub-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" "${attempt_args[@]}"
-          fi
-          # Manager-side credential-bearing state is scrubbed before strict package cleanup.
-          REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh
-          if [ "$review_count" -eq 1 ]; then
-            bash deploy/dokploy/dokploy.sh retire-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" "${attempt_args[@]}"
-          fi
+          # Plan 089: the event is only a latency optimization — the same
+          # idempotent converge the cron runs, nothing bespoke.
+          : "${TTL_HOURS:?BUILDHOUND_REVIEW_TTL_HOURS must be set}"
+          deploy/dokploy/reconcile-reviews.sh
   reconcile_failed_review:
     needs: review
     if: >-
@@ -364,41 +335,20 @@ jobs:
         with:
           ref: "${{ github.sha }}"
           persist-credentials: false
-      - name: Reconcile failed exact-owned review
+      - name: Converge review environments (failed-attempt fast path)
         env:
           DOKPLOY_URL: "${{ vars.DOKPLOY_URL }}"
           DOKPLOY_TOKEN: "${{ secrets.DOKPLOY_TOKEN }}"
           ENVIRONMENT_ID: "${{ secrets.DOKPLOY_ENVIRONMENT_ID }}"
           DNS_SUFFIX: "${{ vars.BUILDHOUND_REVIEW_DNS_SUFFIX }}"
+          TTL_HOURS: "${{ vars.BUILDHOUND_REVIEW_TTL_HOURS }}"
           GH_TOKEN: "${{ github.token }}"
-          PR: "${{ env.REVIEW_PR }}"
-          SHA: "${{ env.REVIEW_SHA }}"
-          ATTEMPT_ID: "${{ github.run_id }}.${{ github.run_attempt }}"
         run: |
-          bash deploy/dokploy/dokploy.sh list-reviews --base-repo "$GITHUB_REPOSITORY" --environment-id "$ENVIRONMENT_ID" > /tmp/failed-reviews.json
-          review_count=$(jq -er --argjson pr "$PR" '[.[] | select(.pr == $pr)] | length' /tmp/failed-reviews.json)
-          test "$review_count" -le 1
-          cleanup_attempted_review=false
-          keep_sha=
-          if [ "$review_count" -eq 1 ]; then
-            review=$(jq -cer --argjson pr "$PR" '.[] | select(.pr == $pr)' /tmp/failed-reviews.json)
-            attempt_id=$(jq -r '.attemptId // empty' <<<"$review")
-            compose_id=$(jq -er .composeId <<<"$review")
-            deployed_sha=$(jq -er .sha <<<"$review")
-            [[ "$compose_id" =~ ^[A-Za-z0-9_-]{1,128}$ ]]
-            [[ "$deployed_sha" =~ ^[0-9a-f]{40}$ ]]
-            if [ "$deployed_sha" = "$SHA" ] && [ "$attempt_id" = "$ATTEMPT_ID" ]; then
-              cleanup_attempted_review=true
-              bash deploy/dokploy/dokploy.sh scrub-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" --expected-attempt-id "$attempt_id"
-            else
-              keep_sha="$deployed_sha"
-              echo "::notice::A different review SHA is persisted; preserving its Stack and images"
-            fi
-          fi
-          KEEP_SHA="$keep_sha" REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh
-          if [ "$cleanup_attempted_review" = true ]; then
-            bash deploy/dokploy/dokploy.sh retire-review --base-repo "$GITHUB_REPOSITORY" --pr "$PR" --environment-id "$ENVIRONMENT_ID" --dns-suffix "$DNS_SUFFIX" --expected-compose-id "$compose_id" --expected-sha "$deployed_sha" --expected-attempt-id "$attempt_id"
-          fi
+          # Plan 089: exact-attempt scrub bookkeeping is gone. A failed
+          # attempt on a still-open, still-labelled PR keeps its anchor and
+          # images until the PR closes or unlabels; converge handles both.
+          : "${TTL_HOURS:?BUILDHOUND_REVIEW_TTL_HOURS must be set}"
+          deploy/dokploy/reconcile-reviews.sh
   record_review_status:
     needs: review
     if: ${{ always() && needs.review.result == 'success' && needs.review.outputs.deploy_outcome == 'success' }}

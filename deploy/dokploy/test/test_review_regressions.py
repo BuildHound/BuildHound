@@ -472,44 +472,35 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn("needs.review.outputs.deploy_outcome == 'failure'", failed_cleanup)
         self.assertIn("needs.review.outputs.publish_outcome == 'failure'", failed_cleanup)
         self.assertIn("environment: review-cleanup", failed_cleanup)
-        self.assertIn("[.[] | select(.pr == $pr)] | length", failed_cleanup)
-        self.assertIn('test "$review_count" -le 1', failed_cleanup)
-        self.assertNotIn(".pr == $pr and .sha == $sha", failed_cleanup)
-        exact_attempt = (
-            'if [ "$deployed_sha" = "$SHA" ] && '
-            '[ "$attempt_id" = "$ATTEMPT_ID" ]; then'
+        # Plan 089: both cleanup paths are thin fast-path calls into the same
+        # idempotent converge entrypoint the cron runs — no bespoke per-PR
+        # scrub/retire choreography in workflow YAML.
+        self.assertIn("deploy/dokploy/reconcile-reviews.sh", failed_cleanup)
+        self.assertIn(
+            'TTL_HOURS: "${{ vars.BUILDHOUND_REVIEW_TTL_HOURS }}"', failed_cleanup
         )
-        self.assertIn(exact_attempt, failed_cleanup)
-        self.assertIn('--expected-attempt-id "$attempt_id"', failed_cleanup)
-        self.assertIn('keep_sha="$deployed_sha"', failed_cleanup)
-        self.assertIn('KEEP_SHA="$keep_sha" REVIEW_PR="$PR"', failed_cleanup)
-        self.assertIn('if [ "$cleanup_attempted_review" = true ]; then', failed_cleanup)
-        sha_match = failed_cleanup.index(exact_attempt)
-        compose_scrub = failed_cleanup.index("scrub-review")
-        image_cleanup = failed_cleanup.index("delete-review-images.sh")
-        retire_guard = failed_cleanup.index('if [ "$cleanup_attempted_review" = true ]; then')
-        compose_retire = failed_cleanup.index("retire-review --base-repo")
-        self.assertLess(sha_match, compose_scrub)
-        self.assertLess(compose_scrub, failed_cleanup.index('keep_sha="$deployed_sha"'))
-        self.assertLess(compose_scrub, image_cleanup)
-        self.assertLess(image_cleanup, retire_guard)
-        self.assertLess(retire_guard, compose_retire)
+        self.assertNotIn("scrub-review", failed_cleanup)
+        self.assertNotIn("retire-review", failed_cleanup)
 
         post_success_cleanup = review_job.split(
             "- name: Delete superseded exact-owned review images", 1
-        )[1].split("- name: Retire exact owned review", 1)[0]
+        )[1].split("- name: Converge review environments", 1)[0]
         self.assertIn("steps.deploy.outcome == 'success'", post_success_cleanup)
         self.assertIn("if ! deploy/dokploy/delete-review-images.sh; then", post_success_cleanup)
         self.assertIn("::warning::Superseded review-image cleanup failed", post_success_cleanup)
 
-        retire_step = review.split("- name: Retire exact owned review", 1)[1]
-        first_recheck = retire_step.index('data=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/$PR")')
-        compose_scrub = retire_step.index("bash deploy/dokploy/dokploy.sh scrub-review")
-        image_cleanup = retire_step.index('REVIEW_PR="$PR" deploy/dokploy/delete-review-images.sh')
-        compose_retire = retire_step.index("bash deploy/dokploy/dokploy.sh retire-review")
-        self.assertLess(first_recheck, compose_scrub)
-        self.assertLess(compose_scrub, image_cleanup)
-        self.assertLess(image_cleanup, compose_retire)
+        retire_step = review.split(
+            "- name: Converge review environments (close/unlabel fast path)", 1
+        )[1].split("  reconcile_failed_review:", 1)[0]
+        self.assertIn("if: env.REVIEW_ACTION == 'retire'", retire_step)
+        self.assertIn("deploy/dokploy/reconcile-reviews.sh", retire_step)
+
+        # The converge script keeps scrub -> image cleanup -> retire ordering.
+        converge_scrub = reconcile.index("scrub-review")
+        converge_images = reconcile.index("delete-review-images.sh")
+        converge_retire = reconcile.index("retire-review")
+        self.assertLess(converge_scrub, converge_images)
+        self.assertLess(converge_images, converge_retire)
 
     def test_reconciler_is_executable_and_fail_closed(self):
         path = ROOT / "deploy/dokploy/reconcile-reviews.sh"
