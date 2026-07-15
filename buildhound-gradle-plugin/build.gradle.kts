@@ -141,14 +141,22 @@ tasks.withType<Test>().configureEach {
         "buildhound.testkit.root",
         layout.buildDirectory.dir("functionalTest-testkit").get().asFile.absolutePath,
     )
-    // Safety net (plan 092): TestKit daemons outlive each test (no daemon-stop API; they die with
-    // the test JVM), so any daemon-held file inside a @TempDir makes JUnit's post-test deletion
-    // throw on Windows. The fixtures keep daemon-held dirs (TestKit dir, GUH) outside @TempDir —
-    // this strategy is the backstop for a future fixture that reintroduces one: it still deletes
-    // best-effort but logs a locked-file failure instead of failing the test. A DeletionException
-    // is never this suite's signal; assertions are.
-    systemProperty(
-        "junit.jupiter.tempdir.deletion.strategy.default",
-        "org.junit.jupiter.api.io.TempDirDeletionStrategy\$IgnoreFailures",
-    )
+}
+
+// Safety net (plan 092): TestKit daemons outlive each test (no daemon-stop API; they die with
+// the test JVM), so any daemon-held file inside a @TempDir makes JUnit's post-test deletion
+// throw on Windows. The fixtures keep daemon-held dirs (TestKit dir, GUH) outside @TempDir —
+// this strategy is the backstop for a future fixture that reintroduces one: it still deletes
+// best-effort but logs a locked-file failure instead of failing the test. A DeletionException
+// is never a TestKit suite's signal; assertions are. Deliberately NOT on the unit `test` task
+// (§3.1/§3.2 review): it spawns no daemons, so there a deletion failure IS a genuine
+// cleanup-bug signal and must stay a failure. The key is @API(EXPERIMENTAL, since = 6.1) —
+// re-verify it still exists on the next junit-jupiter bump.
+listOf(functionalTestTask, isolatedProjectsTestTask).forEach { task ->
+    task.configure {
+        systemProperty(
+            "junit.jupiter.tempdir.deletion.strategy.default",
+            "org.junit.jupiter.api.io.TempDirDeletionStrategy\$IgnoreFailures",
+        )
+    }
 }
