@@ -50,6 +50,7 @@ dependencies {
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.server.call.logging)
     implementation(libs.ktor.server.rate.limit)
+    implementation(libs.ktor.server.auto.head.response)
     implementation(libs.ktor.serialization.kotlinx.json)
     // Outbound HTTP for CI connectors (plan 028): the CIO engine is pure-JVM (no native deps).
     // Timeline JSON is parsed defensively via JsonElement (schema-drift tolerant), so no client

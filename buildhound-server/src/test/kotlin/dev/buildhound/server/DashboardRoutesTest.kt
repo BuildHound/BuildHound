@@ -1,6 +1,7 @@
 package dev.buildhound.server
 
 import io.ktor.client.request.get
+import io.ktor.client.request.head
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -100,5 +101,20 @@ class DashboardRoutesTest {
         assertEquals(HttpStatusCode.OK, client.get("/").status)
         assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/builds").status)
         assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/trends").status)
+    }
+
+    @Test
+    fun `HEAD on the dashboard shell mirrors GET without loosening data-endpoint auth`() = testApplication {
+        application { buildHoundModule() }
+
+        // Uptime monitors probe with HEAD (plan 088 live finding: staging answered 404).
+        val get = client.get("/")
+        val head = client.head("/")
+        assertEquals(get.status, head.status)
+        assertEquals(HttpStatusCode.OK, head.status)
+        assertEquals(DashboardAssets.csp, head.headers["Content-Security-Policy"])
+        assertEquals("", head.bodyAsText())
+        // Spec §5 auth semantics must hold for HEAD exactly as for GET.
+        assertEquals(HttpStatusCode.Unauthorized, client.head("/v1/builds").status)
     }
 }

@@ -3,6 +3,7 @@ package dev.buildhound.server
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
 import io.ktor.client.request.get
+import io.ktor.client.request.head
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -90,6 +91,16 @@ class ApplicationTest {
 
         assertEquals(HttpStatusCode.OK, response.status)
         assertTrue(response.bodyAsText().contains("ok"))
+    }
+
+    @Test
+    fun `health endpoint answers HEAD with the same status as GET`() = testApplication {
+        appWith(fixture())
+
+        // Load balancers and uptime monitors probe with HEAD (plan 088 live finding).
+        assertEquals(client.get("/health").status, client.head("/health").status)
+        assertEquals(HttpStatusCode.OK, client.head("/health").status)
+        assertEquals("", client.head("/health").bodyAsText())
     }
 
     @Test
