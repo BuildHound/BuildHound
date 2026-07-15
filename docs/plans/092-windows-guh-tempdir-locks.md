@@ -10,9 +10,11 @@ failures. Follow-up to plan 049 (fresh-daemon TestKit dirs outside `@TempDir`).
 
 ## Root cause
 
-The 17 failures are exactly the tests of the four classes that pass `-g <@TempDir>`
-(`InvocationFunctionalTest`, `BuildCacheConfigFunctionalTest`, `WrapperFunctionalTest`,
-`ChangedModulesFunctionalTest`). Plan 049 moved the *TestKit dir* out of `@TempDir`
+The 17 failures are exactly the tests of the three Windows-enabled classes that pass
+`-g <@TempDir>` — `InvocationFunctionalTest` (6), `BuildCacheConfigFunctionalTest` (3),
+`WrapperFunctionalTest` (8). The fourth `-g` class, `ChangedModulesFunctionalTest`, is
+`@DisabledOnOs(WINDOWS)` and never ran; it shares the pattern and is relocated for
+consistency. Plan 049 moved the *TestKit dir* out of `@TempDir`
 because the lingering TestKit daemon holds open handles under it; the per-test *Gradle
 User Home* `@TempDir` reintroduced the same hazard — the daemon keeps GUH cache files
 (journal, file hashes, Kotlin DSL caches) open after `.build()` returns, and TestKit
@@ -38,7 +40,10 @@ Classes without `-g` pass — `projectDir` deletion is not affected.
    `private val guhDir: File = newGradleUserHome()` — default per-method test lifecycle
    keeps the "fresh GUH per test, stable across runs within a test" semantics
    (store→hit CC pairs need one GUH).
-2. `buildhound-gradle-plugin/build.gradle.kts`, `tasks.withType<Test>().configureEach`:
+2. `buildhound-gradle-plugin/build.gradle.kts`: on the TestKit-spawning test tasks only
+   (`functionalTest`, `isolatedProjectsTest` — review deviation from the original
+   "all Test tasks": on the unit `test` task, which spawns no daemons, a deletion
+   failure is a genuine cleanup-bug signal and must stay a failure),
    set `junit.jupiter.tempdir.deletion.strategy.default` to JUnit 6.1's built-in
    `org.junit.jupiter.api.io.TempDirDeletionStrategy$IgnoreFailures` (delegates to the
    standard delete, logs failures instead of failing the test). A locked-file
