@@ -18,6 +18,7 @@ import java.sql.SQLException
 import java.util.zip.GZIPOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -101,6 +102,21 @@ class ApplicationTest {
         assertEquals(client.get("/health").status, client.head("/health").status)
         assertEquals(HttpStatusCode.OK, client.head("/health").status)
         assertEquals("", client.head("/health").bodyAsText())
+    }
+
+    @Test
+    fun `authenticated HEAD mirrors GET on a query endpoint including response headers`() = testApplication {
+        appWith(fixture())
+
+        val get = client.get("/v1/builds") { header("Authorization", "Bearer test-token") }
+        val head = client.head("/v1/builds") { header("Authorization", "Bearer test-token") }
+
+        assertEquals(HttpStatusCode.OK, get.status)
+        assertEquals(get.status, head.status)
+        // GET's headers must survive body suppression — X-Total-Count is what a HEAD caller reads.
+        assertNotNull(head.headers["X-Total-Count"])
+        assertEquals(get.headers["X-Total-Count"], head.headers["X-Total-Count"])
+        assertEquals("", head.bodyAsText())
     }
 
     @Test

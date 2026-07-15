@@ -20,12 +20,14 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.autohead.AutoHeadResponse
 import io.ktor.server.plugins.calllogging.CallLogging
+import io.ktor.server.plugins.calllogging.processingTimeMillis
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.origin
 import io.ktor.server.plugins.ratelimit.RateLimit
 import io.ktor.server.plugins.ratelimit.RateLimitName
 import io.ktor.server.plugins.ratelimit.RateLimitProviderConfig
 import io.ktor.server.plugins.ratelimit.rateLimit
+import io.ktor.server.request.path
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.routing
 import kotlin.time.Duration.Companion.seconds
@@ -188,7 +190,15 @@ fun Application.buildHoundModule(
     stores: ServerStores = ServerStores(InMemoryBuildStore(), InMemoryTokenStore()),
     rateLimits: RateLimits = RateLimits(),
 ) {
-    install(CallLogging)
+    install(CallLogging) {
+        // The default format logs httpMethod (= origin.method), which AutoHeadResponse (below)
+        // rewrites to GET for routing — a HEAD-probe flood would be indistinguishable from GET
+        // traffic in the access log. local.method is the verb actually on the wire (088 review).
+        format { call ->
+            "${call.response.status() ?: "Unhandled"}: ${call.request.local.method.value} - " +
+                "${call.request.path()} in ${call.processingTimeMillis()}ms"
+        }
+    }
     // HEAD parity for every GET route (plan 088 live finding: HEAD-probing monitors read the
     // dashboard shell's 404 as down). A HEAD request resolves the matching GET route — auth,
     // scope checks, and the route-scoped rate limiters run unchanged; only the body is dropped.
