@@ -87,6 +87,30 @@ keeps `persist-credentials: false`; no new secrets. Behavior of same-repo gate u
 
 ## Live verification log (Stage A)
 
+- **STAGE A COMPLETE (2026-07-15/16).** Staging deploy fully green: run
+  29456964584 (main `5aee734`, rerun after the token fix) — non-bootstrap
+  path, deploy + full smoke (health JSON contract, authenticated ingest 202,
+  read-back) with zero retries needed. Dashboard live at
+  https://dashboard.staging.buildhound.dev (health `{"status":"ok"}`,
+  Let's Encrypt cert, SAN-valid). Six consecutive labeled review-env deploys
+  green (PRs 42, 45, 46, 47, 48, 50); unlabel cleanup verified (URLs 404
+  after convergence). Exit criteria: review smoke ✓; bootstrap exercised
+  green through the Dokploy deploy (run 29422015761) + green non-bootstrap
+  deploy ✓ (fallback wording); policy suite green ✓; no checkout@v4 ✓.
+- **Two more latent defects found and fixed by the live loop** (each its own
+  merged PR): the smoke's health check grepped for a bare `ok` against the
+  server's JSON contract (never exercised pre-088; PR #47), and the smoke had
+  zero retries across the stop-first task-rollout window (PR #48, observed
+  live at run 29453657873). Ingest evidence instrumentation (PR #50) then
+  isolated the final gap as an operator-side token mismatch.
+- **Operator-side provisioning gaps fixed during Stage A** (GitHub `staging`
+  environment vs Dokploy/plan-087 reality): backup bucket versioning
+  enabled + fresh versioned backup; `DOKPLOY_SITE_APPLICATION_ID` (site is
+  an Application, not a compose — creation deferred, see skip-site);
+  `BUILDHOUND_DASHBOARD_URL` corrected to
+  https://dashboard.staging.buildhound.dev; `BUILDHOUND_INGEST_TOKEN` and
+  `BUILDHOUND_READ_TOKEN` aligned with the Dokploy `BUILDHOUND_BOOTSTRAP_TOKEN`.
+
 - **Review env (check 2): PASSED** — PR #42 labeled deploy green after the
   post-deploy verifier fix (run 29419762276); site and dashboard URLs 200
   with correct content; unlabel converged and both URLs returned 404.
