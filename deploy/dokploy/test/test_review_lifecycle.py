@@ -17,10 +17,16 @@ class ReviewPolicyTest(unittest.TestCase):
             self.assertIn('security_opt: ["no-new-privileges:true"]', service)
             self.assertIn(".middlewares=${BUILDHOUND_REVIEW_PROVIDER_ID}-noindex", service)
             self.assertIn(".tls=true", service)
+            # Traefik v3's swarm provider needs the ingress-reachable network
+            # pinned per routed service (plan 088); the label must point at
+            # the injected isolated network, never at a shared one.
+            self.assertIn(
+                "traefik.swarm.network=${BUILDHOUND_REVIEW_NETWORK}", service
+            )
         self.assertNotIn(".tls.certresolver=", stack)
         self.assertNotIn(".tls.domains", stack)
         self.assertNotIn("networks:", stack)
-        self.assertNotIn("traefik.swarm.network", stack)
+        self.assertNotIn("traefik.docker.network", stack)
         self.assertNotIn("dokploy-network", stack)
         self.assertNotIn("external: true", stack)
         self.assertNotIn("DOKPLOY_REVIEW_INGRESS_NETWORK", stack)

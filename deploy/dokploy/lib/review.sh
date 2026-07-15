@@ -299,13 +299,61 @@ _review_require_materialized_anchor() {
   fi
 }
 
+# Deploy-path twin of _review_require_materialized_anchor: verifies the
+# materialized review stack kept the routing-critical properties after
+# Dokploy's isolated-deployment conversion (plan 088). Traefik v3's swarm
+# provider needs traefik.swarm.network to pick a task IP it can reach, skips
+# services that also define traefik.docker.network (routes 404), and the
+# Swarm converter must not have dropped the long-form tmpfs mounts.
+_review_require_materialized_stack() {
+  local compose_id=$1 app_name=$2 workdir=$3 response_file yaml_file json_file
+  response_file=$workdir/converted-stack.json
+  yaml_file=$workdir/materialized-stack.yaml
+  json_file=$workdir/materialized-stack.json
+  dokploy_api GET "compose.getConvertedCompose?composeId=$compose_id" > "$response_file" || return 1
+  if ! jq -er 'select(type == "string" and length > 0)' "$response_file" > "$yaml_file"; then
+    die "Dokploy returned invalid materialized review Compose evidence"
+    return 1
+  fi
+  if ! command docker compose --file "$yaml_file" config --format json > "$json_file" 2>/dev/null; then
+    die "unable to normalize materialized review Compose evidence"
+    return 1
+  fi
+  if ! jq -e --arg appName "$app_name" '
+    (type == "object") and
+    (.services | type) == "object" and
+    ((["db", "server", "site"] - (.services | keys)) == []) and
+    ([.services[] |
+        ((.deploy.labels // {}) + (.labels // {})) as $labels |
+        ($labels | type) == "object" and
+        ($labels | has("traefik.docker.network") | not)
+      ] | all) and
+    ([.services.site, .services.server] |
+      all(. as $svc |
+        ($svc | type) == "object" and
+        (($svc.deploy.labels // {})["traefik.enable"] == "true") and
+        (($svc.deploy.labels // {})["traefik.swarm.network"] == $appName) and
+        (($svc.volumes // []) |
+          any(type == "object" and .type == "tmpfs" and .target == "/tmp")) and
+        (($svc.networks | type) == "object") and ($svc.networks | has($appName))
+      )) and
+    (.networks | type) == "object" and (.networks | has($appName)) and
+    (.networks[$appName] | type) == "object" and
+    (.networks[$appName].external == true) and
+    ((.networks[$appName].name // $appName) == $appName)
+  ' "$json_file" >/dev/null; then
+    die "Dokploy did not materialize a routable isolated review stack"
+    return 1
+  fi
+}
+
 _review_render_stack() {
   local output=$1 server_image=$2 site_image=$3 repository=$4 pr=$5 sha=$6
-  local provider_id=$7 site_host=$8 dashboard_host=$9 grep_rc
+  local provider_id=$7 site_host=$8 dashboard_host=$9 network=${10} grep_rc
   if ! REVIEW_SERVER_IMAGE=$server_image REVIEW_SITE_IMAGE=$site_image \
     REVIEW_REPOSITORY=$repository REVIEW_PR=$pr REVIEW_SHA=$sha \
     REVIEW_PROVIDER_ID=$provider_id REVIEW_SITE_HOST=$site_host \
-    REVIEW_DASHBOARD_HOST=$dashboard_host \
+    REVIEW_DASHBOARD_HOST=$dashboard_host REVIEW_NETWORK=$network \
     jq -jRs '
       split("${BUILDHOUND_SERVER_IMAGE}") | join(env.REVIEW_SERVER_IMAGE) |
       split("${BUILDHOUND_SITE_IMAGE}") | join(env.REVIEW_SITE_IMAGE) |
@@ -316,7 +364,8 @@ _review_render_stack() {
       split("${BUILDHOUND_HEAD_SHA}") | join(env.REVIEW_SHA) |
       split("${BUILDHOUND_REVIEW_PROVIDER_ID}") | join(env.REVIEW_PROVIDER_ID) |
       split("${BUILDHOUND_REVIEW_SITE_HOST}") | join(env.REVIEW_SITE_HOST) |
-      split("${BUILDHOUND_REVIEW_DASHBOARD_HOST}") | join(env.REVIEW_DASHBOARD_HOST)
+      split("${BUILDHOUND_REVIEW_DASHBOARD_HOST}") | join(env.REVIEW_DASHBOARD_HOST) |
+      split("${BUILDHOUND_REVIEW_NETWORK}") | join(env.REVIEW_NETWORK)
     ' "$_review_stack_template" > "$output"; then
     die "unable to render trusted review manifest"
     return 1
@@ -577,6 +626,7 @@ deploy_review() (
   local server_image=${9-} site_image=${10-} attempt_id=${11-}
   local name provider_id hosts site_host dashboard_host workdir compose_file update_file old_file body_file
   local persisted_file create_result_file description environment owned count compose_id body deployment_id rc
+  local app_name pre_file
   local activated_at existing_sha existing_retired title
   local mutation_possible=false deploy_may_be_active=false terminal=false
 
@@ -600,8 +650,12 @@ deploy_review() (
   old_file=$workdir/old.json
   persisted_file=$workdir/persisted.json
   create_result_file=$workdir/create-result.json
+  # Bootstrap render for compose.create only: Dokploy assigns the isolated
+  # network's name (the suffixed appName) at creation time, so the real
+  # network label value is substituted in a second render before
+  # compose.update — the file sent here is never deployed.
   _review_render_stack "$compose_file" "$server_image" "$site_image" "$base_repo" "$pr" "$sha" \
-    "$provider_id" "$site_host" "$dashboard_host" || return 1
+    "$provider_id" "$site_host" "$dashboard_host" "$provider_id" || return 1
   activated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ') || return 1
   if [[ ! $activated_at =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
     die "unable to determine review activation time"
@@ -658,6 +712,26 @@ deploy_review() (
     fi
   fi
 
+  # The isolated network is named after the compose's suffixed appName, which
+  # only exists server-side. Read it back, then render the trusted manifest
+  # again so traefik.swarm.network points at the real isolated network.
+  pre_file=$workdir/pre-update.json
+  if dokploy_api GET "compose.one?composeId=$compose_id" > "$pre_file" &&
+     app_name=$(jq -er --arg prefix "$provider_id" '
+       .appName | select(type == "string" and test("^" + $prefix + "-[A-Za-z0-9]{6}\\z"))
+     ' "$pre_file") &&
+     _review_render_stack "$compose_file" "$server_image" "$site_image" "$base_repo" "$pr" "$sha" \
+       "$provider_id" "$site_host" "$dashboard_host" "$app_name"; then
+    :
+  else
+    rc=$?
+    if ! _review_cleanup_failed_attempt "$base_repo" "$pr" "$sha" "$attempt_id" "$environment_id" "$name" "$dns_suffix" false; then
+      die "review deployment failed and exact-owned cleanup failed"
+      return 1
+    fi
+    return "$rc"
+  fi
+
   mutation_possible=true
   if ! _review_update_body "$compose_id" "$description" "$compose_file" "$update_file"; then
     if ! _review_cleanup_failed_attempt "$base_repo" "$pr" "$sha" "$attempt_id" "$environment_id" "$name" "$dns_suffix" false; then
@@ -678,6 +752,16 @@ deploy_review() (
   fi
   if dokploy_api GET "compose.one?composeId=$compose_id" > "$persisted_file" &&
      _review_require_exact_compose "$persisted_file" "$update_file" "$environment_id" "$name" "$provider_id"; then
+    :
+  else
+    rc=$?
+    if ! _review_cleanup_failed_attempt "$base_repo" "$pr" "$sha" "$attempt_id" "$environment_id" "$name" "$dns_suffix" false; then
+      die "review deployment failed and exact-owned cleanup failed"
+      return 1
+    fi
+    return "$rc"
+  fi
+  if _review_require_materialized_stack "$compose_id" "$app_name" "$workdir"; then
     :
   else
     rc=$?

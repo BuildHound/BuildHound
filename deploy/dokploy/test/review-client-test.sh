@@ -58,14 +58,22 @@ fake_owned_environment() {
   '
 }
 
-fake_persisted_compose() {
-  local app_name=$PROVIDER-Ab12Cd
+# Sets FAKE_APP_NAME instead of printing it: the appname_newline variant
+# carries a trailing newline that command substitution would strip.
+fake_app_name() {
+  FAKE_APP_NAME=$PROVIDER-Ab12Cd
   if [[ -f $TEST_ROOT/create.json ]]; then
-    app_name=$(jq -er '.appName + "-Ab12Cd"' "$TEST_ROOT/create.json")
+    FAKE_APP_NAME=$(jq -er '.appName + "-Ab12Cd"' "$TEST_ROOT/create.json")
   fi
   if [[ $FAKE_MODE == appname_newline ]]; then
-    app_name+=$'\n'
+    FAKE_APP_NAME+=$'\n'
   fi
+}
+
+fake_persisted_compose() {
+  local app_name
+  fake_app_name
+  app_name=$FAKE_APP_NAME
   jq -c --arg appName "$app_name" '
     . + {
       environmentId:"env1",name:"mr42",appName:$appName,serverId:null,composeStatus:"idle",
@@ -74,6 +82,58 @@ fake_persisted_compose() {
       environment:{environmentId:"env1",env:null,project:{env:null}}
     }
   ' "$TEST_ROOT/compose-state.json"
+}
+
+# Emulates Dokploy's isolated-deployment conversion of the live review stack:
+# services keep their labels and long-form tmpfs mounts and gain the injected
+# per-compose network. FAKE_MODE variants reproduce the routing defects the
+# deploy-path verifier must reject.
+# Intentional literal backticks: Traefik Host() rule syntax.
+# shellcheck disable=SC2016
+fake_converted_stack() {
+  local app swarm_site swarm_server docker_label site_volumes
+  fake_app_name
+  app=$FAKE_APP_NAME
+  swarm_site="      - traefik.swarm.network=$app"
+  swarm_server="      - traefik.swarm.network=$app"
+  docker_label=''
+  site_volumes='    volumes:
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 33554432'
+  case "$FAKE_MODE" in
+    stack_missing_swarm_label) swarm_site='' ;;
+    stack_dual_network) docker_label="      - traefik.docker.network=$app" ;;
+    stack_short_tmpfs) site_volumes='    tmpfs:
+      - /tmp' ;;
+  esac
+  {
+    printf 'version: "3.8"\nservices:\n'
+    printf '  site:\n'
+    printf '    image: ghcr.io/buildhound/site@sha256:%s\n' "$(printf '2%.0s' {1..64})"
+    [[ -z $site_volumes ]] || printf '%s\n' "$site_volumes"
+    printf '    networks:\n      - %s\n' "$app"
+    printf '    deploy:\n      labels:\n'
+    printf '      - traefik.enable=true\n'
+    [[ -z $swarm_site ]] || printf '%s\n' "$swarm_site"
+    [[ -z $docker_label ]] || printf '%s\n' "$docker_label"
+    printf '      - traefik.http.routers.%s-site.rule=Host(`mr42.reviews.example.test`)\n' "$PROVIDER"
+    printf '      - traefik.http.services.%s-site.loadbalancer.server.port=8080\n' "$PROVIDER"
+    printf '  server:\n'
+    printf '    image: ghcr.io/buildhound/server@sha256:%s\n' "$(printf '1%.0s' {1..64})"
+    printf '    volumes:\n      - type: tmpfs\n        target: /tmp\n        tmpfs:\n          size: 67108864\n'
+    printf '    networks:\n      - %s\n' "$app"
+    printf '    deploy:\n      labels:\n'
+    printf '      - traefik.enable=true\n'
+    [[ -z $swarm_server ]] || printf '%s\n' "$swarm_server"
+    printf '      - traefik.http.routers.%s-server.rule=Host(`mr42.dashboard.reviews.example.test`)\n' "$PROVIDER"
+    printf '      - traefik.http.services.%s-server.loadbalancer.server.port=8080\n' "$PROVIDER"
+    printf '  db:\n'
+    printf '    image: timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888\n'
+    printf '    networks:\n      - %s\n' "$app"
+    printf 'networks:\n  %s:\n    name: %s\n    external: true\n' "$app" "$app"
+  }
 }
 
 dokploy_api() {
@@ -153,18 +213,20 @@ dokploy_api() {
       printf '{}\n'
       ;;
     'GET|compose.one?composeId=c1')
-      if [[ $FAKE_MODE == hidden && ! -f $TEST_ROOT/cleanup_started ]]; then
+      if [[ ! -f $TEST_ROOT/compose-state.json ]]; then
+        if [[ $FAKE_MODE == legacy_isolation ]]; then
+          printf '{"composeId":"c1","composeStatus":"idle","isolatedDeployment":false}\n'
+        else
+          fake_app_name
+          jq -cn --arg appName "$FAKE_APP_NAME" \
+            '{composeId:"c1",composeStatus:"idle",appName:$appName}'
+        fi
+      elif [[ $FAKE_MODE == hidden && ! -f $TEST_ROOT/cleanup_started ]]; then
         fake_persisted_compose | jq -c '.command="curl attacker.invalid"'
       elif [[ $FAKE_MODE == isolation_drift && ! -f $TEST_ROOT/cleanup_started ]]; then
         fake_persisted_compose | jq -c '.isolatedDeployment=false'
-      elif [[ $FAKE_MODE == legacy_isolation && ! -f $TEST_ROOT/compose-state.json ]]; then
-        printf '{"composeId":"c1","composeStatus":"idle","isolatedDeployment":false}\n'
       else
-        if [[ -f $TEST_ROOT/compose-state.json ]]; then
-          fake_persisted_compose
-        else
-          printf '{"composeId":"c1","composeStatus":"idle"}\n'
-        fi
+        fake_persisted_compose
       fi
       ;;
     'POST|compose.deploy')
@@ -210,7 +272,10 @@ dokploy_api() {
       fi
       ;;
     'GET|compose.getConvertedCompose?composeId=c1')
-      if [[ ! -f $TEST_ROOT/materialized-anchor || $FAKE_MODE == scrub_drift || $FAKE_MODE == retire_unscrubbed ]]; then
+      if [[ -f $TEST_ROOT/compose-state.json ]] &&
+         ! jq -e '.composeFile | contains("services:\n  anchor:")' "$TEST_ROOT/compose-state.json" >/dev/null; then
+        fake_converted_stack | jq -Rs .
+      elif [[ ! -f $TEST_ROOT/materialized-anchor || $FAKE_MODE == scrub_drift || $FAKE_MODE == retire_unscrubbed ]]; then
         printf '%s\n' 'version: "3.8"
 services:
   anchor:
@@ -316,17 +381,40 @@ jq -e --arg password "$BUILDHOUND_REVIEW_DB_PASSWORD" --arg token "$BUILDHOUND_R
   .githubId == null and .gitlabId == null and .bitbucketId == null and .giteaId == null and
   (.composeFile | contains($password)) and (.composeFile | contains($token))
 ' "$TEST_ROOT/update.json" >/dev/null
+jq -e --arg network "$PROVIDER-Ab12Cd" '
+  (.composeFile | contains("traefik.swarm.network=" + $network)) and
+  (.composeFile | contains("${BUILDHOUND_REVIEW_NETWORK}") | not) and
+  (.composeFile | contains("traefik.docker.network") | not)
+' "$TEST_ROOT/update.json" >/dev/null
 jq -e '.description | fromjson | .attemptId == "12345.1" and .repository == "BuildHound/BuildHound" and .pr == 42 and .sha == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
   "$TEST_ROOT/update.json" >/dev/null
 assert_log_has 'POST|compose.update'
 assert_log_has 'POST|compose.deploy'
 assert_log_lacks 'POST|compose.stop'
 update_call=$(grep -nFx 'POST|compose.update' "$TEST_ROOT/calls.log" | cut -d: -f1)
-readback_call=$(grep -nFx 'GET|compose.one?composeId=c1' "$TEST_ROOT/calls.log" | cut -d: -f1)
+name_readback_call=$(grep -nFx 'GET|compose.one?composeId=c1' "$TEST_ROOT/calls.log" | head -n1 | cut -d: -f1)
+readback_call=$(grep -nFx 'GET|compose.one?composeId=c1' "$TEST_ROOT/calls.log" | tail -n1 | cut -d: -f1)
+converted_call=$(grep -nFx 'GET|compose.getConvertedCompose?composeId=c1' "$TEST_ROOT/calls.log" | cut -d: -f1)
 deploy_call=$(grep -nFx 'POST|compose.deploy' "$TEST_ROOT/calls.log" | cut -d: -f1)
 create_call=$(grep -nFx 'POST|compose.create' "$TEST_ROOT/calls.log" | cut -d: -f1)
-(( create_call < update_call && update_call < readback_call && readback_call < deploy_call )) || \
+(( create_call < name_readback_call && name_readback_call < update_call &&
+   update_call < readback_call && readback_call < converted_call &&
+   converted_call < deploy_call )) || \
   fail 'review isolation was not persisted and verified before deploy'
+
+# Materialized-stack routing defects (plan 088): each must fail closed after
+# compose.update and never reach compose.deploy.
+for stack_defect in stack_missing_swarm_label stack_dual_network stack_short_tmpfs; do
+  reset_fake "$stack_defect"
+  if deploy_review "${deploy_args[@]}" >/dev/null 2> "$TEST_ROOT/error.log"; then
+    fail "materialized stack defect $stack_defect was accepted"
+  fi
+  grep -F 'did not materialize a routable isolated review stack' "$TEST_ROOT/error.log" >/dev/null || \
+    fail "materialized stack defect $stack_defect was not rejected explicitly"
+  assert_log_has 'GET|compose.getConvertedCompose?composeId=c1'
+  assert_log_lacks 'POST|compose.deploy'
+  assert_log_has 'POST|compose.stop'
+done
 
 reset_fake ambiguity
 if deploy_review "${deploy_args[@]}" >/dev/null 2>&1; then fail 'ambiguous ownership accepted'; fi

@@ -27,6 +27,7 @@ services:
         - buildhound.review.pr=${BUILDHOUND_PR_NUMBER}
         - buildhound.review.sha=${BUILDHOUND_HEAD_SHA}
         - traefik.enable=true
+        - traefik.swarm.network=${BUILDHOUND_REVIEW_NETWORK}
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.rule=Host(`${BUILDHOUND_REVIEW_SITE_HOST}`)
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.entrypoints=websecure
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.tls=true
@@ -58,6 +59,7 @@ services:
         limits: {cpus: "1", memory: 1G}
       labels:
         - traefik.enable=true
+        - traefik.swarm.network=${BUILDHOUND_REVIEW_NETWORK}
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.rule=Host(`${BUILDHOUND_REVIEW_DASHBOARD_HOST}`)
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.entrypoints=websecure
         - traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-server.tls=true
