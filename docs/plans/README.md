@@ -25,6 +25,17 @@ active in this directory:
   previously-enabled capture toggle even when the current build's config has it off. Design and
   a `@Disabled` acceptance test exist; the fix hasn't landed.
 
+CI recovery track (research: `docs/ci-pipeline-research.md`; orchestrator runbook:
+[ci-recovery-roadmap.md](ci-recovery-roadmap.md)) — strictly sequential:
+
+- [088](088-ci-staging-review-bugfixes.md) — staging & review-env bug fixes — **open**.
+- [089](089-review-cleanup-reconciler-authority.md) — review cleanup: reconciler becomes
+  source of truth — **open**, after 088.
+- [090](090-promotion-chain-collapse.md) — collapse promotion chain into one gated
+  workflow — **open**, after 089.
+- [091](091-dokploy-client-shrink.md) — shrink the Dokploy delivery client — **open**,
+  after 090 and the first production deploy.
+
 A plan contains, briefly:
 
 1. **Source** — the spec/roadmap section(s) or feature request it implements.
