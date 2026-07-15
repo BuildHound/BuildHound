@@ -320,6 +320,21 @@ NEWER_UNIDENTIFIED=$(jq -cn --arg fullTitle "$FULL_TITLE" '[
 assert_command_empty "newer unidentified success is not skipped" \
   current_release "$NEWER_UNIDENTIFIED"
 
+assert_ok "release anywhere in history is detected" \
+  has_successful_release_deployment "$(jq -cn --arg title "$TRACKED_TITLE" '[
+    {status:"done",title:"Manual deployment",createdAt:"2026-07-14T12:00:00Z"},
+    {status:"done",title:$title,createdAt:"2026-07-13T12:00:00Z"}
+  ]')"
+assert_ok "bare release title in history is detected" \
+  has_successful_release_deployment "[{\"status\":\"success\",\"title\":\"$RID\",\"createdAt\":\"2026-07-13T12:00:00Z\"}]"
+assert_fails "failed release deployment is not release history" \
+  has_successful_release_deployment "[{\"status\":\"failed\",\"title\":\"$FULL_TITLE\",\"createdAt\":\"2026-07-13T12:00:00Z\"}]"
+assert_fails "manual-only history has no release" \
+  has_successful_release_deployment '[{"status":"done","title":"Manual deployment","createdAt":"2026-07-13T12:00:00Z"}]'
+assert_fails "empty history has no release" has_successful_release_deployment '[]'
+assert_fails "invalid evidence rejected by release-history scan" \
+  has_successful_release_deployment '["bad"]'
+
 MANUAL='[{"status":"done","title":"Manual deployment","createdAt":"2026-07-13T12:00:00Z"}]'
 assert_ok "exact manual sentinel accepted" require_manual_current "$MANUAL"
 assert_fails "manual sentinel is case-sensitive" \

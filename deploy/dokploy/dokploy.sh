@@ -335,11 +335,12 @@ cmd_require_manual_current() {
   require_manual_current "$deployments"
 }
 
-# Prints "established" when a successful release deployment exists, or
-# "bootstrap" when the compose has no release history but its latest successful
-# deployment is the explicit plan-087 manual anchor. Any other state fails
-# closed so the first automatic staging deploy cannot run against an
-# unanchored compose.
+# Prints "established" when the latest successful deployment is a release, or
+# "bootstrap" when the compose has never seen a successful release deployment
+# and its latest successful deployment is the explicit plan-087 manual anchor.
+# A manual deployment that merely supersedes an existing release history fails
+# closed (bootstrap is one-shot), as does every other anchorless state, so the
+# first automatic staging deploy cannot run against an unanchored compose.
 cmd_staging_bootstrap_state() {
   local compose_id deployments current
   compose_id=$(parse_single_compose_id "$@") || return
@@ -349,6 +350,10 @@ cmd_staging_bootstrap_state() {
   if [ -n "$current" ]; then
     printf 'established\n'
     return 0
+  fi
+  if has_successful_release_deployment "$deployments"; then
+    fail "manual deployment supersedes an existing release history; refusing automatic bootstrap"
+    return 1
   fi
   require_manual_current "$deployments" || return 1
   printf 'bootstrap\n'

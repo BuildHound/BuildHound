@@ -361,6 +361,26 @@ current_release_source() {
   fi
 }
 
+# True (exit 0) when any successful deployment in the history carries a
+# release-shaped title, regardless of recency. Used to keep the automatic
+# staging bootstrap one-shot: a manual deployment that merely tops an
+# existing release history must not re-open the bootstrap path.
+has_successful_release_deployment() {
+  local deployments=${1:-}
+  if [[ $# -ne 1 ]] || ! jq -e 'type == "array" and all(.[]; type == "object")' <<< "$deployments" >/dev/null; then
+    die "invalid deployment evidence"
+    return 1
+  fi
+  jq -e '
+    any(.[];
+      (((.status // "") | tostring | ascii_downcase) as $status
+        | $status == "done" or $status == "success") and
+      ((.title // null) | type) == "string" and
+      (.title | test("^sha256:[0-9a-f]{64}(\\|V[0-9]+__[A-Za-z0-9_.-]+(\\|[0-9a-f]{64}(\\|[0-9a-f]{40})?)?)?\\z"))
+    )
+  ' <<< "$deployments" >/dev/null
+}
+
 require_manual_current() {
   local deployments=${1:-}
   local latest
