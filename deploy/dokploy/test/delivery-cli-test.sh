@@ -182,6 +182,12 @@ dokploy_api() {
     'empty|GET|deployment.allByCompose?composeId=c1')
       printf '[]\n'
       ;;
+    'manual_over_release|GET|deployment.allByCompose?composeId=c1')
+      jq -cn --arg title "$TITLE" '[
+        {deploymentId:"manual",status:"done",title:"Manual deployment",createdAt:"2026-07-14T12:00:00Z"},
+        {deploymentId:"older-release",status:"done",title:$title,createdAt:"2026-07-13T12:00:00Z"}
+      ]'
+      ;;
     'terminal_invalid_id|GET|deployment.allByCompose?composeId=c1')
       printf '[{"status":"failed","title":"invalid-id-title"}]\n'
       ;;
@@ -368,6 +374,12 @@ FAKE_MODE=empty
 assert_status 1 main staging-bootstrap-state --compose-id c1
 grep -F 'no current successful deployment found' "$test_root/status-stderr" >/dev/null || \
   fail_test 'anchorless compose was not rejected explicitly'
+
+reset_api
+FAKE_MODE=manual_over_release
+assert_status 1 main staging-bootstrap-state --compose-id c1
+grep -F 'supersedes an existing release history' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'manual deployment atop release history re-opened the bootstrap path'
 FAKE_MODE=current
 
 reset_api

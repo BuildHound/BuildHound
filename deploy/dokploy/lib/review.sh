@@ -266,7 +266,11 @@ _review_require_materialized_anchor() {
     die "Dokploy returned invalid materialized review Compose evidence"
     return 1
   fi
-  if ! command docker compose --file "$yaml_file" config --format json > "$json_file" 2>/dev/null; then
+  # env -i: the materialized file legitimately contains no ${...} placeholders,
+  # so interpolation must never see runner secrets (a hostile response could
+  # otherwise pull them into the normalized evidence via ${DOKPLOY_TOKEN}).
+  if ! command env -i PATH="$PATH" HOME="${HOME-}" \
+    docker compose --file "$yaml_file" config --format json > "$json_file" 2>/dev/null; then
     die "unable to normalize materialized review Compose evidence"
     return 1
   fi
@@ -315,7 +319,10 @@ _review_require_materialized_stack() {
     die "Dokploy returned invalid materialized review Compose evidence"
     return 1
   fi
-  if ! command docker compose --file "$yaml_file" config --format json > "$json_file" 2>/dev/null; then
+  # env -i for the same reason as the anchor verifier: never let hostile
+  # ${...} references in the response interpolate runner secrets.
+  if ! command env -i PATH="$PATH" HOME="${HOME-}" \
+    docker compose --file "$yaml_file" config --format json > "$json_file" 2>/dev/null; then
     die "unable to normalize materialized review Compose evidence"
     return 1
   fi
@@ -326,7 +333,8 @@ _review_require_materialized_stack() {
     ([.services[] |
         ((.deploy.labels // {}) + (.labels // {})) as $labels |
         ($labels | type) == "object" and
-        ($labels | has("traefik.docker.network") | not)
+        ($labels | has("traefik.docker.network") | not) and
+        ((.networks | type) == "object") and ((.networks | keys) == [$appName])
       ] | all) and
     ([.services.site, .services.server] |
       all(. as $svc |
@@ -334,10 +342,9 @@ _review_require_materialized_stack() {
         (($svc.deploy.labels // {})["traefik.enable"] == "true") and
         (($svc.deploy.labels // {})["traefik.swarm.network"] == $appName) and
         (($svc.volumes // []) |
-          any(type == "object" and .type == "tmpfs" and .target == "/tmp")) and
-        (($svc.networks | type) == "object") and ($svc.networks | has($appName))
+          any(type == "object" and .type == "tmpfs" and .target == "/tmp"))
       )) and
-    (.networks | type) == "object" and (.networks | has($appName)) and
+    (.networks | type) == "object" and ((.networks | keys) == [$appName]) and
     (.networks[$appName] | type) == "object" and
     (.networks[$appName].external == true) and
     ((.networks[$appName].name // $appName) == $appName)

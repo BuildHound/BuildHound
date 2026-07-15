@@ -91,7 +91,7 @@ fake_persisted_compose() {
 # Intentional literal backticks: Traefik Host() rule syntax.
 # shellcheck disable=SC2016
 fake_converted_stack() {
-  local app swarm_site swarm_server docker_label site_volumes
+  local app swarm_site swarm_server docker_label site_volumes db_networks extra_network
   fake_app_name
   app=$FAKE_APP_NAME
   swarm_site="      - traefik.swarm.network=$app"
@@ -102,11 +102,22 @@ fake_converted_stack() {
         target: /tmp
         tmpfs:
           size: 33554432'
+  db_networks="    networks:
+      - $app"
+  extra_network=''
   case "$FAKE_MODE" in
     stack_missing_swarm_label) swarm_site='' ;;
     stack_dual_network) docker_label="      - traefik.docker.network=$app" ;;
     stack_short_tmpfs) site_volumes='    tmpfs:
       - /tmp' ;;
+    stack_extra_network)
+      db_networks="    networks:
+      - $app
+      - dokploy-network"
+      extra_network='  dokploy-network:
+    name: dokploy-network
+    external: true'
+      ;;
   esac
   {
     printf 'version: "3.8"\nservices:\n'
@@ -131,8 +142,9 @@ fake_converted_stack() {
     printf '      - traefik.http.services.%s-server.loadbalancer.server.port=8080\n' "$PROVIDER"
     printf '  db:\n'
     printf '    image: timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888\n'
-    printf '    networks:\n      - %s\n' "$app"
+    printf '%s\n' "$db_networks"
     printf 'networks:\n  %s:\n    name: %s\n    external: true\n' "$app" "$app"
+    [[ -z $extra_network ]] || printf '%s\n' "$extra_network"
   }
 }
 
@@ -404,7 +416,7 @@ create_call=$(grep -nFx 'POST|compose.create' "$TEST_ROOT/calls.log" | cut -d: -
 
 # Materialized-stack routing defects (plan 088): each must fail closed after
 # compose.update and never reach compose.deploy.
-for stack_defect in stack_missing_swarm_label stack_dual_network stack_short_tmpfs; do
+for stack_defect in stack_missing_swarm_label stack_dual_network stack_short_tmpfs stack_extra_network; do
   reset_fake "$stack_defect"
   if deploy_review "${deploy_args[@]}" >/dev/null 2> "$TEST_ROOT/error.log"; then
     fail "materialized stack defect $stack_defect was accepted"
