@@ -31,9 +31,9 @@ class ChangedModulesFunctionalTest {
      * [freshDaemon] rotates the TestKit dir per call, and without an explicit `-g` that rotating dir
      * IS the GUH — so the store→hit pair in the CC test would run under two different GUHs and the
      * hit build would find no configuration-cache entry. A stable `-g` keeps the CC entry findable.
+     * Not a `@TempDir`: daemon-held GUH files break `@TempDir` deletion on Windows (plan 092).
      */
-    @field:org.junit.jupiter.api.io.TempDir
-    lateinit var guhDir: File
+    private val guhDir: File = newGradleUserHome()
 
     /**
      * Neutralize the CI environment for the inner build ([neutralCiEnv] + [freshDaemon]): on a CI

@@ -28,9 +28,9 @@ class BuildCacheConfigFunctionalTest {
      * pattern): [freshDaemon] rotates the TestKit dir per call, and without an explicit `-g` that
      * rotating dir IS the GUH — so a store→hit pair would run under two different GUHs and the
      * second run finds no configuration-cache entry at all ("no cached configuration is available").
+     * Not a `@TempDir`: daemon-held GUH files break `@TempDir` deletion on Windows (plan 092).
      */
-    @field:TempDir
-    lateinit var guhDir: File
+    private val guhDir: File = newGradleUserHome()
 
     /** A distinctive, never-contacted remote URL: no `--build-cache`, no cacheable task, so nothing dials it. */
     private val remoteHost = "buildcache.internal.example"
