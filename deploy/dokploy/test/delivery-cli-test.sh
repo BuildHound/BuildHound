@@ -179,6 +179,9 @@ dokploy_api() {
     'manual|GET|deployment.allByCompose?composeId=c1')
       printf '[{"deploymentId":"manual","status":"done","title":"Manual deployment","createdAt":"2026-07-13T12:00:00Z"}]\n'
       ;;
+    'empty|GET|deployment.allByCompose?composeId=c1')
+      printf '[]\n'
+      ;;
     'terminal_invalid_id|GET|deployment.allByCompose?composeId=c1')
       printf '[{"status":"failed","title":"invalid-id-title"}]\n'
       ;;
@@ -351,6 +354,27 @@ fi
 reset_api
 FAKE_MODE=manual
 main require-manual-current --compose-id c1
+
+reset_api
+FAKE_MODE=current
+assert_eq "$(main staging-bootstrap-state --compose-id c1)" established
+
+reset_api
+FAKE_MODE=manual
+assert_eq "$(main staging-bootstrap-state --compose-id c1)" bootstrap
+
+reset_api
+FAKE_MODE=empty
+assert_status 1 main staging-bootstrap-state --compose-id c1
+grep -F 'no current successful deployment found' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'anchorless compose was not rejected explicitly'
+FAKE_MODE=current
+
+reset_api
+assert_status 2 main staging-bootstrap-state --bad c1
+[[ ! -s $test_root/calls ]] || fail_test 'invalid staging-bootstrap-state arguments reached the API'
+assert_status 2 main staging-bootstrap-state --compose-id 'c1&applicationId=attacker'
+[[ ! -s $test_root/calls ]] || fail_test 'invalid staging-bootstrap-state ID reached the API'
 
 reset_api
 FAKE_MODE=deploy

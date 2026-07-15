@@ -379,7 +379,7 @@ jobs:
     environment: ${{ needs.resolve.outputs.target }}
     permissions: {actions: read, contents: read, deployments: write}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -454,6 +454,7 @@ jobs:
           fi
           echo "release_id=$id" >> "$GITHUB_OUTPUT"
       - name: Select and verify fresh encrypted backup
+        id: backup
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
@@ -471,12 +472,26 @@ jobs:
           BACKUP_OBJECT: ${{ inputs.backup_object }}
         run: |
           set -euo pipefail
-          if [ "$BOOTSTRAP" = true ]; then
+          bootstrap=$BOOTSTRAP
+          # The first-ever automatic staging deploy has no release history to
+          # verify against; it may proceed only from the explicit plan-087
+          # manual anchor. Any other anchorless state fails closed.
+          if [ "$bootstrap" != true ] && [ "$TARGET" = staging ] && [ "$MODE" = automatic ]; then
+            state=$(bash deploy/dokploy/dokploy.sh staging-bootstrap-state --compose-id "$COMPOSE_ID")
+            if [ "$state" = bootstrap ]; then
+              echo "::notice::No prior release deployment on the staging compose; engaging the first-deploy bootstrap path against the manual anchor"
+              bootstrap=true
+            else
+              test "$state" = established
+            fi
+          fi
+          if [ "$bootstrap" = true ]; then
             expected=manual
             bash deploy/dokploy/dokploy.sh require-manual-current --compose-id "$COMPOSE_ID"
           else
             expected=$(bash deploy/dokploy/dokploy.sh current-release-id --compose-id "$COMPOSE_ID")
           fi
+          echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"
           if [ "$TARGET" = staging ] && [ "$MODE" = automatic ]; then
             bash deploy/dokploy/select-backup.sh --latest --expected-release-id "$expected" > /tmp/backup-selection.json
           else
@@ -496,7 +511,7 @@ jobs:
           TARGET: ${{ needs.resolve.outputs.target }}
           MODE: ${{ needs.resolve.outputs.mode }}
           SOURCE_COMMIT: ${{ needs.resolve.outputs.source_commit }}
-          BOOTSTRAP: ${{ needs.resolve.outputs.bootstrap_bom }}
+          BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}
           ROLLBACK_COMPATIBLE: ${{ needs.resolve.outputs.rollback_compatible }}
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}

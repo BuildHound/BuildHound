@@ -27,6 +27,7 @@ Commands:
   current-release-state --compose-id ID
   current-source-commit --compose-id ID
   require-manual-current --compose-id ID
+  staging-bootstrap-state --compose-id ID
   deploy-release RELEASE --compose-id ID --site-application-id ID --app-role ROLE [OPTIONS]
   deploy-review [OPTIONS]
   count-reviews --base-repo REPO --environment-id ID [--exclude-pr PR]
@@ -332,6 +333,25 @@ cmd_require_manual_current() {
   require_api_environment || return 1
   deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return
   require_manual_current "$deployments"
+}
+
+# Prints "established" when a successful release deployment exists, or
+# "bootstrap" when the compose has no release history but its latest successful
+# deployment is the explicit plan-087 manual anchor. Any other state fails
+# closed so the first automatic staging deploy cannot run against an
+# unanchored compose.
+cmd_staging_bootstrap_state() {
+  local compose_id deployments current
+  compose_id=$(parse_single_compose_id "$@") || return
+  require_api_environment || return 1
+  deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return
+  current=$(current_release "$deployments") || return
+  if [ -n "$current" ]; then
+    printf 'established\n'
+    return 0
+  fi
+  require_manual_current "$deployments" || return 1
+  printf 'bootstrap\n'
 }
 
 cmd_deploy_release() (
@@ -726,6 +746,7 @@ main() {
     release-id) cmd_release_id "$@" ;;
     current-release-id) cmd_current_release_id "$@" ;;
     current-release-state) cmd_current_release_state "$@" ;;
+    staging-bootstrap-state) cmd_staging_bootstrap_state "$@" ;;
     current-source-commit) cmd_current_source_commit "$@" ;;
     require-manual-current) cmd_require_manual_current "$@" ;;
     deploy-release) cmd_deploy_release "$@" ;;
