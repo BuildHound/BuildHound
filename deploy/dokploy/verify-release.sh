@@ -60,11 +60,14 @@ fi
 
 ingest_ok=false
 for _ in $(seq 1 5); do
-  code=$(curl -fsS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $BUILDHOUND_INGEST_TOKEN" -H 'Content-Type: application/json' --data-binary "@$request_payload" "$BUILDHOUND_DASHBOARD_URL/v1/builds" 2>/dev/null) || code=''
+  # -f is intentionally absent: the status code is the evidence; only the
+  # numeric code is ever logged.
+  code=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $BUILDHOUND_INGEST_TOKEN" -H 'Content-Type: application/json' --data-binary "@$request_payload" "$BUILDHOUND_DASHBOARD_URL/v1/builds" 2>/dev/null) || code='transport-error'
   if [ "$code" = 202 ]; then
     ingest_ok=true
     break
   fi
+  printf 'ingest attempt returned %s\n' "$code" >&2
   sleep 10
 done
 test "$ingest_ok" = true
