@@ -302,12 +302,12 @@ jobs:
           if-no-files-found: warn
 
   build-windows:
-    name: Build & test (Windows, watched)
-    # Watched canary (plan 021): the OS-sensitive surfaces are the scrubber, spool paths, and
-    # VCS exec. Known gaps: the hung-git fixture and GitExec fixtures are @DisabledOnOs(WINDOWS)
-    # (plan 015). Promote-or-defer criteria in the architecture decision log.
+    name: Build & test (Windows)
+    # Blocking since plan 092 (executes plan 021's promote-or-defer): the daemon-locked-GUH
+    # @TempDir failures were the job's only red, and are structurally fixed. OS-sensitive
+    # surfaces guarded here: scrubber, spool paths, VCS exec. Known accepted gaps: the
+    # hung-git and GitExec fixtures are @DisabledOnOs(WINDOWS) (plan 015).
     runs-on: windows-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 
