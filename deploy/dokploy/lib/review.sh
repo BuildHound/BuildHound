@@ -509,9 +509,9 @@ _review_revoke_compose() (
   trap 'if [[ -n ${BUILDHOUND_REVIEW_REVOKE_WORKDIR-} ]]; then rm -rf -- "$BUILDHOUND_REVIEW_REVOKE_WORKDIR"; fi; exit 143' TERM
   compose_file=$workdir/compose.json
 
-  # Plan 089: the compose.cleanQueues drain choreography is gone — a queued
-  # deployment that slips past the checks below is converged away by the next
-  # reconciler tick instead of being prevented here.
+  # Plan 089: no queue-drain choreography — a queued deployment that slips
+  # past the checks below is converged away by the next reconciler tick
+  # instead of being prevented here.
   body=$(jq -cn --arg composeId "$compose_id" '{composeId:$composeId}') || return 1
   if [[ -n $expected_title ]]; then
     deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return 1

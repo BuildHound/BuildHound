@@ -122,9 +122,11 @@ class ReviewPolicyTest(unittest.TestCase):
         scrub = client.index("scrub_review()")
         scrub_update = client.index("dokploy_api POST compose.update", scrub)
         scrub_deploy = client.index("dokploy_api POST compose.deploy", scrub_update)
-        materialized = client.index("_review_require_materialized_anchor", scrub_deploy)
         self.assertLess(scrub_update, scrub_deploy)
-        self.assertLess(scrub_deploy, materialized)
+        # Plan 089: the cleanup path carries no queue-drain or anchor
+        # re-verification choreography; convergence covers those failures.
+        self.assertNotIn("compose.cleanQueues", client)
+        self.assertNotIn("_review_require_materialized_anchor", client)
         self.assertNotIn("date -u '+%Y-%m-%dT%H:%M:%SZ'", client[scrub:])
 
         anchor = (ROOT / "deploy/dokploy/review-anchor.yaml").read_text()
@@ -152,8 +154,22 @@ class ReviewPolicyTest(unittest.TestCase):
             with self.subTest(path=path):
                 for value in forbidden:
                     self.assertNotIn(value, content)
+        # Plan 089: retirement runs only through the converge entrypoint; the
+        # workflow's cleanup paths are thin fast-path calls into it.
         workflow = (ROOT / ".github/workflows/review-environment.yml").read_text()
-        self.assertIn("retire-review", workflow)
+        self.assertNotIn("retire-review", workflow)
+        self.assertNotIn("scrub-review", workflow)
+        self.assertEqual(workflow.count("deploy/dokploy/reconcile-reviews.sh"), 2)
+        converge = (ROOT / "deploy/dokploy/reconcile-reviews.sh").read_text()
+        self.assertIn("retire-review", converge)
+        self.assertIn("scrub-review", converge)
+        # Environment/name scoping (plan 089 exit criterion): converge only
+        # ever acts through list-reviews' owned records inside the dedicated
+        # review environment, and its summary logs mrNN names, never ids.
+        self.assertIn('--environment-id "$ENVIRONMENT_ID"', converge)
+        self.assertIn("list-reviews", converge)
+        self.assertIn("converge summary:", converge)
+        self.assertNotIn("composeId=", converge.split("converge summary:")[1])
 
 
 if __name__ == "__main__":
