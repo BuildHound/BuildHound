@@ -550,6 +550,44 @@ jq -e --arg title "$TITLE" \
 jq -e --arg title "$TITLE" \
   '. == {applicationId:"a1",title:$title}' "$test_root/body-11.json" >/dev/null
 
+# --skip-site (owner decision, plan 088): dashboard-only deploy touches no
+# application.* endpoint and reports a null site deployment.
+reset_api
+FAKE_MODE=deploy
+assert_status 2 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --skip-site --app-role staging
+grep -F 'skip-site conflicts with a site application ID' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'skip-site with a site application ID was not rejected explicitly'
+[[ ! -s $test_root/calls ]] || fail_test 'conflicting skip-site arguments reached the API'
+
+reset_api
+FAKE_MODE=deploy
+evidence=$(main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --skip-site --app-role staging)
+jq -e --arg rid "$RID" --arg history "$HISTORY_HASH" '
+  . == {
+    releaseId:$rid,
+    migrationId:"V1__initial",
+    migrationHistorySha256:$history,
+    composeDeploymentId:"compose-new",
+    siteDeploymentId:null
+  }
+' >/dev/null <<< "$evidence"
+if grep -q 'application' "$test_root/calls"; then
+  fail_test 'skip-site deploy touched an application endpoint'
+fi
+expected_skip_calls=$(cat <<'EOF'
+GET|compose.one?composeId=c1
+GET|deployment.allByCompose?composeId=c1
+GET|deployment.allByCompose?composeId=c1
+POST|compose.update
+GET|compose.one?composeId=c1
+POST|compose.deploy
+GET|deployment.allByCompose?composeId=c1
+EOF
+)
+assert_eq "$(cat "$test_root/calls")" "$expected_skip_calls"
+
 cp -- "$test_root/original-release.json" "$release"
 cp -- "$test_root/original-stack.yaml" "$manifest"
 reset_api

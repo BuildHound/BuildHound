@@ -281,6 +281,19 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         )
         self.assertIn('echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"', workflow)
         self.assertIn("BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}", workflow)
+        # Skip-site (owner decision, plan 088) is gated solely by the
+        # environment-scoped variable: never hardcoded, mutually exclusive
+        # with the site application id, mirrored into the smoke step.
+        self.assertIn(
+            "SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}", workflow
+        )
+        self.assertIn(
+            "BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}",
+            workflow,
+        )
+        self.assertEqual(workflow.count("site+=(--skip-site)"), 1)
+        self.assertNotIn("--skip-site \\", workflow)
+        self.assertIn('site+=(--site-application-id "$SITE_APPLICATION_ID")', workflow)
         self.assertIn('if [ "$bootstrap_bom" = true ]; then test "$rollback_compatible" = true; fi', workflow)
         self.assertIn("bootstrap+=(--bootstrap-manual-current)", workflow[backup_gate:])
         self.assertIn('"${bootstrap[@]}"', workflow[backup_gate:])

@@ -38,6 +38,23 @@ run_verify() (
 run_verify https://site.example.test https://dashboard.example.test
 test "$(wc -l < "$curl_log")" -eq 4
 
+# Skip-site mode (owner decision, plan 088): the site probe is skipped, the
+# three dashboard checks stay mandatory, URL validation still applies.
+: > "$curl_log"
+BUILDHOUND_SKIP_SITE_CHECKS=true run_verify https://site.example.test https://dashboard.example.test
+test "$(wc -l < "$curl_log")" -eq 3
+if grep -q 'site.example.test' "$curl_log"; then
+  printf 'skip-site smoke still probed the site\n' >&2
+  exit 1
+fi
+: > "$curl_log"
+set +e
+BUILDHOUND_SKIP_SITE_CHECKS=true run_verify 'https://site.example.test/path' https://dashboard.example.test >/dev/null 2>&1
+status=$?
+set -e
+test "$status" -ne 0
+test ! -s "$curl_log"
+
 for invalid_site in \
   http://site.example.test \
   https://user@site.example.test \

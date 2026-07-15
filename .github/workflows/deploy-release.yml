@@ -507,6 +507,7 @@ jobs:
           DOKPLOY_REGISTRY_ID: ${{ secrets.DOKPLOY_REGISTRY_ID }}
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
           SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
+          SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
           VALIDATED_RELEASE_ID: ${{ steps.release_gate.outputs.release_id }}
           TARGET: ${{ needs.resolve.outputs.target }}
           MODE: ${{ needs.resolve.outputs.mode }}
@@ -522,6 +523,17 @@ jobs:
           bootstrap=()
           predecessor=()
           proof=()
+          site=()
+          # Owner decision (plan 088): the staging site Application is not
+          # provisioned yet — deploy the dashboard stack only when the target
+          # environment sets BUILDHOUND_SKIP_SITE_DEPLOY. Production leaves
+          # the variable unset and keeps requiring the site Application.
+          if [ "$SKIP_SITE" = true ]; then
+            echo "::warning::Site deployment skipped for this target (BUILDHOUND_SKIP_SITE_DEPLOY=true)"
+            site+=(--skip-site)
+          else
+            site+=(--site-application-id "$SITE_APPLICATION_ID")
+          fi
           case "$TARGET" in
             staging)
               app_role=staging
@@ -568,9 +580,8 @@ jobs:
             --manifest "$manifest" \
             --volume-guard /tmp/release/volume-guard.sh \
             --compose-id "$COMPOSE_ID" \
-            --site-application-id "$SITE_APPLICATION_ID" \
             --app-role "$app_role" \
-            "${proof[@]}" "${compatibility[@]}" "${bootstrap[@]}" \
+            "${site[@]}" "${proof[@]}" "${compatibility[@]}" "${bootstrap[@]}" \
             "${predecessor[@]}" > deployment-evidence.json
       - name: Verify public site and authenticated data path
         env:
@@ -578,6 +589,7 @@ jobs:
           BUILDHOUND_DASHBOARD_URL: ${{ vars.BUILDHOUND_DASHBOARD_URL }}
           BUILDHOUND_READ_TOKEN: ${{ secrets.BUILDHOUND_READ_TOKEN }}
           BUILDHOUND_INGEST_TOKEN: ${{ secrets.BUILDHOUND_INGEST_TOKEN }}
+          BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
         run: deploy/dokploy/verify-release.sh
       - name: Record staging attestation
         if: needs.resolve.outputs.target == 'staging'
