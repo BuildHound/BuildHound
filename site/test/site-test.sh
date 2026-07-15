@@ -18,6 +18,8 @@ grep -q 'etag on' site/nginx.conf
 grep -q 'Cache-Control "public, max-age=0, must-revalidate"' site/nginx.conf
 grep -q "location = /health { access_log off; default_type text/plain;" site/nginx.conf
 grep -q '^HEALTHCHECK ' site/Dockerfile
+grep -q 'image: ghcr.io/buildhound/buildhound-site@sha256:${BUILDHOUND_SITE_SHA256:' site/compose.yml
+if grep -Eq '^[[:space:]]+build:' site/compose.yml; then exit 1; fi
 test "$(find site/assets/fonts -maxdepth 1 -type f -name '*.woff2' | wc -l | tr -d ' ')" = 3
 for font in Fraunces-Variable.woff2 Inter-Variable.woff2 JetBrainsMono-Variable.woff2; do
   test -f "site/assets/fonts/$font"

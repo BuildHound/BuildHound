@@ -1,0 +1,38 @@
+# From the repository root:
+# BUILDHOUND_SITE_SHA256=<64-character CI image digest> \
+# BUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test \
+# BUILDHOUND_SITE_HOST=site.example.test \
+# BUILDHOUND_SITE_NOINDEX=false \
+# docker compose -f site/compose.yml up -d
+#
+# CI builds and publishes the image; this Compose file only deploys an exact image reference.
+# The service binds to loopback for a host reverse proxy and opts out of indexing by default.
+name: buildhound-public-site
+
+services:
+  site:
+    image: ghcr.io/buildhound/buildhound-site@sha256:${BUILDHOUND_SITE_SHA256:?Set BUILDHOUND_SITE_SHA256 to the 64-character CI image digest}
+    user: "101:101"
+    environment:
+      BUILDHOUND_SITE_DASHBOARD_URL: ${BUILDHOUND_SITE_DASHBOARD_URL:?Set BUILDHOUND_SITE_DASHBOARD_URL to the dashboard HTTPS origin}
+      BUILDHOUND_SITE_HOST: ${BUILDHOUND_SITE_HOST:?Set BUILDHOUND_SITE_HOST to the public site hostname}
+      BUILDHOUND_SITE_NOINDEX: ${BUILDHOUND_SITE_NOINDEX:-true}
+    ports:
+      - "127.0.0.1:${BUILDHOUND_SITE_PORT:-8080}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    cpus: "0.5"
+    mem_limit: 128m
+    mem_reservation: 32m
+    pids_limit: 100
+    restart: unless-stopped
