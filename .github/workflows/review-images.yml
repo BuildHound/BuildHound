@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy: {fail-fast: false, matrix: {image: [server, site]}}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           persist-credentials: false

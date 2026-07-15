@@ -9,7 +9,7 @@ jobs:
     environment: review-cleanup
     concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: "${{ github.sha }}"
           persist-credentials: false
