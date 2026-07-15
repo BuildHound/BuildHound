@@ -190,7 +190,7 @@ dokploy_api() {
             }]}
           '
           ;;
-        cleanup|route_mixed|scrub|scrub_drift|scrub_failed|retire_unscrubbed|running|no_row)
+        cleanup|route_mixed|scrub|scrub_failed|running|no_row)
           fake_owned_environment
           ;;
         legacy_isolation)
@@ -253,7 +253,7 @@ dokploy_api() {
     'GET|deployment.allByCompose?composeId=c1')
       if [[ ! -f $TEST_ROOT/deploy_started ]]; then
         case "$FAKE_MODE" in
-          cleanup|route_mixed|scrub|scrub_drift|scrub_failed|retire_unscrubbed)
+          cleanup|route_mixed|scrub|scrub_failed)
             printf '[{"deploymentId":"d1","title":"%s","status":"done"}]\n' "$TITLE"
             ;;
           running)
@@ -268,7 +268,7 @@ dokploy_api() {
           scrub_failed)
             printf '[{"deploymentId":"d1","title":"%s","status":"done"},{"deploymentId":"d2","title":"%s","status":"failed"}]\n' "$TITLE" "$deployed_title"
             ;;
-          scrub|scrub_drift)
+          scrub)
             printf '[{"deploymentId":"d1","title":"%s","status":"done"},{"deploymentId":"d2","title":"%s","status":"success"}]\n' "$TITLE" "$deployed_title"
             ;;
           legacy_isolation)
@@ -287,7 +287,7 @@ dokploy_api() {
       if [[ -f $TEST_ROOT/compose-state.json ]] &&
          ! jq -e '.composeFile | contains("services:\n  anchor:")' "$TEST_ROOT/compose-state.json" >/dev/null; then
         fake_converted_stack | jq -Rs .
-      elif [[ ! -f $TEST_ROOT/materialized-anchor || $FAKE_MODE == scrub_drift || $FAKE_MODE == retire_unscrubbed ]]; then
+      elif [[ ! -f $TEST_ROOT/materialized-anchor ]]; then
         printf '%s\n' 'version: "3.8"
 services:
   anchor:
@@ -323,14 +323,11 @@ networks:
     external: true' | jq -Rs .
       fi
       ;;
-    'POST|compose.cleanQueues')
+    'POST|compose.stop')
       if [[ $FAKE_MODE == terminal_cleanup_fail ]]; then
         return 91
       fi
       : > "$TEST_ROOT/cleanup_started"
-      printf '{}\n'
-      ;;
-    'POST|compose.stop')
       : > "$TEST_ROOT/stopped"
       printf '{}\n'
       ;;
@@ -459,7 +456,7 @@ jq -e '
 reset_fake hidden
 if deploy_review "${deploy_args[@]}" >/dev/null 2>&1; then fail 'hidden persisted state accepted'; fi
 assert_log_lacks 'POST|compose.deploy'
-assert_log_has 'POST|compose.cleanQueues'
+assert_log_lacks 'POST|compose.cleanQueues'
 assert_log_has 'POST|compose.stop'
 [[ ! -f $TEST_ROOT/deleted ]] || fail 'failed deployment cleanup deleted its ownership record'
 
@@ -468,7 +465,6 @@ if deploy_review "${deploy_args[@]}" >/dev/null 2>&1; then
   fail 'persisted isolated-deployment drift was accepted'
 fi
 assert_log_lacks 'POST|compose.deploy'
-assert_log_has 'POST|compose.cleanQueues'
 assert_log_has 'POST|compose.stop'
 
 reset_fake appname_newline
@@ -485,7 +481,6 @@ else
 fi
 assert_eq "$terminal_rc" 42
 assert_log_has 'POST|compose.deploy'
-assert_log_has 'POST|compose.cleanQueues'
 assert_log_has 'POST|compose.stop'
 [[ ! -f $TEST_ROOT/deleted ]] || fail 'terminal cleanup deleted its ownership record'
 
@@ -497,8 +492,8 @@ else
 fi
 assert_eq "$terminal_cleanup_rc" 1
 grep -F 'exact-owned cleanup failed' "$TEST_ROOT/error.log" >/dev/null
-assert_log_has 'POST|compose.cleanQueues'
-assert_log_lacks 'POST|compose.stop'
+assert_log_has 'POST|compose.stop'
+[[ ! -f $TEST_ROOT/stopped ]] || fail 'failed stop still marked the compose stopped'
 
 reset_fake terminal_invalid_id
 if deploy_review "${deploy_args[@]}" >/dev/null 2> "$TEST_ROOT/error.log"; then
@@ -560,21 +555,20 @@ reset_fake running
 if revoke_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
   fail 'cleanup raced a running deployment'
 fi
-assert_log_has 'POST|compose.cleanQueues'
+assert_log_lacks 'POST|compose.cleanQueues'
 assert_log_lacks 'POST|compose.stop'
 
 reset_fake no_row
 result=$(revoke_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT")
 jq -e '.revoked == "mr42"' >/dev/null <<< "$result"
-test "$(grep -c '^POST|compose.cleanQueues$' "$TEST_ROOT/calls.log")" -eq 6 || \
-  fail 'no-row cleanup did not repeatedly drain the queue'
+assert_log_lacks 'POST|compose.cleanQueues'
 assert_log_has 'POST|compose.stop'
 
 reset_fake scrub
 result=$(scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT")
 jq -e '.scrubbed == "mr42" and .deploymentId == "d2"' >/dev/null <<< "$result"
 assert_log_lacks 'POST|compose.delete'
-assert_log_has 'GET|compose.getConvertedCompose?composeId=c1'
+assert_log_lacks 'GET|compose.getConvertedCompose?composeId=c1'
 jq -e --arg password "$BUILDHOUND_REVIEW_DB_PASSWORD" --arg token "$BUILDHOUND_REVIEW_TOKEN" '
   .isolatedDeployment == true and
   (.composeFile | contains("services:\n  anchor:")) and
@@ -600,21 +594,10 @@ assert_eq "$result" '{"retired": "mr42"}'
 test "$(grep -c '^POST|compose.update$' "$TEST_ROOT/calls.log")" -eq "$updates" || \
   fail 'idempotent retirement rewrote an already-retired anchor'
 
-reset_fake scrub_drift
-if scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
-  fail 'scrub accepted unexpected manager-side materialization'
-fi
-
 reset_fake scrub_failed
 if scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
   fail 'scrub accepted a failed inert deployment'
 fi
-
-reset_fake retire_unscrubbed
-if retire_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
-  fail 'retirement accepted a credential-bearing manager-side file'
-fi
-assert_log_lacks 'POST|compose.update'
 
 reset_fake legacy_isolation
 result=$(scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" '')

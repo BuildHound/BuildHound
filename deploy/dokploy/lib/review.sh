@@ -273,51 +273,8 @@ _review_normalize_compose_evidence() {
   return 1
 }
 
-# Dokploy v0.29.12's compose.update is database-only. This verifier reads the
-# materialized manager-side file through compose.getConvertedCompose, then uses
-# the local Compose parser to compare its normalized structure fail-closed.
-_review_require_materialized_anchor() {
-  local compose_id=$1 app_name=$2 workdir=$3 response_file yaml_file json_file
-  response_file=$workdir/converted.json
-  yaml_file=$workdir/materialized.yaml
-  json_file=$workdir/materialized.json
-  dokploy_api GET "compose.getConvertedCompose?composeId=$compose_id" > "$response_file" || return 1
-  if ! jq -er 'select(type == "string" and length > 0)' "$response_file" > "$yaml_file"; then
-    die "Dokploy returned invalid materialized review Compose evidence"
-    return 1
-  fi
-  _review_normalize_compose_evidence "$yaml_file" "$json_file" || return 1
-  if ! jq -e --arg appName "$app_name" --arg image "$_review_anchor_image" '
-    (type == "object") and
-    ((keys - ["name", "networks", "services"]) == []) and
-    (.services | type) == "object" and (.services | keys) == ["anchor"] and
-    (.services.anchor | type) == "object" and
-    ((.services.anchor | keys) - ["command", "deploy", "entrypoint", "image", "networks"] == []) and
-    .services.anchor.command == null and .services.anchor.entrypoint == null and
-    .services.anchor.image == $image and
-    (.services.anchor.networks | type) == "object" and
-    (.services.anchor.networks | keys) == [$appName] and
-    .services.anchor.networks[$appName] == null and
-    (.services.anchor.deploy | type) == "object" and
-    ((.services.anchor.deploy | keys) - ["placement", "replicas", "resources"] == []) and
-    .services.anchor.deploy.replicas == 0 and
-    (.services.anchor.deploy.resources // {}) == {} and
-    (.services.anchor.deploy.placement | type) == "object" and
-    (.services.anchor.deploy.placement | keys) == ["constraints"] and
-    .services.anchor.deploy.placement.constraints == ["node.labels.role == review"] and
-    (.networks | type) == "object" and (.networks | keys) == [$appName] and
-    (.networks[$appName] | type) == "object" and
-    ((.networks[$appName] | keys) - ["external", "ipam", "name"] == []) and
-    .networks[$appName].external == true and .networks[$appName].name == $appName and
-    (.networks[$appName].ipam // {}) == {}
-  ' "$json_file" >/dev/null; then
-    die "Dokploy did not materialize the exact inert isolated review anchor"
-    return 1
-  fi
-}
-
-# Deploy-path twin of _review_require_materialized_anchor: verifies the
-# materialized review stack kept the routing-critical properties after
+# Deploy-path verifier: checks that the materialized review stack kept the
+# routing-critical properties after
 # Dokploy's isolated-deployment conversion (plan 088). Traefik v3's swarm
 # provider needs traefik.swarm.network to pick a task IP it can reach, skips
 # services that also define traefik.docker.network (routes 404), and the
@@ -529,7 +486,7 @@ _review_wait_for_routes_gone() {
 _review_revoke_compose() (
   local compose_id=$1 name=$2 dns_suffix=$3 expected_sha=${4-} expected_attempt_id=${5-}
   local expected_title_override=${6-}
-  local body deployments matching_count active_count checks check workdir compose_file
+  local body deployments active_count workdir compose_file
   local expected_title=''
 
   if [[ -n $expected_title_override ]]; then
@@ -552,27 +509,22 @@ _review_revoke_compose() (
   trap 'if [[ -n ${BUILDHOUND_REVIEW_REVOKE_WORKDIR-} ]]; then rm -rf -- "$BUILDHOUND_REVIEW_REVOKE_WORKDIR"; fi; exit 143' TERM
   compose_file=$workdir/compose.json
 
+  # Plan 089: the compose.cleanQueues drain choreography is gone — a queued
+  # deployment that slips past the checks below is converged away by the next
+  # reconciler tick instead of being prevented here.
   body=$(jq -cn --arg composeId "$compose_id" '{composeId:$composeId}') || return 1
-  dokploy_api POST compose.cleanQueues "$body" >/dev/null || return 1
-  matching_count=0
   if [[ -n $expected_title ]]; then
     deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return 1
-    if ! matching_count=$(jq -er --arg title "$expected_title" '
+    if ! active_count=$(jq -er --arg title "$expected_title" '
       if type != "array" or any(.[]; type != "object")
       then error("invalid deployment response")
-      else [.[] | select(.title == $title)] | length
-      end
-    ' <<< "$deployments"); then
-      die "Dokploy returned invalid deployment evidence during cleanup"
-      return 1
-    fi
-    if ! active_count=$(jq -er --arg title "$expected_title" '
-      [ .[] |
+      else [ .[] |
         select(.title == $title) |
         (.status | tostring | ascii_downcase) |
         select(. != "done" and . != "success" and . != "error" and
                . != "failed" and . != "cancelled")
       ] | length
+      end
     ' <<< "$deployments"); then
       die "Dokploy returned invalid deployment evidence during cleanup"
       return 1
@@ -582,23 +534,14 @@ _review_revoke_compose() (
       return 1
     fi
   fi
-  if [[ -n $expected_title && $matching_count -eq 0 ]]; then checks=6; else checks=2; fi
-  for ((check = 0; check < checks; check++)); do
-    if [[ $check -gt 0 && $matching_count -eq 0 ]]; then
-      dokploy_api POST compose.cleanQueues "$body" >/dev/null || return 1
-    fi
-    dokploy_api GET "compose.one?composeId=$compose_id" > "$compose_file" || return 1
-    if ! jq -e --arg composeId "$compose_id" '
-      type == "object" and .composeId == $composeId and
-      (.composeStatus == "idle" or .composeStatus == "done" or .composeStatus == "error")
-    ' "$compose_file" >/dev/null; then
-      die "review deployment is still active or has unknown state"
-      return 1
-    fi
-    if [[ $check -lt $((checks - 1)) ]]; then
-      if [[ $checks -gt 2 ]]; then sleep 5; else sleep 1; fi
-    fi
-  done
+  dokploy_api GET "compose.one?composeId=$compose_id" > "$compose_file" || return 1
+  if ! jq -e --arg composeId "$compose_id" '
+    type == "object" and .composeId == $composeId and
+    (.composeStatus == "idle" or .composeStatus == "done" or .composeStatus == "error")
+  ' "$compose_file" >/dev/null; then
+    die "review deployment is still active or has unknown state"
+    return 1
+  fi
   dokploy_api POST compose.stop "$body" >/dev/null || return 1
   _review_wait_for_routes_gone "$name" "$dns_suffix"
 )
@@ -957,7 +900,7 @@ revoke_review() {
 scrub_review() (
   local base_repo=${1-} pr=${2-} environment_id=${3-} dns_suffix=${4-} compose_id=${5-} sha=${6-}
   local attempt_id=${7-} name provider_id record metadata description workdir anchor_file update_file
-  local persisted_file old_file app_name title body deployment_id retired scrub_epoch
+  local persisted_file old_file title body deployment_id retired scrub_epoch
   [[ $# -eq 7 ]] || { die "scrub_review requires seven arguments"; return 1; }
   _review_validate_cleanup_args "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id" || return 1
   _review_require_supported_dokploy_version || return 1
@@ -992,7 +935,6 @@ scrub_review() (
     die "Dokploy did not persist the inert isolated review anchor"
     return 1
   fi
-  app_name=$(jq -er '.appName | select(type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,62}\\z"))' "$persisted_file") || return 1
 
   scrub_epoch=$(date -u +%s) || return 1
   [[ $scrub_epoch =~ ^[0-9]{1,20}$ ]] || { die "unable to derive scrub deployment title"; return 1; }
@@ -1004,7 +946,8 @@ scrub_review() (
     return 1
   fi
   deployment_id=$(_review_wait_for_deployment "$compose_id" "$old_file" "$title") || return 1
-  _review_require_materialized_anchor "$compose_id" "$app_name" "$workdir" || return 1
+  # Plan 089: no getConvertedCompose anchor verification here — a mangled
+  # anchor materialization is a convergence concern, not a scrub blocker.
   _review_revoke_compose "$compose_id" "$name" "$dns_suffix" "" "" "$title" || return 1
   dokploy_api GET "compose.one?composeId=$compose_id" > "$persisted_file" || return 1
   if ! _review_require_exact_compose "$persisted_file" "$update_file" \
@@ -1020,7 +963,7 @@ scrub_review() (
 retire_review() (
   local base_repo=${1-} pr=${2-} environment_id=${3-} dns_suffix=${4-} compose_id=${5-} sha=${6-}
   local attempt_id=${7-} name provider_id record metadata description retired workdir anchor_file
-  local update_file persisted_file app_name
+  local update_file persisted_file
   [[ $# -eq 7 ]] || { die "retire_review requires seven arguments"; return 1; }
   _review_validate_cleanup_args "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id" || return 1
   _review_require_supported_dokploy_version || return 1
@@ -1044,9 +987,9 @@ retire_review() (
   description=$(jq -c '. + {retired:true}' <<< "$metadata") || return 1
   _review_update_body "$compose_id" "$description" "$anchor_file" "$update_file" || return 1
   dokploy_api GET "compose.one?composeId=$compose_id" > "$persisted_file" || return 1
-  app_name=$(jq -er '.appName | select(type == "string" and test("^[A-Za-z0-9][A-Za-z0-9-]{0,62}\\z"))' "$persisted_file") || return 1
-  if ! jq -e '.composeStatus == "idle"' "$persisted_file" >/dev/null ||
-     ! _review_require_materialized_anchor "$compose_id" "$app_name" "$workdir"; then
+  # Plan 089: scrub-before-retire ordering is the callers' (converge)
+  # responsibility; the getConvertedCompose anchor re-verification is gone.
+  if ! jq -e '.composeStatus == "idle"' "$persisted_file" >/dev/null; then
     die "review anchor is not safely scrubbed and stopped"
     return 1
   fi
