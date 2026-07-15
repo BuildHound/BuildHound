@@ -25,9 +25,11 @@ class WrapperFunctionalTest {
     @field:TempDir
     lateinit var projectDir: File
 
-    /** A Gradle User Home distinct from the project dir and from TestKit's own working dir. */
-    @field:TempDir
-    lateinit var guhDir: File
+    /**
+     * A Gradle User Home distinct from the project dir and from TestKit's own working dir.
+     * Not a `@TempDir`: daemon-held GUH files break `@TempDir` deletion on Windows (plan 092).
+     */
+    private val guhDir: File = newGradleUserHome()
 
     private fun runner(vararg arguments: String): GradleRunner =
         GradleRunner.create()

@@ -23,9 +23,13 @@ class InvocationFunctionalTest {
     @field:TempDir
     lateinit var projectDir: File
 
-    /** A Gradle User Home distinct from the project dir and from TestKit's own working dir (below). */
-    @field:TempDir
-    lateinit var guhDir: File
+    /**
+     * A Gradle User Home distinct from the project dir and from TestKit's own working dir (below).
+     * Not a `@TempDir`: the lingering TestKit daemon keeps GUH cache files open, which broke JUnit's
+     * post-test `@TempDir` deletion on Windows — [newGradleUserHome] sits under the clean-reclaimed
+     * TestKit root instead (plan 092).
+     */
+    private val guhDir: File = newGradleUserHome()
 
     private fun runner(vararg arguments: String): GradleRunner =
         GradleRunner.create()

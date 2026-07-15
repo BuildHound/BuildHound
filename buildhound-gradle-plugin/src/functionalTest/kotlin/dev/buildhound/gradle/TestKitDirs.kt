@@ -26,10 +26,28 @@ internal fun GradleRunner.freshDaemon(): GradleRunner = withTestKitDir(newTestKi
  * module `build/` dir so `clean` reclaims the lingering daemons), falling back to the JVM temp
  * dir when the property is absent.
  */
-private fun newTestKitDir(): File {
+private fun newTestKitDir(): File = newRootedDir("testkit-")
+
+/**
+ * A fresh per-test Gradle User Home for `-g`, living under the same reclaimed-by-`clean` root as
+ * the TestKit dirs (plan 092) — never under a JUnit `@TempDir`.
+ *
+ * The lingering TestKit daemon keeps GUH cache files (journal, file hashes, Kotlin DSL caches)
+ * open after `.build()` returns, and TestKit has no daemon-stop API — daemons die with the test
+ * JVM's shutdown hook, long after JUnit's per-test `@TempDir` deletion runs. On Windows those
+ * open handles made that deletion throw `TempDirDeletionStrategy$DeletionException` for every
+ * test in the four `-g` classes. Same hazard, same cure as plan 049's TestKit-dir relocation.
+ *
+ * Initialize as an instance field (`private val guhDir = newGradleUserHome()`): the default
+ * per-method test lifecycle then yields a GUH fresh per test but stable across the runs *within*
+ * one test, which store→hit configuration-cache pairs rely on.
+ */
+internal fun newGradleUserHome(): File = newRootedDir("guh-")
+
+private fun newRootedDir(prefix: String): File {
     val root = File(System.getProperty("buildhound.testkit.root") ?: System.getProperty("java.io.tmpdir"))
     root.mkdirs()
-    return Files.createTempDirectory(root.toPath(), "testkit-").toFile()
+    return Files.createTempDirectory(root.toPath(), prefix).toFile()
 }
 
 /**
