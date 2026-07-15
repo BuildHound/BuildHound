@@ -38,7 +38,7 @@ tasks.withType<JavaCompile>().configureEach {
 dependencies {
     // This module no longer declares a Gradle plugin (plan 074). Keep Gradle's public + internal
     // types compile-only so its runtime variant can be bundled without exporting the host Gradle,
-    // Groovy, and Kotlin distribution into the Plugin Portal artifact (plan 087).
+    // Groovy, and Kotlin distribution into the Plugin Portal artifact (plan 092).
     compileOnly(gradleApi())
     implementation(projects.buildhoundCommons)
 
