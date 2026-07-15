@@ -12,6 +12,7 @@ import org.gradle.api.Task
 import org.gradle.api.publish.maven.tasks.PublishToMavenRepository
 import org.gradle.api.tasks.Delete
 import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.bundling.AbstractArchiveTask
 import org.gradle.plugin.compatibility.compatibility
 
 plugins {
@@ -68,6 +69,47 @@ private class VerifyPluginWebsiteAction(private val uploadOnly: Boolean) : Actio
     override fun execute(task: Task) {
         if (uploadOnly && task is PublishTask && task.validateOnly.getOrElse(false)) return
         PluginWebsiteVerifier.verify()
+    }
+}
+
+private class VerifyPortalPublicationDigestAction(
+    private val repositoryRoot: File,
+    private val releaseVersion: String,
+) : Action<Task>, Serializable {
+    override fun execute(task: Task) {
+        val expected = System.getenv("EXPECTED_PUBLICATION_DIGEST")
+        if (expected.isNullOrBlank()) {
+            val validateOnly = task is PublishTask && task.validateOnly.getOrElse(false)
+            if (!validateOnly && System.getenv("GITHUB_ACTIONS") == "true") {
+                throw GradleException("GitHub Portal uploads require EXPECTED_PUBLICATION_DIGEST")
+            }
+            return
+        }
+        if (!expected.matches(Regex("[0-9a-f]{64}"))) {
+            throw GradleException("EXPECTED_PUBLICATION_DIGEST must be 64 lowercase hex characters")
+        }
+
+        val verifier = repositoryRoot.resolve(".github/scripts/verify-gradle-plugin-publication-digest.sh")
+        val process =
+            try {
+                ProcessBuilder("bash", verifier.absolutePath, releaseVersion, expected)
+                    .directory(repositoryRoot)
+                    .inheritIO()
+                    .start()
+            } catch (error: IOException) {
+                throw GradleException("Could not start Portal publication digest verification", error)
+            }
+
+        val exitCode =
+            try {
+                process.waitFor()
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw GradleException("Portal publication digest verification was interrupted", error)
+            }
+        if (exitCode != 0) {
+            throw GradleException("Portal publication differs from the approved pre-release build")
+        }
     }
 }
 
@@ -152,7 +194,7 @@ dependencies {
     "functionalTestImplementation"(libs.junit.jupiter)
     "functionalTestImplementation"(gradleTestKit())
     // Runtime-only, separately compiled addon used to prove the published core preserves the
-    // public BuildHoundExtensionContributor ABI across the Shadow JAR boundary (plan 087).
+    // public BuildHoundExtensionContributor ABI across the Shadow JAR boundary (plan 092).
     if (rootProject.findProject(":buildhound-addon-test-sharding") != null) {
         "functionalTestRuntimeOnly"(project(":buildhound-addon-test-sharding"))
     }
@@ -188,6 +230,13 @@ gradlePlugin {
 // addon SPI exposes JsonElement; relocating it would rewrite that binary contract and break every
 // separately compiled contributor. Plugin Publish automatically selects shadowJar and classifies
 // the ordinary JAR as `main`, leaving the bundled JAR as the primary artifact.
+tasks.withType<AbstractArchiveTask>().configureEach {
+    // The protected release job rebuilds after approval and compares these artifacts with the
+    // credential-free build. Stable entry order and timestamps make that comparison meaningful.
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+
 tasks.named<ShadowJar>("shadowJar") {
     // Plugin Publish requires the bundled artifact to be the unclassified primary JAR.
     archiveClassifier.set("")
@@ -203,6 +252,20 @@ tasks.named<ShadowJar>("shadowJar") {
     }
 }
 
+tasks.register("assemblePortalPublication") {
+    description = "Assembles every file hashed and submitted to the Gradle Plugin Portal"
+    group = "publishing"
+    dependsOn(
+        "jar",
+        "shadowJar",
+        "sourcesJar",
+        "javadocJar",
+        "generatePomFileForPluginMavenPublication",
+        "generateMetadataFileForPluginMavenPublication",
+        "generatePomFileForBuildhoundPluginMarkerMavenPublication",
+    )
+}
+
 // Keep validation usable while the certificate is being repaired, but make every real local/CI
 // upload fail closed inside the upload task itself. The standalone task is safe to run as a preflight.
 tasks.register("verifyPluginWebsite") {
@@ -211,6 +274,9 @@ tasks.register("verifyPluginWebsite") {
     doLast(VerifyPluginWebsiteAction(uploadOnly = false))
 }
 tasks.named<PublishTask>("publishPlugins") {
+    // doFirst prepends actions: register the digest first so the later website registration runs
+    // first and the digest is the last check after every producer, immediately before upload.
+    doFirst(VerifyPortalPublicationDigestAction(rootProject.projectDir, version.toString()))
     doFirst(VerifyPluginWebsiteAction(uploadOnly = true))
 }
 

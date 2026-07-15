@@ -72,6 +72,8 @@ jobs:
           sh buildhound-ci-assets/test/metric-cli-test.sh
           shellcheck buildhound-ci-assets/test/wrapper-integrity-test.sh
           sh buildhound-ci-assets/test/wrapper-integrity-test.sh
+          shellcheck .github/scripts/gradle-plugin-publication-digest.sh
+          shellcheck .github/scripts/verify-gradle-plugin-publication-digest.sh
 
   build-floor:
     name: Build & test (Gradle 8.14 floor)
