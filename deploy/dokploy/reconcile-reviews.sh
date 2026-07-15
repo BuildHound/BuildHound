@@ -186,11 +186,21 @@ while IFS= read -r review; do
 done < "$entries"
 
 # Report-only: desired PRs with no live, non-retired review. Deployment is
-# event-driven; the notice makes the gap visible in the run log.
+# event-driven; the notice makes the gap visible in the run log. A review
+# retired earlier in this same pass (TTL) counts as missing too — the
+# snapshot in "$reviews" predates those retirements.
 missing_count=0
 missing_names=''
 while IFS= read -r desired_pr; do
   [ -n "$desired_pr" ] || continue
+  case " $retired_names" in
+    *" mr$desired_pr "*|*" mr$desired_pr")
+      missing_count=$((missing_count + 1))
+      missing_names="$missing_names mr$desired_pr"
+      printf '::notice::Open labelled PR #%s has no live review environment (deploys are event-driven)\n' "$desired_pr"
+      continue
+      ;;
+  esac
   if ! jq -e --argjson pr "$desired_pr" '
     any(.[]; .pr == $pr and .retired == false)
   ' "$reviews" >/dev/null; then

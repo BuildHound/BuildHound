@@ -215,11 +215,13 @@ assert_deletes 1,2
 assert_retires '2|'
 
 # TTL expiry retires even a desired (open + labelled) review, with no
-# pre-retire re-check.
+# pre-retire re-check — and the summary immediately reports it missing.
 expired=$(review 3 '"expired"')
 run_reconcile 1 "[$expired]" '[3]'
 assert_deletes 3
 assert_retires '3|'
+assert_output_has 'Open labelled PR #3 has no live review environment'
+assert_output_has 'missing=1'
 
 # Fresh and desired: kept.
 fresh=$(review 4 '"fresh"')

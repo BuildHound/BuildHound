@@ -127,7 +127,11 @@ class ReviewPolicyTest(unittest.TestCase):
         # re-verification choreography; convergence covers those failures.
         self.assertNotIn("compose.cleanQueues", client)
         self.assertNotIn("_review_require_materialized_anchor", client)
-        self.assertNotIn("date -u '+%Y-%m-%dT%H:%M:%SZ'", client[scrub:])
+        # Scrub preserves the original activation stamp; only retire_review
+        # (below it) stamps retiredAt for the host GC retention window.
+        retire = client.index("retire_review()", scrub)
+        self.assertNotIn("date -u '+%Y-%m-%dT%H:%M:%SZ'", client[scrub:retire])
+        self.assertIn("retiredAt:$retiredAt", client[retire:])
 
         anchor = (ROOT / "deploy/dokploy/review-anchor.yaml").read_text()
         self.assertIn("@sha256:", anchor)
