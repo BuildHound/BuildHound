@@ -10,12 +10,14 @@ jobs:
   policy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with: {persist-credentials: false}
       - run: python3 -m unittest discover -s deploy/dokploy/test -v
       - run: bash deploy/dokploy/test/api-test.sh
       - run: bash deploy/dokploy/test/integrations-test.sh
       - run: bash deploy/dokploy/test/release-client-test.sh
       - run: bash deploy/dokploy/test/deploy-release-resolver-test.sh
+      - run: bash deploy/dokploy/test/deploy-release-backup-step-test.sh
       - run: bash deploy/dokploy/test/review-client-test.sh
       - run: bash deploy/dokploy/test/delivery-cli-test.sh
       - run: sh site/test/site-test.sh
@@ -60,6 +62,7 @@ jobs:
           BUILDHOUND_PR_NUMBER: "20"
           BUILDHOUND_HEAD_SHA: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
           BUILDHOUND_REVIEW_PROVIDER_ID: bh-123456789abcdef012345678-mr20
+          BUILDHOUND_REVIEW_NETWORK: bh-123456789abcdef012345678-mr20-Ab12Cd
           BUILDHOUND_REVIEW_SITE_HOST: mr20.example.test
           BUILDHOUND_REVIEW_DASHBOARD_HOST: mr20.dashboard.example.test
         run: |
