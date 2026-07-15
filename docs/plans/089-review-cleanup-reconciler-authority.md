@@ -43,6 +43,25 @@ run PR code; the lateral-network barrier stays), promotion-chain changes (090).
    Rejected alternatives: accept unbounded residue; SSH from Actions (new long-lived host
    credential in CI).
 
+## Implementation divergences (Stage B PR)
+
+1. **The converge entrypoint is `deploy/dokploy/reconcile-reviews.sh`, not a
+   `dokploy.sh` subcommand.** The converge needs the GitHub API (`gh`) to
+   enumerate open labelled PRs; `dokploy.sh` stays a pure Dokploy API client
+   (which plan 091 will shrink). Single-authority semantics are unchanged —
+   cron and both event fast paths run this one script.
+2. **The summary reports kept/retired/missing/skipped-retired, with no
+   separate skipped-non-review count.** `list-reviews` fails the whole run
+   on any compose in the environment whose metadata is not a review record,
+   so a non-review object in the review environment aborts converge instead
+   of being counted — a stronger staging/prod-untouched guarantee than a
+   skip counter, pinned by the policy test.
+3. **A failed attempt on a still-open, still-labelled PR keeps its anchor
+   and images** until the PR closes, unlabels, or times out — the previous
+   exact-attempt scrub deleted them immediately. Accepted: the residue is
+   bounded by TTL + converge, and correctness no longer depends on attempt
+   evidence.
+
 ## Test strategy
 
 `reconcile-reviews-test.sh` grows converge cases: open+labeled+missing → report; closed

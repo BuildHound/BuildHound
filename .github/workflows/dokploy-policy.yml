@@ -28,6 +28,7 @@ jobs:
       - run: bash deploy/dokploy/test/verify-release-test.sh
       - run: bash deploy/dokploy/test/delete-review-images-test.sh
       - run: sh deploy/dokploy/test/reconcile-reviews-test.sh
+      - run: sh deploy/dokploy/test/host-gc-test.sh
       - name: Validate long-lived Stack policy
         env:
           BUILDHOUND_SERVER_IMAGE: ghcr.io/buildhound/server@sha256:1111111111111111111111111111111111111111111111111111111111111111
