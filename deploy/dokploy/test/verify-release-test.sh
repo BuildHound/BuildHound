@@ -13,7 +13,7 @@ printf '%s\n' "$*" >> "$CURL_LOG"
 for argument do url=$argument; done
 case "$url" in
   https://site.example.test/) printf 'Track every Gradle build\n' ;;
-  https://dashboard.example.test/health) printf 'ok\n' ;;
+  https://dashboard.example.test/health) printf '{"status":"ok"}\n' ;;
   https://dashboard.example.test/v1/builds) printf '202' ;;
   https://dashboard.example.test/v1/builds/*)
     build_id=${url##*/}

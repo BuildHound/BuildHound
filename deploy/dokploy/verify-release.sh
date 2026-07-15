@@ -42,6 +42,7 @@ if [ "${BUILDHOUND_SKIP_SITE_CHECKS-}" = true ]; then
 else
   curl -fsS "$BUILDHOUND_SITE_URL/" | grep -q 'Track every Gradle build'
 fi
-curl -fsS "$BUILDHOUND_DASHBOARD_URL/health" | grep -qx ok
+# The server's health contract is JSON (Routes.kt: HealthResponse(status="ok")).
+curl -fsS "$BUILDHOUND_DASHBOARD_URL/health" | jq -e '.status == "ok"' >/dev/null
 curl -fsS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $BUILDHOUND_INGEST_TOKEN" -H 'Content-Type: application/json' --data-binary "@$request_payload" "$BUILDHOUND_DASHBOARD_URL/v1/builds" | grep -qx 202
 curl -fsS -H "Authorization: Bearer $BUILDHOUND_READ_TOKEN" "$BUILDHOUND_DASHBOARD_URL/v1/builds/$build_id" | jq -e --arg id "$build_id" '.buildId == $id' >/dev/null
