@@ -253,6 +253,26 @@ _review_require_exact_compose() {
   fi
 }
 
+# Shared normalization for materialized-compose evidence. env -i: the
+# materialized file legitimately contains no ${...} placeholders, so
+# interpolation must never see runner secrets (a hostile response could
+# otherwise pull them into the normalized evidence via ${DOKPLOY_TOKEN}).
+# On failure the parser's diagnostics are surfaced with every 64-hex value
+# redacted (review credentials are validated 64-hex lowercase; release ids and
+# digests are recognizable without their payload) so live failures are
+# diagnosable from run logs without leaking manifest secrets.
+_review_normalize_compose_evidence() {
+  local yaml_file=$1 json_file=$2 stderr_file
+  stderr_file=${yaml_file%.yaml}.stderr
+  if command env -i PATH="$PATH" HOME="${HOME-}" \
+    docker compose --file "$yaml_file" config --format json > "$json_file" 2> "$stderr_file"; then
+    return 0
+  fi
+  sed -E 's/[0-9a-f]{64}/[64-hex]/g' "$stderr_file" | head -n 5 >&2
+  die "unable to normalize materialized review Compose evidence"
+  return 1
+}
+
 # Dokploy v0.29.12's compose.update is database-only. This verifier reads the
 # materialized manager-side file through compose.getConvertedCompose, then uses
 # the local Compose parser to compare its normalized structure fail-closed.
@@ -266,14 +286,7 @@ _review_require_materialized_anchor() {
     die "Dokploy returned invalid materialized review Compose evidence"
     return 1
   fi
-  # env -i: the materialized file legitimately contains no ${...} placeholders,
-  # so interpolation must never see runner secrets (a hostile response could
-  # otherwise pull them into the normalized evidence via ${DOKPLOY_TOKEN}).
-  if ! command env -i PATH="$PATH" HOME="${HOME-}" \
-    docker compose --file "$yaml_file" config --format json > "$json_file" 2>/dev/null; then
-    die "unable to normalize materialized review Compose evidence"
-    return 1
-  fi
+  _review_normalize_compose_evidence "$yaml_file" "$json_file" || return 1
   if ! jq -e --arg appName "$app_name" --arg image "$_review_anchor_image" '
     (type == "object") and
     ((keys - ["name", "networks", "services"]) == []) and
@@ -319,13 +332,7 @@ _review_require_materialized_stack() {
     die "Dokploy returned invalid materialized review Compose evidence"
     return 1
   fi
-  # env -i for the same reason as the anchor verifier: never let hostile
-  # ${...} references in the response interpolate runner secrets.
-  if ! command env -i PATH="$PATH" HOME="${HOME-}" \
-    docker compose --file "$yaml_file" config --format json > "$json_file" 2>/dev/null; then
-    die "unable to normalize materialized review Compose evidence"
-    return 1
-  fi
+  _review_normalize_compose_evidence "$yaml_file" "$json_file" || return 1
   if ! jq -e --arg appName "$app_name" '
     (type == "object") and
     (.services | type) == "object" and
