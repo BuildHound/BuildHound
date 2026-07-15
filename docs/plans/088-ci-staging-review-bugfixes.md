@@ -97,6 +97,14 @@ keeps `persist-credentials: false`; no new secrets. Behavior of same-repo gate u
   after convergence). Exit criteria: review smoke ✓; bootstrap exercised
   green through the Dokploy deploy (run 29422015761) + green non-bootstrap
   deploy ✓ (fallback wording); policy suite green ✓; no checkout@v4 ✓.
+- **HEAD-request finding (2026-07-16): `HEAD /` on the live dashboard returns
+  404 while `GET /` returns 200.** Ktor `get(...)` routes do not answer HEAD on
+  their own, so HEAD-probing uptime monitors read the shell as down. Fix:
+  install Ktor's `AutoHeadResponse` plugin application-wide — it re-routes a
+  HEAD request to the matching GET route (auth, scope checks, and the
+  route-scoped rate limiters run unchanged; only the response body is dropped),
+  with server tests pinning HEAD `/` and HEAD `/health` to the same status as
+  GET and the spec-§5 auth semantics (401 without a token) unchanged.
 - **Two more latent defects found and fixed by the live loop** (each its own
   merged PR): the smoke's health check grepped for a bare `ok` against the
   server's JSON contract (never exercised pre-088; PR #47), and the smoke had
