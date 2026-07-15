@@ -34,6 +34,16 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn("node.labels.role == ${BUILDHOUND_APP_ROLE}", server)
                 self.assertNotIn("node.labels.buildhound.traefik", stack)
+                # The server is multi-network (private + ingress); Traefik
+                # v3's swarm provider skips services whose reachable network
+                # it cannot determine (routes 404) — the ingress network must
+                # be pinned explicitly, and never via the docker.network
+                # variant (plan 088 live verification, staging run
+                # 29431369681).
+                self.assertIn(
+                    "traefik.swarm.network=${DOKPLOY_INGRESS_NETWORK}", server
+                )
+                self.assertNotIn("traefik.docker.network", stack)
                 for service in (db, backup):
                     self.assertIn("node.labels.role == db", service)
                     self.assertIn("node.id == ${BUILDHOUND_DB_NODE_ID}", service)

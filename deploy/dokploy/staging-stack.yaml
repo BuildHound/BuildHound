@@ -39,6 +39,7 @@ services:
       restart_policy: {condition: on-failure, delay: 5s, max_attempts: 5}
       labels:
         - traefik.enable=true
+        - traefik.swarm.network=${DOKPLOY_INGRESS_NETWORK}
         - traefik.http.routers.buildhound.rule=Host(`${BUILDHOUND_DASHBOARD_HOST}`)
         - traefik.http.routers.buildhound.entrypoints=websecure
         - traefik.http.routers.buildhound.tls.certresolver=letsencrypt-dns-hetzner

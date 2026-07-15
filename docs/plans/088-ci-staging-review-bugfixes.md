@@ -107,6 +107,20 @@ keeps `persist-credentials: false`; no new secrets. Behavior of same-repo gate u
   checks remain mandatory. Stage D precondition added: production site
   Application must be provisioned (or the owner extends the skip decision to
   production explicitly) before the first production deploy.
+- **Staging bootstrap deploy (run 29431369681, main `6419de9`): the Dokploy
+  deployment itself SUCCEEDED** — bootstrap branch exercised end-to-end
+  (resolve lineage, manual-anchor detection, versioned backup selection,
+  compose deploy green, dashboard-only). The run then failed at the smoke:
+  the dashboard host answered 404 because `staging-stack.yaml`'s server is
+  multi-network (`private` + `ingress`) with no `traefik.swarm.network`
+  label — the same ranked root-cause candidate the review stack was fixed
+  for, present in both long-lived stacks. Fixed by pinning
+  `traefik.swarm.network=${DOKPLOY_INGRESS_NETWORK}` on the server in
+  `staging-stack.yaml` and `stack.yaml`, with a policy assertion. A
+  successful release deployment now exists, so the bootstrap path is spent;
+  per this plan's exit-criteria fallback wording, the bootstrap criterion is
+  satisfied by the exercised bootstrap branch (run logs + resolver/backup
+  step tests) plus a green non-bootstrap deploy on the next merge.
 - The 088 merge itself (PR #41, main `8b2028c`) could not produce the
   bootstrap staging deploy: `resolve` requires a successful
   `buildhound/review-deployed/pr-N` status on the merged PR's head, and
