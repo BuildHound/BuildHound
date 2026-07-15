@@ -18,6 +18,7 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.autohead.AutoHeadResponse
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.origin
@@ -188,6 +189,10 @@ fun Application.buildHoundModule(
     rateLimits: RateLimits = RateLimits(),
 ) {
     install(CallLogging)
+    // HEAD parity for every GET route (plan 088 live finding: HEAD-probing monitors read the
+    // dashboard shell's 404 as down). A HEAD request resolves the matching GET route — auth,
+    // scope checks, and the route-scoped rate limiters run unchanged; only the body is dropped.
+    install(AutoHeadResponse)
     install(ContentNegotiation) {
         json(BuildHoundJson.payload)
     }
