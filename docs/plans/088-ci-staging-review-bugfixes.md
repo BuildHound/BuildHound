@@ -62,6 +62,16 @@ inversion (089), workflow_run chain removal (090), client shrink (091).
    Because Dokploy names the isolated network after the server-side suffixed
    appName, `deploy_review` reads the appName back after `compose.create` and
    renders the trusted manifest a second time before `compose.update`.
+3. **Materialized-stack verification runs after `compose.deploy`, not before.**
+   Discovered live (PR #42, runs 29415802776/29418873892):
+   `compose.getConvertedCompose` reflects the manager-side file materialized
+   **on deploy** — before the first deploy it returns stale or absent content
+   (the second attempt returned the cleanup anchor from the first attempt's
+   retirement). This is the same reason the pre-existing anchor verifier runs
+   post-deploy. A defective stack is therefore briefly deployed before being
+   retired through exact-owned cleanup — equivalent to the smoke-failure
+   path. Verifier failures now log redacted parser diagnostics and a
+   structural summary (shape only, no environment values, 64-hex redacted).
 
 ## Test strategy
 

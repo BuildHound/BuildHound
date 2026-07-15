@@ -409,13 +409,16 @@ readback_call=$(grep -nFx 'GET|compose.one?composeId=c1' "$TEST_ROOT/calls.log" 
 converted_call=$(grep -nFx 'GET|compose.getConvertedCompose?composeId=c1' "$TEST_ROOT/calls.log" | cut -d: -f1)
 deploy_call=$(grep -nFx 'POST|compose.deploy' "$TEST_ROOT/calls.log" | cut -d: -f1)
 create_call=$(grep -nFx 'POST|compose.create' "$TEST_ROOT/calls.log" | cut -d: -f1)
+# Isolation is persisted and verified before deploy; the materialized stack
+# can only be verified after deploy (Dokploy materializes on deploy).
 (( create_call < name_readback_call && name_readback_call < update_call &&
-   update_call < readback_call && readback_call < converted_call &&
-   converted_call < deploy_call )) || \
-  fail 'review isolation was not persisted and verified before deploy'
+   update_call < readback_call && readback_call < deploy_call &&
+   deploy_call < converted_call )) || \
+  fail 'review deploy order was not persist, verify, deploy, verify-materialized'
 
-# Materialized-stack routing defects (plan 088): each must fail closed after
-# compose.update and never reach compose.deploy.
+# Materialized-stack routing defects (plan 088): verified after deploy (the
+# converted file only exists then); each must fail closed and retire the
+# attempt through exact-owned cleanup.
 for stack_defect in stack_missing_swarm_label stack_dual_network stack_short_tmpfs stack_extra_network; do
   reset_fake "$stack_defect"
   if deploy_review "${deploy_args[@]}" >/dev/null 2> "$TEST_ROOT/error.log"; then
@@ -424,7 +427,7 @@ for stack_defect in stack_missing_swarm_label stack_dual_network stack_short_tmp
   grep -F 'did not materialize a routable isolated review stack' "$TEST_ROOT/error.log" >/dev/null || \
     fail "materialized stack defect $stack_defect was not rejected explicitly"
   assert_log_has 'GET|compose.getConvertedCompose?composeId=c1'
-  assert_log_lacks 'POST|compose.deploy'
+  assert_log_has 'POST|compose.deploy'
   assert_log_has 'POST|compose.stop'
 done
 
