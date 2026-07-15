@@ -137,7 +137,7 @@ _review_owned_items() {
       if (($metadata | type) == "object") and
          (($metadata | has("repository")) and ($metadata | has("pr")) and
           ($metadata | has("sha"))) and
-         (($metadata | keys) - ["activatedAt", "attemptId", "pr", "repository", "retired", "sha"] == []) and
+         (($metadata | keys) - ["activatedAt", "attemptId", "pr", "repository", "retired", "retiredAt", "sha"] == []) and
          (($metadata.repository | type) == "string") and
          ($metadata.repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\z")) and
          (($metadata.pr | type) == "number") and
@@ -149,6 +149,9 @@ _review_owned_items() {
          ((($metadata | has("activatedAt")) | not) or
           (($metadata.activatedAt | type) == "string" and
            ($metadata.activatedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z")))) and
+         ((($metadata | has("retiredAt")) | not) or
+          (($metadata.retiredAt | type) == "string" and
+           ($metadata.retiredAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z")))) and
          ((($metadata | has("attemptId")) | not) or
           (($metadata.attemptId | type) == "string" and
            ($metadata.attemptId | test("^[1-9][0-9]{0,19}\\.[1-9][0-9]{0,9}\\z"))))
@@ -802,7 +805,7 @@ list_reviews() {
       if (($metadata | type) == "object") and
          (($metadata | has("repository")) and ($metadata | has("pr")) and
           ($metadata | has("sha"))) and
-         (($metadata | keys) - ["activatedAt", "attemptId", "pr", "repository", "retired", "sha"] == []) and
+         (($metadata | keys) - ["activatedAt", "attemptId", "pr", "repository", "retired", "retiredAt", "sha"] == []) and
          (($metadata.repository | type) == "string") and
          ($metadata.repository | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\z")) and
          (($metadata.pr | type) == "number") and
@@ -814,6 +817,9 @@ list_reviews() {
          ((($metadata | has("activatedAt")) | not) or
           (($metadata.activatedAt | type) == "string" and
            ($metadata.activatedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z")))) and
+         ((($metadata | has("retiredAt")) | not) or
+          (($metadata.retiredAt | type) == "string" and
+           ($metadata.retiredAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\\z")))) and
          ((($metadata | has("attemptId")) | not) or
           (($metadata.attemptId | type) == "string" and
            ($metadata.attemptId | test("^[1-9][0-9]{0,19}\\.[1-9][0-9]{0,9}\\z"))))
@@ -963,7 +969,7 @@ scrub_review() (
 retire_review() (
   local base_repo=${1-} pr=${2-} environment_id=${3-} dns_suffix=${4-} compose_id=${5-} sha=${6-}
   local attempt_id=${7-} name provider_id record metadata description retired workdir anchor_file
-  local update_file persisted_file
+  local update_file persisted_file retired_at
   [[ $# -eq 7 ]] || { die "retire_review requires seven arguments"; return 1; }
   _review_validate_cleanup_args "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id" || return 1
   _review_require_supported_dokploy_version || return 1
@@ -984,7 +990,15 @@ retire_review() (
   update_file=$workdir/update.json
   persisted_file=$workdir/compose.json
   cp -- "$_review_anchor_template" "$anchor_file" || return 1
-  description=$(jq -c '. + {retired:true}' <<< "$metadata") || return 1
+  # retiredAt anchors the host GC's retention window to actual retirement
+  # time (plan 089); already-retired anchors keep their original stamp.
+  retired_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ') || return 1
+  if [[ ! $retired_at =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+    die "unable to determine review retirement time"
+    return 1
+  fi
+  description=$(jq -c --arg retiredAt "$retired_at" \
+    '. + {retired:true, retiredAt:$retiredAt}' <<< "$metadata") || return 1
   _review_update_body "$compose_id" "$description" "$anchor_file" "$update_file" || return 1
   dokploy_api GET "compose.one?composeId=$compose_id" > "$persisted_file" || return 1
   # Plan 089: scrub-before-retire ordering is the callers' (converge)

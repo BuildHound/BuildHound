@@ -60,7 +60,29 @@ run PR code; the lateral-network barrier stays), promotion-chain changes (090).
    and images** until the PR closes, unlabels, or times out — the previous
    exact-attempt scrub deleted them immediately. Accepted: the residue is
    bounded by TTL + converge, and correctness no longer depends on attempt
-   evidence.
+   evidence. Note the residual: for a failed attempt this residue is the
+   credential-bearing stack composeFile (same kind as any live review),
+   TTL-bounded; and with the anchor re-verification gone, scrub→retire
+   ordering is enforced by converge's control flow plus a policy pin, with
+   the host GC as the retention-bounded backstop — which exists only once
+   Gate H1's timer is installed.
+4. **Review-driven hardening (§3 reviews).** `retire_review` stamps
+   `retiredAt` (additive metadata key, whitelisted in both validators) so
+   the host GC retention window measures from actual retirement, not first
+   deployment. The host GC gained: repository scoping (network prefix
+   derived from sha256(repo) exactly like `review_provider_id`, and anchor
+   deletion requires `metadata.repository` to match), lifecycle gating
+   (networks of non-retired reviews are never removed, even while
+   transiently unattached), a hard failure when `docker network ls` itself
+   fails (a listing failure must never read as a clean H1 report), runtime
+   enforcement of the env file's root ownership + 0600 mode on every run,
+   `RETENTION_DAYS` bounds, URL/token shape validation, `--max-redirs 0`,
+   and a GNU-date probe. `issues: read` was added to the three converge
+   call sites for the issues-listing endpoint. Accepted as residual risk:
+   the daily-timer network sweep is not serialized with in-flight deploys
+   (lifecycle gating plus docker's in-use refusal bound the race;
+   self-heals next tick), and the systemd unit is unsandboxed (any
+   docker.sock client is root-equivalent anyway).
 
 ## Test strategy
 

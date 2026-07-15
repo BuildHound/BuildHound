@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')) && 'review-cleanup' || 'review' }}
     concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
-    permissions: {contents: read, pull-requests: read, actions: read, packages: write}
+    permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write}
     outputs:
       deploy_outcome: ${{ steps.deploy_status.outputs.outcome }}
       publish_outcome: ${{ steps.deploy_status.outputs.publish_outcome }}
@@ -329,7 +329,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: review-cleanup
     concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
-    permissions: {contents: read, pull-requests: read, actions: read, packages: write}
+    permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write}
     steps:
       - uses: actions/checkout@v7
         with:

@@ -2,7 +2,7 @@ name: Reconcile review environments
 on:
   schedule: [{cron: "*/15 * * * *"}]
   workflow_dispatch:
-permissions: {contents: read, pull-requests: read, actions: read, packages: write}
+permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write}
 jobs:
   reconcile:
     runs-on: ubuntu-latest
