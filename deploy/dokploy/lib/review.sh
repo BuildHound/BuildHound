@@ -991,14 +991,21 @@ retire_review() (
   persisted_file=$workdir/compose.json
   cp -- "$_review_anchor_template" "$anchor_file" || return 1
   # retiredAt anchors the host GC's retention window to actual retirement
-  # time (plan 089); already-retired anchors keep their original stamp.
-  retired_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ') || return 1
-  if [[ ! $retired_at =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
-    die "unable to determine review retirement time"
-    return 1
+  # time (plan 089). An already-retired anchor keeps its original stamp:
+  # regenerating it here would make the post-check compare a fresh timestamp
+  # against the preserved one and fail whenever the two retires straddle a
+  # second boundary (observed as a CI-only flake).
+  if [[ $retired == true ]]; then
+    description=$metadata
+  else
+    retired_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ') || return 1
+    if [[ ! $retired_at =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+      die "unable to determine review retirement time"
+      return 1
+    fi
+    description=$(jq -c --arg retiredAt "$retired_at" \
+      '. + {retired:true, retiredAt:$retiredAt}' <<< "$metadata") || return 1
   fi
-  description=$(jq -c --arg retiredAt "$retired_at" \
-    '. + {retired:true, retiredAt:$retiredAt}' <<< "$metadata") || return 1
   _review_update_body "$compose_id" "$description" "$anchor_file" "$update_file" || return 1
   dokploy_api GET "compose.one?composeId=$compose_id" > "$persisted_file" || return 1
   # Plan 089: scrub-before-retire ordering is the callers' (converge)

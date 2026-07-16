@@ -586,13 +586,23 @@ assert_eq "$result" '{"retired": "mr42"}'
 jq -e '
   .isolatedDeployment == true and
   (.description | fromjson |
-    .retired == true and .activatedAt == "2026-07-13T12:00:00Z")
+    .retired == true and .activatedAt == "2026-07-13T12:00:00Z" and
+    (.retiredAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))
 ' "$TEST_ROOT/compose-state.json" >/dev/null
 updates=$(grep -c '^POST|compose.update$' "$TEST_ROOT/calls.log")
+# Re-retirement must preserve the original retiredAt stamp, even when the
+# clock has moved on — a regenerated stamp fails the exact-compose check
+# whenever two retires straddle a second boundary (observed as a CI flake).
+jq -c '.description = (.description | fromjson | .retiredAt = "2020-01-01T00:00:00Z" | tojson)' \
+  "$TEST_ROOT/compose-state.json" > "$TEST_ROOT/compose-state.tmp"
+mv -- "$TEST_ROOT/compose-state.tmp" "$TEST_ROOT/compose-state.json"
 result=$(retire_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT")
 assert_eq "$result" '{"retired": "mr42"}'
 test "$(grep -c '^POST|compose.update$' "$TEST_ROOT/calls.log")" -eq "$updates" || \
   fail 'idempotent retirement rewrote an already-retired anchor'
+jq -e '(.description | fromjson | .retiredAt) == "2020-01-01T00:00:00Z"' \
+  "$TEST_ROOT/compose-state.json" >/dev/null || \
+  fail 'idempotent retirement regenerated the preserved retiredAt stamp'
 
 reset_fake scrub_failed
 if scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
