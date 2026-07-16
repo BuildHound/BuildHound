@@ -116,7 +116,12 @@ workflows (088/089), client internals beyond what the collapse deletes (091).
    recovers. (b) the
    deployment-progress backstop is restored in both deploy jobs (a
    behind/diverged candidate — e.g. an approved stale waiting run — needs
-   the explicit rollback attestation); (c) dispatch verification also binds
+   the explicit rollback attestation). Accepted looseness vs the retired
+   `require_deployment_progress`: `behind` and `diverged` share one
+   attestation-overridable bucket for both targets, where the old function
+   hard-failed staging backward moves and all diverged candidates —
+   `diverged` cannot occur while main forbids force pushes, and the
+   attestation is an explicit operator act; (c) dispatch verification also binds
    the attestation's source commit to the dispatched sha (GHCR tags are
    mutable) and pins `--signer-workflow` to deploy.yml. Additionally: the
    qualify job regained `pull-requests: read`, and a production-targeted
