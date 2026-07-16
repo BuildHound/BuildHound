@@ -312,6 +312,13 @@ jobs:
           test "$status" = 200
           jq -e --arg id "$build_id" '.buildId == $id' /tmp/review-read.json > /dev/null
 
+          # Plan 094: hand the dashboard URL + per-run review ingest token to the
+          # payload-publish step below. The token is masked above; a step output stays
+          # inside this job on this runner (it never crosses a job boundary, unlike
+          # job-level outputs, which GitHub drops when they contain a masked value).
+          echo "dashboard_url=$dashboard_url" >> "$GITHUB_OUTPUT"
+          echo "review_token=$BUILDHOUND_REVIEW_TOKEN" >> "$GITHUB_OUTPUT"
+
           mkdir -p /tmp/review-attestation
           jq -cn --arg attemptId "$ATTEMPT_ID" --arg repository "$GITHUB_REPOSITORY" --argjson pr "$PR" \
             --arg headSha "$SHA" --arg serverImage "$server@$server_digest" \
@@ -339,6 +346,69 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: env.REVIEW_ACTION == 'deploy' && steps.deploy.outcome == 'success'
         with: {name: review-attestation, path: /tmp/review-attestation/review.json, retention-days: 90}
+      # Plan 094: replay this PR's CI build payloads into the freshly deployed review
+      # environment, so a deploy-review PR shows its own telemetry end to end.
+      #
+      # Trust boundary (pull_request_target): this job executes TRUSTED base-branch code —
+      # the workspace root is the `github.sha` checkout; the untrusted PR head exists only
+      # under review-source/ as a docker build context. The publish script is therefore
+      # invoked from the trusted root checkout, never from review-source/, so a malicious
+      # PR cannot alter the code that handles the review token. The payload files are
+      # untrusted PR-produced data, but they are POSTed to a review server that already
+      # runs that same PR's code — blast radius nil (plan 094 §3 trust model).
+      #
+      # Soft-fail contract: review copies are non-authoritative, and the ci.yml run for
+      # this SHA may legitimately still be building (ordering race, plan 094 §5 — accepted).
+      # Polling is bounded (~10×30 s, so the global review concurrency lock is never held
+      # long); a missing run/artifact is a step-summary note and exit 0, never a red job.
+      - name: Publish CI payloads to the review environment
+        if: env.REVIEW_ACTION == 'deploy' && steps.deploy.outcome == 'success'
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          SHA: "${{ env.REVIEW_SHA }}"
+          BUILDHOUND_SERVER_URL: "${{ steps.deploy.outputs.dashboard_url }}"
+          BUILDHOUND_TOKEN: "${{ steps.deploy.outputs.review_token }}"
+        run: |
+          set +e  # soft-fail contract: nothing below may redden a green deploy
+          note() {
+            echo "$1"
+            echo "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+          run_id=""
+          artifact_count=0
+          for attempt in $(seq 1 10); do
+            [ "$attempt" -gt 1 ] && sleep 30
+            if [ -z "$run_id" ]; then
+              candidate=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${SHA}&per_page=1" --jq '.workflow_runs[0].id // empty' 2>/dev/null)
+              case "$candidate" in
+                ''|*[!0-9]*) continue ;;
+                *) run_id="$candidate" ;;
+              esac
+            fi
+            status=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.status' 2>/dev/null)
+            artifact_count=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" --jq '[.artifacts[] | select(.name | startswith("buildhound-payload-"))] | length' 2>/dev/null)
+            case "$artifact_count" in ''|*[!0-9]*) artifact_count=0 ;; esac
+            # Stop when the CI run finished (its artifact set is final) or both expected
+            # payloads (build + sample-springboot) are already uploaded (if: always()).
+            if [ "$status" = "completed" ] || [ "$artifact_count" -ge 2 ]; then break; fi
+          done
+          if [ -z "$run_id" ]; then
+            note "buildhound review publish: no ci.yml run found for $SHA (docs-only change or run not started) — review copy skipped (non-authoritative, plan 094)"
+            exit 0
+          fi
+          if [ "$artifact_count" -eq 0 ]; then
+            note "buildhound review publish: ci.yml run $run_id produced no buildhound-payload-* artifacts within the polling budget — review copy skipped (non-authoritative, plan 094)"
+            exit 0
+          fi
+          if ! gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --pattern 'buildhound-payload-*' --dir /tmp/review-ci-payloads; then
+            note "buildhound review publish: artifact download failed — review copy skipped (non-authoritative, plan 094)"
+            exit 0
+          fi
+          # Trusted-checkout script; token only via env → Authorization header. The script
+          # itself soft-fails (exit 0) on 4xx/5xx/transport errors and re-POSTs are safe
+          # (ingest dedups on (project_id, build_id)).
+          find /tmp/review-ci-payloads -type f -name '*.json' -exec buildhound-ci-assets/bin/buildhound-publish {} +
+          exit 0
       - id: deploy_status
         name: Capture deploy step outcome
         if: ${{ always() }}

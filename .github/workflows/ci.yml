@@ -67,10 +67,27 @@ jobs:
       # Runs unit tests, TestKit functional tests, and plugin validation, with the
       # configuration cache enabled (gradle.properties). The plugin's test tasks use
       # a JDK 21 launcher (plan 011) — the toolchain resolver provisions it.
-      # The -I flag applies the just-published plugin to this build only (plan 093);
-      # no server URL/token env is set, so the UploadGate skips upload and the payload
-      # lands in the artifact below. Local `gradle build` without -I is unchanged.
+      # The -I flag applies the just-published plugin to this build only (plan 093).
+      # Local `gradle build` without -I is unchanged.
+      #
+      # Production publication (plan 094): the init script wires server.url/server.token
+      # from these env vars via providers.environmentVariable(...); the in-plugin upload
+      # keeps the spool/retry path, so prod is the loss-protected copy of every CI build.
+      #  - Fork PRs: secrets are never exposed to fork runs, and the URL is blanked
+      #    explicitly below — repo *variables*, unlike secrets, are readable from fork
+      #    runs, and an URL without a token would make the plugin attempt (and soft-fail)
+      #    an unauthenticated upload instead of skipping. With both empty, UploadGate
+      #    skips with "no server configured" — that skip IS the fork gate (plan 094 §2);
+      #    no separate same-repo job conditional is needed.
+      #  - Variable/secret not yet minted: same clean skip, so this YAML is safe to merge
+      #    before the owner creates BUILDHOUND_PROD_SERVER_URL /
+      #    BUILDHOUND_PROD_INGEST_TOKEN (plan 094 §6).
+      #  - Prod ingest token in same-repo PR context: accepted owner decision
+      #    (plan 094 §5) — ingest-scope only, fork-excluded, revocable.
       - name: Build
+        env:
+          BUILDHOUND_SERVER_URL: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.BUILDHOUND_PROD_SERVER_URL || '' }}
+          BUILDHOUND_TOKEN: ${{ secrets.BUILDHOUND_PROD_INGEST_TOKEN }}
         run: gradle build -I .github/buildhound-dogfood.init.gradle.kts
 
       # The plugin writes the payload even when the build fails (spec §3.2), so upload it
@@ -92,6 +109,8 @@ jobs:
         run: |
           shellcheck buildhound-ci-assets/bin/buildhound-metric buildhound-ci-assets/test/metric-cli-test.sh
           sh buildhound-ci-assets/test/metric-cli-test.sh
+          shellcheck buildhound-ci-assets/bin/buildhound-publish buildhound-ci-assets/test/publish-cli-test.sh
+          sh buildhound-ci-assets/test/publish-cli-test.sh
           shellcheck buildhound-ci-assets/test/wrapper-integrity-test.sh
           sh buildhound-ci-assets/test/wrapper-integrity-test.sh
           shellcheck .github/scripts/gradle-plugin-publication-digest.sh
@@ -137,6 +156,58 @@ jobs:
           path: samples/springboot-legacy/build/buildhound/build-payload.json
           if-no-files-found: warn
           retention-days: 7
+
+  publish-staging:
+    name: Publish payloads (staging)
+    # Plan 094: replay the plan-093 payload artifacts to the staging environment. Staging
+    # copies are non-authoritative — prod already got a direct, spool-backed upload in
+    # `build` — so this whole job is advisory by design:
+    #  - Same-repo PRs and pushes to main only. Fork PRs get no secrets, so the job is
+    #    skipped outright instead of running a guaranteed no-op (plan 094 §2 matrix).
+    #  - Plain `needs` semantics: if a producer job fails, this job is skipped — the
+    #    failed build's payload still reaches prod via the in-build upload; staging
+    #    misses it, accepted (non-authoritative copy).
+    #  - The publish script exits 0 on missing env (credentials not yet minted — this
+    #    YAML is merge-safe before the owner creates BUILDHOUND_STAGING_SERVER_URL /
+    #    BUILDHOUND_STAGING_INGEST_TOKEN), on 4xx, and on an unreachable staging: a dead
+    #    staging must never redden a PR.
+    #  - continue-on-error additionally keeps step-level infrastructure failures
+    #    (checkout, artifact download) from reddening the PR — the image-scan advisory
+    #    precedent; gh-ci-babysitter surfaces continue-on-error failures, so breakage
+    #    stays visible instead of silently green.
+    needs: [build, sample-springboot]
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # Both producer jobs upload if: always() with if-no-files-found: warn, so either
+      # artifact may be missing; the pattern download tolerates that (zero matches is
+      # not an error) and the find below handles an empty result.
+      - name: Download payload artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: buildhound-payload-*
+          path: payloads
+
+      # Token only via env → Authorization header inside the script — never argv, never
+      # echoed (tokens are masked in logs, but that is not relied upon).
+      - name: Publish payloads to staging
+        env:
+          BUILDHOUND_SERVER_URL: ${{ vars.BUILDHOUND_STAGING_SERVER_URL }}
+          BUILDHOUND_TOKEN: ${{ secrets.BUILDHOUND_STAGING_INGEST_TOKEN }}
+        run: |
+          mkdir -p payloads
+          count=$(find payloads -type f -name '*.json' | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "no buildhound-payload-* artifacts to publish (producer jobs uploaded none)"
+            exit 0
+          fi
+          find payloads -type f -name '*.json' -exec buildhound-ci-assets/bin/buildhound-publish {} +
 
   build-floor:
     name: Build & test (Gradle 8.14 floor)
