@@ -13,7 +13,7 @@ Plans 000–080 are implemented and live there, except [035](035-cc-miss-reason-
 [075](075-internal-adapters-cc-hit-toggle-rehydration.md) below — including
 [045](implemented/045-composite-task-dictionary.md), which was
 superseded/closed by [056](implemented/056-composite-build-logic-dictionary-priority.md) rather
-than shipping standalone, but whose own exit criteria were met by that work. Five plans remain
+than shipping standalone, but whose own exit criteria were met by that work. Six plans remain
 active in this directory:
 
 - [035](035-cc-miss-reason-capture.md) — CC miss-reason capture — **blocked**, not implementable
@@ -28,6 +28,8 @@ active in this directory:
   `dev.buildhound` for a protected, reproducible Portal publication.
 - [093](093-dogfood-buildhound-telemetry.md) — dogfood telemetry on the repo's own build and
   the springboot sample, payload as CI artifact — **open**.
+- [094](094-multi-env-build-data-publication.md) — multi-environment build-data publication
+  (prod direct, staging/review via artifact consumers) — **open**, after 093.
 
 CI recovery track (research: `docs/ci-pipeline-research.md`; orchestrator runbook:
 [ci-recovery-roadmap.md](ci-recovery-roadmap.md)) — strictly sequential:
