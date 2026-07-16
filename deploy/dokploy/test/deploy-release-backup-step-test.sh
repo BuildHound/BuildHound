@@ -88,7 +88,7 @@ run_step() {
 #    against the current release id.
 : > "$TEST_ROOT/out-established"
 run_step backup-step-1.sh "$TEST_ROOT/out-established" \
-  BOOTSTRAP=false MODE=automatic BACKUP_OBJECT= \
+  BOOTSTRAP=false MODE=automatic DISPATCH_TARGET= BACKUP_OBJECT= \
   FAKE_ANCHOR_STATE=established
 grep -Fx 'bootstrap=false' "$TEST_ROOT/out-established" >/dev/null
 grep -Fx -- "--latest --expected-release-id $RELEASE_ID" "$TEST_ROOT/calls.log" >/dev/null
@@ -100,7 +100,7 @@ fi
 # 2. First automatic staging deploy: bootstrap engages against the anchor.
 : > "$TEST_ROOT/out-bootstrap"
 run_step backup-step-1.sh "$TEST_ROOT/out-bootstrap" \
-  BOOTSTRAP=false MODE=automatic BACKUP_OBJECT= \
+  BOOTSTRAP=false MODE=automatic DISPATCH_TARGET= BACKUP_OBJECT= \
   FAKE_ANCHOR_STATE=bootstrap
 grep -Fx 'bootstrap=true' "$TEST_ROOT/out-bootstrap" >/dev/null
 grep -Fx 'require-manual-current --compose-id c1' "$TEST_ROOT/calls.log" >/dev/null
@@ -108,7 +108,7 @@ grep -Fx -- '--latest --expected-release-id manual' "$TEST_ROOT/calls.log" >/dev
 
 # 3. Anchorless compose fails closed before any backup selection.
 if run_step backup-step-1.sh "$TEST_ROOT/out-missing" \
-  BOOTSTRAP=false MODE=automatic BACKUP_OBJECT= \
+  BOOTSTRAP=false MODE=automatic DISPATCH_TARGET= BACKUP_OBJECT= \
   FAKE_ANCHOR_STATE=missing 2>/dev/null; then
   printf 'anchorless staging compose did not fail closed\n' >&2
   exit 1
@@ -122,12 +122,24 @@ fi
 #    backup object; the automatic detector must not run.
 : > "$TEST_ROOT/out-dispatch"
 run_step backup-step-1.sh "$TEST_ROOT/out-dispatch" \
-  BOOTSTRAP=true MODE=dispatch BACKUP_OBJECT=backups/x.dump.age \
+  BOOTSTRAP=true MODE=dispatch DISPATCH_TARGET=staging BACKUP_OBJECT=backups/x.dump.age \
   FAKE_ANCHOR_STATE=bootstrap
 grep -Fx 'bootstrap=true' "$TEST_ROOT/out-dispatch" >/dev/null
 grep -Fx -- '--object backups/x.dump.age --expected-release-id manual' "$TEST_ROOT/calls.log" >/dev/null
 if grep -q 'staging-bootstrap-state' "$TEST_ROOT/calls.log"; then
   printf 'dispatch staging deploy ran the automatic bootstrap detector\n' >&2
+  exit 1
+fi
+
+# 4b. Production-targeted dispatch: the staging safety leg selects staging's
+#     own latest backup (the operator object belongs to production).
+: > "$TEST_ROOT/out-dispatch-prod-leg"
+run_step backup-step-1.sh "$TEST_ROOT/out-dispatch-prod-leg" \
+  BOOTSTRAP=false MODE=dispatch DISPATCH_TARGET=production BACKUP_OBJECT=backups/y.dump.age \
+  FAKE_ANCHOR_STATE=established
+grep -Fx -- "--latest --expected-release-id $RELEASE_ID" "$TEST_ROOT/calls.log" >/dev/null
+if grep -q -- '--object' "$TEST_ROOT/calls.log"; then
+  printf 'production-targeted dispatch used the production backup object on staging\n' >&2
   exit 1
 fi
 
