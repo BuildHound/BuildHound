@@ -101,6 +101,25 @@ workflows (088/089), client internals beyond what the collapse deletes (091).
    client still validates the schema-3 BOM it produces (client changes are
    091's scope); only the workflow-side schema predicates are deleted.
 
+8. **Review-driven hardening (§3.2, Stage C).** Three review findings the
+   plan's tradeoffs had not accepted, all fixed: (a) both deploy jobs check
+   out the **candidate** commit (== `github.sha` on push; the
+   attestation-bound sha on dispatch) so a rollback's BOM, migration
+   history, and manifests are the candidate's own — rendering from current
+   main made the migration-compatibility gate vacuous; (b) the
+   deployment-progress backstop is restored in both deploy jobs (a
+   behind/diverged candidate — e.g. an approved stale waiting run — needs
+   the explicit rollback attestation); (c) dispatch verification also binds
+   the attestation's source commit to the dispatched sha (GHCR tags are
+   mutable) and pins `--signer-workflow` to deploy.yml. Additionally: the
+   qualify job regained `pull-requests: read`, and a production-targeted
+   dispatch's staging safety leg selects staging's own latest backup (the
+   operator object belongs to production and cannot validate cross-
+   environment). **Gate H2 gains one item (§3.2 finding): both `staging`
+   and `production` environments must restrict deployment branches to
+   `main`** — environment protection is the sole barrier around deployment
+   secrets for dispatched refs.
+
 ## Test strategy
 
 `deploy-release-resolver-test.sh` retires with the resolver; replacement tests assert:
