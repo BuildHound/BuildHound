@@ -106,7 +106,14 @@ workflows (088/089), client internals beyond what the collapse deletes (091).
    out the **candidate** commit (== `github.sha` on push; the
    attestation-bound sha on dispatch) so a rollback's BOM, migration
    history, and manifests are the candidate's own — rendering from current
-   main made the migration-compatibility gate vacuous; (b) the
+   main made the migration-compatibility gate vacuous (the infra security
+   review independently rated the dispatch variant of this CRITICAL: a
+   rollback would pair historical images with current-main manifests and
+   migrations). Deliberate consequence: a dispatch run's *tooling*
+   (dokploy.sh, select-backup.sh, verify-release.sh) is also the
+   candidate's — the whole tree is the coherent, once-deployed state; if a
+   tooling regression ever blocks a rollback, dispatching a newer sha
+   recovers. (b) the
    deployment-progress backstop is restored in both deploy jobs (a
    behind/diverged candidate — e.g. an approved stale waiting run — needs
    the explicit rollback attestation); (c) dispatch verification also binds
