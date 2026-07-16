@@ -74,7 +74,9 @@ head-of-branch plugin from source — wiring already exists in its settings file
 
 **Artifacts.** Both jobs upload `build/buildhound/build-payload.json` as
 `buildhound-payload-<job>` with `if: always()` (the payload is written even when the build
-fails — spec §3.2) and short retention (7 days).
+fails — spec §3.2) and short retention (7 days). The repository is public, so these
+artifacts are world-readable — assessed as acceptable (§3.2 review, 2026-07-16): the
+payload is pseudonymized by design (spec §3.7) and retention is 7 days.
 
 ## 4. Test strategy
 
@@ -94,7 +96,25 @@ fails — spec §3.2) and short retention (7 days).
   cannot redden CI; the failure marker + missing artifact make it visible.
 - Known warm-daemon CC edge (plan 075) does not apply — CI daemons are cold.
 
-## 6. Exit criteria
+## 6. Review acceptances (2026-07-16)
+
+Recorded per CLAUDE.md §3 (findings fixed or explicitly accepted):
+
+- **Silent total-collection failure:** the payload-artifact steps use
+  `if-no-files-found: warn`, so a build where the plugin never wrote a payload uploads
+  nothing and stays green. Accepted for 093 (collection-only, no consumer yet); revisit in
+  094+, whose publish jobs are natural detectors for a missing artifact.
+- **Non-relocatable functionalTest input:** the `buildhound.dogfood.init-script` absolute
+  path rides the `functionalTest` system properties, blocking cross-machine build-cache
+  reuse of the task. Accepted: it follows the pre-existing `release-test-repository` /
+  `testkit.root` pattern, and the suite is deliberately machine-specific (plan 049 §3.1
+  rationale).
+- **Committed demo token in CI:** the sample's `buildhound-local-dev-token` fallback
+  (a documented, well-known non-secret for the local compose stack) now also runs in the
+  `sample-springboot` job, where the localhost upload fails closed. Accepted; no credential
+  value is exposed that was not already committed.
+
+## 7. Exit criteria
 
 - A PR run uploads `buildhound-payload-build` and `buildhound-payload-sample-springboot`
   artifacts containing valid v1 payloads (each with a fresh `buildId`).

@@ -18,8 +18,9 @@ import org.junit.jupiter.api.io.TempDir
  * system property, never a copy) is applied with `-I` to a synthetic project that does NOT apply
  * the plugin itself — exactly the ci.yml `build` job shape.
  *
- * The init script resolves `dev.buildhound:buildhound-gradle-plugin:0.1.0-SNAPSHOT` from the
- * local Maven repository; the tests redirect that repository with `-Dmaven.repo.local` (which
+ * The init script resolves `dev.buildhound:buildhound-gradle-plugin` at the root build's
+ * default development version (parsed from the root build script, see [rootDefaultVersion])
+ * from the local Maven repository; the tests redirect that repository with `-Dmaven.repo.local` (which
  * both `mavenLocal()` and the script's stage-1 presence check honor) to a fixture repo built
  * from the already-published release-test-repository JAR — so the dev machine's real `~/.m2`
  * is never read nor required.
@@ -33,6 +34,24 @@ class DogfoodInitScriptFunctionalTest {
         val script = File(requireNotNull(System.getProperty("buildhound.dogfood.init-script")))
         assertTrue(script.isFile, "the real dogfood init script must exist: $script")
         return script
+    }
+
+    /**
+     * The default development version, parsed from the root build script's actual fallback
+     * (`.getOrElse("0.1.0-SNAPSHOT")` on the buildhoundVersion provider chain) rather than
+     * hardcoded here: the init script must carry its own self-contained copy of that literal,
+     * and a copy asserted against another copy would stay self-consistently green forever. By
+     * deriving the expectation from the source of truth, a version bump that forgets the init
+     * script breaks these tests loudly instead of silently no-op-ing the dogfood telemetry
+     * through the script's graceful-degrade path (093 review finding).
+     */
+    private fun rootDefaultVersion(): String {
+        val rootBuildScript = initScript().parentFile.parentFile.resolve("build.gradle.kts")
+        assertTrue(rootBuildScript.isFile, "root build script not found next to .github: $rootBuildScript")
+        val match = Regex("""\.getOrElse\("([^"]+)"\)""").find(rootBuildScript.readText())
+        return requireNotNull(match?.groupValues?.get(1)) {
+            "could not parse the default development version from $rootBuildScript"
+        }
     }
 
     /**
@@ -64,17 +83,20 @@ class DogfoodInitScriptFunctionalTest {
             it.name.endsWith(".jar") && !it.name.contains("-sources") && !it.name.contains("-javadoc")
         }
 
-        val target = File(localRepo, "dev/buildhound/buildhound-gradle-plugin/$INIT_SCRIPT_VERSION")
+        // Laid out at the ROOT default version (the coordinates the init script must resolve),
+        // regardless of the version the release-test publication happened to be built as.
+        val version = rootDefaultVersion()
+        val target = File(localRepo, "dev/buildhound/buildhound-gradle-plugin/$version")
         check(target.mkdirs()) { "could not create $target" }
-        publishedJar.copyTo(File(target, "buildhound-gradle-plugin-$INIT_SCRIPT_VERSION.jar"))
-        File(target, "buildhound-gradle-plugin-$INIT_SCRIPT_VERSION.pom").writeText(
+        publishedJar.copyTo(File(target, "buildhound-gradle-plugin-$version.jar"))
+        File(target, "buildhound-gradle-plugin-$version.pom").writeText(
             """
             <?xml version="1.0" encoding="UTF-8"?>
             <project xmlns="http://maven.apache.org/POM/4.0.0">
               <modelVersion>4.0.0</modelVersion>
               <groupId>dev.buildhound</groupId>
               <artifactId>buildhound-gradle-plugin</artifactId>
-              <version>$INIT_SCRIPT_VERSION</version>
+              <version>$version</version>
             </project>
             """.trimIndent(),
         )
@@ -144,6 +166,20 @@ class DogfoodInitScriptFunctionalTest {
     }
 
     @Test
+    fun `init script version literal matches the root build default`() {
+        // The init script's stage-1 block must stay self-contained, so it carries its own copy
+        // of the default development version. This pins that copy to the root build script's
+        // fallback: bumping one without the other fails here with a direct message instead of
+        // the indirect "plugin summary missing" failure of the activation test above.
+        val version = rootDefaultVersion()
+        assertTrue(
+            initScript().readText().contains("val version = \"$version\""),
+            "the init script's version literal drifted from the root default ($version) — " +
+                "update .github/buildhound-dogfood.init.gradle.kts",
+        )
+    }
+
+    @Test
     fun `missing local publication degrades to a warn and never fails the build`() {
         setUpProject()
         // An empty repo: the stage-1 presence check must skip the classpath, the body must warn.
@@ -161,14 +197,5 @@ class DogfoodInitScriptFunctionalTest {
             File(projectDir, "build/buildhound/build-payload.json").exists(),
             "no payload may be written without the plugin",
         )
-    }
-
-    private companion object {
-        /**
-         * The version the init script hardcodes (the root build's default development version).
-         * The fixture repo is laid out at these coordinates regardless of the published
-         * release-test version, mirroring what `publishToMavenLocal` produces in CI.
-         */
-        const val INIT_SCRIPT_VERSION = "0.1.0-SNAPSHOT"
     }
 }

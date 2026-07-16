@@ -105,6 +105,10 @@ jobs:
     # localhost, so the in-CI upload attempt fails soft (warn + spool) — collection and the
     # payload artifact are unaffected, and no credential exists in this job.
     runs-on: ubuntu-latest
+    # First CI outing for a 52-module build that deliberately runs with -Xmx1g, no build
+    # cache, and no parallelism — don't let a pathological run ride the 360-min platform
+    # default (same rationale as build-windows below).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
