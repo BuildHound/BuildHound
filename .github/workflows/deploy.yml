@@ -205,6 +205,11 @@ jobs:
       backup_image: ${{ steps.verify.outputs.backup_image }}
       db_image: ${{ steps.verify.outputs.db_image }}
     steps:
+      # gh attestation verify on an oci:// URL reads the registry through the
+      # local Docker credential store; the packages are private, so the
+      # rollback path needs an explicit login (infra review).
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
       - id: verify
         env:
           GH_TOKEN: ${{ github.token }}
