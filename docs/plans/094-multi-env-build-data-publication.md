@@ -1,0 +1,90 @@
+# 094 — Multi-environment build-data publication (prod + staging + review)
+
+## 1. Source
+
+Owner feature request (2026-07) following the multi-server ingest investigation: internal
+CI builds must land in every environment at-or-above the change's maturity, so prod tracks
+all builds over time while new telemetry features are validated on review/staging first.
+**Internal-only**: implemented entirely in workflow YAML + secrets — the published plugin
+and the server keep their single-server contract (the investigation rejected a multi-URL
+plugin DSL; Develocity ships none either, and the retry spool is keyed by `buildId` only,
+so a second in-plugin destination would corrupt retry state). Depends on plan 093
+(payload artifacts).
+
+## 2. Scope
+
+**In:** routing matrix below; direct plugin upload to production; artifact-consuming
+publish jobs for staging and review; ingest-token provisioning.
+
+| Build source | production | staging | review (PR env) |
+|---|---|---|---|
+| PR CI (same-repo) | direct (plugin) | artifact job | artifact step, `deploy-review`-labeled PRs only |
+| push to `main` | direct (plugin) | artifact job | — |
+| fork PR | — (no secrets → gate skips) | — | — |
+
+**Out:** plugin/server/schema changes; multi-target spool; proxy mirroring; `/v1/metrics`
+fan-out; backfilling review/staging gaps (only prod has spool-backed delivery).
+
+## 3. Design
+
+**Production (authoritative record).** The plan-093 init script gets real values in the
+`build` job: `BUILDHOUND_SERVER_URL` = prod dashboard origin (repo variable),
+`BUILDHOUND_TOKEN` = **new ingest-scope-only token** minted on prod for the `buildhound`
+project, stored as repo secret `BUILDHOUND_PROD_INGEST_TOKEN`. Inline CI upload keeps the
+spool/retry path, so prod is the loss-protected copy.
+
+**Staging.** New `ci.yml` job `publish-staging` (`needs: [build, sample-springboot]`,
+runs for same-repo PRs and `main` pushes): downloads the `buildhound-payload-*` artifacts
+and POSTs each to `<staging>/v1/builds` with `BUILDHOUND_STAGING_INGEST_TOKEN` (repo
+secret, ingest scope). The POST lives in a small shellchecked script under
+`buildhound-ci-assets/bin/` (metric-CLI conventions: token only via header, soft-fail
+exit 0) — a dead staging must never redden a PR.
+
+**Review.** A post-smoke step in `review-environment.yml`'s deploy path: find the CI run
+for `$REVIEW_SHA` (`gh api`, `actions: read` is already granted), poll bounded (~10×30 s)
+for the payload artifacts, POST them to `$dashboard_url/v1/builds` with the in-run
+`BUILDHOUND_REVIEW_TOKEN` (generated per deploy; it exists nowhere else, which is why this
+step cannot live in `ci.yml`). Soft-fail with a job-summary note when the artifact never
+appears.
+
+**Idempotency.** Ingest dedups on `(project_id, build_id)` — `ON CONFLICT DO NOTHING`,
+duplicates return `"duplicate"` — so job re-runs, spool drains, and multi-env replays are
+all safe; each environment dedups independently.
+
+**Trust model.** Repo-level secrets hold *ingest-scope* tokens only (worst case: junk
+telemetry, bounded by payload caps + rate limiting). Admin/bootstrap tokens stay in the
+protected GitHub Environments. Fork PRs get no secrets → clean skips. The review step
+consumes an artifact produced by PR-controlled code — treated as untrusted data POSTed to
+an environment that runs that same PR's code anyway (blast radius nil).
+
+## 4. Test strategy
+
+- The publish script gets a `metric-cli-test.sh`-style sh test (success / 4xx-drop /
+  unreachable-soft-fail / missing-env skip); shellcheck already enforced in CI.
+- `actionlint` covers the workflow edits.
+- End-to-end proof is the exit criteria run below.
+
+## 5. Risks
+
+- **Prod ingest token in PR context** — accepted deliberately (owner decision, this plan):
+  scope-limited, fork-excluded, revocable; prerequisite below tightens the boundary first.
+- **Schema drift, accepted:** an older prod server drops unknown new payload fields
+  (`ignoreUnknownKeys`) and first-write-wins means no backfill after upgrade. New fields
+  are *validated* on review (runs the PR's server image) and staging — exactly the point
+  of the matrix.
+- **Ordering race:** review deploy may finish before the CI build; bounded polling covers
+  the common case, a missed artifact is logged and dropped (review copies are
+  non-authoritative).
+- **Workflow contention:** touches `ci.yml` + `review-environment.yml` — coordinate with
+  the open CI-recovery plans 088–090.
+
+## 6. Prerequisites & exit criteria
+
+Prerequisites: mint ingest-scope tokens on staging + production (via each environment's
+bootstrap-token admin path) and store the two repo secrets; verify the four GitHub
+Environments' protection rules match `deploy/dokploy/README.md` (a 2026-07-15 live check
+found them unset — per that README this is a rollout blocker for adding credentials).
+
+Exit: a `deploy-review`-labeled PR lands the same `buildId` in all three environments; a
+merged commit lands in prod + staging; a fork PR shows "no server configured" and skipped
+publish jobs; no token appears in any log (masked).
