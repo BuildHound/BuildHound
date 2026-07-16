@@ -28,17 +28,34 @@ fan-out; backfilling review/staging gaps (only prod has spool-backed delivery).
 ## 3. Design
 
 **Production (authoritative record).** The plan-093 init script gets real values in the
-`build` job: `BUILDHOUND_SERVER_URL` = prod dashboard origin (repo variable),
-`BUILDHOUND_TOKEN` = **new ingest-scope-only token** minted on prod for the `buildhound`
-project, stored as repo secret `BUILDHOUND_PROD_INGEST_TOKEN`. Inline CI upload keeps the
-spool/retry path, so prod is the loss-protected copy.
+`build` job: `BUILDHOUND_SERVER_URL` = prod dashboard origin (repo variable
+`BUILDHOUND_PROD_SERVER_URL`), `BUILDHOUND_TOKEN` = **new ingest-scope-only token**
+minted on prod for the `buildhound` project, stored as repo secret
+`BUILDHOUND_PROD_INGEST_TOKEN`. Inline CI upload keeps the spool/retry path, so prod is
+the loss-protected copy. *Implementation note:* the URL env is blanked for fork PRs with
+an expression-level same-repo condition — repo **variables**, unlike secrets, are
+readable from fork runs, and a URL without a token would make the plugin attempt (and
+soft-fail) an unauthenticated upload instead of producing the exit-criteria
+"no server configured" skip. This is the plan's fork row made deterministic, not an
+extra gate.
 
 **Staging.** New `ci.yml` job `publish-staging` (`needs: [build, sample-springboot]`,
 runs for same-repo PRs and `main` pushes): downloads the `buildhound-payload-*` artifacts
-and POSTs each to `<staging>/v1/builds` with `BUILDHOUND_STAGING_INGEST_TOKEN` (repo
-secret, ingest scope). The POST lives in a small shellchecked script under
-`buildhound-ci-assets/bin/` (metric-CLI conventions: token only via header, soft-fail
-exit 0) — a dead staging must never redden a PR.
+and POSTs each to `<staging>/v1/builds` (staging origin from repo variable
+`BUILDHOUND_STAGING_SERVER_URL`) with `BUILDHOUND_STAGING_INGEST_TOKEN` (repo secret,
+ingest scope). The POST lives in a small shellchecked script,
+`buildhound-ci-assets/bin/buildhound-publish` (metric-CLI conventions: server/token via
+`BUILDHOUND_SERVER_URL`/`BUILDHOUND_TOKEN` env, token only via header, soft-fail exit 0;
+the env-scoped `*_INGEST_TOKEN` naming lives in the secret names and the workflow `env:`
+mapping keeps both conventions visible at the call site) — a dead staging must never
+redden a PR. *Implementation note:* the script's soft-fail exit 0 is the primary
+contract (missing env → skip, 4xx → drop with warning, transport/5xx → warn); the job
+additionally sets `continue-on-error: true` so step-level infrastructure failures
+(checkout, artifact download) can't redden a PR either — the image-scan advisory
+precedent, and gh-ci-babysitter surfaces continue-on-error failures so breakage stays
+visible. Plain `needs` semantics are kept: a failed producer job skips this job (prod
+still gets that payload via the in-build upload; staging misses it — accepted,
+non-authoritative).
 
 **Review.** A post-smoke step in `review-environment.yml`'s deploy path: find the CI run
 for `$REVIEW_SHA` (`gh api`, `actions: read` is already granted), poll bounded (~10×30 s)
@@ -84,6 +101,25 @@ Prerequisites: mint ingest-scope tokens on staging + production (via each enviro
 bootstrap-token admin path) and store the two repo secrets; verify the four GitHub
 Environments' protection rules match `deploy/dokploy/README.md` (a 2026-07-15 live check
 found them unset — per that README this is a rollout blocker for adding credentials).
+
+### Owner actions required before enabling
+
+The merged YAML is deliberately safe *before* any of these exist — every publish path
+skips cleanly (plugin: `UploadGate` "no server configured"; script: "skipping publish"
+log + exit 0) while they are unset. Nothing uploads until the owner:
+
+1. Mints an **ingest-scope-only** token on production and staging (each environment's
+   bootstrap-token admin path).
+2. Creates the repo **secrets**: `BUILDHOUND_PROD_INGEST_TOKEN`,
+   `BUILDHOUND_STAGING_INGEST_TOKEN`.
+3. Creates the repo **variables** (dashboard origins, `https://…`, no trailing path):
+   `BUILDHOUND_PROD_SERVER_URL`, `BUILDHOUND_STAGING_SERVER_URL`.
+4. Fixes the four GitHub Environments' protection rules per `deploy/dokploy/README.md`
+   (2026-07-15 check found them unset — a rollout blocker for credentialed use, and
+   explicitly *not* permission to fall back to repository-wide credentials).
+
+The review path needs no owner action: it reuses the per-run `BUILDHOUND_REVIEW_TOKEN`
+minted inside `review-environment.yml`.
 
 Exit: a `deploy-review`-labeled PR lands the same `buildId` in all three environments; a
 merged commit lands in prod + staging; a fork PR shows "no server configured" and skipped
