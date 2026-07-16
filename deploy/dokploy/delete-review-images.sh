@@ -161,6 +161,17 @@ for package in buildhound-server buildhound-site; do
          select(.number == $pr and .head.repo.full_name == $repo and .base.repo.full_name == $repo)
        ' >/dev/null; then
       verified=true
+    elif pr_record=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$REVIEW_PR") &&
+       printf '%s\n' "$pr_record" | jq -e --arg repo "$GITHUB_REPOSITORY" --arg sha "$sha" '
+         .head.sha == $sha and
+         .head.repo.full_name == $repo and .base.repo.full_name == $repo
+       ' >/dev/null; then
+      # commits/{sha}/pulls only returns OPEN pull requests for commits that
+      # are not on the default branch (documented GitHub behavior), so the
+      # head image of a closed or rebase-merged PR — exactly what retirement
+      # cleans up — never verifies through it. The PR record itself proves
+      # the sha is that PR's exact head.
+      verified=true
     elif force_push_history_contains "$sha"; then
       verified=true
     fi

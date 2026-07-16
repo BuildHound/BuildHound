@@ -55,6 +55,21 @@ case "$*" in
       printf '[]\n'
     fi
     ;;
+  "api repos/BuildHound/BuildHound/pulls/42")
+    # commits/{sha}/pulls omits closed/rebase-merged PRs off the default
+    # branch; the PR record is the fallback provenance for the exact head.
+    case "${PACKAGE_TEST_MODE:-normal}" in
+      closedpr)
+        printf '{"head":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"BuildHound/BuildHound"}},"base":{"repo":{"full_name":"BuildHound/BuildHound"}}}\n'
+        ;;
+      closedpr_fork)
+        printf '{"head":{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","repo":{"full_name":"someone/fork"}},"base":{"repo":{"full_name":"BuildHound/BuildHound"}}}\n'
+        ;;
+      *)
+        exit 91
+        ;;
+    esac
+    ;;
   "api graphql "*)
     case "${PACKAGE_TEST_MODE:-normal}" in
       forcepush)
@@ -102,6 +117,19 @@ if grep -F 'api graphql ' "$gh_log" >/dev/null; then
   exit 1
 fi
 
+# Closed / rebase-merged PR: commits/{sha}/pulls is empty, the PR record
+# verifies the exact head, and no GraphQL fallback is needed.
+: > "$delete_log"
+: > "$gh_log"
+run_cleanup closedpr
+grep -F 'buildhound-server/versions/11' "$delete_log" >/dev/null
+grep -F 'buildhound-site/versions/21' "$delete_log" >/dev/null
+if grep -Eq 'versions/(12|22)' "$delete_log"; then exit 1; fi
+if grep -F 'api graphql ' "$gh_log" >/dev/null; then
+  echo 'GraphQL fallback ran despite PR-record provenance' >&2
+  exit 1
+fi
+
 for mode in forcepush forcepush_page2; do
   : > "$delete_log"
   : > "$gh_log"
@@ -111,7 +139,7 @@ for mode in forcepush forcepush_page2; do
   test "$(grep -Fc 'api graphql ' "$gh_log")" = 1
 done
 
-for mode in shared unowned graphfail malformed wrongidentity revalidation_drift; do
+for mode in shared unowned graphfail malformed wrongidentity revalidation_drift closedpr_fork; do
   : > "$delete_log"
   : > "$gh_log"
   if run_cleanup "$mode" >/dev/null 2>&1; then
