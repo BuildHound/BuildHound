@@ -103,6 +103,23 @@ platform trust root. The shipped script must never embed the token: it reads it 
 root-owned `0600` EnvironmentFile or systemd `LoadCredential=`; the token stays out of
 the committed script, unit file, repo, and logs.
 
+## Live verification log (Stage B)
+
+- First converge on merged main green (run 29460940750); the issues-listing
+  endpoint works under the granted permissions (both reviews' open
+  question). Summary: `kept=0 retired=0 missing=0 skipped-retired=6` — the
+  six Stage A anchors skipped, staging/prod untouched.
+- Failure alerting round-trip verified live: `simulate_failure` dispatch
+  (run 29460976273) created marker issue #54; the next converge closed it
+  with the recovery link.
+- Chaos 1 (cancel mid-cleanup): run 29461071764 cancelled in flight; the
+  next converge (run 29461086938) green with no manual action.
+- Chaos 2 (close PR while the workflow is disabled): this PR is the test
+  vehicle — results recorded on the PR after execution.
+- Chaos 3 (host GC pass): pending the Gate H1 operator report (merge
+  proceeded ahead of H1 at the owner's direction; the report remains the
+  outstanding exit-criterion evidence).
+
 ## Exit criteria
 
 - Kill a cleanup run mid-flight (cancel in UI): environment is converged at the next tick
