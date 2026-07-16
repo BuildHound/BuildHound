@@ -318,6 +318,15 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
     systemProperty("buildhound.testkit.cc", testkitCcMode)
     systemProperty("buildhound.release-test-repository", releaseTestRepository.get().asFile.absolutePath)
     systemProperty("buildhound.release-version", version.toString())
+    // The REAL dogfood init script (plan 093), not a copy: DogfoodInitScriptFunctionalTest runs
+    // it against a synthetic project so the CI-injection path cannot rot unnoticed. Declared as
+    // an input below so an edit to the script re-runs the suite.
+    systemProperty(
+        "buildhound.dogfood.init-script",
+        rootProject.layout.projectDirectory.file(".github/buildhound-dogfood.init.gradle.kts").asFile.absolutePath,
+    )
+    inputs.files(rootProject.layout.projectDirectory.file(".github/buildhound-dogfood.init.gradle.kts"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     // Fingerprint the deterministic publication sources, not the generated repository: SNAPSHOT
     // Maven metadata and filenames change on every publish even when the artifact is identical.
     // These are the files the fixture resolves and validates, including the plugin marker POM.
