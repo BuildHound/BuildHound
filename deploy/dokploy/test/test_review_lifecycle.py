@@ -100,6 +100,18 @@ class ReviewPolicyTest(unittest.TestCase):
         self.assertIn(
             'test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"', reconciler
         )
+        # The reconciler is the only cleanup mechanism; failures must surface
+        # (open marker issue) and recovery must self-heal (close it). The
+        # simulate_failure knob fails before any Dokploy access.
+        self.assertIn("if: failure()", reconciler)
+        self.assertIn("if: success()", reconciler)
+        self.assertIn("Review-environment converge is failing", reconciler)
+        self.assertIn("issues: write", reconciler)
+        simulate = reconciler.index("Simulate a converge failure")
+        converge_call = reconciler.index("deploy/dokploy/reconcile-reviews.sh")
+        dokploy_env = reconciler.index("DOKPLOY_TOKEN:")
+        self.assertLess(simulate, converge_call)
+        self.assertLess(simulate, dokploy_env)
         publisher = (ROOT / ".github/workflows/publish-deploy-images.yml").read_text()
         self.assertIn("group: review-environment-global", publisher)
 
