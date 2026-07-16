@@ -103,6 +103,36 @@ platform trust root. The shipped script must never embed the token: it reads it 
 root-owned `0600` EnvironmentFile or systemd `LoadCredential=`; the token stays out of
 the committed script, unit file, repo, and logs.
 
+## Live verification log (Stage B)
+
+- First converge on merged main green (run 29460940750); the issues-listing
+  endpoint works under the granted permissions (both reviews' open
+  question). Summary: `kept=0 retired=0 missing=0 skipped-retired=6` — the
+  six Stage A anchors skipped, staging/prod untouched.
+- Failure alerting round-trip verified live: `simulate_failure` dispatch
+  (run 29460976273) created marker issue #54; the next converge closed it
+  with the recovery link.
+- Chaos 1 (cancel mid-cleanup): run 29461071764 cancelled in flight; the
+  next converge (run 29461086938) green with no manual action.
+- Chaos 2 (close PR while the workflow is disabled): **PASSED, and caught a
+  latent defect.** PR #55's review env went live (mr55 health 200);
+  review-environment.yml was disabled; the PR closed (no cleanup event
+  fired); the workflow was re-enabled. The next converge (run 29461440253)
+  scrubbed mr55 (routes 404) but failed image cleanup and correctly opened
+  marker issue #56: the `commits/{sha}/pulls` provenance check can never
+  verify a closed or rebase-merged PR's head image (the endpoint omits
+  non-open PRs for commits off the default branch — documented GitHub
+  behavior), so every close-path image cleanup had been silently failing
+  since inception. Fixed by PR #57 (PR-record provenance branch). PR #57's
+  own merge close-event then exercised the fast path with the fix: mr55
+  images deleted and anchor retired at 00:34:58Z, the dispatched converge
+  one second later serialized behind it and reported `skipped-retired=7`,
+  and issue #56 auto-closed — fast path, converge idempotence, and
+  concurrency-group serialization demonstrated in one sequence.
+- Chaos 3 (host GC pass): pending the Gate H1 operator report (merge
+  proceeded ahead of H1 at the owner's direction; the report remains the
+  outstanding exit-criterion evidence).
+
 ## Exit criteria
 
 - Kill a cleanup run mid-flight (cancel in UI): environment is converged at the next tick
