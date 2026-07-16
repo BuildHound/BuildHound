@@ -39,6 +39,7 @@ jobs:
   qualify:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions: {contents: read, pull-requests: read}
     outputs:
       deploy: ${{ steps.pr.outputs.deploy }}
     steps:
@@ -226,12 +227,24 @@ jobs:
             gh attestation verify "oci://$image" \
               --repo "$GITHUB_REPOSITORY" \
               --source-ref refs/heads/main \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml" \
               --format json > "verify-$package.json"
             digest=$(jq -er '
               [.[] | .verificationResult.statement.subject[]?.digest.sha256
                 | select(type == "string" and test("^[0-9a-f]{64}$"))]
               | unique | select(length == 1) | .[0]
             ' "verify-$package.json")
+            # GHCR tags are mutable: verifying "built from main" is not
+            # enough — the attestation's source commit must be exactly the
+            # commit the operator named, or a retagged (older, attested)
+            # digest could ship under this sha's identity.
+            jq -e --arg sha "$SHA" '
+              [.. | objects | .gitCommit? | select(type == "string")]
+              | (length > 0) and (unique == [$sha])
+            ' "verify-$package.json" >/dev/null || {
+              echo "::error::$package attestation source commit does not match the dispatched sha"
+              exit 1
+            }
             echo "${package}_image=$IMAGE_REGISTRY_PREFIX/buildhound-$package@sha256:$digest" >> "$GITHUB_OUTPUT"
           done
   deploy-staging:
@@ -254,9 +267,14 @@ jobs:
       DB_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.db_image || needs.resolve_dispatch.outputs.db_image }}
       SOURCE_COMMIT: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
     steps:
+      # Checked out at the CANDIDATE commit (== github.sha on push; the
+      # attestation-bound sha on dispatch) so the rendered BOM, migration
+      # history, and manifests are the candidate's own — a rollback candidate
+      # rendered from current main would always pass the migration-
+      # compatibility gate vacuously.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
           persist-credentials: false
       - name: Render trusted release inputs
         run: |
@@ -287,6 +305,7 @@ jobs:
           DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
           MODE: ${{ github.event_name == 'push' && 'automatic' || 'dispatch' }}
+          DISPATCH_TARGET: ${{ inputs.target }}
           BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'staging' && inputs.bootstrap_bom || false }}
           BACKUP_OBJECT: ${{ inputs.backup_object }}
         run: |
@@ -311,7 +330,12 @@ jobs:
             expected=$(bash deploy/dokploy/dokploy.sh current-release-id --compose-id "$COMPOSE_ID")
           fi
           echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"
-          if [ "$MODE" = automatic ]; then
+          # A production-targeted dispatch redeploys staging first as a
+          # safety leg; the operator-chosen backup object belongs to the
+          # PRODUCTION environment and cannot validate against staging's
+          # bucket/instance metadata, so that leg selects staging's own
+          # latest backup instead.
+          if [ "$MODE" = automatic ] || [ "$DISPATCH_TARGET" = production ]; then
             bash deploy/dokploy/select-backup.sh --latest --expected-release-id "$expected" > /tmp/backup-selection.json
           else
             test -n "$BACKUP_OBJECT"
@@ -327,6 +351,7 @@ jobs:
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
           SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
           SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
+          GH_TOKEN: ${{ github.token }}
           BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}
           ROLLBACK_COMPATIBLE: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_compatibility_attested || false }}
         run: |
@@ -348,6 +373,22 @@ jobs:
             selected_predecessor=$(jq -er '.expectedReleaseId | select(type == "string")' /tmp/backup-selection.json)
             [[ "$selected_predecessor" =~ ^sha256:[0-9a-f]{64}$ ]]
             predecessor+=(--expected-current-release-id "$selected_predecessor")
+            # Restored backstop (§3.2 review): a candidate behind or diverged
+            # from the deployed release never deploys silently — e.g. an
+            # operator approving a stale waiting run after a newer deploy —
+            # it requires the explicit rollback attestation.
+            current_source=$(bash deploy/dokploy/dokploy.sh current-source-commit --compose-id "$COMPOSE_ID")
+            [[ "$current_source" =~ ^[0-9a-f]{40}$ ]]
+            progress=$(gh api "repos/$GITHUB_REPOSITORY/compare/$current_source...$SOURCE_COMMIT" --jq .status)
+            case "$progress" in
+              identical|ahead) ;;
+              *)
+                if [ "$ROLLBACK_COMPATIBLE" != true ]; then
+                  echo "::error::candidate is $progress relative to the deployed release; rollback requires the compatibility attestation"
+                  exit 1
+                fi
+                ;;
+            esac
           fi
           if [ "$BOOTSTRAP" = true ]; then
             test "$(jq -er '.expectedReleaseId' /tmp/backup-selection.json)" = manual
@@ -382,9 +423,14 @@ jobs:
       DB_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.db_image || needs.resolve_dispatch.outputs.db_image }}
       SOURCE_COMMIT: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
     steps:
+      # Checked out at the CANDIDATE commit (== github.sha on push; the
+      # attestation-bound sha on dispatch) so the rendered BOM, migration
+      # history, and manifests are the candidate's own — a rollback candidate
+      # rendered from current main would always pass the migration-
+      # compatibility gate vacuously.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
           persist-credentials: false
       - name: Render trusted release inputs
         run: |
@@ -448,6 +494,7 @@ jobs:
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
           SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
           SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
+          GH_TOKEN: ${{ github.token }}
           BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}
           ROLLBACK_COMPATIBLE: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_compatibility_attested || false }}
         run: |
@@ -471,6 +518,22 @@ jobs:
             selected_predecessor=$(jq -er '.expectedReleaseId | select(type == "string")' /tmp/backup-selection.json)
             [[ "$selected_predecessor" =~ ^sha256:[0-9a-f]{64}$ ]]
             predecessor+=(--expected-current-release-id "$selected_predecessor")
+            # Restored backstop (§3.2 review): a candidate behind or diverged
+            # from the deployed release never deploys silently — e.g. an
+            # operator approving a stale waiting run after a newer deploy —
+            # it requires the explicit rollback attestation.
+            current_source=$(bash deploy/dokploy/dokploy.sh current-source-commit --compose-id "$COMPOSE_ID")
+            [[ "$current_source" =~ ^[0-9a-f]{40}$ ]]
+            progress=$(gh api "repos/$GITHUB_REPOSITORY/compare/$current_source...$SOURCE_COMMIT" --jq .status)
+            case "$progress" in
+              identical|ahead) ;;
+              *)
+                if [ "$ROLLBACK_COMPATIBLE" != true ]; then
+                  echo "::error::candidate is $progress relative to the deployed release; rollback requires the compatibility attestation"
+                  exit 1
+                fi
+                ;;
+            esac
           fi
           bash deploy/dokploy/dokploy.sh deploy-release /tmp/release/release.json \
             --base-repo "$GITHUB_REPOSITORY" \

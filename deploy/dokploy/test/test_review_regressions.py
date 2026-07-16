@@ -339,10 +339,33 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             workflow.count("BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}"),
             2,
         )
-        # Dispatch-supplied identities are never trusted as-is (plan 090 §4).
+        # Dispatch-supplied identities are never trusted as-is (plan 090 §4):
+        # provenance from this repo's deploy workflow on main, AND the
+        # attestation's source commit must equal the dispatched sha (GHCR
+        # tags are mutable), AND the signer workflow is pinned.
         self.assertIn("gh attestation verify", workflow)
         self.assertIn('--repo "$GITHUB_REPOSITORY"', workflow)
         self.assertIn("--source-ref refs/heads/main", workflow)
+        self.assertIn(
+            '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/deploy.yml"',
+            workflow,
+        )
+        self.assertIn("attestation source commit does not match", workflow)
+        # Both deploy jobs check out the CANDIDATE commit so a rollback's
+        # BOM/migrations/manifests are its own (§3.2 review finding), and
+        # both carry the restored deployment-progress backstop.
+        self.assertEqual(
+            workflow.count(
+                "ref: ${{ github.event_name == 'push' && github.sha || inputs.sha }}"
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count("current-source-commit --compose-id"), 2
+        )
+        self.assertEqual(
+            workflow.count("rollback requires the compatibility attestation"), 2
+        )
         # The retired trust chain must not resurface.
         self.assertNotIn("workflow_run", workflow)
         self.assertNotIn("staging-attestation", workflow)
