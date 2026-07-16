@@ -2,7 +2,14 @@ name: Reconcile review environments
 on:
   schedule: [{cron: "*/15 * * * *"}]
   workflow_dispatch:
-permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write}
+    inputs:
+      simulate_failure:
+        description: Fail before converging (tests the failure-alerting path only)
+        type: boolean
+        default: false
+permissions: {contents: read, pull-requests: read, issues: write, actions: read, packages: write}
+env:
+  CONVERGE_ISSUE_TITLE: "Review-environment converge is failing"
 jobs:
   reconcile:
     runs-on: ubuntu-latest
@@ -16,6 +23,11 @@ jobs:
       - name: Require the protected default branch workflow
         env: {DEFAULT_BRANCH: "${{ github.event.repository.default_branch }}"}
         run: test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+      - name: Simulate a converge failure (dispatch-only test knob)
+        if: inputs.simulate_failure == true
+        run: |
+          echo "::error::simulate_failure requested; failing before any Dokploy access"
+          exit 1
       - name: Converge review environments toward open labelled PRs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -27,3 +39,38 @@ jobs:
         run: |
           : "${TTL_HOURS:?BUILDHOUND_REVIEW_TTL_HOURS must be set}"
           deploy/dokploy/reconcile-reviews.sh
+      # The reconciler is the only cleanup mechanism (plan 089); a silent
+      # multi-day stall would leave review stacks built from untrusted PR
+      # code serving live HTTPS endpoints. Failures keep exactly one open
+      # marker issue current; recovery closes it.
+      - name: Surface converge failure as an open issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list --state open --json number,title \
+            --jq "[.[] | select(.title == \"$CONVERGE_ISSUE_TITLE\")][0].number // empty")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "Converge failed again: $RUN_URL"
+          else
+            gh issue create --title "$CONVERGE_ISSUE_TITLE" --body "$(printf '%s\n' \
+              "The review-environment reconciler (the single cleanup authority, plan 089) is failing." \
+              "" \
+              "Until it recovers, undesired review environments are not being retired." \
+              "" \
+              "First failing run: $RUN_URL" \
+              "" \
+              "This issue is maintained by reconcile-reviews.yml: later failures comment here, and the next successful converge closes it.")"
+          fi
+      - name: Close the converge-failure issue on recovery
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list --state open --json number,title \
+            --jq "[.[] | select(.title == \"$CONVERGE_ISSUE_TITLE\")][0].number // empty")
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --comment "Converge recovered: $RUN_URL"
+          fi
