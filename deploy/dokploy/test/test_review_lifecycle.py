@@ -112,7 +112,7 @@ class ReviewPolicyTest(unittest.TestCase):
         dokploy_env = reconciler.index("DOKPLOY_TOKEN:")
         self.assertLess(simulate, converge_call)
         self.assertLess(simulate, dokploy_env)
-        publisher = (ROOT / ".github/workflows/publish-deploy-images.yml").read_text()
+        publisher = (ROOT / ".github/workflows/deploy.yml").read_text()
         self.assertIn("group: review-environment-global", publisher)
 
         client = (ROOT / "deploy/dokploy/lib/review.sh").read_text()

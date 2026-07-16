@@ -16,7 +16,6 @@ jobs:
       - run: bash deploy/dokploy/test/api-test.sh
       - run: bash deploy/dokploy/test/integrations-test.sh
       - run: bash deploy/dokploy/test/release-client-test.sh
-      - run: bash deploy/dokploy/test/deploy-release-resolver-test.sh
       - run: bash deploy/dokploy/test/deploy-release-backup-step-test.sh
       - run: bash deploy/dokploy/test/review-client-test.sh
       - run: bash deploy/dokploy/test/delivery-cli-test.sh

@@ -7,17 +7,22 @@ trap 'rm -rf -- "$TEST_ROOT"' EXIT
 
 RELEASE_ID="sha256:$(printf '7%.0s' {1..64})"
 
-awk '
-  /^      - name: Select and verify fresh encrypted backup$/ { found = 1; next }
+# deploy.yml carries one backup-selection step per deploy job; extract each
+# verbatim (first = staging, second = production).
+awk -v out="$TEST_ROOT" '
+  /^      - name: Select and verify fresh encrypted backup$/ { count += 1; found = 1; next }
   found && /^        run: \|$/ { in_run = 1; next }
-  in_run && $0 !~ /^          / && $0 !~ /^$/ { exit }
-  in_run { sub(/^          /, ""); print }
-' "$ROOT/.github/workflows/deploy-release.yml" >"$TEST_ROOT/backup-step.sh"
+  in_run && $0 !~ /^          / && $0 !~ /^$/ { in_run = 0; found = 0 }
+  in_run { sub(/^          /, ""); print > (out "/backup-step-" count ".sh") }
+' "$ROOT/.github/workflows/deploy.yml"
 
-grep -q 'select-backup.sh' "$TEST_ROOT/backup-step.sh" || {
-  printf 'failed to extract the backup selection step from deploy-release.yml\n' >&2
+test -s "$TEST_ROOT/backup-step-1.sh"
+test -s "$TEST_ROOT/backup-step-2.sh"
+grep -q 'staging-bootstrap-state' "$TEST_ROOT/backup-step-1.sh"
+if grep -q 'staging-bootstrap-state' "$TEST_ROOT/backup-step-2.sh"; then
+  printf 'production backup step must not run the staging bootstrap detector\n' >&2
   exit 1
-}
+fi
 
 mkdir -p "$TEST_ROOT/repo/deploy/dokploy"
 cat >"$TEST_ROOT/repo/deploy/dokploy/dokploy.sh" <<'EOF'
@@ -51,7 +56,6 @@ cat >"$TEST_ROOT/repo/deploy/dokploy/select-backup.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$FAKE_CALLS"
-mode=$1
 expected=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -64,8 +68,8 @@ EOF
 chmod +x "$TEST_ROOT/repo/deploy/dokploy/dokploy.sh" "$TEST_ROOT/repo/deploy/dokploy/select-backup.sh"
 
 run_step() {
-  local output=$1
-  shift
+  local script=$1 output=$2
+  shift 2
   : > "$TEST_ROOT/calls.log"
   (
     cd "$TEST_ROOT/repo"
@@ -74,15 +78,17 @@ run_step() {
       FAKE_RELEASE_ID="$RELEASE_ID" \
       GITHUB_OUTPUT="$output" \
       COMPOSE_ID=c1 \
-      bash "$TEST_ROOT/backup-step.sh"
+      bash "$TEST_ROOT/$script"
   )
 }
 
-# 1. Automatic staging deploy with an established release history: no
-#    bootstrap, backup selected against the current release id.
+# --- staging job -------------------------------------------------------------
+
+# 1. Automatic push with established history: no bootstrap, latest backup
+#    against the current release id.
 : > "$TEST_ROOT/out-established"
-run_step "$TEST_ROOT/out-established" \
-  BOOTSTRAP=false TARGET=staging MODE=automatic BACKUP_OBJECT= \
+run_step backup-step-1.sh "$TEST_ROOT/out-established" \
+  BOOTSTRAP=false MODE=automatic BACKUP_OBJECT= \
   FAKE_ANCHOR_STATE=established
 grep -Fx 'bootstrap=false' "$TEST_ROOT/out-established" >/dev/null
 grep -Fx -- "--latest --expected-release-id $RELEASE_ID" "$TEST_ROOT/calls.log" >/dev/null
@@ -91,20 +97,18 @@ if grep -q 'require-manual-current' "$TEST_ROOT/calls.log"; then
   exit 1
 fi
 
-# 2. First automatic staging deploy (empty release history, manual anchor
-#    present): bootstrap engages and the backup is selected against "manual".
+# 2. First automatic staging deploy: bootstrap engages against the anchor.
 : > "$TEST_ROOT/out-bootstrap"
-run_step "$TEST_ROOT/out-bootstrap" \
-  BOOTSTRAP=false TARGET=staging MODE=automatic BACKUP_OBJECT= \
+run_step backup-step-1.sh "$TEST_ROOT/out-bootstrap" \
+  BOOTSTRAP=false MODE=automatic BACKUP_OBJECT= \
   FAKE_ANCHOR_STATE=bootstrap
 grep -Fx 'bootstrap=true' "$TEST_ROOT/out-bootstrap" >/dev/null
 grep -Fx 'require-manual-current --compose-id c1' "$TEST_ROOT/calls.log" >/dev/null
 grep -Fx -- '--latest --expected-release-id manual' "$TEST_ROOT/calls.log" >/dev/null
 
-# 3. Empty history without a manual anchor: the step fails closed before any
-#    backup selection.
-if run_step "$TEST_ROOT/out-missing" \
-  BOOTSTRAP=false TARGET=staging MODE=automatic BACKUP_OBJECT= \
+# 3. Anchorless compose fails closed before any backup selection.
+if run_step backup-step-1.sh "$TEST_ROOT/out-missing" \
+  BOOTSTRAP=false MODE=automatic BACKUP_OBJECT= \
   FAKE_ANCHOR_STATE=missing 2>/dev/null; then
   printf 'anchorless staging compose did not fail closed\n' >&2
   exit 1
@@ -114,30 +118,44 @@ if grep -q 'select-backup' "$TEST_ROOT/calls.log"; then
   exit 1
 fi
 
-# 4. Explicit dispatch bootstrap keeps its manual-anchor and operator
-#    backup-object semantics; the automatic detector must not run.
+# 4. Dispatch staging (redeploy/rollback or bootstrap): operator-chosen
+#    backup object; the automatic detector must not run.
 : > "$TEST_ROOT/out-dispatch"
-run_step "$TEST_ROOT/out-dispatch" \
-  BOOTSTRAP=true TARGET=staging MODE=bootstrap BACKUP_OBJECT=backups/x.dump.age \
+run_step backup-step-1.sh "$TEST_ROOT/out-dispatch" \
+  BOOTSTRAP=true MODE=dispatch BACKUP_OBJECT=backups/x.dump.age \
   FAKE_ANCHOR_STATE=bootstrap
 grep -Fx 'bootstrap=true' "$TEST_ROOT/out-dispatch" >/dev/null
 grep -Fx -- '--object backups/x.dump.age --expected-release-id manual' "$TEST_ROOT/calls.log" >/dev/null
 if grep -q 'staging-bootstrap-state' "$TEST_ROOT/calls.log"; then
-  printf 'dispatch bootstrap ran the automatic bootstrap detector\n' >&2
+  printf 'dispatch staging deploy ran the automatic bootstrap detector\n' >&2
   exit 1
 fi
 
-# 5. Production dispatch never consults the staging bootstrap detector and
-#    keeps requiring the operator-supplied backup object.
-: > "$TEST_ROOT/out-production"
-run_step "$TEST_ROOT/out-production" \
-  BOOTSTRAP=false TARGET=production MODE=manual BACKUP_OBJECT=backups/y.dump.age \
+# --- production job ----------------------------------------------------------
+
+# 5. Push-run production: latest backup against the current release id.
+: > "$TEST_ROOT/out-prod-push"
+run_step backup-step-2.sh "$TEST_ROOT/out-prod-push" \
+  GITHUB_EVENT_NAME=push BOOTSTRAP=false BACKUP_OBJECT= \
   FAKE_ANCHOR_STATE=established
-grep -Fx 'bootstrap=false' "$TEST_ROOT/out-production" >/dev/null
-grep -Fx -- "--object backups/y.dump.age --expected-release-id $RELEASE_ID" "$TEST_ROOT/calls.log" >/dev/null
-if grep -q 'staging-bootstrap-state' "$TEST_ROOT/calls.log"; then
-  printf 'production dispatch ran the staging bootstrap detector\n' >&2
+grep -Fx 'bootstrap=false' "$TEST_ROOT/out-prod-push" >/dev/null
+grep -Fx -- "--latest --expected-release-id $RELEASE_ID" "$TEST_ROOT/calls.log" >/dev/null
+
+# 6. Dispatch production bootstrap: manual anchor + operator backup object.
+: > "$TEST_ROOT/out-prod-bootstrap"
+run_step backup-step-2.sh "$TEST_ROOT/out-prod-bootstrap" \
+  GITHUB_EVENT_NAME=workflow_dispatch BOOTSTRAP=true BACKUP_OBJECT=backups/y.dump.age \
+  FAKE_ANCHOR_STATE=bootstrap
+grep -Fx 'bootstrap=true' "$TEST_ROOT/out-prod-bootstrap" >/dev/null
+grep -Fx 'require-manual-current --compose-id c1' "$TEST_ROOT/calls.log" >/dev/null
+grep -Fx -- '--object backups/y.dump.age --expected-release-id manual' "$TEST_ROOT/calls.log" >/dev/null
+
+# 7. Dispatch production without a backup object fails closed.
+if run_step backup-step-2.sh "$TEST_ROOT/out-prod-noobj" \
+  GITHUB_EVENT_NAME=workflow_dispatch BOOTSTRAP=false BACKUP_OBJECT= \
+  FAKE_ANCHOR_STATE=established 2>/dev/null; then
+  printf 'production dispatch without a backup object was accepted\n' >&2
   exit 1
 fi
 
-printf 'deploy release backup step bootstraps only anchored first staging deploys\n'
+printf 'deploy backup steps bind bootstrap and backup selection per role\n'
