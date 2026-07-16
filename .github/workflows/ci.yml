@@ -56,11 +56,33 @@ jobs:
           gradle-version: "9.6.1"
           cache-read-only: false
 
+      # Dogfooding bootstrap (plan 093): the root build cannot includeBuild itself, so the
+      # candidate plugin is published to mavenLocal first and injected into the real build
+      # below via the CI-only init script (the Develocity/CCUD injection pattern). This
+      # consumes the same shaded publication the Portal release ships, so publication
+      # drift surfaces here first.
+      - name: Publish plugin to mavenLocal (dogfood bootstrap)
+        run: gradle :buildhound-gradle-plugin:publishToMavenLocal
+
       # Runs unit tests, TestKit functional tests, and plugin validation, with the
       # configuration cache enabled (gradle.properties). The plugin's test tasks use
       # a JDK 21 launcher (plan 011) — the toolchain resolver provisions it.
+      # The -I flag applies the just-published plugin to this build only (plan 093);
+      # no server URL/token env is set, so the UploadGate skips upload and the payload
+      # lands in the artifact below. Local `gradle build` without -I is unchanged.
       - name: Build
-        run: gradle build
+        run: gradle build -I .github/buildhound-dogfood.init.gradle.kts
+
+      # The plugin writes the payload even when the build fails (spec §3.2), so upload it
+      # always; plan 094 consumes these artifacts for multi-env publication.
+      - name: Upload BuildHound payload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildhound-payload-build
+          path: build/buildhound/build-payload.json
+          if-no-files-found: warn
+          retention-days: 7
 
       # ci-assets is not a Gradle module, so its shell is checked here (plan 025):
       # shellcheck the metric CLI + run its stubbed-curl harness (no network), and
@@ -74,6 +96,43 @@ jobs:
           sh buildhound-ci-assets/test/wrapper-integrity-test.sh
           shellcheck .github/scripts/gradle-plugin-publication-digest.sh
           shellcheck .github/scripts/verify-gradle-plugin-publication-digest.sh
+
+  sample-springboot:
+    name: Sample build (springboot-legacy)
+    # Dogfooding (plan 093): the JVM-only sample consumes the head-of-branch plugin from
+    # source (its settings already does pluginManagement { includeBuild("../..") }), giving
+    # a second real telemetry payload per PR. The sample's demo server.url points at
+    # localhost, so the in-CI upload attempt fails soft (warn + spool) — collection and the
+    # payload artifact are unaffected, and no credential exists in this job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 26
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "9.6.1"
+          cache-read-only: false
+
+      - name: Build sample
+        working-directory: samples/springboot-legacy
+        run: gradle build
+
+      # Same contract as the build job's payload artifact: written even on failure
+      # (spec §3.2), consumed by plan 094. Path is relative to the workspace root, not
+      # the job step's working-directory.
+      - name: Upload BuildHound payload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildhound-payload-sample-springboot
+          path: samples/springboot-legacy/build/buildhound/build-payload.json
+          if-no-files-found: warn
+          retention-days: 7
 
   build-floor:
     name: Build & test (Gradle 8.14 floor)
