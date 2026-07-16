@@ -10,11 +10,13 @@
  * Local builds are untouched: no settings.gradle.kts change; a maintainer opts in by passing
  * the same -I flag after a publishToMavenLocal.
  *
- * Failure posture (plan 093 §3): this script must never redden a build. The classpath is only
+ * Failure posture (plan 093 §3): this script must not redden a build. The classpath is only
  * declared when the plugin JAR is actually present in the local Maven repository, and the
  * apply/configure path below is reflection-based and fully guarded — a missing bootstrap
- * publish degrades to a warn log and a build without telemetry, never a failure. The plugin
- * itself never fails a build by design (CLAUDE.md hard constraint).
+ * publish degrades to a warn log and a build without telemetry, never a failure. One accepted
+ * exception (plan 093 §3, "residual accepted edge"): an artifact that is present on disk but
+ * corrupt still fails resolution loudly — in CI that is the publication-drift signal. The
+ * plugin itself never fails a build by design (CLAUDE.md hard constraint).
  *
  * Token discipline (architecture §6): server.url/server.token are wired from
  * providers.environmentVariable(...) ONLY. A DSL literal or gradleProperty would serialize
