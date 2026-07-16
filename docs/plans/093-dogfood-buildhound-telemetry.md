@@ -38,6 +38,36 @@ later); any plugin, schema, or server change; changing local-developer builds.
 Local builds are untouched: no `settings.gradle.kts` change; a maintainer opts in by passing
 the same `-I` flag.
 
+**Init-script failure posture (implementation decision, 2026-07-16).** The init script must
+never redden a build, mirroring the plugin's own invariant. Its `initscript {}` stage
+declares the mavenLocal classpath only when the plugin JAR is actually present (same
+location logic `mavenLocal()` uses: `maven.repo.local` system property, else
+`~/.m2/repository`), and the `beforeSettings` body is reflection-based (no static
+`dev.buildhound` reference) and fully `runCatching`-guarded — a missing bootstrap publish
+degrades to a warn log and a telemetry-less build, and any apply/configure failure degrades
+the same way. Residual accepted edge: a *corrupt* artifact that exists on disk but fails
+resolution still fails the invocation loudly — in CI that can only follow a successful
+`publishToMavenLocal` in the same job, where a loud failure is the publication-drift signal
+this plan wants.
+
+**Dependency verification (investigated, no change needed).** The repo runs with
+`gradle/verification-metadata.xml` (`verify-metadata=true`), and a locally-built artifact
+has a fresh checksum every build — but no `trusted-artifacts` entry is required: Gradle
+exempts `mavenLocal()` from dependency verification. Verified empirically on Gradle 9.6.1
+with a negative probe (an empty-`<components/>` verification file resolves
+`dev.buildhound:buildhound-gradle-plugin:0.1.0-SNAPSHOT` from mavenLocal without error, on
+both an init-script classpath and a regular configuration). Should a future Gradle start
+verifying mavenLocal, the failure is loud and the fix is a narrowly scoped
+`<trust group="dev.buildhound" name="buildhound-gradle-plugin" version="0.1.0-SNAPSHOT"/>`.
+
+**Sample job upload noise (observed, accepted).** `samples/springboot-legacy` deliberately
+points `server.url` at `http://localhost:8080` (its local-demo deviation). In the
+`sample-springboot` CI job that inline upload fails soft (warn + spool) — collection, the
+payload file, and the job outcome are unaffected, and no credential exists in the job (the
+committed local-dev token fallback goes nowhere). Accepted rather than changing the sample:
+the plan's scope excludes changing local-developer builds, and plan 094 will route these
+payloads properly from the workflow side.
+
 **Sample in CI.** New `ci.yml` job `sample-springboot`: `gradle build` inside
 `samples/springboot-legacy` (JVM-only, no SDK needs; the composite build supplies the
 head-of-branch plugin from source — wiring already exists in its settings file).
