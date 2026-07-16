@@ -138,7 +138,7 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
     def test_backup_gate_uses_only_completed_final_objects(self):
         backup = self.read("deploy/dokploy/backup/backup-loop.sh")
         selector = self.read("deploy/dokploy/select-backup.sh")
-        workflow = self.read(".github/workflows/deploy-release.yml")
+        workflow = self.read(".github/workflows/deploy.yml")
         self.assertIn("started-at=$started_at", backup)
         self.assertIn('staged_key="$key.partial"', backup)
         self.assertIn('"s3://$S3_BUCKET/$staged_key" \\\n    "s3://$S3_BUCKET/$key"', backup)
@@ -238,7 +238,7 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
 
     def test_workflows_scope_dokploy_configuration(self):
         for path in (
-            ".github/workflows/deploy-release.yml",
+            ".github/workflows/deploy.yml",
             ".github/workflows/review-environment.yml",
             ".github/workflows/reconcile-reviews.yml",
         ):
@@ -249,11 +249,11 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
                 self.assertNotIn("${{ secrets.DOKPLOY_URL }}", workflow)
                 self.assertNotIn("DOKPLOY_URL='${{ vars.DOKPLOY_URL }}'", workflow)
                 self.assertNotIn("DOKPLOY_TOKEN='${{ secrets.DOKPLOY_TOKEN }}'", workflow)
-        deploy = self.read(".github/workflows/deploy-release.yml")
+        deploy = self.read(".github/workflows/deploy.yml")
         self.assertIn('current-release-id --compose-id "$COMPOSE_ID"', deploy)
 
         for path, step_name in (
-            (".github/workflows/deploy-release.yml", "- name: Explicit Dokploy deploy"),
+            (".github/workflows/deploy.yml", "- name: Explicit Dokploy deploy"),
             (".github/workflows/review-environment.yml", "- name: Deploy and verify trusted review manifest"),
         ):
             with self.subTest(integration_scope=path):
@@ -261,60 +261,109 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
                 self.assertIn("${{ secrets.DOKPLOY_GIT_PROVIDER_ID }}", step)
                 self.assertIn("${{ secrets.DOKPLOY_REGISTRY_ID }}", step)
 
-    def test_production_bootstrap_requires_staging_proof_manual_current_and_attestation(self):
-        workflow = self.read(".github/workflows/deploy-release.yml")
-        self.assertIn("deployments: read", workflow)
-        self.assertIn("statuses: read", workflow)
-        self.assertIn("environment: ${{ needs.resolve.outputs.target }}", workflow)
-        production_gate = workflow.index("production)\n")
-        staging_proof = workflow.index('resolve_staging_proof "$staging_run_id"')
-        backup_gate = workflow.index('if [ "$bootstrap" = true ]')
-        explicit_deploy = workflow.index("bash deploy/dokploy/dokploy.sh deploy-release")
-        self.assertLess(production_gate, staging_proof)
-        self.assertLess(staging_proof, backup_gate)
-        self.assertLess(backup_gate, explicit_deploy)
-        bootstrap = workflow[backup_gate:explicit_deploy]
-        self.assertIn('mode=$(jq -er .mode "$workdir/staging/staging.json")', workflow[:backup_gate])
-        self.assertIn('expected=manual', bootstrap)
-        self.assertIn('require-manual-current --compose-id "$COMPOSE_ID"', bootstrap)
-        self.assertIn('select-backup.sh --object "$BACKUP_OBJECT"', bootstrap)
-        # First automatic staging deploy (plan 088): the bootstrap detector is
-        # gated to staging/automatic, fails closed without the manual anchor,
-        # and the deploy step consumes the step's effective bootstrap output.
+    def test_promotion_chain_is_one_gated_workflow(self):
+        workflow = self.read(".github/workflows/deploy.yml")
+        # Same-run trust model (plan 090): staging and production are jobs of
+        # one workflow gated by GitHub environments; production consumes the
+        # identical digest outputs staging just proved.
+        self.assertIn("environment: staging", workflow)
+        self.assertIn("environment: production", workflow)
+        self.assertIn("needs: [publish, resolve_dispatch, deploy-staging]", workflow)
+        self.assertIn("needs.deploy-staging.result == 'success'", workflow)
+        # Per-job concurrency groups; never one shared group (a run waiting on
+        # prod approval holds its group).
+        self.assertIn(
+            "concurrency: {group: deploy-staging, queue: max, cancel-in-progress: false}",
+            workflow,
+        )
+        self.assertIn(
+            "concurrency: {group: deploy-production, queue: max, cancel-in-progress: false}",
+            workflow,
+        )
+        # The qualify gate is ported in full: exactly one merged same-repo PR
+        # into the default branch carrying the label; direct pushes never
+        # deploy.
+        self.assertIn(".merged_at != null and .merge_commit_sha == $sha and", workflow)
+        self.assertIn(
+            ".head.repo.full_name == $repository and .base.repo.full_name == $repository and",
+            workflow,
+        )
+        self.assertIn('.base.ref == $base', workflow)
+        self.assertIn("grep -Fx deploy-review", workflow)
+        self.assertIn('echo "deploy=false" >> "$GITHUB_OUTPUT"', workflow)
+        self.assertIn("needs.qualify.outputs.deploy == 'true'", workflow)
+        # Role -> manifest binding lives solely in job wiring (the plan-090
+        # replacement for the schema-3 per-role checksum recheck).
+        staging_job = workflow.index("  deploy-staging:")
+        production_job = workflow.index("  deploy-production:")
+        staging_body = workflow[staging_job:production_job]
+        production_body = workflow[production_job:]
+        self.assertIn("--app-role staging", staging_body)
+        self.assertIn("--manifest /tmp/release/staging-stack.yaml", staging_body)
+        self.assertNotIn("--manifest /tmp/release/stack.yaml", staging_body)
+        self.assertIn("--app-role prod", production_body)
+        self.assertIn("--manifest /tmp/release/stack.yaml", production_body)
+        self.assertNotIn("--manifest /tmp/release/staging-stack.yaml", production_body)
+        self.assertIn(
+            "cp release.json deploy/dokploy/staging-stack.yaml deploy/dokploy/volume-guard.sh /tmp/release/",
+            staging_body,
+        )
+        self.assertIn(
+            "cp release.json deploy/dokploy/stack.yaml deploy/dokploy/volume-guard.sh /tmp/release/",
+            production_body,
+        )
+        # Staging bootstrap (plan 088 semantics carried over) stays gated to
+        # automatic pushes and fails closed without the manual anchor.
         detector = workflow.index(
             'state=$(bash deploy/dokploy/dokploy.sh staging-bootstrap-state'
         )
-        self.assertLess(detector, backup_gate)
+        self.assertLess(staging_job, detector)
+        self.assertLess(detector, production_job)
+        self.assertIn('[ "$bootstrap" != true ] && [ "$MODE" = automatic ]', staging_body)
+        self.assertIn('echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"', staging_body)
+        self.assertIn("BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}", staging_body)
+        self.assertIn('require-manual-current --compose-id "$COMPOSE_ID"', staging_body)
+        # Production has no automatic bootstrap: dispatch-only flag, manual
+        # anchor validation, operator-chosen backup object, and an explicit
+        # rollback-compatibility attestation.
+        self.assertNotIn("staging-bootstrap-state", production_body)
+        self.assertIn('require-manual-current --compose-id "$COMPOSE_ID"', production_body)
+        self.assertIn('test "$ROLLBACK_COMPATIBLE" = true', production_body)
+        self.assertIn('select-backup.sh --object "$BACKUP_OBJECT"', production_body)
+        # Skip-site stays environment-variable gated in both deploy jobs.
+        self.assertEqual(workflow.count("site+=(--skip-site)"), 2)
+        self.assertEqual(
+            workflow.count("SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}"), 2
+        )
+        self.assertEqual(
+            workflow.count("BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}"),
+            2,
+        )
+        # Dispatch-supplied identities are never trusted as-is (plan 090 §4).
+        self.assertIn("gh attestation verify", workflow)
+        self.assertIn('--repo "$GITHUB_REPOSITORY"', workflow)
+        self.assertIn("--source-ref refs/heads/main", workflow)
+        # The retired trust chain must not resurface.
+        self.assertNotIn("workflow_run", workflow)
+        self.assertNotIn("staging-attestation", workflow)
+        self.assertNotIn("review-attestation", workflow)
+        self.assertNotIn("schema:2", workflow)
+        self.assertNotIn("proven-release-id", workflow)
+        # Least-privilege carries over; no checkout persists credentials.
+        self.assertIn("permissions: {contents: read}", workflow.split("jobs:", 1)[0])
         self.assertIn(
-            '[ "$bootstrap" != true ] && [ "$TARGET" = staging ] && [ "$MODE" = automatic ]',
+            "permissions: {contents: read, packages: write, id-token: write, attestations: write}",
             workflow,
         )
-        self.assertIn('echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"', workflow)
-        self.assertIn("BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}", workflow)
-        # Skip-site (owner decision, plan 088) is gated solely by the
-        # environment-scoped variable: never hardcoded, mutually exclusive
-        # with the site application id, mirrored into the smoke step.
-        self.assertIn(
-            "SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}", workflow
+        self.assertNotIn("persist-credentials: true", workflow)
+        self.assertEqual(
+            workflow.count("persist-credentials: false"),
+            workflow.count("actions/checkout@"),
         )
-        self.assertIn(
-            "BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}",
-            workflow,
-        )
-        self.assertEqual(workflow.count("site+=(--skip-site)"), 1)
-        self.assertNotIn("--skip-site \\", workflow)
-        self.assertIn('site+=(--site-application-id "$SITE_APPLICATION_ID")', workflow)
-        self.assertIn('if [ "$bootstrap_bom" = true ]; then test "$rollback_compatible" = true; fi', workflow)
-        self.assertIn("bootstrap+=(--bootstrap-manual-current)", workflow[backup_gate:])
-        self.assertIn('"${bootstrap[@]}"', workflow[backup_gate:])
-        self.assertIn('proof+=(--proven-release-id "$VALIDATED_RELEASE_ID")', workflow)
-        self.assertIn('"${proof[@]}"', workflow)
-        self.assertIn('schema:2', workflow)
-        self.assertIn('backup:$backup[0]', workflow)
 
     def test_review_success_drives_auto_staging_and_manual_production(self):
         review = self.read(".github/workflows/review-environment.yml")
-        release = self.read(".github/workflows/deploy-release.yml")
+        deploy = self.read(".github/workflows/deploy.yml")
 
         review_smoke = review.index('jq -e --arg id "$build_id"')
         review_proof = review.index("name: review-attestation")
@@ -332,84 +381,21 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         )
         self.assertIn("statuses/$SHA", review[review_status:])
 
-        self.assertIn("workflow_run:", release)
-        self.assertIn('workflows: ["Publish deployment images"]', release)
-        self.assertIn("types: [completed]", release)
-        self.assertIn("branches: [main]", release)
-        self.assertIn("workflow_dispatch:", release)
-        self.assertIn("queue: max", release)
-        self.assertIn("github.event.workflow_run", release)
-        self.assertIn('context="buildhound/review-deployed/pr-$review_pr"', release)
-        self.assertIn("deploy-review", release)
-        self.assertIn("review-attestation", release)
-        self.assertIn(
-            'gh run download "$review_run_id" --repo "$GITHUB_REPOSITORY" '
-            '--name review-attestation',
-            release,
-        )
-        self.assertIn(
-            'gh run download "$run_id" --repo "$GITHUB_REPOSITORY" '
-            '--name staging-attestation',
-            release,
-        )
-        self.assertIn("inputs.bootstrap_bom", release)
-        self.assertIn(
-            'expected_attempt_id="${review_run_id}.${run_attempt}"', release
-        )
-        self.assertIn('--arg attemptId "$expected_attempt_id"', release)
-        self.assertIn('$proof.attemptId == $attemptId', release)
-        self.assertNotIn("attemptPrefix", release)
-
-        automatic_gate = release.index('if [ "$EVENT_NAME" = workflow_run ]')
-        dispatch_gate = release.index('elif [ "$EVENT_NAME" = workflow_dispatch ]')
-        production_gate = release.index("production)\n", dispatch_gate)
-        explicit_deploy = release.index("bash deploy/dokploy/dokploy.sh deploy-release")
-        self.assertLess(automatic_gate, dispatch_gate)
-        self.assertLess(dispatch_gate, production_gate)
-        self.assertIn("target=staging", release[automatic_gate:dispatch_gate])
-        self.assertIn("mode=automatic", release[automatic_gate:dispatch_gate])
-        self.assertNotIn("target=production", release[automatic_gate:dispatch_gate])
-        self.assertIn("github.event_name", release[:explicit_deploy])
-        self.assertIn("workflow_dispatch", release[:explicit_deploy])
-        self.assertIn('actions/workflows/deploy-release.yml', release)
-        self.assertIn('test "$(jq -r .workflow_id <<<"$run")" = "$workflow_id"', release)
-        self.assertIn('test "$(jq -r .event <<<"$run")" = workflow_run', release)
-        self.assertIn(
-            'test "$(jq -r .head_repository.full_name <<<"$run")" = "$GITHUB_REPOSITORY"',
-            release,
-        )
-        self.assertIn(
-            'test "$(jq -r .head_sha <<<"$run")" = "$review_sha"', release
-        )
-        self.assertNotIn(".pull_requests[]", release)
-        self.assertIn('prefix="https://github.com/${GITHUB_REPOSITORY}/actions/runs/$run_id/job/"', release)
-        self.assertIn(
-            'compare/${SOURCE_COMMIT}...${latest}', release
-        )
-        self.assertIn(
-            'current-release-state --compose-id "$COMPOSE_ID"', release
-        )
-        self.assertIn(
-            'compare/${current_source}...${SOURCE_COMMIT}', release
-        )
-        self.assertIn(
-            'require_deployment_progress \\\n                "$selected_predecessor" "$VALIDATED_RELEASE_ID"',
-            release,
-        )
-
-        self.assertIn("staging)\n              app_role=staging", release)
-        self.assertIn("production)\n              app_role=prod", release)
-        self.assertIn('--app-role "$app_role"', release)
-        self.assertNotIn("BUILDHOUND_APP_ROLE: ${{", release)
-
-        staging_attestation = release.index("- name: Record staging attestation")
-        self.assertIn(
-            "review:{runId:$reviewRun,attemptId:$reviewAttempt,pr:$reviewPr,headSha:$reviewSha}",
-            release[staging_attestation:],
-        )
-        self.assertIn("source:{runId:$sourceRun,commit:$sourceCommit,artifact:$sourceArtifact}", release[staging_attestation:])
-        self.assertIn('($proof.review | keys) == ["attemptId","headSha","pr","runId"]', release)
-        self.assertIn('"$deployment_progress" "$TARGET" "$ROLLBACK_COMPATIBLE"', release)
+        # The promotion chain triggers on push to main (label-qualified) plus
+        # workflow_dispatch for redeploy/rollback — no cross-workflow chain.
+        self.assertIn("push:", deploy)
+        self.assertIn("branches: [main]", deploy)
+        self.assertIn("workflow_dispatch:", deploy)
+        self.assertIn("inputs.bootstrap_bom", deploy)
+        self.assertIn("backup_object", deploy)
+        self.assertIn("rollback_compatibility_attested", deploy)
+        self.assertIn("queue: max", deploy)
+        self.assertNotIn("gh run download", deploy)
+        self.assertNotIn("download-artifact", deploy)
+        # Digests flow as same-run job outputs only.
+        self.assertIn("server_image: ${{ steps.digests.outputs.server_image }}", deploy)
+        self.assertIn("needs.publish.outputs.server_image", deploy)
+        self.assertIn("needs.resolve_dispatch.outputs.server_image", deploy)
 
     def test_review_cleanup_is_not_blocked_by_environment_approval(self):
         review = self.read(".github/workflows/review-environment.yml")
@@ -423,23 +409,21 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn(expected, reconcile)
 
     def test_release_artifact_binds_stack_guard_and_db_wrapper(self):
-        publish = self.read(".github/workflows/publish-deploy-images.yml")
-        deploy = self.read(".github/workflows/deploy-release.yml")
+        deploy = self.read(".github/workflows/deploy.yml")
         stack = self.read("deploy/dokploy/stack.yaml")
         staging_stack = self.read("deploy/dokploy/staging-stack.yaml")
         db_image = self.read("deploy/dokploy/db/Dockerfile")
-        self.assertIn("matrix: {image: [server, site, backup, db]}", publish)
         self.assertIn(
             "cp release.json deploy/dokploy/stack.yaml deploy/dokploy/staging-stack.yaml "
             "deploy/dokploy/volume-guard.sh release-artifact/",
-            publish,
+            deploy,
         )
-        self.assertIn("--migrations-dir buildhound-server/src/main/resources/db/migration", publish)
-        self.assertNotIn("--migration-id", publish)
-        self.assertIn("manifest=/tmp/release/staging-stack.yaml", deploy)
-        self.assertIn("manifest=/tmp/release/stack.yaml", deploy)
-        self.assertIn('--manifest "$manifest"', deploy)
-        self.assertIn("--volume-guard /tmp/release/volume-guard.sh", deploy)
+        self.assertIn("--migrations-dir buildhound-server/src/main/resources/db/migration", deploy)
+        self.assertNotIn("--migration-id", deploy)
+        self.assertIn('--volume-guard /tmp/release/volume-guard.sh', deploy)
+        self.assertIn("provenance: true", deploy)
+        self.assertIn("sbom: true", deploy)
+        self.assertIn("actions/attest-build-provenance", deploy)
         self.assertIn("${BUILDHOUND_POSTGRES_IMAGE}", stack)
         self.assertIn("${BUILDHOUND_POSTGRES_IMAGE}", staging_stack)
         self.assertNotIn("file: ./volume-guard.sh", stack)
@@ -512,8 +496,7 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
 
     def test_delivery_uses_shell_client_without_git_provider_checkout(self):
         paths = (
-            ".github/workflows/deploy-release.yml",
-            ".github/workflows/publish-deploy-images.yml",
+            ".github/workflows/deploy.yml",
             ".github/workflows/review-environment.yml",
             "deploy/dokploy/reconcile-reviews.sh",
         )

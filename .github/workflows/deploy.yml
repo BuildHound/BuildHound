@@ -1,0 +1,490 @@
+name: Deploy
+# One promotion chain in one workflow (plan 090): publish -> deploy-staging
+# (environment: staging, automatic) -> deploy-production (environment:
+# production, required reviewers). Same-run job ordering proves that
+# production deploys exactly the digests staging just proved; triggering on
+# main proves ancestry. The bespoke schema-2/3 attestation validation chain
+# is retired in favor of these GitHub-native guarantees plus
+# attest-build-provenance on every published image.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deploy target (staging always redeploys first; production also requires approval)
+        type: choice
+        options: [staging, production]
+        default: staging
+      sha:
+        description: Published commit to redeploy/roll back to (40-hex; its image attestations are verified before any deploy)
+        type: string
+        required: true
+      bootstrap_bom:
+        description: First-ever deploy for the target compose (validates the manual anchor; production dispatch only)
+        type: boolean
+        default: false
+      backup_object:
+        description: Backup object key (required for production and for bootstrap deploys)
+        type: string
+        default: ""
+      rollback_compatibility_attested:
+        description: Operator attests the rollback target is migration-compatible
+        type: boolean
+        default: false
+permissions: {contents: read}
+env:
+  IMAGE_REGISTRY_PREFIX: ghcr.io/buildhound
+jobs:
+  qualify:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.pr.outputs.deploy }}
+    steps:
+      - id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          # Ported in full from the retired publish-deploy-images.yml: only a
+          # single merged same-repo PR into the default branch, carrying the
+          # deploy-review label, qualifies. Direct pushes never deploy.
+          pulls=$(gh api "repos/${GITHUB_REPOSITORY}/commits/$GITHUB_SHA/pulls")
+          count=$(jq -er --arg repository "$GITHUB_REPOSITORY" --arg base "$DEFAULT_BRANCH" --arg sha "$GITHUB_SHA" '
+            [.[] | select(
+              .merged_at != null and .merge_commit_sha == $sha and
+              .head.repo.full_name == $repository and .base.repo.full_name == $repository and
+              .base.ref == $base
+            )] | length
+          ' <<<"$pulls")
+          if [ "$count" -ne 1 ]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          pr=$(jq -er --arg repository "$GITHUB_REPOSITORY" --arg base "$DEFAULT_BRANCH" --arg sha "$GITHUB_SHA" '
+            [.[] | select(
+              .merged_at != null and .merge_commit_sha == $sha and
+              .head.repo.full_name == $repository and .base.repo.full_name == $repository and
+              .base.ref == $base
+            )][0].number
+          ' <<<"$pulls")
+          if gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' | grep -Fx deploy-review; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+  publish:
+    needs: qualify
+    if: github.event_name == 'push' && needs.qualify.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    permissions: {contents: read, packages: write, id-token: write, attestations: write}
+    concurrency:
+      # Share the review lifecycle lock so an exact-owned review package
+      # version cannot acquire a release tag between GC verification and
+      # deletion (carried over from publish-deploy-images.yml).
+      group: review-environment-global
+      queue: max
+      cancel-in-progress: false
+    outputs:
+      server_image: ${{ steps.digests.outputs.server_image }}
+      site_image: ${{ steps.digests.outputs.site_image }}
+      backup_image: ${{ steps.digests.outputs.backup_image }}
+      db_image: ${{ steps.digests.outputs.db_image }}
+    steps:
+      - uses: actions/checkout@v7
+        with: {persist-credentials: false}
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - uses: docker/setup-buildx-action@v3
+      - id: build_server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: buildhound-server/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-server:${{ github.sha }}
+          provenance: true
+          sbom: true
+      - id: build_site
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: site/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-site:${{ github.sha }}
+          provenance: true
+          sbom: true
+      - id: build_backup
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/dokploy/backup/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-backup:${{ github.sha }}
+          provenance: true
+          sbom: true
+      - id: build_db
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/dokploy/db/Dockerfile
+          push: true
+          tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-db:${{ github.sha }}
+          provenance: true
+          sbom: true
+      # GitHub-native provenance: this is what `gh attestation verify` checks
+      # before any dispatch redeploy/rollback trusts a digest.
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-server
+          subject-digest: ${{ steps.build_server.outputs.digest }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-site
+          subject-digest: ${{ steps.build_site.outputs.digest }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-backup
+          subject-digest: ${{ steps.build_backup.outputs.digest }}
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-db
+          subject-digest: ${{ steps.build_db.outputs.digest }}
+          push-to-registry: true
+      - id: digests
+        env:
+          SERVER_DIGEST: ${{ steps.build_server.outputs.digest }}
+          SITE_DIGEST: ${{ steps.build_site.outputs.digest }}
+          BACKUP_DIGEST: ${{ steps.build_backup.outputs.digest }}
+          DB_DIGEST: ${{ steps.build_db.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for digest in "$SERVER_DIGEST" "$SITE_DIGEST" "$BACKUP_DIGEST" "$DB_DIGEST"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          done
+          {
+            echo "server_image=$IMAGE_REGISTRY_PREFIX/buildhound-server@$SERVER_DIGEST"
+            echo "site_image=$IMAGE_REGISTRY_PREFIX/buildhound-site@$SITE_DIGEST"
+            echo "backup_image=$IMAGE_REGISTRY_PREFIX/buildhound-backup@$BACKUP_DIGEST"
+            echo "db_image=$IMAGE_REGISTRY_PREFIX/buildhound-db@$DB_DIGEST"
+          } >> "$GITHUB_OUTPUT"
+      - name: Upload human-readable release BOM
+        env:
+          SERVER_DIGEST: ${{ steps.build_server.outputs.digest }}
+          SITE_DIGEST: ${{ steps.build_site.outputs.digest }}
+          BACKUP_DIGEST: ${{ steps.build_backup.outputs.digest }}
+          DB_DIGEST: ${{ steps.build_db.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python3 deploy/dokploy/render-release.py \
+            --source-commit "$GITHUB_SHA" \
+            --server-image "$IMAGE_REGISTRY_PREFIX/buildhound-server@$SERVER_DIGEST" \
+            --site-image "$IMAGE_REGISTRY_PREFIX/buildhound-site@$SITE_DIGEST" \
+            --backup-image "$IMAGE_REGISTRY_PREFIX/buildhound-backup@$BACKUP_DIGEST" \
+            --postgres-image "$IMAGE_REGISTRY_PREFIX/buildhound-db@$DB_DIGEST" \
+            --production-manifest deploy/dokploy/stack.yaml \
+            --staging-manifest deploy/dokploy/staging-stack.yaml \
+            --volume-guard deploy/dokploy/volume-guard.sh \
+            --migrations-dir buildhound-server/src/main/resources/db/migration
+          mkdir release-artifact
+          cp release.json deploy/dokploy/stack.yaml deploy/dokploy/staging-stack.yaml deploy/dokploy/volume-guard.sh release-artifact/
+      - uses: actions/upload-artifact@v4
+        with: {name: "release-${{ github.sha }}", path: release-artifact, retention-days: 90}
+  resolve_dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions: {contents: read, packages: read, attestations: read}
+    outputs:
+      server_image: ${{ steps.verify.outputs.server_image }}
+      site_image: ${{ steps.verify.outputs.site_image }}
+      backup_image: ${{ steps.verify.outputs.backup_image }}
+      db_image: ${{ steps.verify.outputs.db_image }}
+    steps:
+      - id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
+          TARGET: ${{ inputs.target }}
+          BOOTSTRAP: ${{ inputs.bootstrap_bom }}
+          BACKUP_OBJECT: ${{ inputs.backup_object }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "$TARGET" in staging|production) ;; *) echo "::error::invalid target"; exit 1 ;; esac
+          # Every dispatch redeploys staging first, and dispatch staging
+          # always selects an explicit operator-chosen backup object.
+          test -n "$BACKUP_OBJECT"
+          # Dispatch-supplied identities are never trusted as-is: each image
+          # must carry GitHub-native provenance from this repository's deploy
+          # workflow on the default branch (plan 090 §4).
+          for package in server site backup db; do
+            image="$IMAGE_REGISTRY_PREFIX/buildhound-$package:$SHA"
+            gh attestation verify "oci://$image" \
+              --repo "$GITHUB_REPOSITORY" \
+              --source-ref refs/heads/main \
+              --format json > "verify-$package.json"
+            digest=$(jq -er '
+              [.[] | .verificationResult.statement.subject[]?.digest.sha256
+                | select(type == "string" and test("^[0-9a-f]{64}$"))]
+              | unique | select(length == 1) | .[0]
+            ' "verify-$package.json")
+            echo "${package}_image=$IMAGE_REGISTRY_PREFIX/buildhound-$package@sha256:$digest" >> "$GITHUB_OUTPUT"
+          done
+  deploy-staging:
+    needs: [qualify, publish, resolve_dispatch]
+    if: >-
+      !cancelled() &&
+      ((github.event_name == 'push' && needs.publish.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' && needs.resolve_dispatch.result == 'success'))
+    runs-on: ubuntu-latest
+    environment: staging
+    # Never one shared group with production: a run waiting on prod approval
+    # holds its group, and a shared group would block every later staging
+    # deploy behind the unapproved gate (plan 090).
+    concurrency: {group: deploy-staging, queue: max, cancel-in-progress: false}
+    permissions: {contents: read}
+    env:
+      SERVER_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.server_image || needs.resolve_dispatch.outputs.server_image }}
+      SITE_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.site_image || needs.resolve_dispatch.outputs.site_image }}
+      BACKUP_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.backup_image || needs.resolve_dispatch.outputs.backup_image }}
+      DB_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.db_image || needs.resolve_dispatch.outputs.db_image }}
+      SOURCE_COMMIT: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Render trusted release inputs
+        run: |
+          set -euo pipefail
+          python3 deploy/dokploy/render-release.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --server-image "$SERVER_IMAGE" \
+            --site-image "$SITE_IMAGE" \
+            --backup-image "$BACKUP_IMAGE" \
+            --postgres-image "$DB_IMAGE" \
+            --production-manifest deploy/dokploy/stack.yaml \
+            --staging-manifest deploy/dokploy/staging-stack.yaml \
+            --volume-guard deploy/dokploy/volume-guard.sh \
+            --migrations-dir buildhound-server/src/main/resources/db/migration
+          mkdir -p /tmp/release
+          cp release.json deploy/dokploy/staging-stack.yaml deploy/dokploy/volume-guard.sh /tmp/release/
+      - name: Select and verify fresh encrypted backup
+        id: backup
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.BACKUP_AWS_REGION }}
+          BACKUP_S3_ENDPOINT: ${{ vars.BACKUP_S3_ENDPOINT }}
+          BACKUP_S3_BUCKET: ${{ vars.BACKUP_S3_BUCKET }}
+          BUILDHOUND_DB_INSTANCE: ${{ secrets.BUILDHOUND_DB_INSTANCE }}
+          BUILDHOUND_AGE_RECIPIENT: ${{ vars.BUILDHOUND_AGE_RECIPIENT }}
+          DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+          DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
+          COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+          MODE: ${{ github.event_name == 'push' && 'automatic' || 'dispatch' }}
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'staging' && inputs.bootstrap_bom || false }}
+          BACKUP_OBJECT: ${{ inputs.backup_object }}
+        run: |
+          set -euo pipefail
+          bootstrap=$BOOTSTRAP
+          # The first-ever automatic staging deploy has no release history to
+          # verify against; it may proceed only from the explicit plan-087
+          # manual anchor. Any other anchorless state fails closed (plan 088).
+          if [ "$bootstrap" != true ] && [ "$MODE" = automatic ]; then
+            state=$(bash deploy/dokploy/dokploy.sh staging-bootstrap-state --compose-id "$COMPOSE_ID")
+            if [ "$state" = bootstrap ]; then
+              echo "::notice::No prior release deployment on the staging compose; engaging the first-deploy bootstrap path against the manual anchor"
+              bootstrap=true
+            else
+              test "$state" = established
+            fi
+          fi
+          if [ "$bootstrap" = true ]; then
+            expected=manual
+            bash deploy/dokploy/dokploy.sh require-manual-current --compose-id "$COMPOSE_ID"
+          else
+            expected=$(bash deploy/dokploy/dokploy.sh current-release-id --compose-id "$COMPOSE_ID")
+          fi
+          echo "bootstrap=$bootstrap" >> "$GITHUB_OUTPUT"
+          if [ "$MODE" = automatic ]; then
+            bash deploy/dokploy/select-backup.sh --latest --expected-release-id "$expected" > /tmp/backup-selection.json
+          else
+            test -n "$BACKUP_OBJECT"
+            bash deploy/dokploy/select-backup.sh --object "$BACKUP_OBJECT" --expected-release-id "$expected" > /tmp/backup-selection.json
+          fi
+          jq -e 'keys == ["expectedReleaseId","object","versionId"]' /tmp/backup-selection.json >/dev/null
+      - name: Explicit Dokploy deploy
+        env:
+          DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+          DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
+          DOKPLOY_GIT_PROVIDER_ID: ${{ secrets.DOKPLOY_GIT_PROVIDER_ID }}
+          DOKPLOY_REGISTRY_ID: ${{ secrets.DOKPLOY_REGISTRY_ID }}
+          COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+          SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
+          SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
+          BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}
+          ROLLBACK_COMPATIBLE: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_compatibility_attested || false }}
+        run: |
+          set -euo pipefail
+          compatibility=()
+          bootstrap=()
+          predecessor=()
+          site=()
+          if [ "$SKIP_SITE" = true ]; then
+            echo "::warning::Site deployment skipped for this target (BUILDHOUND_SKIP_SITE_DEPLOY=true)"
+            site+=(--skip-site)
+          else
+            site+=(--site-application-id "$SITE_APPLICATION_ID")
+          fi
+          if [ "$ROLLBACK_COMPATIBLE" = true ]; then compatibility+=(--rollback-compatible); fi
+          if [ "$BOOTSTRAP" = true ]; then
+            bootstrap+=(--bootstrap-manual-current)
+          else
+            selected_predecessor=$(jq -er '.expectedReleaseId | select(type == "string")' /tmp/backup-selection.json)
+            [[ "$selected_predecessor" =~ ^sha256:[0-9a-f]{64}$ ]]
+            predecessor+=(--expected-current-release-id "$selected_predecessor")
+          fi
+          if [ "$BOOTSTRAP" = true ]; then
+            test "$(jq -er '.expectedReleaseId' /tmp/backup-selection.json)" = manual
+          fi
+          bash deploy/dokploy/dokploy.sh deploy-release /tmp/release/release.json \
+            --base-repo "$GITHUB_REPOSITORY" \
+            --manifest /tmp/release/staging-stack.yaml \
+            --volume-guard /tmp/release/volume-guard.sh \
+            --compose-id "$COMPOSE_ID" \
+            --app-role staging \
+            "${site[@]}" "${compatibility[@]}" "${bootstrap[@]}" \
+            "${predecessor[@]}" > deployment-evidence.json
+      - name: Verify public site and authenticated data path
+        env:
+          BUILDHOUND_SITE_URL: ${{ vars.BUILDHOUND_SITE_URL }}
+          BUILDHOUND_DASHBOARD_URL: ${{ vars.BUILDHOUND_DASHBOARD_URL }}
+          BUILDHOUND_READ_TOKEN: ${{ secrets.BUILDHOUND_READ_TOKEN }}
+          BUILDHOUND_INGEST_TOKEN: ${{ secrets.BUILDHOUND_INGEST_TOKEN }}
+          BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
+        run: deploy/dokploy/verify-release.sh
+  deploy-production:
+    needs: [publish, resolve_dispatch, deploy-staging]
+    if: ${{ !cancelled() && needs.deploy-staging.result == 'success' && (github.event_name == 'push' || inputs.target == 'production') }}
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency: {group: deploy-production, queue: max, cancel-in-progress: false}
+    permissions: {contents: read}
+    env:
+      SERVER_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.server_image || needs.resolve_dispatch.outputs.server_image }}
+      SITE_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.site_image || needs.resolve_dispatch.outputs.site_image }}
+      BACKUP_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.backup_image || needs.resolve_dispatch.outputs.backup_image }}
+      DB_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.db_image || needs.resolve_dispatch.outputs.db_image }}
+      SOURCE_COMMIT: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Render trusted release inputs
+        run: |
+          set -euo pipefail
+          python3 deploy/dokploy/render-release.py \
+            --source-commit "$SOURCE_COMMIT" \
+            --server-image "$SERVER_IMAGE" \
+            --site-image "$SITE_IMAGE" \
+            --backup-image "$BACKUP_IMAGE" \
+            --postgres-image "$DB_IMAGE" \
+            --production-manifest deploy/dokploy/stack.yaml \
+            --staging-manifest deploy/dokploy/staging-stack.yaml \
+            --volume-guard deploy/dokploy/volume-guard.sh \
+            --migrations-dir buildhound-server/src/main/resources/db/migration
+          mkdir -p /tmp/release
+          # The production job renders and deploys the production manifest —
+          # never staging-stack.yaml. This wiring is the plan-090 replacement
+          # for the schema-3 per-role checksum recheck, pinned by policy test.
+          cp release.json deploy/dokploy/stack.yaml deploy/dokploy/volume-guard.sh /tmp/release/
+      - name: Select and verify fresh encrypted backup
+        id: backup
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.BACKUP_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ vars.BACKUP_AWS_REGION }}
+          BACKUP_S3_ENDPOINT: ${{ vars.BACKUP_S3_ENDPOINT }}
+          BACKUP_S3_BUCKET: ${{ vars.BACKUP_S3_BUCKET }}
+          BUILDHOUND_DB_INSTANCE: ${{ secrets.BUILDHOUND_DB_INSTANCE }}
+          BUILDHOUND_AGE_RECIPIENT: ${{ vars.BUILDHOUND_AGE_RECIPIENT }}
+          DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+          DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
+          COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'production' && inputs.bootstrap_bom || false }}
+          BACKUP_OBJECT: ${{ inputs.backup_object }}
+        run: |
+          set -euo pipefail
+          # Production has no automatic bootstrap: the first-ever production
+          # deploy runs via dispatch with the bootstrap flag and an
+          # operator-chosen backup object (mirroring the retired
+          # production-dispatch semantics).
+          if [ "$BOOTSTRAP" = true ]; then
+            expected=manual
+            bash deploy/dokploy/dokploy.sh require-manual-current --compose-id "$COMPOSE_ID"
+          else
+            expected=$(bash deploy/dokploy/dokploy.sh current-release-id --compose-id "$COMPOSE_ID")
+          fi
+          echo "bootstrap=$BOOTSTRAP" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            bash deploy/dokploy/select-backup.sh --latest --expected-release-id "$expected" > /tmp/backup-selection.json
+          else
+            test -n "$BACKUP_OBJECT"
+            bash deploy/dokploy/select-backup.sh --object "$BACKUP_OBJECT" --expected-release-id "$expected" > /tmp/backup-selection.json
+          fi
+          jq -e 'keys == ["expectedReleaseId","object","versionId"]' /tmp/backup-selection.json >/dev/null
+      - name: Explicit Dokploy deploy
+        env:
+          DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+          DOKPLOY_TOKEN: ${{ secrets.DOKPLOY_TOKEN }}
+          DOKPLOY_GIT_PROVIDER_ID: ${{ secrets.DOKPLOY_GIT_PROVIDER_ID }}
+          DOKPLOY_REGISTRY_ID: ${{ secrets.DOKPLOY_REGISTRY_ID }}
+          COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
+          SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
+          SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
+          BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}
+          ROLLBACK_COMPATIBLE: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_compatibility_attested || false }}
+        run: |
+          set -euo pipefail
+          compatibility=()
+          bootstrap=()
+          predecessor=()
+          site=()
+          if [ "$SKIP_SITE" = true ]; then
+            echo "::warning::Site deployment skipped for this target (BUILDHOUND_SKIP_SITE_DEPLOY=true)"
+            site+=(--skip-site)
+          else
+            site+=(--site-application-id "$SITE_APPLICATION_ID")
+          fi
+          if [ "$ROLLBACK_COMPATIBLE" = true ]; then compatibility+=(--rollback-compatible); fi
+          if [ "$BOOTSTRAP" = true ]; then
+            test "$ROLLBACK_COMPATIBLE" = true
+            bootstrap+=(--bootstrap-manual-current)
+            test "$(jq -er '.expectedReleaseId' /tmp/backup-selection.json)" = manual
+          else
+            selected_predecessor=$(jq -er '.expectedReleaseId | select(type == "string")' /tmp/backup-selection.json)
+            [[ "$selected_predecessor" =~ ^sha256:[0-9a-f]{64}$ ]]
+            predecessor+=(--expected-current-release-id "$selected_predecessor")
+          fi
+          bash deploy/dokploy/dokploy.sh deploy-release /tmp/release/release.json \
+            --base-repo "$GITHUB_REPOSITORY" \
+            --manifest /tmp/release/stack.yaml \
+            --volume-guard /tmp/release/volume-guard.sh \
+            --compose-id "$COMPOSE_ID" \
+            --app-role prod \
+            "${site[@]}" "${compatibility[@]}" "${bootstrap[@]}" \
+            "${predecessor[@]}" > deployment-evidence.json
+      - name: Verify public site and authenticated data path
+        env:
+          BUILDHOUND_SITE_URL: ${{ vars.BUILDHOUND_SITE_URL }}
+          BUILDHOUND_DASHBOARD_URL: ${{ vars.BUILDHOUND_DASHBOARD_URL }}
+          BUILDHOUND_READ_TOKEN: ${{ secrets.BUILDHOUND_READ_TOKEN }}
+          BUILDHOUND_INGEST_TOKEN: ${{ secrets.BUILDHOUND_INGEST_TOKEN }}
+          BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
+        run: deploy/dokploy/verify-release.sh

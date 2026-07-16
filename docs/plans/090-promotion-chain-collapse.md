@@ -67,6 +67,40 @@ workflows (088/089), client internals beyond what the collapse deletes (091).
    prior push-triggered publish job produced); the run fails otherwise. This replaces the
    rollback-attestation flags.
 
+## Implementation divergences (Stage C PR)
+
+1. **`publish` is one sequential job, not a matrix.** Matrix jobs cannot
+   reliably expose distinct outputs (each leg overwrites the shared output
+   set); four build steps in one job give clean digest outputs, which is the
+   whole point of the same-run trust model.
+2. **Dispatch takes a `sha` input, not raw digests.** The published images
+   are tagged by commit; `gh attestation verify oci://<image>:<sha>` both
+   resolves and verifies each digest against this repository's default
+   branch — one input, still nothing trusted as-is. The exact
+   `--source-ref` behavior and GHCR auth for `gh attestation verify` get
+   their first live exercise at Stage D; the path fails closed if either
+   assumption is off.
+3. **Every dispatch requires a backup object** (staging always redeploys
+   first and dispatch staging always uses the operator-chosen object, per
+   the retired dispatch semantics).
+4. **Push-run production uses `--latest` backup selection** against the
+   current production release id, mirroring automatic staging — the retired
+   workflow had no push-path production at all (dispatch-only).
+5. **Skip-site applies to both deploy jobs** via the environment-scoped
+   variable (staging sets it today; production must either provision the
+   site Application or explicitly set the variable before Stage D).
+6. **`deploy-release-backup-step-test.sh` extracts both backup steps** from
+   deploy.yml (staging + production) rather than the retired resolver
+   script; the resolver test is deleted with the resolver.
+7. **The ≥50% YAML-shrink criterion lands at 31% in this stage**
+   (713 → 490 lines): the resolve/attestation machinery is gone, but the
+   two environment-gated deploy jobs each repeat their render/backup/deploy
+   /verify steps and env blocks. The remaining dedup is exactly plan 091's
+   composite-action work and is deferred there, where the combined target
+   still holds. `render-release.py` is retained in full — the delivery
+   client still validates the schema-3 BOM it produces (client changes are
+   091's scope); only the workflow-side schema predicates are deleted.
+
 ## Test strategy
 
 `deploy-release-resolver-test.sh` retires with the resolver; replacement tests assert:
