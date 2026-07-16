@@ -1,0 +1,97 @@
+#!/usr/bin/env sh
+# Payload publisher (plan 094): POST plan-093 `build-payload.json` workflow artifacts to a
+# BuildHound environment's /v1/builds — no JVM required. Used by the `publish-staging` CI
+# job and the review-environment deploy path.
+#
+#   buildhound-publish payload.json [more-payloads.json ...]
+#   buildhound-publish --server https://bh.example.com payload.json
+#
+# The server URL comes from --server or BUILDHOUND_SERVER_URL (URLs are not secret, so a
+# flag is fine). The token comes ONLY from the BUILDHOUND_TOKEN environment variable and
+# rides an Authorization header — never a script flag, so it never lands on this script's
+# command line or in `ps`, and it is never echoed (same contract as buildhound-metric).
+#
+# Delivery posture (plan 094): staging/review copies are non-authoritative — production
+# gets a direct, spool-backed upload from the plugin — so this script NEVER fails the
+# calling CI step:
+#   - missing URL or token        -> skip with a log line, exit 0 (credentials not minted
+#                                     yet; the workflow must be merge-safe before they are)
+#   - 2xx (accepted or duplicate) -> success log; "duplicate" means the ingest already has
+#                                     this (project_id, build_id) — re-POSTs are safe
+#   - 4xx                         -> drop with a warning (a bad payload will not get better
+#                                     on retry), exit 0
+#   - transport error / 5xx       -> soft-fail warning, exit 0 (a dead staging must never
+#                                     redden a PR)
+# Argument errors (no files, unknown flag) stay hard — a broken invocation is a caller bug.
+set -eu
+
+usage() {
+    echo "usage: buildhound-publish [--server URL] PAYLOAD_JSON..." >&2
+}
+
+server="${BUILDHOUND_SERVER_URL:-}"
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --server) server="${2:-}"; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        -*) echo "buildhound-publish: unknown argument '$1'" >&2; usage; exit 2 ;;
+        *) break ;;
+    esac
+done
+if [ $# -eq 0 ]; then usage; exit 2; fi
+
+if [ -z "$server" ]; then
+    echo "buildhound-publish: no server URL configured (BUILDHOUND_SERVER_URL or --server); skipping publish" >&2
+    exit 0
+fi
+if [ -z "${BUILDHOUND_TOKEN:-}" ]; then
+    echo "buildhound-publish: BUILDHOUND_TOKEN is not set; skipping publish" >&2
+    exit 0
+fi
+
+endpoint="${server%/}/v1/builds"
+response="$(mktemp)"
+trap 'rm -f "$response"' EXIT
+
+published=0
+dropped=0
+for payload in "$@"; do
+    if [ ! -f "$payload" ]; then
+        # Payload artifacts are best-effort (if-no-files-found: warn upstream) — soft.
+        echo "buildhound-publish: $payload does not exist; skipping" >&2
+        dropped=$((dropped + 1))
+        continue
+    fi
+    # Token is passed via a header from the env — never on this script's command line.
+    http_code="$(
+        curl -s -o "$response" -w '%{http_code}' \
+            -X POST "$endpoint" \
+            -H "Authorization: Bearer ${BUILDHOUND_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary @"$payload" 2>/dev/null || echo "000"
+    )"
+    case "$http_code" in
+        2*)
+            if grep -q '"duplicate"' "$response" 2>/dev/null; then
+                echo "buildhound-publish: $payload already ingested (duplicate build_id — dedup is server-side)"
+            else
+                echo "buildhound-publish: published $payload (HTTP $http_code)"
+            fi
+            published=$((published + 1))
+            ;;
+        000)
+            echo "buildhound-publish: could not reach $endpoint (transport error); dropping $payload — non-authoritative copy, not retried" >&2
+            dropped=$((dropped + 1))
+            ;;
+        4*)
+            echo "buildhound-publish: server rejected $payload (HTTP $http_code); dropping — a bad payload will not get better on retry" >&2
+            dropped=$((dropped + 1))
+            ;;
+        *)
+            echo "buildhound-publish: server returned HTTP $http_code for $payload; dropping — non-authoritative copy, not retried" >&2
+            dropped=$((dropped + 1))
+            ;;
+    esac
+done
+echo "buildhound-publish: done ($published published, $dropped dropped/skipped)"
+exit 0
