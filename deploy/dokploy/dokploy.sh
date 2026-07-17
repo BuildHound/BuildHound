@@ -24,7 +24,6 @@ usage: dokploy.sh COMMAND [OPTIONS]
 Commands:
   release-id RELEASE
   current-release-id --compose-id ID
-  current-release-state --compose-id ID
   current-source-commit --compose-id ID
   require-manual-current --compose-id ID
   staging-bootstrap-state --compose-id ID
@@ -424,22 +423,6 @@ cmd_current_release_id() {
   current=$(current_release "$deployments") || return
   [ -n "$current" ] || { fail "no current successful release deployment found"; return 1; }
   jq -er '.releaseId' <<<"$current"
-}
-
-cmd_current_release_state() {
-  local compose_id deployments current release_id source_commit
-  compose_id=$(parse_single_compose_id "$@") || return
-  require_api_environment || return 1
-  deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return
-  current=$(current_release "$deployments") || return
-  source_commit=$(current_release_source "$deployments") || return
-  if [ -z "$current" ] || [ -z "$source_commit" ]; then
-    fail "current successful deployment lacks tracked release lineage"
-    return 1
-  fi
-  release_id=$(jq -er '.releaseId' <<<"$current") || return
-  jq -cn --arg releaseId "$release_id" --arg sourceCommit "$source_commit" \
-    '{releaseId:$releaseId,sourceCommit:$sourceCommit}'
 }
 
 cmd_current_source_commit() {
@@ -1027,7 +1010,6 @@ main() {
   case "$command" in
     release-id) cmd_release_id "$@" ;;
     current-release-id) cmd_current_release_id "$@" ;;
-    current-release-state) cmd_current_release_state "$@" ;;
     staging-bootstrap-state) cmd_staging_bootstrap_state "$@" ;;
     current-source-commit) cmd_current_source_commit "$@" ;;
     require-manual-current) cmd_require_manual_current "$@" ;;
