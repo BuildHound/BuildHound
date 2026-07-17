@@ -439,6 +439,28 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('dashboard_host="$review_name.dashboard.$DNS_SUFFIX"', workflow)
         self.assertNotIn('dashboard_host="dashboard-$review_name.$DNS_SUFFIX"', workflow)
 
+    def test_qualify_association_retry_is_hard_failure_tolerant(self):
+        # PR #75: qualify re-asks commits/{sha}/pulls (the association is
+        # eventually consistent — run 29572242790 lost a labeled merge to a
+        # 6s lag). The retry must tolerate HARD failures too: a bare
+        # pulls=$(gh api ...) trips the runner's default errexit mid-loop,
+        # and the extraction below the loop must reuse the winning $pulls
+        # snapshot, never a second fetch.
+        workflow = self.read(".github/workflows/deploy.yml")
+        self.assertIn(
+            'if pulls=$(gh api "repos/${GITHUB_REPOSITORY}'
+            '/commits/$GITHUB_SHA/pulls")',
+            workflow,
+        )
+        self.assertIn("for attempt in 1 2 3 4 5", workflow)
+        self.assertEqual(
+            workflow.count('/commits/$GITHUB_SHA/pulls"'),
+            1,
+            "qualify must fetch the PR association exactly once per attempt "
+            "and reuse the snapshot for extraction — a second fetch site "
+            "reintroduces the count/extraction TOCTOU",
+        )
+
     def test_workflows_scope_dokploy_configuration(self):
         for path in (
             ".github/workflows/deploy.yml",
