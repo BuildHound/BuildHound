@@ -32,7 +32,11 @@ PY
 payload=buildhound-commons/src/jvmTest/resources/golden/build-payload-v1-ci-env.json
 request_payload=$(mktemp)
 header_dump=$(mktemp)
-trap 'rm -f "$request_payload" "$header_dump"' EXIT
+site_headers=$(mktemp)
+site_body=$(mktemp)
+robots_headers=$(mktemp)
+robots_body=$(mktemp)
+trap 'rm -f "$request_payload" "$header_dump" "$site_headers" "$site_body" "$robots_headers" "$robots_body"' EXIT
 new_build_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
 jq --arg build_id "$new_build_id" '.buildId = $build_id' "$payload" > "$request_payload"
 build_id=$(jq -er .buildId "$request_payload")
@@ -72,7 +76,44 @@ fi
 if [ "${BUILDHOUND_SKIP_SITE_CHECKS-}" = true ]; then
   printf '%s\n' 'site check skipped (BUILDHOUND_SKIP_SITE_CHECKS=true)' >&2
 else
-  curl -fsS "$BUILDHOUND_SITE_URL/" | grep -q 'Track every Gradle build'
+  # Keep headers and the rendered body as separate evidence.  Do not use -f:
+  # the explicit status check makes an HTTP failure impossible to mistake for
+  # a successful smoke, while keeping responses (which may contain site data)
+  # out of the job log.
+  site_status=$(curl -sS --dump-header "$site_headers" --output "$site_body" \
+    --write-out '%{http_code}' "$BUILDHOUND_SITE_URL/" 2>/dev/null) || site_status=transport-error
+  [[ "$site_status" =~ ^2[0-9]{2}$ ]]
+  grep -q 'Track every Gradle build' "$site_body"
+  python3 - "$site_body" "$BUILDHOUND_DASHBOARD_URL" <<'PY'
+import sys
+from html.parser import HTMLParser
+
+class DashboardLink(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.matches = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag != "a":
+            return
+        attributes = dict(attrs)
+        if "primary" in attributes.get("class", "").split() and attributes.get("href") == sys.argv[2]:
+            self.matches += 1
+
+parser = DashboardLink()
+with open(sys.argv[1], encoding="utf-8") as page:
+    parser.feed(page.read())
+if parser.matches != 1:
+    raise SystemExit("site dashboard link does not match the configured dashboard origin")
+PY
+
+  if [ "${BUILDHOUND_EXPECT_NOINDEX-}" = true ]; then
+    test "$(tr -d '\r' < "$site_headers" | grep -Fxc 'X-Robots-Tag: noindex, nofollow')" = 1
+    robots_status=$(curl -sS --dump-header "$robots_headers" --output "$robots_body" \
+      --write-out '%{http_code}' "$BUILDHOUND_SITE_URL/robots.txt" 2>/dev/null) || robots_status=transport-error
+    [[ "$robots_status" =~ ^2[0-9]{2}$ ]]
+    printf 'User-agent: *\nDisallow: /\n' | cmp -s - "$robots_body"
+  fi
 fi
 
 ingest_ok=false

@@ -234,9 +234,31 @@ jobs:
           site_url="https://$site_host"
           dashboard_url="https://$dashboard_host"
           common=(--silent --show-error --fail --retry 30 --retry-delay 5 --retry-max-time 300 --retry-all-errors --connect-timeout 10 --max-time 20 --write-out '%{http_code}')
-          status=$(curl "${common[@]}" --dump-header /tmp/review-site-headers --output /dev/null "$site_url/")
+          status=$(curl "${common[@]}" --dump-header /tmp/review-site-headers --output /tmp/review-site-body "$site_url/")
           test "$status" = 200
           tr -d '\r' < /tmp/review-site-headers | grep -Fxi 'X-Robots-Tag: noindex, nofollow'
+          python3 - /tmp/review-site-body "$dashboard_url" <<'PY'
+          import sys
+          from html.parser import HTMLParser
+
+          class DashboardLink(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.matches = 0
+
+              def handle_starttag(self, tag, attrs):
+                  if tag != "a":
+                      return
+                  attributes = dict(attrs)
+                  if "primary" in attributes.get("class", "").split() and attributes.get("href") == sys.argv[2]:
+                      self.matches += 1
+
+          parser = DashboardLink()
+          with open(sys.argv[1], encoding="utf-8") as page:
+              parser.feed(page.read())
+          if parser.matches != 1:
+              raise SystemExit("review site dashboard link does not match its review dashboard origin")
+          PY
           status=$(curl "${common[@]}" --dump-header /tmp/review-dashboard-headers --output /dev/null "$dashboard_url/health")
           test "$status" = 200
           tr -d '\r' < /tmp/review-dashboard-headers | grep -Fxi 'X-Robots-Tag: noindex, nofollow'

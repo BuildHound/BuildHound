@@ -16,11 +16,48 @@ grep -q 'font-weight:400 700' site/assets/site.css
 grep -q 'font-weight:400 600' site/assets/site.css
 grep -q 'etag on' site/nginx.conf
 grep -q 'Cache-Control "public, max-age=0, must-revalidate"' site/nginx.conf
+grep -q 'access_log off;' site/nginx.conf
+if grep -q 'access_log /dev/' site/nginx.conf; then exit 1; fi
 grep -q "location = /health { access_log off; default_type text/plain;" site/nginx.conf
 grep -q '^HEALTHCHECK ' site/Dockerfile
 # shellcheck disable=SC2016 # Compose interpolation must remain literal in this assertion.
 grep -q 'image: ghcr.io/buildhound/buildhound-site@sha256:${BUILDHOUND_SITE_SHA256:' site/compose.yml
 if grep -Eq '^[[:space:]]+build:' site/compose.yml; then exit 1; fi
+compose_config=$(mktemp)
+if ! BUILDHOUND_SITE_SHA256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  BUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test \
+  BUILDHOUND_SITE_HOST=site.example.test \
+  BUILDHOUND_SITE_NOINDEX=false \
+  BUILDHOUND_SITE_PORT=18080 \
+  docker compose -f site/compose.yml config > "$compose_config"; then
+  rm -f "$compose_config"
+  exit 1
+fi
+grep -q '^    image: ghcr.io/buildhound/buildhound-site@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa$' "$compose_config"
+grep -q '^        host_ip: 127.0.0.1$' "$compose_config"
+grep -q '^        published: "18080"$' "$compose_config"
+for setting in \
+  'BUILDHOUND_SITE_DASHBOARD_URL: https://dashboard.example.test' \
+  'BUILDHOUND_SITE_HOST: site.example.test' \
+  'BUILDHOUND_SITE_NOINDEX: "false"' \
+  'read_only: true' \
+  '/tmp:rw,noexec,nosuid,nodev,size=64m' \
+  'no-new-privileges:true' \
+  'driver: json-file' \
+  'max-file: "5"' \
+  'max-size: 20m' \
+  'cpus: 0.5' \
+  'mem_limit: "134217728"' \
+  'mem_reservation: "33554432"' \
+  'pids_limit: 100'; do
+  grep -q "$setting" "$compose_config"
+done
+grep -q '^      - ALL$' "$compose_config"
+rm -f "$compose_config"
+if env -u BUILDHOUND_SITE_SHA256 \
+  BUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test \
+  BUILDHOUND_SITE_HOST=site.example.test \
+  docker compose -f site/compose.yml config >/dev/null 2>&1; then exit 1; fi
 test "$(find site/assets/fonts -maxdepth 1 -type f -name '*.woff2' | wc -l | tr -d ' ')" = 3
 for font in Fraunces-Variable.woff2 Inter-Variable.woff2 JetBrainsMono-Variable.woff2; do
   test -f "site/assets/fonts/$font"
@@ -69,6 +106,10 @@ if [ -n "${BUILDHOUND_SITE_TEST_IMAGE:-}" ]; then
   curl -fsS -H 'Host: site.example.test' -H 'X-Forwarded-Proto: https' -D "$tmp/health.headers" "$base/health" > "$tmp/health.txt"
   test "$(tr -d '\r\n' < "$tmp/health.txt")" = ok
   tr -d '\r' < "$tmp/health.headers" | grep -qi '^Content-Type: text/plain$'
+
+  # Access logs can contain visitor IPs and request paths; error logging stays on stderr.
+  if docker logs "$container" 2>&1 | grep -Fq 'GET / HTTP'; then exit 1; fi
+
   for headers in "$tmp/index.headers" "$tmp/health.headers"; do
     tr -d '\r' < "$headers" > "$headers.clean"
     grep -qi '^Content-Security-Policy:' "$headers.clean"
