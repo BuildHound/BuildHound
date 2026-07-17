@@ -1,5 +1,12 @@
 # Dogfooding + multi-env publication — implementation handoff
 
+> **Status (historical):** both plans are implemented and reviewed — 093 merged in PR #64,
+> 094 in PR #67. The `- [ ]` task lists below are the original pre-implementation scope, kept
+> for provenance; they are **not** a live checklist. The implemented plan files under
+> `docs/plans/implemented/` are the source of truth, and the code shipped with the
+> `BUILDHOUND_DOGFOOD_*` env contract (093 §3.2 review) — prefer them over any wording here.
+> What genuinely remains is the owner credential/rollout actions in 094 §6.
+
 ## Authority and provenance
 
 This handoff accompanies two approved, already-committed plans, implemented **in order**:
@@ -121,9 +128,13 @@ build over time while new telemetry features get validated on review/staging fir
       `BUILDHOUND_STAGING_INGEST_TOKEN`.
 - [ ] Prerequisite: verify/fix the four GitHub Environments' protection rules against
       `deploy/dokploy/README.md` before adding credentialed jobs (currently unset — rollout blocker).
-- [ ] Wire real values into 093's init script for prod: `BUILDHOUND_SERVER_URL` = prod dashboard
-      origin (repo variable), `BUILDHOUND_TOKEN` = `BUILDHOUND_PROD_INGEST_TOKEN`. Keeps the
-      spool/retry path — prod is the loss-protected copy.
+- [ ] Wire real values into 093's init script for prod: `BUILDHOUND_DOGFOOD_SERVER_URL` =
+      prod dashboard origin (repo variable `BUILDHOUND_PROD_SERVER_URL`), `BUILDHOUND_DOGFOOD_TOKEN`
+      = repo secret `BUILDHOUND_PROD_INGEST_TOKEN`. Keeps the spool/retry path — prod is the
+      loss-protected copy. (The dogfood contract is `BUILDHOUND_DOGFOOD_*`, **not** the bare
+      `BUILDHOUND_SERVER_URL`/`BUILDHOUND_TOKEN`: those are the plugin's plan-027 convention
+      fallback and a job-level bare name would arm uploads in the nested TestKit fixture builds —
+      093 §3.2 review, implemented in commit `2173425`.)
 - [ ] Add new `ci.yml` job `publish-staging` (`needs: [build, sample-springboot]`, same-repo PRs
       + `main` pushes only): download `buildhound-payload-*` artifacts, POST each to
       `<staging>/v1/builds` via a new shellchecked script under `buildhound-ci-assets/bin/`
