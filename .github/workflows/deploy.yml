@@ -568,7 +568,7 @@ jobs:
         run: deploy/dokploy/verify-release.sh
       - name: Upload deployment evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: {name: "staging-deployment-evidence-${{ github.run_attempt }}", path: deployment-evidence.json, if-no-files-found: warn, retention-days: 90}
   deploy-production:
     needs: [publish, resolve_dispatch, deploy-staging]
