@@ -18,14 +18,19 @@ while [ "$#" -gt 0 ]; do
     --output|-o) output=$2; shift 2 ;;
     --dump-header|-D) headers=$2; shift 2 ;;
     --write-out|-w) write_out=$2; shift 2 ;;
-    --header|-H|--data-binary|--request|-X) shift 2 ;;
+    --header|-H|--data-binary|--request|-X|--connect-timeout|--max-time) shift 2 ;;
     *) url=$1; shift ;;
   esac
 done
 case "$url" in
   https://site.example.test/) body=${TEST_SITE_BODY-'<a class="primary" href="https://dashboard.example.test">Open dashboard</a> Track every Gradle build'}; code=200; headers_value=${TEST_SITE_HEADERS-'X-Robots-Tag: noindex, nofollow'} ;;
-  https://site.example.test/robots.txt) body='User-agent: *
-Disallow: /'; code=200; headers_value='X-Robots-Tag: noindex, nofollow' ;;
+  https://site.example.test/robots.txt)
+    count=$(sed -n '1p' "$TEST_ROBOTS_COUNT_FILE"); count=${count:-0}; count=$((count + 1))
+    printf '%s\n' "$count" > "$TEST_ROBOTS_COUNT_FILE"
+    body='User-agent: *
+Disallow: /'; headers_value='X-Robots-Tag: noindex, nofollow'
+    if [ "$count" -le "${TEST_ROBOTS_FAIL_FIRST-0}" ]; then code=503; else code=200; fi
+    ;;
   https://dashboard.example.test/health) body='{"status":"ok"}'; code=200; headers_value='' ;;
   https://dashboard.example.test/v1/builds) body=''; code=202; headers_value='' ;;
   https://dashboard.example.test/v1/builds/*)
@@ -51,6 +56,11 @@ if [ -n "$output" ] && [ "$output" != /dev/null ]; then printf '%b\n' "$body" > 
 if [ -n "$write_out" ]; then printf '%s' "$code"; fi
 EOF
 chmod +x "$bin/curl"
+cat > "$bin/sleep" <<'EOF'
+#!/usr/bin/env sh
+exit 0
+EOF
+chmod +x "$bin/sleep"
 
 run_verify() (
   export BUILDHOUND_SITE_URL=$1
@@ -62,13 +72,57 @@ run_verify() (
   fi
   export BUILDHOUND_EXPECT_NOINDEX=true
   export CURL_LOG="$curl_log"
+  export TEST_ROBOTS_COUNT_FILE="$root/robots-count"
+  export TEST_ROBOTS_FAIL_FIRST="${TEST_ROBOTS_FAIL_FIRST-0}"
   export PATH="$bin:$PATH"
+  : > "$TEST_ROBOTS_COUNT_FILE"
   bash deploy/dokploy/verify-release.sh
 )
+
+assert_staging_probe_timeouts() {
+  local url=$1
+  awk -v url="$url" '
+    $NF == url {
+      saw = 1
+      connect_timeout = 0
+      max_time = 0
+      for (i = 1; i < NF; i++) {
+        if ($i == "--connect-timeout" && $(i + 1) == "10") connect_timeout = 1
+        if ($i == "--max-time" && $(i + 1) == "20") max_time = 1
+      }
+      if (!connect_timeout || !max_time) invalid = 1
+    }
+    END { exit !saw || invalid }
+  ' "$curl_log"
+}
 
 : > "$curl_log"
 run_verify https://site.example.test https://dashboard.example.test
 test "$(wc -l < "$curl_log")" -eq 5
+assert_staging_probe_timeouts https://site.example.test/
+assert_staging_probe_timeouts https://site.example.test/robots.txt
+
+# A partial tuple is discarded: after robots fails, the retry fetches and
+# revalidates the page before trying robots again, then ingest follows.
+: > "$curl_log"
+TEST_ROBOTS_FAIL_FIRST=1 run_verify https://site.example.test https://dashboard.example.test
+test "$(wc -l < "$curl_log")" -eq 7
+test "$(awk '$NF == "https://site.example.test/" { count++ } END { print count + 0 }' "$curl_log")" -eq 2
+test "$(awk '$NF == "https://site.example.test/robots.txt" { count++ } END { print count + 0 }' "$curl_log")" -eq 2
+
+# The rollout retry remains bounded and never reaches ingest without a full
+# site tuple. The fake sleep keeps this exhaustion test fast.
+: > "$curl_log"
+set +e
+TEST_ROBOTS_FAIL_FIRST=20 run_verify https://site.example.test https://dashboard.example.test >/dev/null 2>&1
+status=$?
+set -e
+test "$status" -ne 0
+test "$(wc -l < "$curl_log")" -eq 41
+if grep -q 'dashboard.example.test/v1/builds' "$curl_log"; then
+  printf 'ingest ran without a complete staging site tuple\n' >&2
+  exit 1
+fi
 
 # Site proof is an ingress gate: a successful-looking page with the wrong
 # dashboard origin must stop before ingest/read attestation could run.
@@ -78,7 +132,7 @@ TEST_SITE_BODY='<a class="primary" href="https://other-dashboard.example.test">O
 status=$?
 set -e
 test "$status" -ne 0
-test "$(wc -l < "$curl_log")" -eq 2
+test "$(wc -l < "$curl_log")" -eq 21
 
 : > "$curl_log"
 set +e
@@ -87,7 +141,7 @@ X-Robots-Tag: noindex, nofollow' run_verify https://site.example.test https://da
 status=$?
 set -e
 test "$status" -ne 0
-test "$(wc -l < "$curl_log")" -eq 2
+test "$(wc -l < "$curl_log")" -eq 21
 
 # Staging's noindex header is exact, not merely present.
 : > "$curl_log"
@@ -96,7 +150,7 @@ TEST_SITE_HEADERS='X-Robots-Tag: noindex' run_verify https://site.example.test h
 status=$?
 set -e
 test "$status" -ne 0
-test "$(wc -l < "$curl_log")" -eq 2
+test "$(wc -l < "$curl_log")" -eq 21
 
 # Robots-header gate (plan 095): the expectation is value-agnostic (production
 # pins "all"); a wrong, missing, or duplicated served header fails right after

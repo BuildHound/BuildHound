@@ -94,17 +94,31 @@ jobs:
           # cleanup events share the workflow, so bind to the PR lifecycle
           # instead of naively requiring the newest workflow run.
           events=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/$pr/events?per_page=100")
-          review_cutoff=$(jq -ser '
+          review_request=$(jq -ser '
             [ .[][] |
               select(
                 (.event == "labeled" and .label.name == "deploy-review") or
                 .event == "reopened"
               ) |
-              .created_at |
-              select(type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
-            ] | max // empty
+              select(
+                (.created_at | type) == "string" and
+                (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+                (.id | type) == "number" and .id >= 1 and (.id | floor) == .id
+              )
+            ] | sort_by(.created_at, .id) | last // empty
           ' <<<"$events")
-          test -n "$review_cutoff"
+          review_cutoff=$(jq -er '.created_at' <<<"$review_request")
+          review_request_event_id=$(jq -er '.id | tostring | select(test("^[1-9][0-9]*$"))' <<<"$review_request")
+
+          # Bootstrap compatibility only: PR #38 was opened before the
+          # schema-1 attestation gained digest and lifecycle fields. Remove
+          # this PR- and branch-pinned exception after this rollout reaches
+          # staging.
+          # No other legacy proof is accepted.
+          legacy_bootstrap=false
+          if [ "$pr" = 38 ] && [ "$head_branch" = codex/public-site-compose ]; then
+            legacy_bootstrap=true
+          fi
 
           # A label alone is insufficient: promotion consumes the newest
           # exact-context status on the merged PR's *head* commit, then
@@ -130,30 +144,46 @@ jobs:
           [[ "$workflow_id" =~ ^[0-9]+$ ]]
           run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id")
           run_attempt=$(jq -er '.run_attempt | select(type == "number" and . >= 1 and floor == .)' <<<"$run")
-          jq -e --arg repository "$GITHUB_REPOSITORY" --arg sha "$head_sha" --arg branch "$head_branch" --argjson workflow_id "$workflow_id" '
+          jq -e --arg repository "$GITHUB_REPOSITORY" --arg sha "$head_sha" --arg branch "$head_branch" --arg cutoff "$review_cutoff" --argjson workflow_id "$workflow_id" '
             .status == "completed" and .conclusion == "success" and
             .event == "pull_request_target" and
             .workflow_id == $workflow_id and .repository.full_name == $repository and
-            .head_sha == $sha and .head_branch == $branch
+            .head_sha == $sha and .head_branch == $branch and
+            (.created_at | type) == "string" and .created_at > $cutoff
           ' <<<"$run" >/dev/null
           proof_dir=$(mktemp -d)
           trap 'rm -rf "$proof_dir"' EXIT
           gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name review-attestation --dir "$proof_dir"
           proof_file=$(find "$proof_dir" -type f -name review.json -print -quit)
           test -n "$proof_file"
-          jq -e -s --arg repository "$GITHUB_REPOSITORY" --argjson pr "$pr" \
-            --arg sha "$head_sha" --arg run_id "$run_id" --argjson run_attempt "$run_attempt" '
+          jq -e -s --arg legacy_bootstrap "$legacy_bootstrap" --arg registry "$IMAGE_REGISTRY_PREFIX" --arg repository "$GITHUB_REPOSITORY" --argjson pr "$pr" \
+            --arg sha "$head_sha" --arg run_id "$run_id" --argjson run_attempt "$run_attempt" \
+            --arg review_request_event_id "$review_request_event_id" '
             length == 1 and .[0] as $proof and
             ($proof | type) == "object" and
-            ($proof | keys) == ["attemptId","composeId","deploymentId","headSha","pr","repository","runAttempt","runId","schema","serverDigest","serverImage","siteDigest","siteImage"] and
-            $proof.schema == 1 and $proof.repository == $repository and $proof.pr == $pr and
-            $proof.headSha == $sha and $proof.runId == $run_id and $proof.runAttempt == $run_attempt and
-            $proof.attemptId == ($run_id + "." + ($run_attempt | tostring)) and
-            ($proof.serverImage | type) == "string" and ($proof.siteImage | type) == "string" and
-            ($proof.serverDigest | type) == "string" and ($proof.serverDigest | test("^sha256:[0-9a-f]{64}$")) and
-            ($proof.siteDigest | type) == "string" and ($proof.siteDigest | test("^sha256:[0-9a-f]{64}$")) and
-            ($proof.serverImage | endswith("@" + $proof.serverDigest)) and
-            ($proof.siteImage | endswith("@" + $proof.siteDigest))
+            if $legacy_bootstrap == "true" then
+              ($proof | keys) == ["attemptId","composeId","deploymentId","headSha","pr","repository","runId","schema","serverImage","siteImage"] and
+              $proof.schema == 1 and $proof.repository == $repository and $proof.pr == $pr and
+              $proof.headSha == $sha and $proof.runId == $run_id and
+              $proof.attemptId == ($run_id + "." + ($run_attempt | tostring)) and
+              ($proof.composeId | type) == "string" and ($proof.composeId | test("^[A-Za-z0-9_-]{1,128}$")) and
+              ($proof.deploymentId | type) == "string" and ($proof.deploymentId | test("^[A-Za-z0-9_-]{1,128}$")) and
+              ($proof.serverImage | type) == "string" and
+              ($proof.serverImage | capture("^(?<image>.+)@(?<digest>sha256:[0-9a-f]{64})$").image == ($registry + "/buildhound-server")) and
+              ($proof.siteImage | type) == "string" and
+              ($proof.siteImage | capture("^(?<image>.+)@(?<digest>sha256:[0-9a-f]{64})$").image == ($registry + "/buildhound-site"))
+            else
+              ($proof | keys) == ["attemptId","composeId","deploymentId","headSha","pr","repository","reviewRequestEventId","runAttempt","runId","schema","serverDigest","serverImage","siteDigest","siteImage"] and
+              $proof.schema == 1 and $proof.repository == $repository and $proof.pr == $pr and
+              $proof.reviewRequestEventId == $review_request_event_id and
+              $proof.headSha == $sha and $proof.runId == $run_id and $proof.runAttempt == $run_attempt and
+              $proof.attemptId == ($run_id + "." + ($run_attempt | tostring)) and
+              ($proof.serverImage | type) == "string" and ($proof.siteImage | type) == "string" and
+              ($proof.serverDigest | type) == "string" and ($proof.serverDigest | test("^sha256:[0-9a-f]{64}$")) and
+              ($proof.siteDigest | type) == "string" and ($proof.siteDigest | test("^sha256:[0-9a-f]{64}$")) and
+              ($proof.serverImage == ($registry + "/buildhound-server@" + $proof.serverDigest)) and
+              ($proof.siteImage == ($registry + "/buildhound-site@" + $proof.siteDigest))
+            end
           ' "$proof_file" >/dev/null
           echo "deploy=true" >> "$GITHUB_OUTPUT"
   publish:
@@ -353,14 +383,23 @@ jobs:
       DB_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.db_image || needs.resolve_dispatch.outputs.db_image }}
       SOURCE_COMMIT: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
     steps:
+      # Delivery controls always come from the trusted workflow revision;
+      # only candidate release inputs come from SOURCE_COMMIT.
+      - name: Check out trusted delivery controls
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       # Checked out at the CANDIDATE commit (== github.sha on push; the
       # attestation-bound sha on dispatch) so the rendered BOM, migration
       # history, and manifests are the candidate's own — a rollback candidate
       # rendered from current main would always pass the migration-
       # compatibility gate vacuously.
-      - uses: actions/checkout@v7
+      - name: Check out candidate release inputs
+        uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
+          ref: ${{ env.SOURCE_COMMIT }}
+          path: candidate
           persist-credentials: false
       - name: Render trusted release inputs
         run: |
@@ -371,12 +410,12 @@ jobs:
             --site-image "$SITE_IMAGE" \
             --backup-image "$BACKUP_IMAGE" \
             --postgres-image "$DB_IMAGE" \
-            --production-manifest deploy/dokploy/stack.yaml \
-            --staging-manifest deploy/dokploy/staging-stack.yaml \
-            --volume-guard deploy/dokploy/volume-guard.sh \
-            --migrations-dir buildhound-server/src/main/resources/db/migration
+            --production-manifest candidate/deploy/dokploy/stack.yaml \
+            --staging-manifest candidate/deploy/dokploy/staging-stack.yaml \
+            --volume-guard candidate/deploy/dokploy/volume-guard.sh \
+            --migrations-dir candidate/buildhound-server/src/main/resources/db/migration
           mkdir -p /tmp/release
-          cp release.json deploy/dokploy/staging-stack.yaml deploy/dokploy/volume-guard.sh /tmp/release/
+          cp release.json candidate/deploy/dokploy/staging-stack.yaml candidate/deploy/dokploy/volume-guard.sh /tmp/release/
       - name: Select and verify fresh encrypted backup
         id: backup
         env:
@@ -501,7 +540,7 @@ jobs:
       - name: Upload deployment evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
-        with: {name: staging-deployment-evidence, path: deployment-evidence.json, if-no-files-found: warn, retention-days: 90}
+        with: {name: "staging-deployment-evidence-${{ github.run_attempt }}", path: deployment-evidence.json, if-no-files-found: warn, retention-days: 90}
   deploy-production:
     needs: [publish, resolve_dispatch, deploy-staging]
     if: ${{ !cancelled() && needs.deploy-staging.result == 'success' && (github.event_name == 'push' || inputs.target == 'production') }}
@@ -516,14 +555,23 @@ jobs:
       DB_IMAGE: ${{ github.event_name == 'push' && needs.publish.outputs.db_image || needs.resolve_dispatch.outputs.db_image }}
       SOURCE_COMMIT: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
     steps:
+      # Delivery controls always come from the trusted workflow revision;
+      # only candidate release inputs come from SOURCE_COMMIT.
+      - name: Check out trusted delivery controls
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       # Checked out at the CANDIDATE commit (== github.sha on push; the
       # attestation-bound sha on dispatch) so the rendered BOM, migration
       # history, and manifests are the candidate's own — a rollback candidate
       # rendered from current main would always pass the migration-
       # compatibility gate vacuously.
-      - uses: actions/checkout@v7
+      - name: Check out candidate release inputs
+        uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'push' && github.sha || inputs.sha }}
+          ref: ${{ env.SOURCE_COMMIT }}
+          path: candidate
           persist-credentials: false
       - name: Render trusted release inputs
         run: |
@@ -534,15 +582,15 @@ jobs:
             --site-image "$SITE_IMAGE" \
             --backup-image "$BACKUP_IMAGE" \
             --postgres-image "$DB_IMAGE" \
-            --production-manifest deploy/dokploy/stack.yaml \
-            --staging-manifest deploy/dokploy/staging-stack.yaml \
-            --volume-guard deploy/dokploy/volume-guard.sh \
-            --migrations-dir buildhound-server/src/main/resources/db/migration
+            --production-manifest candidate/deploy/dokploy/stack.yaml \
+            --staging-manifest candidate/deploy/dokploy/staging-stack.yaml \
+            --volume-guard candidate/deploy/dokploy/volume-guard.sh \
+            --migrations-dir candidate/buildhound-server/src/main/resources/db/migration
           mkdir -p /tmp/release
           # The production job renders and deploys the production manifest —
           # never staging-stack.yaml. This wiring is the plan-090 replacement
           # for the schema-3 per-role checksum recheck, pinned by policy test.
-          cp release.json deploy/dokploy/stack.yaml deploy/dokploy/volume-guard.sh /tmp/release/
+          cp release.json candidate/deploy/dokploy/stack.yaml candidate/deploy/dokploy/volume-guard.sh /tmp/release/
       - name: Select and verify fresh encrypted backup
         id: backup
         env:
