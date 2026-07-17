@@ -87,29 +87,37 @@ class BuildCacheConfigFunctionalTest {
     }
 
     /**
-     * Fails if the remote URL, its host, or a cache-location accessor leaked anywhere into the
-     * payload JSON.
+     * Fails if the remote URL, its host, its port, or a cache-location accessor leaked into the
+     * payload — the spec §3.7 guarantee that [BuildCacheConfigInfo] carries only booleans plus a
+     * normalized backend type name.
      *
-     * CI-portability fix: the blanket `!raw.contains("://")` this used to run against the WHOLE
-     * raw payload false-positives on GitHub Actions CI, where `CiEnvironmentProviders` legitimately
-     * populates `environment.ci.buildUrl` with a real `https://github.com/.../actions/runs/...`
-     * URL (a separate, intended feature — CI provenance, not the build-cache config). That field
-     * doesn't exist on a local dev machine (no `GITHUB_*` env), which is why this passed there but
-     * failed on every CI runner. The distinctive host/port checks stay scoped to the whole raw
-     * payload (safe — `buildcache.internal.example`/`5071` cannot collide with real CI metadata);
-     * the generic `://` scheme check is rescoped to just the encoded [BuildCacheConfigInfo] block,
-     * which is spec'd (§3.7) to carry only booleans + a normalized type name and must never contain
-     * a URL scheme, regardless of what legitimately appears elsewhere in the payload.
+     * CI-portability rule: only a token distinctive enough that it cannot occur by chance may be
+     * searched against the WHOLE raw payload. On GitHub Actions the payload legitimately carries CI
+     * metadata a local dev machine never produces (no `GITHUB_*` env) — `environment.ci.buildUrl`
+     * holds a real `https://github.com/.../actions/runs/...` URL, alongside numeric run ids,
+     * timestamps, durations, byte counts and hex identity hashes. A whole-payload search for a
+     * generic token therefore passes locally and fails intermittently on CI: that is how the blanket
+     * `://` check failed, and how the bare 4-digit port `5071` collided with CI numerics (PR #67,
+     * run 29584263088).
+     *
+     * So every generic token — `://`, the port, the accessor names — is checked against the encoded
+     * [BuildCacheConfigInfo] block instead, which is where the §3.7 guarantee actually binds and
+     * where none of them can appear without a real leak. Only [remoteHost]
+     * (`buildcache.internal.example`) is distinctive enough to stay a whole-payload check, and it
+     * keeps that scope deliberately: it is the catch-all for a URL escaping into any other field.
      */
     private fun assertNoUrlOrPathLeak() {
         val raw = payloadFile().readText()
         assertTrue(!raw.contains(remoteHost), "remote-cache host must never reach the payload (spec §3.7)")
-        assertTrue(!raw.contains("5071"), "no remote-cache port may reach the payload")
-        assertTrue(!raw.contains("getUrl") && !raw.contains("getDirectory"), "no cache-location accessor output may leak")
 
         val buildCache = readPayload().environment?.buildCache ?: error("expected environment.buildCache")
         val buildCacheJson = BuildHoundJson.payload.encodeToString(BuildCacheConfigInfo.serializer(), buildCache)
         assertTrue(!buildCacheJson.contains("://"), "no remote-cache URL may reach the buildCache payload block (spec §3.7)")
+        assertTrue(!buildCacheJson.contains("5071"), "no remote-cache port may reach the buildCache payload block (spec §3.7)")
+        assertTrue(
+            !buildCacheJson.contains("getUrl") && !buildCacheJson.contains("getDirectory"),
+            "no cache-location accessor output may reach the buildCache payload block (spec §3.7)",
+        )
     }
 
     @Test
