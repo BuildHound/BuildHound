@@ -481,7 +481,7 @@ cmd_deploy_release() (
   local compose_deployment site_deployment rc has_success compose_server_id
   local workdir stack_file app_file app_before_file compose_state_file compose_before_file
   local compose_observed_file site_observed_file
-  local migration history release_schema manifest_field compose_environment_id='' dashboard_host=''
+  local migration history manifest_field compose_environment_id='' dashboard_host=''
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -581,16 +581,11 @@ cmd_deploy_release() (
   rid=$(release_id "$release") || return
   manifest_hash=$(sha256_file "$manifest") || return
   guard_hash=$(sha256_file "$volume_guard") || return
-  release_schema=$(jq -er '.schema' "$release") || return
-  if [ "$release_schema" -ge 3 ]; then
-    case "$app_role" in
-      staging) manifest_field=stagingManifestSha256 ;;
-      prod) manifest_field=productionManifestSha256 ;;
-      *) fail "unsupported release application role"; return 1 ;;
-    esac
-  else
-    manifest_field=manifestSha256
-  fi
+  case "$app_role" in
+    staging) manifest_field=stagingManifestSha256 ;;
+    prod) manifest_field=productionManifestSha256 ;;
+    *) fail "unsupported release application role"; return 1 ;;
+  esac
   expected=$(jq -er --arg key "$manifest_field" '.[$key]' "$release") || return
   [ "$manifest_hash" = "$expected" ] || { fail "release manifest checksum differs from trusted stack"; return 1; }
   expected=$(jq -er '.volumeGuardSha256' "$release") || return
