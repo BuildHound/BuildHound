@@ -347,7 +347,7 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         source_checkout = workflow.index("- name: Check out the exact untrusted review source")
         build_server = workflow.index("- name: Build review server without registry credentials")
         build_site = workflow.index("- name: Build review site without registry credentials")
-        login = workflow.index("- uses: docker/login-action@v3")
+        login = workflow.index("- uses: docker/login-action@v4")
         publish = workflow.index("name: Publish exact review images and record push digests")
         deploy = workflow.index("- name: Deploy and verify trusted review manifest")
         self.assertLess(source_checkout, build_server)
