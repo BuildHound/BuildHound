@@ -40,14 +40,17 @@ services:
       labels:
         - traefik.enable=true
         - traefik.swarm.network=${DOKPLOY_INGRESS_NETWORK}
-        - traefik.http.routers.buildhound.rule=Host(`${BUILDHOUND_DASHBOARD_HOST}`)
-        - traefik.http.routers.buildhound.entrypoints=websecure
-        - traefik.http.routers.buildhound.tls.certresolver=letsencrypt-dns-hetzner
-        - traefik.http.routers.buildhound.middlewares=buildhound-ratelimit,buildhound-robots
-        - traefik.http.middlewares.buildhound-ratelimit.ratelimit.average=10
-        - traefik.http.middlewares.buildhound-ratelimit.ratelimit.burst=20
-        - traefik.http.middlewares.buildhound-robots.headers.customresponseheaders.X-Robots-Tag=${BUILDHOUND_ROBOTS_HEADER:-all}
-        - traefik.http.services.buildhound.loadbalancer.server.port=8080
+        # Traefik object names are swarm-global: they MUST stay disjoint from
+        # staging-stack.yaml (and review stacks), or the first coexistence of
+        # two stacks silently 404s both routers (first prod anchor, 2026-07-17).
+        - traefik.http.routers.buildhound-prod.rule=Host(`${BUILDHOUND_DASHBOARD_HOST}`)
+        - traefik.http.routers.buildhound-prod.entrypoints=websecure
+        - traefik.http.routers.buildhound-prod.tls.certresolver=letsencrypt-dns-hetzner
+        - traefik.http.routers.buildhound-prod.middlewares=buildhound-prod-ratelimit,buildhound-prod-robots
+        - traefik.http.middlewares.buildhound-prod-ratelimit.ratelimit.average=10
+        - traefik.http.middlewares.buildhound-prod-ratelimit.ratelimit.burst=20
+        - traefik.http.middlewares.buildhound-prod-robots.headers.customresponseheaders.X-Robots-Tag=${BUILDHOUND_ROBOTS_HEADER:-all}
+        - traefik.http.services.buildhound-prod.loadbalancer.server.port=8080
 
   db:
     image: ${BUILDHOUND_POSTGRES_IMAGE}
