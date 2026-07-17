@@ -40,11 +40,25 @@ but does not otherwise change production delivery.
   it to `false`). The existing workflow must then supply `--site-application-id`, and
   `dokploy.sh deploy-release` must retain its fail-closed Application update/readback:
   `sourceType=docker`, the BOM's `siteImage`, `autoDeploy=false`, null registry-transform
-  fields, and the sole `node.labels.role==staging` constraint before `application.deploy`.
+  fields, no direct or advanced-Swarm published ports, no mounts, and the sole
+  `node.labels.role==staging` constraint before `application.deploy`. Bind the configured
+  dashboard origin independently to the selected Compose environment's dashboard host.
+  Deploy and attest the Compose before starting the site Application so a failed Compose
+  cannot leave an unrecorded split release.
   Promotion must validate the pending, failure, and success deployment states and the
   run-scoped attestation, rather than treating optional PR metadata as evidence. The release
   evidence must contain a non-null site deployment ID; retain partial deployment evidence as
-  an artifact when a rollout fails.
+  an attempt-scoped artifact when a rollout fails or is rerun.
+- Keep workflow-dispatch rollback inputs candidate-bound while running delivery controls from
+  the trusted workflow revision: render the candidate manifests, migrations, and volume guard
+  with the current renderer, then deploy them with the current Dokploy client and verifier.
+  Historical candidates must not need to understand flags added by this plan.
+- Bootstrap the protected `pull_request_target` producer/consumer schema change explicitly.
+  The producer used for this PR comes from pre-change `main`, so only PR 38 on its exact head
+  branch may qualify with the exact legacy schema; that proof must name the current run
+  attempt, use digest-pinned images, and come from a protected run created strictly after the
+  latest review-request event. Every other PR requires the new attestation's exact lifecycle
+  event ID. Remove the one-shot compatibility branch after this rollout reaches staging.
 - Keep production's Environment, Application configuration, manual approval, and exact
   release path unchanged, and authorize no production deployment. The shared image disables
   Nginx access logging to eliminate unbounded visitor-metadata retention. No fallback from a
@@ -62,6 +76,10 @@ but does not otherwise change production delivery.
   run-scoped attestation; assert partial evidence is uploaded on failure. Preserve the
   explicit skip-mode tests only as the historical mechanism, and preserve production's
   current workflow behavior.
+- Cover the protected-workflow schema bootstrap, dispatching an older candidate through the
+  current delivery controls, advanced Swarm/direct port and mount rejection, cross-environment
+  dashboard-origin rejection, sequential Compose/site submission, partial evidence, and
+  bounded site-probe connection/response timeouts.
 - Pin the site image's Nginx configuration so access logging is disabled; this prevents
   unbounded retention of visitor metadata without enabling a production deploy.
 - Run `sh site/test/site-test.sh`, including the hardened image mode; the complete Dokploy

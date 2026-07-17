@@ -292,6 +292,13 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn("printf 'User-agent: *\\nDisallow: /\\n' | cmp -s", verify)
         self.assertIn("BUILDHOUND_EXPECT_NOINDEX: true", staging)
         self.assertIn('curl -fsS "$BUILDHOUND_SITE_URL/" | grep -q', verify)
+        retry = verify.index("verify_staging_site()")
+        complete = verify.index('test "$site_retry_ok" = true', retry)
+        ingest = verify.index("ingest_ok=false", complete)
+        self.assertIn("for _ in $(seq 1 20)", verify[retry:complete])
+        self.assertIn("sleep 15", verify[retry:complete])
+        self.assertLess(retry, complete)
+        self.assertLess(complete, ingest)
 
     def test_release_verification_validates_exact_https_origins_before_curl(self):
         verify = self.read("deploy/dokploy/verify-release.sh")
@@ -469,8 +476,10 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('issues/$pr/events?per_page=100', workflow)
         self.assertIn('.event == "labeled" and .label.name == "deploy-review"', workflow)
         self.assertIn('.event == "reopened"', workflow)
-        self.assertIn('test -n "$review_cutoff"', workflow)
+        self.assertIn('sort_by(.created_at, .id) | last', workflow)
+        self.assertIn('review_request_event_id=$(jq -er', workflow)
         self.assertIn('.updated_at >= $cutoff', workflow)
+        self.assertIn('$proof.reviewRequestEventId == $review_request_event_id', workflow)
         self.assertIn("test \"$state\" = success", workflow)
         self.assertIn("test \"$creator\" = 'github-actions[bot]'", workflow)
         self.assertIn('actions/runs/$run_id', workflow)
@@ -501,11 +510,11 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn("--manifest /tmp/release/stack.yaml", production_body)
         self.assertNotIn("--manifest /tmp/release/staging-stack.yaml", production_body)
         self.assertIn(
-            "cp release.json deploy/dokploy/staging-stack.yaml deploy/dokploy/volume-guard.sh /tmp/release/",
+            "cp release.json candidate/deploy/dokploy/staging-stack.yaml candidate/deploy/dokploy/volume-guard.sh /tmp/release/",
             staging_body,
         )
         self.assertIn(
-            "cp release.json deploy/dokploy/stack.yaml deploy/dokploy/volume-guard.sh /tmp/release/",
+            "cp release.json candidate/deploy/dokploy/stack.yaml candidate/deploy/dokploy/volume-guard.sh /tmp/release/",
             production_body,
         )
         # Staging bootstrap (plan 088 semantics carried over) stays gated to
@@ -535,6 +544,10 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             "jq -e '.siteDeploymentId | type == \"string\" and length > 0' deployment-evidence.json >/dev/null",
             staging_body,
         )
+        self.assertIn(
+            'name: "staging-deployment-evidence-${{ github.run_attempt }}"',
+            staging_body,
+        )
         self.assertIn('BUILDHOUND_SITE_URL: ${{ vars.BUILDHOUND_SITE_URL }}', staging_body)
         self.assertNotIn("BUILDHOUND_SKIP_SITE_DEPLOY", staging_body)
         self.assertNotIn("--skip-site", staging_body)
@@ -560,13 +573,19 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             workflow,
         )
         self.assertIn("attestation source commit does not match", workflow)
-        # Both deploy jobs check out the CANDIDATE commit so a rollback's
-        # BOM/migrations/manifests are its own (§3.2 review finding), and
-        # both carry the restored deployment-progress backstop.
+        # Both jobs keep controls at the trusted workflow revision and check
+        # candidate material out separately, so historical rollback commits
+        # need not understand current delivery-client flags.
         self.assertEqual(
-            workflow.count(
-                "ref: ${{ github.event_name == 'push' && github.sha || inputs.sha }}"
-            ),
+            workflow.count("ref: ${{ github.sha }}"),
+            2,
+        )
+        self.assertEqual(workflow.count("ref: ${{ env.SOURCE_COMMIT }}"), 2)
+        self.assertEqual(workflow.count("path: candidate"), 2)
+        self.assertEqual(workflow.count("candidate/deploy/dokploy/stack.yaml"), 3)
+        self.assertEqual(workflow.count("candidate/deploy/dokploy/staging-stack.yaml"), 3)
+        self.assertEqual(
+            workflow.count("candidate/buildhound-server/src/main/resources/db/migration"),
             2,
         )
         self.assertEqual(
@@ -595,10 +614,58 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             workflow.count("actions/checkout@"),
         )
 
+    def test_pr_38_legacy_review_proof_is_a_one_shot_strict_exception(self):
+        workflow = self.read(".github/workflows/deploy.yml")
+        legacy_keys = (
+            '["attemptId","composeId","deploymentId","headSha","pr",'
+            '"repository","runId","schema","serverImage","siteImage"]'
+        )
+        modern_keys = (
+            '["attemptId","composeId","deploymentId","headSha","pr",'
+            '"repository","reviewRequestEventId","runAttempt","runId",'
+            '"schema","serverDigest","serverImage","siteDigest","siteImage"]'
+        )
+        self.assertIn('if [ "$pr" = 38 ] && [ "$head_branch" = codex/public-site-compose ]; then', workflow)
+        self.assertIn("branch-pinned exception after this rollout reaches", workflow)
+        self.assertIn('if $legacy_bootstrap == "true" then', workflow)
+        self.assertIn(legacy_keys, workflow)
+        self.assertIn(modern_keys, workflow)
+        # The old payload has no runAttempt field, so current-attempt binding
+        # must be reconstructed from the protected run ID + attempt number.
+        self.assertIn('$proof.attemptId == ($run_id + "." + ($run_attempt | tostring))', workflow)
+        self.assertIn('.created_at > $cutoff', workflow)
+        self.assertIn('.event == "pull_request_target"', workflow)
+        self.assertIn('.conclusion == "success"', workflow)
+        self.assertIn('.workflow_id == $workflow_id', workflow)
+        self.assertIn('capture("^(?<image>.+)@(?<digest>sha256:[0-9a-f]{64})$")', workflow)
+        self.assertIn('($registry + "/buildhound-server")', workflow)
+        self.assertIn('($registry + "/buildhound-site")', workflow)
+
+    def test_dispatch_uses_trusted_controls_and_candidate_release_inputs(self):
+        workflow = self.read(".github/workflows/deploy.yml")
+        staging = workflow[workflow.index("  deploy-staging:") : workflow.index("  deploy-production:")]
+        production = workflow[workflow.index("  deploy-production:") :]
+        for job in (staging, production):
+            with self.subTest(job=job[:40]):
+                trusted = job.index("Check out trusted delivery controls")
+                candidate = job.index("Check out candidate release inputs")
+                render = job.index("Render trusted release inputs")
+                deploy = job.index("Explicit Dokploy deploy")
+                self.assertLess(trusted, candidate)
+                self.assertLess(candidate, render)
+                self.assertLess(render, deploy)
+                self.assertIn("ref: ${{ github.sha }}", job[trusted:candidate])
+                self.assertIn("ref: ${{ env.SOURCE_COMMIT }}", job[candidate:render])
+                self.assertIn("path: candidate", job[candidate:render])
+                self.assertIn("candidate/deploy/dokploy", job[render:deploy])
+                # The release client itself remains outside candidate/.
+                self.assertIn("bash deploy/dokploy/dokploy.sh deploy-release", job[deploy:])
+                self.assertNotIn("bash candidate/deploy/dokploy/dokploy.sh", job)
+
     def test_stale_review_success_cannot_cross_relabel_or_reopen_cutoff(self):
-        def proof_is_fresh(events, status_updated_at):
-            cutoffs = [
-                event["created_at"]
+        def proof_is_current(events, attested_event_id, status_updated_at):
+            requests = [
+                event
                 for event in events
                 if (
                     event["event"] == "labeled"
@@ -606,30 +673,45 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
                 )
                 or event["event"] == "reopened"
             ]
-            return bool(cutoffs) and status_updated_at >= max(cutoffs)
+            if not requests:
+                return False
+            latest = max(requests, key=lambda event: (event["created_at"], event["id"]))
+            return (
+                attested_event_id == str(latest["id"])
+                and status_updated_at >= latest["created_at"]
+            )
 
         first_label = {
             "event": "labeled",
+            "id": 101,
             "label": {"name": "deploy-review"},
             "created_at": "2026-07-17T09:00:00Z",
         }
         relabel = {
             "event": "labeled",
+            "id": 102,
             "label": {"name": "deploy-review"},
             "created_at": "2026-07-17T11:00:00Z",
         }
         reopened = {
             "event": "reopened",
+            "id": 103,
             "created_at": "2026-07-17T12:00:00Z",
         }
-        stale_success = "2026-07-17T10:00:00Z"
-
-        self.assertFalse(proof_is_fresh([first_label, relabel], stale_success))
-        self.assertFalse(proof_is_fresh([first_label, reopened], stale_success))
+        # Even if an old run posts success after the newer request timestamp,
+        # its unique lifecycle ID cannot cross the relabel/reopen boundary.
+        delayed_success = "2026-07-17T13:00:00Z"
+        self.assertFalse(
+            proof_is_current([first_label, relabel], "101", delayed_success)
+        )
+        self.assertFalse(
+            proof_is_current([first_label, reopened], "101", delayed_success)
+        )
         self.assertTrue(
-            proof_is_fresh(
+            proof_is_current(
                 [first_label, relabel, reopened],
-                "2026-07-17T12:00:00Z",
+                "103",
+                delayed_success,
             )
         )
 
@@ -651,6 +733,31 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn("serverDigest:$serverDigest", review[review_smoke:review_proof])
         self.assertIn("siteDigest:$siteDigest", review[review_smoke:review_proof])
         self.assertIn("runAttempt:$runAttempt", review[review_smoke:review_proof])
+        self.assertIn(
+            "reviewRequestEventId:$reviewRequestEventId",
+            review[review_smoke:review_proof],
+        )
+        self.assertIn(
+            "review_request_event_id: ${{ steps.pr.outputs.review_request_event_id }}",
+            review,
+        )
+        self.assertIn(
+            'REVIEW_REQUEST_EVENT_ID: "${{ needs.review.outputs.review_request_event_id }}"',
+            review[review_status:],
+        )
+        self.assertIn(
+            "$proof.reviewRequestEventId == $reviewRequestEventId",
+            review[review_status:],
+        )
+        proof_keys = (
+            '["attemptId","composeId","deploymentId","headSha","pr",'
+            '"repository","reviewRequestEventId","runAttempt","runId",'
+            '"schema","serverDigest","serverImage","siteDigest","siteImage"]'
+        )
+        self.assertIn(proof_keys, review)
+        self.assertIn(proof_keys, deploy)
+        self.assertIn('issues/$PR/events?per_page=100', review)
+        self.assertIn('sort_by(.created_at, .id) | last.id', review)
         self.assertIn(
             'context="buildhound/review-deployed/pr-$PR"', review[review_status:]
         )

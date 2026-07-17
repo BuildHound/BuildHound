@@ -89,6 +89,27 @@ require_site_noindex() {
   case "${1-}" in true|false) ;; *) fail "site noindex value is invalid" ;; esac
 }
 
+# Dokploy layers project, environment, and Compose variables in that order.  Do
+# not print any of those values: they can contain deployment secrets.
+effective_compose_dashboard_host() {
+  local state_file=$1 compose_id=$2
+  jq -er --arg id "$compose_id" '
+    if type != "object" or .composeId != $id or
+       (.environment | type) != "object" or
+       (.environment.project | type) != "object" or
+       ([.environment.project.env, .environment.env, .env] | any(. != null and (type != "string")))
+    then error("invalid Compose environment")
+    else
+      ([.environment.project.env // "", .environment.env // "", .env // ""]
+       | join("\n") | split("\n")
+       | map(select(startswith("BUILDHOUND_DASHBOARD_HOST=")) | .[26:])
+       | if length == 0 then error("missing dashboard host") else last end
+       | select(test("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$") )
+      )
+    end
+  ' "$state_file"
+}
+
 # The evidence contains only release lineage and opaque Dokploy deployment IDs.
 # Write via a same-directory temporary file so a failed job never leaves partial JSON.
 write_release_evidence() {
@@ -121,10 +142,11 @@ deployment_ids() {
   '
 }
 
-# wait_for_deployment PATH OLD_IDS_JSON TITLE
+# wait_for_deployment PATH OLD_IDS_JSON TITLE [OBSERVED_ID_FILE]
 # Returns 42 for an exact failed terminal deployment and 1 for uncertainty.
 wait_for_deployment() {
-  local path=$1 old_ids=$2 title=$3 attempt=1 items matches count status deployment_id
+  local path=$1 old_ids=$2 title=$3 observed_id_file=${4-}
+  local attempt=1 items matches count status deployment_id
   local deadline=$((SECONDS + 600)) remaining
   while [ "$attempt" -le 121 ]; do
     if ! items=$(dokploy_api GET "$path"); then return 1; fi
@@ -153,6 +175,11 @@ wait_for_deployment() {
           fail "matching deployment has an invalid or missing ID"
           return 1
         }
+      if [ -n "$observed_id_file" ]; then
+        # The caller keeps this in its private workspace and refreshes public
+        # evidence before acting on a terminal status.
+        printf '%s\n' "$deployment_id" > "$observed_id_file" || return 1
+      fi
       status=$(jq -er '
         (.[0].status // "") as $status
         | if ($status | type) != "string" then "other"
@@ -318,6 +345,12 @@ require_exact_release_application_state() {
         $domain.forwardAuthEnabled == false and $domain.serviceName == null) and
       $before.redirects == [] and $actual.redirects == $before.redirects and
       $before.security == [] and $actual.security == $before.security and
+      $before.mounts == [] and $actual.mounts == $before.mounts and
+      $before.ports == [] and $actual.ports == $before.ports and
+      ($before.endpointSpecSwarm == null or
+       $before.endpointSpecSwarm == {Mode:"vip"} or
+       $before.endpointSpecSwarm == {Mode:"vip",Ports:[]}) and
+      $actual.endpointSpecSwarm == $before.endpointSpecSwarm and
       ($actual.env | type) == "string" and
       ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_HOST="))) == ["BUILDHOUND_SITE_HOST=" + ($siteUrl | ltrimstr("https://"))]) and
       ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_DASHBOARD_URL="))) == ["BUILDHOUND_SITE_DASHBOARD_URL=" + $dashboardUrl]) and
@@ -360,6 +393,11 @@ require_site_application_binding() {
         $domain.stripPath == false and $domain.middlewares == [] and
         $domain.forwardAuthEnabled == false and $domain.serviceName == null) and
       .redirects == [] and .security == [] and
+      (.mounts | type) == "array" and .mounts == [] and
+      (.ports | type) == "array" and .ports == [] and
+      (.endpointSpecSwarm == null or
+       .endpointSpecSwarm == {Mode:"vip"} or
+       .endpointSpecSwarm == {Mode:"vip",Ports:[]}) and
       (.env | type) == "string" and
       (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_HOST="))) == ["BUILDHOUND_SITE_HOST=" + ($siteUrl | ltrimstr("https://"))]) and
       (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_DASHBOARD_URL="))) == ["BUILDHOUND_SITE_DASHBOARD_URL=" + $dashboardUrl]) and
@@ -460,7 +498,8 @@ cmd_deploy_release() (
   local old_compose old_site body server_image site_image registry_host release_image image_host key
   local compose_deployment site_deployment rc has_success compose_server_id
   local workdir stack_file app_file app_before_file compose_state_file compose_before_file
-  local migration history release_schema manifest_field compose_environment_id
+  local compose_observed_file site_observed_file
+  local migration history release_schema manifest_field compose_environment_id dashboard_host
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -555,6 +594,8 @@ cmd_deploy_release() (
   app_before_file=$workdir/site-application-before.json
   compose_state_file=$workdir/compose.json
   compose_before_file=$workdir/compose-before.json
+  compose_observed_file=$workdir/compose-observed-deployment-id
+  site_observed_file=$workdir/site-observed-deployment-id
 
   release_validate "$release" || return 1
   rid=$(release_id "$release") || return
@@ -625,6 +666,14 @@ cmd_deploy_release() (
       fail "Dokploy returned an invalid Compose deployment target"
       return 1
     }
+    dashboard_host=$(effective_compose_dashboard_host "$compose_before_file" "$compose_id") || {
+      fail "Dokploy returned an invalid Compose dashboard host"
+      return 1
+    }
+    if [ "$site_dashboard_url" != "https://$dashboard_host" ]; then
+      fail "site dashboard URL does not match the release Compose dashboard host"
+      return 1
+    fi
   fi
   dokploy_require_integrations "$base_repo" "$registry_host" "$compose_server_id" || return 1
   if [ "$skip_site" != true ]; then
@@ -740,6 +789,13 @@ cmd_deploy_release() (
     fail "Dokploy persisted unexpected release Compose state"
     return 1
   }
+  if [ "$app_role" = staging ]; then
+    deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return
+    old_compose=$(deployment_ids <<<"$deployments") || {
+      fail "invalid Compose deployment evidence"
+      return 1
+    }
+  fi
   if [ "$skip_site" != true ]; then
     body=$(jq -cn --arg id "$site_application_id" --arg image "$site_image" --arg appRole "$app_role" \
       '{applicationId:$id,dockerImage:$image,sourceType:"docker",autoDeploy:false,registryId:null,
@@ -754,15 +810,32 @@ cmd_deploy_release() (
       return 1
     }
   fi
+  if [ "$app_role" = staging ] && [ "$skip_site" != true ]; then
+    # Close the attribution window after all staging update readbacks. Any
+    # deployment already present here belongs to another actor, even if it uses
+    # this release title.
+    deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return
+    old_compose=$(deployment_ids <<<"$deployments") || {
+      fail "invalid Compose deployment evidence"
+      return 1
+    }
+  fi
   body=$(jq -cn --arg id "$compose_id" --arg title "$title" '{composeId:$id,title:$title}') || return
   dokploy_api POST compose.deploy "$body" >/dev/null || return
-  if [ "$skip_site" != true ]; then
+  if [ "$skip_site" != true ] && [ "$app_role" = prod ]; then
+    # Preserve production's established joint-release behavior. Staging is
+    # deliberately serialized so its Compose evidence precedes site mutation.
     body=$(jq -cn --arg id "$site_application_id" --arg title "$title" '{applicationId:$id,title:$title}') || return
     dokploy_api POST application.deploy "$body" >/dev/null || return
   fi
-
   rc=0
-  compose_deployment=$(wait_for_deployment "deployment.allByCompose?composeId=$compose_id" "$old_compose" "$title") || rc=$?
+  compose_deployment=$(wait_for_deployment "deployment.allByCompose?composeId=$compose_id" "$old_compose" "$title" "$compose_observed_file") || rc=$?
+  if [ -s "$compose_observed_file" ]; then
+    compose_deployment=$(<"$compose_observed_file")
+    if [ -n "$evidence_file" ]; then
+      write_release_evidence "$evidence_file" "$rid" "$migration" "$history" "$compose_deployment" '' || return 1
+    fi
+  fi
   if [ "$rc" -eq 42 ]; then
     fail "Dokploy deployment reached a failed terminal state"
     return 42
@@ -770,13 +843,52 @@ cmd_deploy_release() (
     fail "Compose deployment failed or remained uncertain"
     return 1
   fi
-  if [ -n "$evidence_file" ]; then
+  if [ -n "$evidence_file" ] && [ ! -s "$compose_observed_file" ]; then
     write_release_evidence "$evidence_file" "$rid" "$migration" "$history" "$compose_deployment" '' || return 1
   fi
   site_deployment=''
   if [ "$skip_site" != true ]; then
+    if [ "$app_role" = staging ]; then
+      # The Compose wait is an untrusted mutation window. Re-bind the
+      # Application and its deployment baseline immediately before submitting
+      # the staging site deploy.
+      dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
+      require_exact_release_application_state "$app_file" "$app_before_file" \
+        "$site_application_id" "$site_image" "$registry_host" "$app_role" "$compose_environment_id" \
+        "$compose_server_id" "$site_url" "$site_dashboard_url" "$site_noindex" || {
+        fail "site Application drifted while the release Compose deployed"
+        return 1
+      }
+      dokploy_api GET "compose.one?composeId=$compose_id" > "$compose_state_file" || return
+      require_exact_release_compose_state "$compose_state_file" "$compose_before_file" \
+        "$stack_file" "$compose_id" "$compose_server_id" || {
+        fail "release Compose drifted while it deployed"
+        return 1
+      }
+      dashboard_host=$(effective_compose_dashboard_host "$compose_state_file" "$compose_id") || {
+        fail "Dokploy returned an invalid Compose dashboard host"
+        return 1
+      }
+      if [ "$site_dashboard_url" != "https://$dashboard_host" ]; then
+        fail "site dashboard URL no longer matches the release Compose dashboard host"
+        return 1
+      fi
+      deployments=$(dokploy_api GET "deployment.all?applicationId=$site_application_id") || return
+      old_site=$(deployment_ids <<<"$deployments") || {
+        fail "invalid site deployment evidence"
+        return 1
+      }
+      body=$(jq -cn --arg id "$site_application_id" --arg title "$title" '{applicationId:$id,title:$title}') || return
+      dokploy_api POST application.deploy "$body" >/dev/null || return
+    fi
     rc=0
-    site_deployment=$(wait_for_deployment "deployment.all?applicationId=$site_application_id" "$old_site" "$title") || rc=$?
+    site_deployment=$(wait_for_deployment "deployment.all?applicationId=$site_application_id" "$old_site" "$title" "$site_observed_file") || rc=$?
+    if [ -s "$site_observed_file" ]; then
+      site_deployment=$(<"$site_observed_file")
+      if [ -n "$evidence_file" ]; then
+        write_release_evidence "$evidence_file" "$rid" "$migration" "$history" "$compose_deployment" "$site_deployment" || return 1
+      fi
+    fi
     if [ "$rc" -eq 42 ]; then
       fail "Dokploy deployment reached a failed terminal state"
       return 42
@@ -784,7 +896,7 @@ cmd_deploy_release() (
       fail "site deployment failed or remained uncertain"
       return 1
     fi
-    if [ -n "$evidence_file" ]; then
+    if [ -n "$evidence_file" ] && [ ! -s "$site_observed_file" ]; then
       write_release_evidence "$evidence_file" "$rid" "$migration" "$history" "$compose_deployment" "$site_deployment" || return 1
     fi
     dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return

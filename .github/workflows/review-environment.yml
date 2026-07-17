@@ -24,6 +24,7 @@ jobs:
     outputs:
       deploy_outcome: ${{ steps.deploy_status.outputs.outcome }}
       publish_outcome: ${{ steps.deploy_status.outputs.publish_outcome }}
+      review_request_event_id: ${{ steps.pr.outputs.review_request_event_id }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -52,6 +53,22 @@ jobs:
             test "$(jq -r .state <<<"$data")" = open
             test "$(jq -r .head.sha <<<"$data")" = "$EXPECTED_SHA"
             gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review
+            events=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/$PR/events?per_page=100")
+            review_request_event_id=$(jq -ser '
+              [ .[][] |
+                select(
+                  (.event == "labeled" and .label.name == "deploy-review") or
+                  .event == "reopened"
+                ) |
+                select(
+                  (.created_at | type) == "string" and
+                  (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+                  (.id | type) == "number" and .id >= 1 and (.id | floor) == .id
+                )
+              ] | sort_by(.created_at, .id) | last.id | tostring |
+              select(test("^[1-9][0-9]*$"))
+            ' <<<"$events")
+            echo "review_request_event_id=$review_request_event_id" >> "$GITHUB_OUTPUT"
           else
             { test "$(jq -r .state <<<"$data")" != open || ! gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review; }
           fi
@@ -204,7 +221,9 @@ jobs:
           PR: "${{ env.REVIEW_PR }}"
           SHA: "${{ env.REVIEW_SHA }}"
           ATTEMPT_ID: "${{ github.run_id }}.${{ github.run_attempt }}"
+          REVIEW_REQUEST_EVENT_ID: "${{ steps.pr.outputs.review_request_event_id }}"
         run: |
+          [[ "$REVIEW_REQUEST_EVENT_ID" =~ ^[1-9][0-9]*$ ]]
           server=$(jq -er .images.server.image /tmp/review-images/review-images.json)
           site=$(jq -er .images.site.image /tmp/review-images/review-images.json)
           server_digest=$(jq -er .images.server.digest /tmp/review-images/review-images.json)
@@ -298,7 +317,8 @@ jobs:
             --arg headSha "$SHA" --arg serverImage "$server@$server_digest" \
             --arg siteImage "$site@$site_digest" --arg composeId "$compose_id" \
             --arg deploymentId "$deployment_id" --arg runId "$GITHUB_RUN_ID" --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-            --arg serverDigest "$server_digest" --arg siteDigest "$site_digest" '
+            --arg serverDigest "$server_digest" --arg siteDigest "$site_digest" \
+            --arg reviewRequestEventId "$REVIEW_REQUEST_EVENT_ID" '
             {
               schema:1,
               attemptId:$attemptId,
@@ -309,6 +329,7 @@ jobs:
               siteImage:$siteImage,
               composeId:$composeId,
               deploymentId:$deploymentId,
+              reviewRequestEventId:$reviewRequestEventId,
               runId:$runId,
               runAttempt:$runAttempt,
               serverDigest:$serverDigest,
@@ -401,16 +422,19 @@ jobs:
           PR: "${{ env.REVIEW_PR }}"
           SHA: "${{ env.REVIEW_SHA }}"
           ATTEMPT_ID: "${{ github.run_id }}.${{ github.run_attempt }}"
+          REVIEW_REQUEST_EVENT_ID: "${{ needs.review.outputs.review_request_event_id }}"
         run: |
+          [[ "$REVIEW_REQUEST_EVENT_ID" =~ ^[1-9][0-9]*$ ]]
           jq -e -s --arg attemptId "$ATTEMPT_ID" --arg repository "$GITHUB_REPOSITORY" --arg runId "$GITHUB_RUN_ID" --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-            --argjson pr "$PR" --arg headSha "$SHA" '
+            --argjson pr "$PR" --arg headSha "$SHA" --arg reviewRequestEventId "$REVIEW_REQUEST_EVENT_ID" '
             length == 1 and
             .[0] as $proof |
             ($proof | type) == "object" and
-            ($proof | keys) == ["attemptId","composeId","deploymentId","headSha","pr","repository","runAttempt","runId","schema","serverDigest","serverImage","siteDigest","siteImage"] and
+            ($proof | keys) == ["attemptId","composeId","deploymentId","headSha","pr","repository","reviewRequestEventId","runAttempt","runId","schema","serverDigest","serverImage","siteDigest","siteImage"] and
             $proof.schema == 1 and $proof.repository == $repository and
             $proof.runId == $runId and $proof.runAttempt == $runAttempt and $proof.attemptId == $attemptId and
             $proof.pr == $pr and $proof.headSha == $headSha and
+            $proof.reviewRequestEventId == $reviewRequestEventId and
             ($proof.composeId | type) == "string" and ($proof.composeId | test("^[A-Za-z0-9_-]{1,128}\\z")) and
             ($proof.deploymentId | type) == "string" and ($proof.deploymentId | test("^[A-Za-z0-9_-]{1,128}\\z")) and
             ($proof.serverImage | type) == "string" and ($proof.serverImage | test("@sha256:[0-9a-f]{64}\\z")) and
