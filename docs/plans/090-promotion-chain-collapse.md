@@ -176,6 +176,37 @@ holds the `deploy-production` group: a newer run's prod job queues behind it and
 proceeds only after an operator rejects (or approves) the waiting run; the newer run's
 staging pass proceeds independently.
 
+## Live verification log (Stage C)
+
+- Vehicle: PR #66 (the divergence-9 entry above), rebase-merged 2026-07-17 with
+  `deploy-review` applied at merge time; merge tip `625cd6f0`.
+- Run 29564505571 (`deploy.yml`, push): `qualify` success (`deploy=true` — exactly
+  one merged labeled same-repo PR for the pushed SHA), `publish` success in the
+  same run. Digests: server `sha256:b6073d5a…ac3a53c`, site
+  `sha256:d1727d15…1726a522`, backup `sha256:8bafd341…c0a0a00e`, db
+  `sha256:05cf3d8d…ee4081bf`; BOM artifact `release-625cd6f0…` uploaded same-run.
+- `deploy-staging` success (09:00–09:02Z); staging `/health` →
+  `{"status":"ok"}` after the deploy. Zero cross-workflow artifact downloads
+  anywhere in the run — all five run artifacts are its own uploads (four buildx
+  traces + the BOM); no `download-artifact` step exists in any job.
+- `deploy-production` entered **Waiting** (required reviewers active on the
+  `production` environment) — the exit-criterion state. Two operator deviations,
+  both in the GitHub UI, both benign:
+  1. The `staging` environment had also been given required reviewers while the
+     production gate was being enabled, so `deploy-staging` waited ~63 min for a
+     manual approval before running (plan design: staging is automatic). Revert:
+     `staging` keeps `branch_policy` only.
+  2. The waiting `deploy-production` run was approved instead of rejected
+     (roadmap: reject; Stage D deploys via dispatch). The job failed closed in
+     8s inside the read-only backup-selection step (`no current successful
+     release deployment found`) before rendering or any Dokploy call —
+     live-proving the fail-closed no-anchor path that divergence 4 relies on.
+     No Dokploy deployment was attempted, so no credential exposure (H4
+     boundary). Consequence: no stale waiting run remains for Stage D step 1.
+- Exit criteria: one-run promotion green ✓; zero cross-workflow artifact
+  downloads ✓; prod job blocks pending approval ✓ (approval semantics beyond
+  the block stay unexercised until Stage D).
+
 ## Exit criteria
 
 - Merge to main: staging deploys green with **zero** cross-workflow artifact downloads.
