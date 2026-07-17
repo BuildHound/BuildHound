@@ -126,11 +126,11 @@ jobs:
           ref: "${{ env.REVIEW_SHA }}"
           path: review-source
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         if: env.REVIEW_ACTION == 'deploy'
       - name: Build review server without registry credentials
         if: env.REVIEW_ACTION == 'deploy'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: review-source
           file: review-source/buildhound-server/Dockerfile
@@ -141,7 +141,7 @@ jobs:
           tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-server:pr-${{ env.REVIEW_PR }}-${{ env.REVIEW_SHA }}
       - name: Build review site without registry credentials
         if: env.REVIEW_ACTION == 'deploy'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: review-source
           file: review-source/site/Dockerfile
@@ -162,7 +162,7 @@ jobs:
           test "$(jq -r .state <<<"$data")" = open
           test "$(jq -r .head.sha <<<"$data")" = "$SHA"
           gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: env.REVIEW_ACTION == 'deploy'
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
       - id: publish
@@ -336,7 +336,7 @@ jobs:
               siteDigest:$siteDigest
             }
           ' > /tmp/review-attestation/review.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: env.REVIEW_ACTION == 'deploy' && steps.deploy.outcome == 'success'
         with: {name: review-attestation, path: /tmp/review-attestation/review.json, retention-days: 90}
       - id: deploy_status

@@ -77,7 +77,7 @@ jobs:
       # always; plan 094 consumes these artifacts for multi-env publication.
       - name: Upload BuildHound payload
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: buildhound-payload-build
           path: build/buildhound/build-payload.json
@@ -131,7 +131,7 @@ jobs:
       # the job step's working-directory.
       - name: Upload BuildHound payload
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: buildhound-payload-sample-springboot
           path: samples/springboot-legacy/build/buildhound/build-payload.json
@@ -170,14 +170,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # BuildKit layer cache persisted in the GitHub Actions cache: the dependency
       # layers (wrapper + build scripts, Dockerfile lines up to the priming RUN)
       # only rebuild when the build configuration changes. load: true keeps the
       # image in the local daemon for the smoke test below.
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: buildhound-server/Dockerfile
@@ -223,11 +223,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Rebuild from the gha layer cache the server-image job populated (fast; no source rebuild).
       - name: Build image (from cache)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: buildhound-server/Dockerfile
@@ -252,7 +252,7 @@ jobs:
 
       - name: Upload scan report + SBOM
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: image-scan
           path: |
@@ -369,7 +369,7 @@ jobs:
 
       - name: Upload overhead table
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: overhead-budget
           path: |
