@@ -156,6 +156,11 @@ dokploy_api() {
       case "$FAKE_MODE" in
         version_below) printf '"v0.29.11"\n' ;;
         version_above) printf '"v0.29.13"\n' ;;
+        # Discriminates numeric from lexical comparison: "0.29.9" sorts
+        # lexically AFTER "0.29.12" (PR #79 infra review) — only a numeric
+        # per-segment compare fails it closed.
+        version_numeric) printf '"v0.29.9"\n' ;;
+        version_malformed) printf '"v0.30"\n' ;;
         *) printf '"v0.29.12"\n' ;;
       esac
       ;;
@@ -382,22 +387,55 @@ grep -F 'review lifecycle requires Dokploy v0.29.12 or newer' "$TEST_ROOT/error.
 assert_log_lacks 'GET|environment.one?environmentId=env1'
 assert_log_lacks 'POST|compose.create'
 
+# A genuinely older version whose differing segment has fewer digits fails
+# closed — this is the case that discriminates the numeric comparator from
+# the lexical bug it replaced ("0.29.9" > "0.29.12" lexically; PR #79 reviews).
+reset_fake version_numeric
+if deploy_review "${deploy_args[@]}" >/dev/null 2> "$TEST_ROOT/error.log"; then
+  fail 'lexically-newer but numerically-older Dokploy version was accepted'
+fi
+grep -F 'review lifecycle requires Dokploy v0.29.12 or newer' "$TEST_ROOT/error.log" >/dev/null
+assert_log_lacks 'POST|compose.create'
+
+# A version string that is not a vN.N.N triple fails closed as unrecognized.
+reset_fake version_malformed
+if deploy_review "${deploy_args[@]}" >/dev/null 2> "$TEST_ROOT/error.log"; then
+  fail 'malformed Dokploy version string was accepted'
+fi
+grep -F 'review lifecycle received an unrecognized Dokploy version' "$TEST_ROOT/error.log" >/dev/null
+assert_log_lacks 'POST|compose.create'
+
 reset_fake success
-_review_require_supported_dokploy_version 2> "$TEST_ROOT/error.log" || \
+_review_require_supported_dokploy_version warn 2> "$TEST_ROOT/error.log" || \
   fail 'minimum Dokploy version was rejected'
 [[ ! -s $TEST_ROOT/error.log ]] || fail 'minimum Dokploy version emitted a warning'
 
+# The above-baseline warn speaks only at the deploy entrypoint (warn arg) —
+# converge scrub/retire re-checks stay quiet or every 15-minute tick nags
+# (PR #79 reviews: level-triggered tripwire is alert fatigue). When the
+# runner provides a step summary, the warn also lands there — the visible
+# channel from a command-substituted nested process.
 reset_fake version_above
-_review_require_supported_dokploy_version 2> "$TEST_ROOT/error.log" || \
+GITHUB_STEP_SUMMARY="$TEST_ROOT/step-summary" \
+  _review_require_supported_dokploy_version warn 2> "$TEST_ROOT/error.log" || \
   fail 'newer Dokploy version was rejected'
 grep -F 'newer than the validated baseline' "$TEST_ROOT/error.log" >/dev/null
+grep -F 'plan 091 tripwire' "$TEST_ROOT/step-summary" >/dev/null
+rm -f "$TEST_ROOT/step-summary"
 
-# End-to-end: a newer-than-baseline version warns but still completes a full
-# deploy — the Design-2 motivation (patch releases no longer break the client).
+reset_fake version_above
+_review_require_supported_dokploy_version 2> "$TEST_ROOT/error.log" || \
+  fail 'newer Dokploy version was rejected on the quiet path'
+[[ ! -s $TEST_ROOT/error.log ]] || fail 'quiet lifecycle re-check emitted the tripwire warning'
+
+# End-to-end: a newer-than-baseline version still completes a full deploy —
+# the Design-2 motivation (patch releases no longer break the client). The
+# library-level deploy_review call is quiet; the warn belongs to the
+# cmd_deploy_review entrypoint.
 reset_fake version_above
 result=$(deploy_review "${deploy_args[@]}" 2> "$TEST_ROOT/error.log")
 jq -e '.name == "mr42" and .composeId == "c1" and .deploymentId == "d1"' >/dev/null <<< "$result"
-grep -F 'newer than the validated baseline' "$TEST_ROOT/error.log" >/dev/null
+[[ ! -s $TEST_ROOT/error.log ]] || fail 'library deploy_review emitted the entrypoint warning'
 
 reset_fake success
 result=$(deploy_review "${deploy_args[@]}")

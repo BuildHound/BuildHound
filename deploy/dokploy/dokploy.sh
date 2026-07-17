@@ -925,7 +925,9 @@ cmd_deploy_review() {
   fi
   # The registry credential test refreshes manager login state, so pin the
   # installed Dokploy behavior before that first review-related mutation.
-  _review_require_supported_dokploy_version || return 1
+  # `warn` = this is the deploy entrypoint, the one place the plan-091
+  # above-baseline tripwire should speak (lifecycle re-checks stay quiet).
+  _review_require_supported_dokploy_version warn || return 1
   # Review Composes are constrained to the Dokploy manager (serverId null).
   dokploy_require_integrations "$base_repo" "$server_registry" "" || return 1
   deploy_review "$base_repo" "$head_repo" "$pr" "$sha" "$state" "$label_present" \
