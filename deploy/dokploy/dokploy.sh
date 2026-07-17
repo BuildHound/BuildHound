@@ -34,7 +34,6 @@ Commands:
   deploy-review [OPTIONS]
   count-reviews --base-repo REPO --environment-id ID [--exclude-pr PR]
   list-reviews --base-repo REPO --environment-id ID
-  revoke-review [OPTIONS]
   scrub-review [OPTIONS]
   retire-review [OPTIONS]
 EOF
@@ -1010,9 +1009,6 @@ cmd_review_cleanup() {
   fi
   require_api_environment || return 1
   case "$command" in
-    revoke)
-      revoke_review "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id"
-      ;;
     scrub)
       require_command docker || return 1
       scrub_review "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id"
@@ -1039,7 +1035,6 @@ main() {
     deploy-review) cmd_deploy_review "$@" ;;
     count-reviews) cmd_list_or_count_reviews count "$@" ;;
     list-reviews) cmd_list_or_count_reviews list "$@" ;;
-    revoke-review) cmd_review_cleanup revoke "$@" ;;
     scrub-review) cmd_review_cleanup scrub "$@" ;;
     retire-review) cmd_review_cleanup retire "$@" ;;
     *) usage ;;

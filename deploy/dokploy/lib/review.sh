@@ -871,10 +871,6 @@ _review_get_exact_record() {
     <<< "$matches"
 }
 
-_review_find_exact_record() {
-  _review_get_exact_record "$@" >/dev/null
-}
-
 _review_validate_cleanup_args() {
   local base_repo=$1 pr=$2 environment_id=$3 dns_suffix=$4 compose_id=$5 sha=$6 attempt_id=$7 name
   if ! _review_valid_repository "$base_repo" || ! _review_valid_positive_integer "$pr" ||
@@ -889,18 +885,6 @@ _review_validate_cleanup_args() {
   fi
   name=$(review_name "$pr") || return 1
   review_hosts "$name" "$dns_suffix" >/dev/null
-}
-
-revoke_review() {
-  local base_repo=${1-} pr=${2-} environment_id=${3-} dns_suffix=${4-} compose_id=${5-} sha=${6-}
-  local attempt_id=${7-} name
-  [[ $# -eq 7 ]] || { die "revoke_review requires seven arguments"; return 1; }
-  _review_validate_cleanup_args "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id" || return 1
-  _review_require_supported_dokploy_version || return 1
-  _review_find_exact_record "$base_repo" "$pr" "$environment_id" "$compose_id" "$sha" "$attempt_id" || return 1
-  name=$(review_name "$pr") || return 1
-  _review_revoke_compose "$compose_id" "$name" "$dns_suffix" "$sha" "$attempt_id" || return 1
-  jq -jrn --arg revoked "$name" '"{\"revoked\": " + ($revoked | tojson) + "}\n"'
 }
 
 scrub_review() (

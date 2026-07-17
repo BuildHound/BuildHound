@@ -268,7 +268,7 @@ dokploy_api() {
           scrub_failed)
             printf '[{"deploymentId":"d1","title":"%s","status":"done"},{"deploymentId":"d2","title":"%s","status":"failed"}]\n' "$TITLE" "$deployed_title"
             ;;
-          scrub)
+          scrub|no_row)
             printf '[{"deploymentId":"d1","title":"%s","status":"done"},{"deploymentId":"d2","title":"%s","status":"success"}]\n' "$TITLE" "$deployed_title"
             ;;
           legacy_isolation)
@@ -529,38 +529,34 @@ reset_fake invalid_metadata
 if list_reviews "$REPO" env1 >/dev/null 2>&1; then fail 'invalid ownership metadata was listed'; fi
 if count_reviews "$REPO" env1 >/dev/null 2>&1; then fail 'invalid ownership metadata was counted'; fi
 
+# The exact-record and revoke-compose guards that revoke_review exercised are
+# live in scrub_review's cleanup preamble; port each guard scenario here so the
+# cleanup path stays covered after revoke_review was deleted (plan 091).
 reset_fake cleanup
-result=$(revoke_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT")
-assert_eq "$result" '{"revoked": "mr42"}'
-jq -e '.revoked == "mr42"' >/dev/null <<< "$result"
-assert_log_has 'POST|compose.stop'
-test "$(grep -c '^https://' "$TEST_ROOT/curl.log")" -eq 2
-grep -Fx 'https://mr42.reviews.example.test/' "$TEST_ROOT/curl.log" >/dev/null
-grep -Fx 'https://mr42.dashboard.reviews.example.test/health' "$TEST_ROOT/curl.log" >/dev/null
-
-reset_fake cleanup
-if revoke_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" 12345.2 >/dev/null 2>&1; then
-  fail 'cleanup accepted a different review attempt'
+if scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" 12345.2 >/dev/null 2>&1; then
+  fail 'scrub accepted a different review attempt'
 fi
-assert_log_lacks 'POST|compose.cleanQueues'
 assert_log_lacks 'POST|compose.stop'
+assert_log_lacks 'POST|compose.update'
 
 reset_fake route_mixed
-if revoke_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
-  fail 'cleanup accepted a still-reachable dashboard route'
+if scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
+  fail 'scrub accepted a still-reachable dashboard route'
 fi
 [[ ! -f $TEST_ROOT/deleted ]] || fail 'route convergence failure deleted ownership record'
 
 reset_fake running
-if revoke_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
-  fail 'cleanup raced a running deployment'
+if scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT" >/dev/null 2>&1; then
+  fail 'scrub raced a running deployment'
 fi
 assert_log_lacks 'POST|compose.cleanQueues'
 assert_log_lacks 'POST|compose.stop'
 
+# no_row: an empty active-deployment set is idempotent-proceed, not a rejection.
+# scrub's first _review_revoke_compose stops and then the full inert scrub runs.
 reset_fake no_row
-result=$(revoke_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT")
-jq -e '.revoked == "mr42"' >/dev/null <<< "$result"
+result=$(scrub_review "$REPO" 42 env1 reviews.example.test c1 "$SHA" "$ATTEMPT")
+jq -e '.scrubbed == "mr42" and .deploymentId == "d2"' >/dev/null <<< "$result"
 assert_log_lacks 'POST|compose.cleanQueues'
 assert_log_has 'POST|compose.stop'
 
