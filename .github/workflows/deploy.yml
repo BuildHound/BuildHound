@@ -51,15 +51,27 @@ jobs:
           # Ported in full from the retired publish-deploy-images.yml: only a
           # single merged same-repo PR into the default branch, carrying the
           # deploy-review label, qualifies. Direct pushes never deploy.
-          pulls=$(gh api "repos/${GITHUB_REPOSITORY}/commits/$GITHUB_SHA/pulls")
-          count=$(jq -er --arg repository "$GITHUB_REPOSITORY" --arg base "$DEFAULT_BRANCH" --arg sha "$GITHUB_SHA" '
-            [.[] | select(
-              .merged_at != null and .merge_commit_sha == $sha and
-              .head.repo.full_name == $repository and .base.repo.full_name == $repository and
-              .base.ref == $base
-            )] | length
-          ' <<<"$pulls")
+          # commits/{sha}/pulls is eventually consistent: six seconds after a
+          # rebase merge it can return no association yet (run 29572242790,
+          # 2026-07-17 — a labeled merge published nothing until a manual
+          # rerun). Re-ask before concluding no/ambiguous association; the
+          # qualifying predicate itself is unchanged and never weakened.
+          count=0
+          for attempt in 1 2 3 4 5 6; do
+            pulls=$(gh api "repos/${GITHUB_REPOSITORY}/commits/$GITHUB_SHA/pulls")
+            count=$(jq -er --arg repository "$GITHUB_REPOSITORY" --arg base "$DEFAULT_BRANCH" --arg sha "$GITHUB_SHA" '
+              [.[] | select(
+                .merged_at != null and .merge_commit_sha == $sha and
+                .head.repo.full_name == $repository and .base.repo.full_name == $repository and
+                .base.ref == $base
+              )] | length
+            ' <<<"$pulls")
+            [ "$count" -eq 1 ] && break
+            echo "attempt $attempt: qualifying-PR count=$count (association may lag the merge); retrying in 10s"
+            sleep 10
+          done
           if [ "$count" -ne 1 ]; then
+            echo "no single qualifying PR after $attempt attempts (count=$count)"
             echo "deploy=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
