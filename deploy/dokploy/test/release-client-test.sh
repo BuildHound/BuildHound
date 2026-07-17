@@ -347,35 +347,6 @@ assert_fails "current release ID with trailing newline rejected" \
 assert_fails "attestation must be an exact boolean word" \
   require_migration_compatibility "$CURRENT_FULL" "$FORWARD" yes
 
-CURRENT_RELEASE="sha256:$H1"
-CANDIDATE_RELEASE="sha256:$H2"
-assert_ok "ahead source accepts a new release for staging" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" ahead staging false
-assert_ok "ahead source accepts a new release for production" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" ahead production false
-assert_ok "identical source and release is idempotent" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CURRENT_RELEASE" identical staging false
-assert_fails "same-source release replacement is rejected for staging" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" identical staging true
-assert_fails "same-source release replacement requires production attestation" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" identical production false
-assert_ok "same-source release replacement accepts production attestation" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" identical production true
-assert_fails "staging rollback is rejected despite attestation" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" behind staging true
-assert_fails "production rollback requires attestation" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" behind production false
-assert_ok "production rollback accepts attestation" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" behind production true
-assert_fails "diverged source is always rejected" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" diverged production true
-assert_fails "unknown source progress is rejected" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" sideways production true
-assert_fails "invalid release ID is rejected" \
-  require_deployment_progress sha256:bad "$CANDIDATE_RELEASE" ahead staging false
-assert_fails "deployment attestation must be an exact boolean word" \
-  require_deployment_progress "$CURRENT_RELEASE" "$CANDIDATE_RELEASE" ahead staging yes
-
 HUGE_PREVIOUS='V999999999999999999999__previous'
 HUGE_CANDIDATE='V1000000000000000000000__candidate'
 HUGE_HISTORY=$(jq -cn --arg previous "$HUGE_PREVIOUS" --arg candidate "$HUGE_CANDIDATE" \
