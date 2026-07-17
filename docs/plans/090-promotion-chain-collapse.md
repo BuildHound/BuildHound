@@ -164,6 +164,19 @@ workflows (088/089), client internals beyond what the collapse deletes (091).
     and the Stage D dispatch sha must contain this fix (the dispatch deploys
     the candidate tree's own manifests).
 
+11. **Secret file modes were group-writable in production (found at the
+    re-anchor after divergence 10, 2026-07-17).** `stack.yaml` declared the
+    backup service's `pgpass`/`s3_credentials` mounts as `mode: 0400`; docker's
+    YAML 1.2 loader parses that bare leading-zero literal as **decimal** 400 =
+    `0o620` (group-writable), so libpq rejected the pgpass file ("password file
+    has group or world access") and `pg_dump` got no password. Same latency
+    class as divergence 10: only the production stack mounts Swarm secrets, so
+    the bug could not surface before the first prod anchor. Fixed as
+    `mode: 0o400`; a regression test bans bare leading-zero mode literals in
+    all dokploy manifests. The production anchor must again be re-pasted from
+    the fixed manifest, and this fix's labeled merge supersedes `480008c0`
+    (merged unlabeled — no published images) as the Stage D dispatch candidate.
+
 ## Test strategy
 
 `deploy-release-resolver-test.sh` retires with the resolver; replacement tests assert:
