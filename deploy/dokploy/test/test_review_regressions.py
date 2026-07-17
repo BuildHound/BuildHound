@@ -281,13 +281,16 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('site_headers=$(mktemp)', verify)
         self.assertIn('site_body=$(mktemp)', verify)
         self.assertIn("--dump-header \"$site_headers\" --output \"$site_body\"", verify)
-        self.assertIn('[[ "$site_status" =~ ^2[0-9]{2}$ ]]', verify)
+        self.assertIn('test "$site_status" = 200', verify)
         self.assertIn('attributes.get("href") == sys.argv[2]', verify)
         self.assertIn('BUILDHOUND_EXPECT_NOINDEX', verify)
         self.assertIn("X-Robots-Tag: noindex, nofollow", verify)
+        self.assertIn("count=0; exact=0", verify)
         self.assertIn('BUILDHOUND_SITE_URL/robots.txt', verify)
+        self.assertIn('test "$robots_status" = 200', verify)
         self.assertIn("printf 'User-agent: *\\nDisallow: /\\n' | cmp -s", verify)
         self.assertIn("BUILDHOUND_EXPECT_NOINDEX: true", staging)
+        self.assertIn('curl -fsS "$BUILDHOUND_SITE_URL/" | grep -q', verify)
 
     def test_release_verification_validates_exact_https_origins_before_curl(self):
         verify = self.read("deploy/dokploy/verify-release.sh")
@@ -427,12 +430,13 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn("grep -Fx deploy-review", workflow)
         self.assertIn('commits/$head_sha/statuses?per_page=100', workflow)
         self.assertIn('context "buildhound/review-deployed/pr-$pr"', workflow)
-        self.assertIn('sort_by(.created_at) | last', workflow)
+        self.assertIn('sort_by(.updated_at, .id) | last', workflow)
         self.assertIn("test \"$state\" = success", workflow)
         self.assertIn("test \"$creator\" = 'github-actions[bot]'", workflow)
         self.assertIn('actions/runs/$run_id', workflow)
         self.assertIn('.event == "pull_request_target"', workflow)
-        self.assertIn('.path == ".github/workflows/review-environment.yml"', workflow)
+        self.assertIn('actions/workflows/review-environment.yml', workflow)
+        self.assertIn('.workflow_id == $workflow_id', workflow)
         self.assertIn('echo "deploy=false" >> "$GITHUB_OUTPUT"', workflow)
         self.assertIn("needs.qualify.outputs.deploy == 'true'", workflow)
         # Role -> manifest binding lives solely in job wiring (the plan-090
@@ -497,6 +501,8 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             "BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}",
             production_body,
         )
+        self.assertNotIn("--evidence-file", production_body)
+        self.assertNotIn("production-deployment-evidence", production_body)
         # Dispatch-supplied identities are never trusted as-is (plan 090 §4):
         # provenance from this repo's deploy workflow on main, AND the
         # attestation's source commit must equal the dispatched sha (GHCR
@@ -527,7 +533,9 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         # The retired trust chain must not resurface.
         self.assertNotIn("workflow_run", workflow)
         self.assertNotIn("staging-attestation", workflow)
-        self.assertNotIn("review-attestation", workflow)
+        # Promotion reintroduces only the run-scoped review proof; it must
+        # not revive the retired staging or cross-workflow lineage chain.
+        self.assertIn("review-attestation", workflow)
         self.assertNotIn("schema:2", workflow)
         self.assertNotIn("proven-release-id", workflow)
         # Least-privilege carries over; no checkout persists credentials.
@@ -557,10 +565,17 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn("headSha:$headSha", review[review_smoke:review_proof])
         self.assertIn("serverImage:$serverImage", review[review_smoke:review_proof])
         self.assertIn("siteImage:$siteImage", review[review_smoke:review_proof])
+        self.assertIn("serverDigest:$serverDigest", review[review_smoke:review_proof])
+        self.assertIn("siteDigest:$siteDigest", review[review_smoke:review_proof])
+        self.assertIn("runAttempt:$runAttempt", review[review_smoke:review_proof])
         self.assertIn(
             'context="buildhound/review-deployed/pr-$PR"', review[review_status:]
         )
         self.assertIn("statuses/$SHA", review[review_status:])
+        self.assertIn("Record pending exact-SHA review deployment", review)
+        self.assertIn("Record failed exact-SHA review deployment", review)
+        self.assertIn("state=pending", review)
+        self.assertIn("state=failure", review)
 
         # The promotion chain triggers on push to main (label-qualified) plus
         # workflow_dispatch for redeploy/rollback — no cross-workflow chain.
@@ -571,8 +586,10 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn("backup_object", deploy)
         self.assertIn("rollback_compatibility_attested", deploy)
         self.assertIn("queue: max", deploy)
-        self.assertNotIn("gh run download", deploy)
-        self.assertNotIn("download-artifact", deploy)
+        self.assertIn('gh run download "$run_id"', deploy)
+        self.assertIn('actions/workflows/review-environment.yml', deploy)
+        self.assertIn('.workflow_id == $workflow_id', deploy)
+        self.assertIn('.head_branch == $branch', deploy)
         # Digests flow as same-run job outputs only.
         self.assertIn("server_image: ${{ steps.digests.outputs.server_image }}", deploy)
         self.assertIn("needs.publish.outputs.server_image", deploy)

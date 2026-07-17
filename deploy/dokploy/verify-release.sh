@@ -76,15 +76,13 @@ fi
 if [ "${BUILDHOUND_SKIP_SITE_CHECKS-}" = true ]; then
   printf '%s\n' 'site check skipped (BUILDHOUND_SKIP_SITE_CHECKS=true)' >&2
 else
-  # Keep headers and the rendered body as separate evidence.  Do not use -f:
-  # the explicit status check makes an HTTP failure impossible to mistake for
-  # a successful smoke, while keeping responses (which may contain site data)
-  # out of the job log.
-  site_status=$(curl -sS --dump-header "$site_headers" --output "$site_body" \
-    --write-out '%{http_code}' "$BUILDHOUND_SITE_URL/" 2>/dev/null) || site_status=transport-error
-  [[ "$site_status" =~ ^2[0-9]{2}$ ]]
-  grep -q 'Track every Gradle build' "$site_body"
-  python3 - "$site_body" "$BUILDHOUND_DASHBOARD_URL" <<'PY'
+  if [ "${BUILDHOUND_EXPECT_NOINDEX-}" = true ]; then
+    # Staging records a narrow, exact public-site contract before promoting.
+    site_status=$(curl -sS --dump-header "$site_headers" --output "$site_body" \
+      --write-out '%{http_code}' "$BUILDHOUND_SITE_URL/" 2>/dev/null) || site_status=transport-error
+    test "$site_status" = 200
+    grep -q 'Track every Gradle build' "$site_body"
+    python3 - "$site_body" "$BUILDHOUND_DASHBOARD_URL" <<'PY'
 import sys
 from html.parser import HTMLParser
 
@@ -106,13 +104,16 @@ with open(sys.argv[1], encoding="utf-8") as page:
 if parser.matches != 1:
     raise SystemExit("site dashboard link does not match the configured dashboard origin")
 PY
-
-  if [ "${BUILDHOUND_EXPECT_NOINDEX-}" = true ]; then
-    test "$(tr -d '\r' < "$site_headers" | grep -Fxc 'X-Robots-Tag: noindex, nofollow')" = 1
+    # Exactly one total X-Robots-Tag field is accepted; a duplicate or a
+    # different value can be interpreted differently by intermediaries.
+    test "$(tr -d '\r' < "$site_headers" | awk 'BEGIN { IGNORECASE=1; count=0; exact=0 } /^X-Robots-Tag:/ { count++; if ($0 == "X-Robots-Tag: noindex, nofollow") exact++ } END { print count ":" exact }')" = '1:1'
     robots_status=$(curl -sS --dump-header "$robots_headers" --output "$robots_body" \
       --write-out '%{http_code}' "$BUILDHOUND_SITE_URL/robots.txt" 2>/dev/null) || robots_status=transport-error
-    [[ "$robots_status" =~ ^2[0-9]{2}$ ]]
+    test "$robots_status" = 200
     printf 'User-agent: *\nDisallow: /\n' | cmp -s - "$robots_body"
+  else
+    # Preserve production's established, intentionally narrow page proof.
+    curl -fsS "$BUILDHOUND_SITE_URL/" | grep -q 'Track every Gradle build'
   fi
 fi
 

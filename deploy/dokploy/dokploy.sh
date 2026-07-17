@@ -30,6 +30,7 @@ Commands:
   staging-bootstrap-state --compose-id ID
   deploy-release RELEASE --compose-id ID (--site-application-id ID | --skip-site) --app-role ROLE [OPTIONS]
     staging site target: --site-url HTTPS_URL --site-dashboard-url HTTPS_URL --site-noindex true|false
+    optional retainable evidence: --evidence-file PATH
   deploy-review [OPTIONS]
   count-reviews --base-repo REPO --environment-id ID [--exclude-pr PR]
   list-reviews --base-repo REPO --environment-id ID
@@ -86,6 +87,26 @@ require_site_url() {
 
 require_site_noindex() {
   case "${1-}" in true|false) ;; *) fail "site noindex value is invalid" ;; esac
+}
+
+# The evidence contains only release lineage and opaque Dokploy deployment IDs.
+# Write via a same-directory temporary file so a failed job never leaves partial JSON.
+write_release_evidence() {
+  local path=$1 rid=$2 migration=$3 history=$4 compose=${5-} site=${6-}
+  local directory temporary
+  directory=$(dirname -- "$path") || return 1
+  temporary=$(mktemp "$directory/.buildhound-evidence.XXXXXX") || return 1
+  if ! jq -cn --arg rid "$rid" --arg migration "$migration" --arg history "$history" \
+      --arg compose "$compose" --arg site "$site" '
+      {releaseId:$rid,migrationId:$migration,
+       migrationHistorySha256:(if $history == "" then null else $history end),
+       composeDeploymentId:(if $compose == "" then null else $compose end),
+       siteDeploymentId:(if $site == "" then null else $site end)}
+    ' > "$temporary" || ! mv -f -- "$temporary" "$path"; then
+    rm -f -- "$temporary"
+    fail "unable to write deployment evidence"
+    return 1
+  fi
 }
 
 deployment_ids() {
@@ -284,7 +305,14 @@ require_exact_release_application_state() {
       (if $serverId == "" then $actual.serverId == null else $actual.serverId == $serverId end) and
       ($actual.domains | type) == "array" and
       ($actual.domains | length) == 1 and
-      ($actual.domains[0].host? == ($siteUrl | ltrimstr("https://"))) and
+      ($actual.domains[0] as $domain |
+        ($domain.domainId | type) == "string" and
+        ($domain.domainId | test("^[A-Za-z0-9_-]{1,128}\\z")) and
+        $domain.host == ($siteUrl | ltrimstr("https://")) and
+        $domain.https == true and $domain.port == 8080 and $domain.path == "/" and
+        $domain.domainType == "application" and $domain.applicationId == $id and
+        $domain.composeId == null and $domain.previewDeploymentId == null and
+        $domain.certificateType == "none" and $domain.customCertResolver == null) and
       ($actual.env | type) == "string" and
       ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_HOST="))) == ["BUILDHOUND_SITE_HOST=" + ($siteUrl | ltrimstr("https://"))]) and
       ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_DASHBOARD_URL="))) == ["BUILDHOUND_SITE_DASHBOARD_URL=" + $dashboardUrl]) and
@@ -315,7 +343,14 @@ require_site_application_binding() {
     (if $serverId == "" then .serverId == null else .serverId == $serverId end) and
     (if $siteUrl == "" then true else
       (.domains | type) == "array" and (.domains | length) == 1 and
-      (.domains[0].host? == ($siteUrl | ltrimstr("https://"))) and
+      (.domains[0] as $domain |
+        ($domain.domainId | type) == "string" and
+        ($domain.domainId | test("^[A-Za-z0-9_-]{1,128}\\z")) and
+        $domain.host == ($siteUrl | ltrimstr("https://")) and
+        $domain.https == true and $domain.port == 8080 and $domain.path == "/" and
+        $domain.domainType == "application" and $domain.applicationId == $id and
+        $domain.composeId == null and $domain.previewDeploymentId == null and
+        $domain.certificateType == "none" and $domain.customCertResolver == null) and
       (.env | type) == "string" and
       (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_HOST="))) == ["BUILDHOUND_SITE_HOST=" + ($siteUrl | ltrimstr("https://"))]) and
       (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_DASHBOARD_URL="))) == ["BUILDHOUND_SITE_DASHBOARD_URL=" + $dashboardUrl]) and
@@ -409,7 +444,7 @@ cmd_staging_bootstrap_state() {
 cmd_deploy_release() (
   if [ "$#" -lt 1 ]; then usage; return 2; fi
   local release=$1 compose_id='' site_application_id='' proven_release_id='' base_repo=''
-  local expected_current_release_id='' app_role='' site_url='' site_dashboard_url='' site_noindex=''
+  local expected_current_release_id='' app_role='' site_url='' site_dashboard_url='' site_noindex='' evidence_file=''
   local manifest="$SCRIPT_DIR/stack.yaml" volume_guard="$SCRIPT_DIR/volume-guard.sh"
   local rollback_compatible=false bootstrap_manual_current=false skip_site=false
   local rid title expected manifest_hash guard_hash deployments current
@@ -420,7 +455,7 @@ cmd_deploy_release() (
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --base-repo|--compose-id|--site-application-id|--app-role|--site-url|--site-dashboard-url|--site-noindex|--proven-release-id|--expected-current-release-id|--manifest|--volume-guard)
+      --base-repo|--compose-id|--site-application-id|--app-role|--site-url|--site-dashboard-url|--site-noindex|--proven-release-id|--expected-current-release-id|--manifest|--volume-guard|--evidence-file)
         if [ "$#" -lt 2 ]; then usage; return 2; fi
         case "$1" in
           --base-repo) base_repo=$2 ;;
@@ -434,6 +469,7 @@ cmd_deploy_release() (
           --expected-current-release-id) expected_current_release_id=$2 ;;
           --manifest) manifest=$2 ;;
           --volume-guard) volume_guard=$2 ;;
+          --evidence-file) evidence_file=$2 ;;
         esac
         shift 2
         ;;
@@ -456,6 +492,10 @@ cmd_deploy_release() (
     return 2
   fi
   if [ -z "$base_repo" ] || [ -z "$compose_id" ] || [ -z "$app_role" ]; then usage; return 2; fi
+  if [ -n "$evidence_file" ] && [ ! -d "$(dirname -- "$evidence_file")" ]; then
+    fail "evidence file directory is missing"
+    return 2
+  fi
   if [ "$skip_site" != true ] && [ -z "$site_application_id" ]; then usage; return 2; fi
   if [ "$skip_site" != true ] && [ "$app_role" = staging ] && { [ -z "$site_url" ] || [ -z "$site_dashboard_url" ] || [ -z "$site_noindex" ]; }; then usage; return 2; fi
   if { [ -n "$site_url" ] || [ -n "$site_dashboard_url" ] || [ -n "$site_noindex" ]; } &&
@@ -530,6 +570,11 @@ cmd_deploy_release() (
   expected=$(jq -er '.volumeGuardSha256' "$release") || return
   [ "$guard_hash" = "$expected" ] || { fail "release volume guard checksum differs from trusted source"; return 1; }
   title=$(release_title "$release") || return
+  migration=$(jq -er '.migrationId' "$release") || return
+  history=$(jq -r '.migrationHistorySha256 // empty' "$release") || return
+  if [ -n "$evidence_file" ]; then
+    write_release_evidence "$evidence_file" "$rid" "$migration" "$history" '' '' || return 1
+  fi
 
   require_api_environment || return 1
   server_image=$(jq -er '.serverImage' "$release") || return 1
@@ -716,6 +761,9 @@ cmd_deploy_release() (
     fail "Compose deployment failed or remained uncertain"
     return 1
   fi
+  if [ -n "$evidence_file" ]; then
+    write_release_evidence "$evidence_file" "$rid" "$migration" "$history" "$compose_deployment" '' || return 1
+  fi
   site_deployment=''
   if [ "$skip_site" != true ]; then
     rc=0
@@ -727,6 +775,9 @@ cmd_deploy_release() (
       fail "site deployment failed or remained uncertain"
       return 1
     fi
+    if [ -n "$evidence_file" ]; then
+      write_release_evidence "$evidence_file" "$rid" "$migration" "$history" "$compose_deployment" "$site_deployment" || return 1
+    fi
     dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
     require_exact_release_application_state "$app_file" "$app_before_file" \
       "$site_application_id" "$site_image" "$registry_host" "$app_role" "$compose_environment_id" \
@@ -735,8 +786,6 @@ cmd_deploy_release() (
       return 1
     }
   fi
-  migration=$(jq -er '.migrationId' "$release") || return
-  history=$(jq -r '.migrationHistorySha256 // empty' "$release") || return
   jq -cn --arg rid "$rid" \
     --arg migration "$migration" \
     --arg history "$history" \

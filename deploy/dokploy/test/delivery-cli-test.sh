@@ -201,7 +201,7 @@ dokploy_api() {
           '[{deploymentId:"current",status:"done",title:$title,createdAt:"2026-07-13T12:00:00Z"}]'
       fi
       ;;
-    'deploy|GET|deployment.allByCompose?composeId=c1'|'deploy_terminal|GET|deployment.allByCompose?composeId=c1'|'deploy_registry_drift|GET|deployment.allByCompose?composeId=c1')
+    'deploy|GET|deployment.allByCompose?composeId=c1'|'deploy_terminal|GET|deployment.allByCompose?composeId=c1'|'deploy_site_terminal|GET|deployment.allByCompose?composeId=c1'|'deploy_registry_drift|GET|deployment.allByCompose?composeId=c1')
       if [[ -f $test_root/compose-deployed ]]; then
         if [[ $FAKE_MODE == deploy_terminal ]]; then
           jq -cn --arg title "$TITLE" \
@@ -219,23 +219,23 @@ dokploy_api() {
         printf '[]\n'
       fi
       ;;
-    'deploy|GET|deployment.all?applicationId=a1'|'deploy_terminal|GET|deployment.all?applicationId=a1'|'deploy_registry_drift|GET|deployment.all?applicationId=a1'|'deploy_predecessor_drift|GET|deployment.all?applicationId=a1')
+    'deploy|GET|deployment.all?applicationId=a1'|'deploy_terminal|GET|deployment.all?applicationId=a1'|'deploy_site_terminal|GET|deployment.all?applicationId=a1'|'deploy_registry_drift|GET|deployment.all?applicationId=a1'|'deploy_predecessor_drift|GET|deployment.all?applicationId=a1')
       if [[ -f $test_root/site-deployed ]]; then
-        jq -cn --arg title "$TITLE" \
-          '[{deploymentId:"site-new",status:"done",title:$title}]'
+        jq -cn --arg title "$TITLE" --arg status "$(if [[ $FAKE_MODE == deploy_site_terminal ]]; then printf '%s' failed; else printf '%s' 'done'; fi)" \
+          '[{deploymentId:"site-new",status:$status,title:$title}]'
       else
         printf '[]\n'
       fi
       ;;
-    'deploy|POST|compose.update'|'deploy_terminal|POST|compose.update'|'deploy_registry_drift|POST|compose.update')
+    'deploy|POST|compose.update'|'deploy_terminal|POST|compose.update'|'deploy_site_terminal|POST|compose.update'|'deploy_registry_drift|POST|compose.update')
       printf '%s\n' "$body" > "$test_root/compose-update-body.json"
       printf '{}\n'
       ;;
-    'deploy|POST|application.update'|'deploy_terminal|POST|application.update'|'deploy_registry_drift|POST|application.update')
+    'deploy|POST|application.update'|'deploy_terminal|POST|application.update'|'deploy_site_terminal|POST|application.update'|'deploy_registry_drift|POST|application.update')
       printf '%s\n' "$body" > "$test_root/application-update-body.json"
       printf '{}\n'
       ;;
-    'deploy|GET|compose.one?composeId=c1'|'deploy_terminal|GET|compose.one?composeId=c1'|'deploy_registry_drift|GET|compose.one?composeId=c1'|'deploy_predecessor_drift|GET|compose.one?composeId=c1')
+    'deploy|GET|compose.one?composeId=c1'|'deploy_terminal|GET|compose.one?composeId=c1'|'deploy_site_terminal|GET|compose.one?composeId=c1'|'deploy_registry_drift|GET|compose.one?composeId=c1'|'deploy_predecessor_drift|GET|compose.one?composeId=c1')
       if [[ -f $test_root/compose-update-body.json ]]; then
         fake_release_compose | jq -c \
           --slurpfile update "$test_root/compose-update-body.json" \
@@ -251,13 +251,13 @@ dokploy_api() {
         fake_release_compose
       fi
       ;;
-    'deploy|POST|compose.deploy'|'deploy_terminal|POST|compose.deploy'|'deploy_registry_drift|POST|compose.deploy')
+    'deploy|POST|compose.deploy'|'deploy_terminal|POST|compose.deploy'|'deploy_site_terminal|POST|compose.deploy'|'deploy_registry_drift|POST|compose.deploy')
       : > "$test_root/compose-deployed"; printf '{}\n'
       ;;
-    'deploy|POST|application.deploy'|'deploy_terminal|POST|application.deploy'|'deploy_registry_drift|POST|application.deploy')
+    'deploy|POST|application.deploy'|'deploy_terminal|POST|application.deploy'|'deploy_site_terminal|POST|application.deploy'|'deploy_registry_drift|POST|application.deploy')
       : > "$test_root/site-deployed"; printf '{}\n'
       ;;
-    'deploy|GET|application.one?applicationId=a1'|'deploy_terminal|GET|application.one?applicationId=a1'|'deploy_registry_drift|GET|application.one?applicationId=a1'|'deploy_predecessor_drift|GET|application.one?applicationId=a1'|'application_binding_drift|GET|application.one?applicationId=a1')
+    'deploy|GET|application.one?applicationId=a1'|'deploy_terminal|GET|application.one?applicationId=a1'|'deploy_site_terminal|GET|application.one?applicationId=a1'|'deploy_registry_drift|GET|application.one?applicationId=a1'|'deploy_predecessor_drift|GET|application.one?applicationId=a1'|'application_binding_drift|GET|application.one?applicationId=a1')
       if [[ -f $test_root/application-update-body.json ]]; then
         auto_deploy=$(jq -cr '.autoDeploy' "$test_root/application-update-body.json")
         placement=$(jq -cr '.placementSwarm' "$test_root/application-update-body.json")
@@ -268,7 +268,7 @@ dokploy_api() {
             rollbackRegistry:null,autoDeploy:false,placementSwarm:{Constraints:["node.labels.role==staging"]},
             registryUrl:"ghcr.io",username:"robot",password:"pull-token",environmentId:"wrong-environment",serverId:(if $serverId == "" then null else $serverId end),
             env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://wrong-dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=false",
-            domains:[{host:"wrong-site.example.test"}]}'
+            domains:[{domainId:"domain1",host:"wrong-site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null}]}'
         return 0
       else
         auto_deploy=${APPLICATION_AUTO_DEPLOY_BEFORE-true}
@@ -283,7 +283,7 @@ dokploy_api() {
             rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
             registryUrl:"ghcr.io",username:"",password:"",environmentId:"env1",serverId:(if $serverId == "" then null else $serverId end),
             env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-            domains:[{host:"site.example.test"}]}'
+            domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null}]}'
       elif [[ $FAKE_MODE == deploy_registry_drift && -f $test_root/site-deployed ]]; then
         jq -cn --arg image "$SITE_IMAGE" --arg serverId "${COMPOSE_SERVER_ID-}" --argjson autoDeploy "$auto_deploy" --argjson placement "$placement" \
           '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:"registry2",
@@ -291,7 +291,7 @@ dokploy_api() {
             buildRegistry:null,rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
             registryUrl:"ghcr.io",username:"robot",password:"pull-token",environmentId:"env1",serverId:(if $serverId == "" then null else $serverId end),
             env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-            domains:[{host:"site.example.test"}]}'
+            domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null}]}'
       else
         jq -cn --arg image "$SITE_IMAGE" --arg serverId "${COMPOSE_SERVER_ID-}" --argjson autoDeploy "$auto_deploy" --argjson placement "$placement" \
           '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:null,
@@ -299,7 +299,7 @@ dokploy_api() {
             rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
             registryUrl:"ghcr.io",username:"robot",password:"pull-token",environmentId:"env1",serverId:(if $serverId == "" then null else $serverId end),
             env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-            domains:[{host:"site.example.test"}]}'
+            domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null}]}'
       fi
       ;;
     *)
@@ -331,7 +331,7 @@ jq -cn --arg image "$SITE_IMAGE" '
    buildRegistry:null,rollbackRegistry:null,registryUrl:"ghcr.io",username:"robot",
    password:"pull-token",environmentId:"env1",serverId:null,
    env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-   domains:[{host:"site.example.test"}],placementSwarm:{Constraints:["node.labels.role==staging"]}}
+   domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null}],placementSwarm:{Constraints:["node.labels.role==staging"]}}
 ' > "$test_root/bound-site-app.json"
 jq '.domains += [{host:"attacker.example.test"}]' "$test_root/bound-site-app.json" > "$test_root/extra-domain-app.json"
 if require_site_application_binding "$test_root/extra-domain-app.json" a1 env1 '' \
@@ -342,6 +342,17 @@ jq '.env += "\nBUILDHOUND_SITE_NOINDEX=false"' "$test_root/bound-site-app.json" 
 if require_site_application_binding "$test_root/duplicate-env-app.json" a1 env1 '' \
     https://site.example.test https://dashboard.example.test true; then
   fail_test 'duplicate conflicting site environment entry passed the binding check'
+fi
+jq '.domains[0].port = 3000' "$test_root/bound-site-app.json" > "$test_root/wrong-port-app.json"
+if require_site_application_binding "$test_root/wrong-port-app.json" a1 env1 '' \
+    https://site.example.test https://dashboard.example.test true; then
+  fail_test 'wrong site domain port passed the binding check'
+fi
+jq '.domains[0].certificateType = "letsencrypt" | .domains[0].customCertResolver = "attacker"' \
+  "$test_root/bound-site-app.json" > "$test_root/certificate-drift-app.json"
+if require_site_application_binding "$test_root/certificate-drift-app.json" a1 env1 '' \
+    https://site.example.test https://dashboard.example.test true; then
+  fail_test 'site certificate/resolver drift passed the binding check'
 fi
 
 reset_api
@@ -560,6 +571,14 @@ jq -e --arg rid "$RID" --arg history "$HISTORY_HASH" '
   }
 ' >/dev/null <<< "$evidence"
 
+reset_api
+FAKE_MODE=deploy
+evidence_file=$test_root/release-evidence.json
+evidence=$(main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
+  --evidence-file "$evidence_file")
+cmp -s <(printf '%s\n' "$evidence") "$evidence_file" || fail_test 'success evidence file differs from stdout evidence'
+
 expected_calls=$(cat <<'EOF'
 GET|compose.one?composeId=c1
 GET|application.one?applicationId=a1
@@ -685,6 +704,19 @@ grep -F 'Dokploy deployment reached a failed terminal state' "$test_root/status-
   fail_test 'terminal release failure lost its distinct diagnostic'
 [[ $(grep -c '^GET|deployment.all?applicationId=a1$' "$test_root/calls") -eq 1 ]] || \
   fail_test 'terminal Compose failure continued polling the site deployment'
+
+cp -- "$test_root/original-release.json" "$release"
+cp -- "$test_root/original-stack.yaml" "$manifest"
+reset_api
+FAKE_MODE=deploy_site_terminal
+evidence_file=$test_root/site-failure-evidence.json
+assert_status 42 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
+  --evidence-file "$evidence_file"
+jq -e --arg rid "$RID" --arg history "$HISTORY_HASH" '
+  . == {releaseId:$rid,migrationId:"V1__initial",migrationHistorySha256:$history,
+        composeDeploymentId:"compose-new",siteDeploymentId:null}
+' "$evidence_file" >/dev/null || fail_test 'site failure did not retain partial evidence'
 
 cp -- "$test_root/original-release.json" "$release"
 cp -- "$test_root/original-stack.yaml" "$manifest"

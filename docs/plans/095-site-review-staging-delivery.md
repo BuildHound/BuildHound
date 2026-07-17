@@ -11,8 +11,11 @@ provisioned. Enable that existing path without changing production delivery.
 
 **In:** preserve and regression-test the review site's exact-image deployment; provision and
 enable the existing staging Dokploy site Application path; prove staging's site and dashboard
-release together. **Out:** production changes, release-BOM/schema/client redesign, a new
-site service topology, and copying `site/compose.yml` into a Swarm Stack.
+release together. **Out:** production workflow/environment/approval/deploy changes, a
+production deployment, release-BOM/schema/client redesign, a new site service topology, and
+copying `site/compose.yml` into a Swarm Stack. The next shared site image intentionally
+disables Nginx access logging: this narrow privacy hardening applies wherever that image runs,
+but does not otherwise change production delivery.
 
 ## Design
 
@@ -26,7 +29,9 @@ site service topology, and copying `site/compose.yml` into a Swarm Stack.
   port, and container hardening. It is not a Swarm template; the long-lived site remains a
   Dokploy Docker-image Application and review remains the trusted combined Stack.
 - Before changing repository configuration, create the staging Application through Dokploy
-  with registry pull access and no source build/auto-deploy. Configure its protected values:
+  with registry pull access and no source build/auto-deploy. Bind its exact public hostname to
+  the TLS-enabled staging route, the Application's runtime image/port contract, and its sole
+  `node.labels.role==staging` placement. Configure protected values:
   `BUILDHOUND_SITE_DASHBOARD_URL` as the exact staging HTTPS origin,
   `BUILDHOUND_SITE_HOST` as the staging host, and `BUILDHOUND_SITE_NOINDEX=true`; record the
   Application ID in the protected `staging` Environment as `DOKPLOY_SITE_APPLICATION_ID` and
@@ -36,10 +41,14 @@ site service topology, and copying `site/compose.yml` into a Swarm Stack.
   `dokploy.sh deploy-release` must retain its fail-closed Application update/readback:
   `sourceType=docker`, the BOM's `siteImage`, `autoDeploy=false`, null registry-transform
   fields, and the sole `node.labels.role==staging` constraint before `application.deploy`.
-  The release evidence must contain a non-null site deployment ID.
+  Promotion must validate the pending, failure, and success deployment states and the
+  run-scoped attestation, rather than treating optional PR metadata as evidence. The release
+  evidence must contain a non-null site deployment ID; retain partial deployment evidence as
+  an artifact when a rollout fails.
 - Keep production's Environment, Application configuration, manual approval, and exact
-  release path unchanged. No fallback from a missing Application ID to `--skip-site` is
-  permitted.
+  release path unchanged, and authorize no production deployment. The shared image disables
+  Nginx access logging to eliminate unbounded visitor-metadata retention. No fallback from a
+  missing Application ID to `--skip-site` is permitted.
 
 ## Test strategy
 
@@ -48,8 +57,13 @@ site service topology, and copying `site/compose.yml` into a Swarm Stack.
   dashboard ingest/read attestation.
 - Pin staging workflow selection: an absent skip variable uses the site Application ID,
   performs exact state readback plus deploy, emits a non-null `siteDeploymentId`, and runs
-  the site probe. Preserve the explicit skip-mode tests only as the historical mechanism,
-  and preserve production's current behavior.
+  an exact public probe (`200`, `X-Robots-Tag: noindex, nofollow`, and the staging-local
+  dashboard link). Cover pending, failure, and success deployment outcomes plus the
+  run-scoped attestation; assert partial evidence is uploaded on failure. Preserve the
+  explicit skip-mode tests only as the historical mechanism, and preserve production's
+  current workflow behavior.
+- Pin the site image's Nginx configuration so access logging is disabled; this prevents
+  unbounded retention of visitor metadata without enabling a production deploy.
 - Run `sh site/test/site-test.sh`, including the hardened image mode; the complete Dokploy
   policy suite, Stack rendering, ShellCheck, shell syntax, workflow YAML/actionlint checks,
   and `git diff --check`.
@@ -58,12 +72,12 @@ site service topology, and copying `site/compose.yml` into a Swarm Stack.
 
 The staging Application is a supply-chain boundary: only the BOM image digest may be set,
 and Dokploy registry/build/rollback fields must remain isolated so it cannot retag or push.
-Bad URL or role configuration must fail before deployment; do not log environment values.
-If the site rollout fails after the dashboard Stack succeeds, stop promotion, retain the
-evidence, fix the staging Application/configuration, and rerun the same immutable BOM. Do
-not restore the skip variable as a silent success path; an emergency exception requires an
-explicit owner decision and recorded divergence. Production credentials and configuration
-never enter staging or review.
+Bad route/TLS/runtime, URL, or role configuration must fail before deployment; do not log
+environment values. If the site rollout fails after the dashboard Stack succeeds, stop
+promotion, retain and upload the partial deployment evidence, fix the staging
+Application/configuration, and rerun the same immutable BOM. Do not restore the skip variable
+as a silent success path; an emergency exception requires an explicit owner decision and
+recorded divergence. Production credentials and configuration never enter staging or review.
 
 ## Exit criteria
 
@@ -76,6 +90,10 @@ A labeled same-repository PR proves review site `200`, `X-Robots-Tag: noindex, n
 the review-local dashboard link, and the existing authenticated ingest/read smoke from
 digest-pinned images. Then a merge deploys staging without the skip: Dokploy readback matches
 the exact staging Application contract, its deployment evidence has a site deployment ID,
-the public staging site is `200` and noindex with the staging-local dashboard link, and the
-dashboard health/ingest/read smoke passes. Production is not changed or deployed. Complete
-fresh infrastructure and security/privacy reviews before merge.
+the public staging site is exactly `200` with `X-Robots-Tag: noindex, nofollow` and the
+staging-local dashboard link, and the dashboard health/ingest/read smoke passes. Promotion
+has verified pending/failure/success states and the run-scoped attestation; failed rollouts
+retain their partial evidence artifact. Production workflow/environment/approval/deploy
+behavior is unchanged and no production deployment is authorized, apart from the next shared
+image having access logging disabled. Complete fresh infrastructure and security/privacy
+reviews before merge.

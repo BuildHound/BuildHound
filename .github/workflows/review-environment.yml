@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')) && 'review-cleanup' || 'review' }}
     concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
-    permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write}
+    permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write, statuses: write}
     outputs:
       deploy_outcome: ${{ steps.deploy_status.outputs.outcome }}
       publish_outcome: ${{ steps.deploy_status.outputs.publish_outcome }}
@@ -55,6 +55,18 @@ jobs:
           else
             { test "$(jq -r .state <<<"$data")" != open || ! gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review; }
           fi
+      - name: Record pending exact-SHA review deployment
+        if: env.REVIEW_ACTION == 'deploy'
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          PR: "${{ env.REVIEW_PR }}"
+          SHA: "${{ env.REVIEW_SHA }}"
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/$SHA" \
+            -f state=pending \
+            -f context="buildhound/review-deployed/pr-$PR" \
+            -f description='Protected review deployment is running' \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
       - name: Enforce active ceiling
         if: env.REVIEW_ACTION == 'deploy'
         env:
@@ -285,7 +297,8 @@ jobs:
           jq -cn --arg attemptId "$ATTEMPT_ID" --arg repository "$GITHUB_REPOSITORY" --argjson pr "$PR" \
             --arg headSha "$SHA" --arg serverImage "$server@$server_digest" \
             --arg siteImage "$site@$site_digest" --arg composeId "$compose_id" \
-            --arg deploymentId "$deployment_id" --arg runId "$GITHUB_RUN_ID" '
+            --arg deploymentId "$deployment_id" --arg runId "$GITHUB_RUN_ID" --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg serverDigest "$server_digest" --arg siteDigest "$site_digest" '
             {
               schema:1,
               attemptId:$attemptId,
@@ -296,7 +309,10 @@ jobs:
               siteImage:$siteImage,
               composeId:$composeId,
               deploymentId:$deploymentId,
-              runId:$runId
+              runId:$runId,
+              runAttempt:$runAttempt,
+              serverDigest:$serverDigest,
+              siteDigest:$siteDigest
             }
           ' > /tmp/review-attestation/review.json
       - uses: actions/upload-artifact@v4
@@ -386,22 +402,48 @@ jobs:
           SHA: "${{ env.REVIEW_SHA }}"
           ATTEMPT_ID: "${{ github.run_id }}.${{ github.run_attempt }}"
         run: |
-          jq -e -s --arg attemptId "$ATTEMPT_ID" --arg repository "$GITHUB_REPOSITORY" --arg runId "$GITHUB_RUN_ID" \
+          jq -e -s --arg attemptId "$ATTEMPT_ID" --arg repository "$GITHUB_REPOSITORY" --arg runId "$GITHUB_RUN_ID" --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
             --argjson pr "$PR" --arg headSha "$SHA" '
             length == 1 and
             .[0] as $proof |
             ($proof | type) == "object" and
-            ($proof | keys) == ["attemptId","composeId","deploymentId","headSha","pr","repository","runId","schema","serverImage","siteImage"] and
+            ($proof | keys) == ["attemptId","composeId","deploymentId","headSha","pr","repository","runAttempt","runId","schema","serverDigest","serverImage","siteDigest","siteImage"] and
             $proof.schema == 1 and $proof.repository == $repository and
-            $proof.runId == $runId and $proof.attemptId == $attemptId and
+            $proof.runId == $runId and $proof.runAttempt == $runAttempt and $proof.attemptId == $attemptId and
             $proof.pr == $pr and $proof.headSha == $headSha and
             ($proof.composeId | type) == "string" and ($proof.composeId | test("^[A-Za-z0-9_-]{1,128}\\z")) and
             ($proof.deploymentId | type) == "string" and ($proof.deploymentId | test("^[A-Za-z0-9_-]{1,128}\\z")) and
             ($proof.serverImage | type) == "string" and ($proof.serverImage | test("@sha256:[0-9a-f]{64}\\z")) and
-            ($proof.siteImage | type) == "string" and ($proof.siteImage | test("@sha256:[0-9a-f]{64}\\z"))
+            ($proof.siteImage | type) == "string" and ($proof.siteImage | test("@sha256:[0-9a-f]{64}\\z")) and
+            ($proof.serverDigest | type) == "string" and ($proof.serverDigest | test("^sha256:[0-9a-f]{64}\\z")) and
+            ($proof.siteDigest | type) == "string" and ($proof.siteDigest | test("^sha256:[0-9a-f]{64}\\z")) and
+            ($proof.serverImage | endswith("@" + $proof.serverDigest)) and
+            ($proof.siteImage | endswith("@" + $proof.siteDigest))
           ' /tmp/review/review.json >/dev/null
           gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/$SHA" \
             -f state=success \
             -f context="buildhound/review-deployed/pr-$PR" \
             -f description='Protected review deployment passed' \
+            -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
+  record_failed_review_status:
+    needs: [review, record_review_status]
+    if: >-
+      always() &&
+      (github.event.action == 'labeled' && github.event.label.name == 'deploy-review' ||
+       (github.event.action == 'synchronize' || github.event.action == 'reopened') &&
+       contains(github.event.pull_request.labels.*.name, 'deploy-review')) &&
+      (needs.review.result != 'success' || needs.record_review_status.result != 'success')
+    runs-on: ubuntu-latest
+    permissions: {contents: read, statuses: write}
+    steps:
+      - name: Record failed exact-SHA review deployment
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          PR: "${{ env.REVIEW_PR }}"
+          SHA: "${{ env.REVIEW_SHA }}"
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/$SHA" \
+            -f state=failure \
+            -f context="buildhound/review-deployed/pr-$PR" \
+            -f description='Protected review deployment failed' \
             -f target_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null
