@@ -414,7 +414,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {actions: read, contents: read, statuses: write}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: {name: review-attestation, path: /tmp/review}
       - name: Validate attestation and record successful exact-SHA review
         env:
