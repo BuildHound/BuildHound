@@ -155,8 +155,8 @@ authenticated ingest/read smoke before it records exact-SHA status and a run-sco
 After a qualifying labelled PR is merged, completion of the trusted main-branch image publisher
 triggers staging through `workflow_run`. Staging accepts only the matching successful review
 proof, deploys one release ID, and carries that proof forward. Production is never triggered by
-that chain: it is `workflow_dispatch`-only, accepts only the same staging-proven release ID via
-`--proven-release-id`, and still requires protected-Environment approval plus an explicitly
+that chain: it is `workflow_dispatch`-only, deploys only the same staging-proven release
+artifact, and still requires protected-Environment approval plus an explicitly
 selected fresh backup. The optional first-BOM staging bootstrap may also be dispatched manually.
 Review mutation concurrency is acquired at the job level only after the selected Environment's
 non-reviewer protection rules pass, allowing close/unlabel cleanup to proceed independently.

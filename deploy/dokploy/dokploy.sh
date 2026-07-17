@@ -472,7 +472,7 @@ cmd_staging_bootstrap_state() {
 
 cmd_deploy_release() (
   if [ "$#" -lt 1 ]; then usage; return 2; fi
-  local release=$1 compose_id='' site_application_id='' proven_release_id='' base_repo=''
+  local release=$1 compose_id='' site_application_id='' base_repo=''
   local expected_current_release_id='' app_role='' site_url='' site_dashboard_url='' site_noindex='' evidence_file=''
   local manifest="$SCRIPT_DIR/stack.yaml" volume_guard="$SCRIPT_DIR/volume-guard.sh"
   local rollback_compatible=false bootstrap_manual_current=false skip_site=false
@@ -485,7 +485,7 @@ cmd_deploy_release() (
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --base-repo|--compose-id|--site-application-id|--app-role|--site-url|--site-dashboard-url|--site-noindex|--proven-release-id|--expected-current-release-id|--manifest|--volume-guard|--evidence-file)
+      --base-repo|--compose-id|--site-application-id|--app-role|--site-url|--site-dashboard-url|--site-noindex|--expected-current-release-id|--manifest|--volume-guard|--evidence-file)
         if [ "$#" -lt 2 ]; then usage; return 2; fi
         case "$1" in
           --base-repo) base_repo=$2 ;;
@@ -495,7 +495,6 @@ cmd_deploy_release() (
           --site-url) site_url=$2 ;;
           --site-dashboard-url) site_dashboard_url=$2 ;;
           --site-noindex) site_noindex=$2 ;;
-          --proven-release-id) proven_release_id=$2 ;;
           --expected-current-release-id) expected_current_release_id=$2 ;;
           --manifest) manifest=$2 ;;
           --volume-guard) volume_guard=$2 ;;
@@ -540,7 +539,6 @@ cmd_deploy_release() (
     fi
   fi
   require_app_role "$app_role" || return 2
-  if [ -n "$proven_release_id" ]; then require_release_id "$proven_release_id" || return 2; fi
   if [ -n "$expected_current_release_id" ]; then
     require_release_id "$expected_current_release_id" || return 2
   fi
@@ -581,10 +579,6 @@ cmd_deploy_release() (
 
   release_validate "$release" || return 1
   rid=$(release_id "$release") || return
-  if [ -n "$proven_release_id" ] && [ "$rid" != "$proven_release_id" ]; then
-    fail "production release differs from staging-proven release"
-    return 1
-  fi
   manifest_hash=$(sha256_file "$manifest") || return
   guard_hash=$(sha256_file "$volume_guard") || return
   release_schema=$(jq -er '.schema' "$release") || return
