@@ -40,8 +40,18 @@ _review_compare_dokploy_version() {
   printf '%s\n' 0
 }
 
+# Fail-below is enforced on every lifecycle action. The above-baseline warn —
+# the plan-091 tripwire ("on the first deploy after a previously unseen
+# version, spot-check getConvertedCompose") — fires only when warn=true, which
+# deploy_review passes: converge scrub/retire ticks run every 15 minutes and a
+# level-triggered warn there is alert fatigue, not a signal (PR #79 reviews).
+# The warn also lands in the Actions step summary when the runner provides one
+# ($GITHUB_STEP_SUMMARY): stdout of these commands is consumed by command
+# substitution in the calling workflows, so a ::warning:: there would never
+# reach the runner's command parser — the summary file is the visible channel
+# that works from a nested process; the lib stays runner-agnostic otherwise.
 _review_require_supported_dokploy_version() {
-  local response version comparison
+  local warn=${1:-} response version comparison message
   response=$(dokploy_api GET settings.getDokployVersion) || return 1
   if ! version=$(jq -er 'select(type == "string")' <<< "$response"); then
     die "review lifecycle could not read the reported Dokploy version"
@@ -55,8 +65,12 @@ _review_require_supported_dokploy_version() {
     die "review lifecycle requires Dokploy $_review_minimum_dokploy_version or newer"
     return 1
   fi
-  if [[ $comparison == 1 ]]; then
-    printf '%s\n' "warning: Dokploy $version is newer than the validated baseline $_review_minimum_dokploy_version; proceeding" >&2
+  if [[ $comparison == 1 && $warn == warn ]]; then
+    message="Dokploy $version is newer than the validated baseline $_review_minimum_dokploy_version; proceeding — spot-check compose.getConvertedCompose for one review app before trusting this run (plan 091 tripwire)"
+    printf 'warning: %s\n' "$message" >&2
+    if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+      printf ':warning: %s\n' "$message" >> "$GITHUB_STEP_SUMMARY"
+    fi
   fi
 }
 
