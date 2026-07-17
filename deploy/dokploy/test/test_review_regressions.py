@@ -1,5 +1,6 @@
 import re
 import stat
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -368,6 +369,40 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertLess(ingest, read)
         self.assertLess(read, attestation)
 
+    def test_review_site_probe_rejects_duplicate_conflicting_robots_headers(self):
+        workflow = self.read(".github/workflows/review-environment.yml")
+        match = re.search(
+            r"review-site-headers \| awk '([^']+)'",
+            workflow,
+        )
+        self.assertIsNotNone(match)
+        awk_program = match.group(1)
+        self.assertIn(
+            "END { print count \":\" exact }')\" = '1:1'",
+            workflow,
+        )
+
+        def classify(headers: str) -> str:
+            return subprocess.run(
+                ["awk", awk_program],
+                input=headers,
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+
+        self.assertEqual(
+            classify("X-Robots-Tag: noindex, nofollow\n"),
+            "1:1",
+        )
+        self.assertEqual(
+            classify(
+                "X-Robots-Tag: noindex, nofollow\n"
+                "X-Robots-Tag: index, follow\n"
+            ),
+            "2:1",
+        )
+
     def test_review_smoke_uses_derived_hosts(self):
         workflow = self.read(".github/workflows/review-environment.yml")
         self.assertIn('site_host="$review_name.$DNS_SUFFIX"', workflow)
@@ -431,6 +466,11 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('commits/$head_sha/statuses?per_page=100', workflow)
         self.assertIn('context "buildhound/review-deployed/pr-$pr"', workflow)
         self.assertIn('sort_by(.updated_at, .id) | last', workflow)
+        self.assertIn('issues/$pr/events?per_page=100', workflow)
+        self.assertIn('.event == "labeled" and .label.name == "deploy-review"', workflow)
+        self.assertIn('.event == "reopened"', workflow)
+        self.assertIn('test -n "$review_cutoff"', workflow)
+        self.assertIn('.updated_at >= $cutoff', workflow)
         self.assertIn("test \"$state\" = success", workflow)
         self.assertIn("test \"$creator\" = 'github-actions[bot]'", workflow)
         self.assertIn('actions/runs/$run_id', workflow)
@@ -439,6 +479,11 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('.workflow_id == $workflow_id', workflow)
         self.assertIn('echo "deploy=false" >> "$GITHUB_OUTPUT"', workflow)
         self.assertIn("needs.qualify.outputs.deploy == 'true'", workflow)
+        self.assertIn(
+            "permissions: {contents: read, pull-requests: read, actions: read, "
+            "statuses: read, issues: read}",
+            workflow,
+        )
         # Role -> manifest binding lives solely in job wiring (the plan-090
         # replacement for the schema-3 per-role checksum recheck).
         staging_job = workflow.index("  deploy-staging:")
@@ -548,6 +593,44 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertEqual(
             workflow.count("persist-credentials: false"),
             workflow.count("actions/checkout@"),
+        )
+
+    def test_stale_review_success_cannot_cross_relabel_or_reopen_cutoff(self):
+        def proof_is_fresh(events, status_updated_at):
+            cutoffs = [
+                event["created_at"]
+                for event in events
+                if (
+                    event["event"] == "labeled"
+                    and event.get("label", {}).get("name") == "deploy-review"
+                )
+                or event["event"] == "reopened"
+            ]
+            return bool(cutoffs) and status_updated_at >= max(cutoffs)
+
+        first_label = {
+            "event": "labeled",
+            "label": {"name": "deploy-review"},
+            "created_at": "2026-07-17T09:00:00Z",
+        }
+        relabel = {
+            "event": "labeled",
+            "label": {"name": "deploy-review"},
+            "created_at": "2026-07-17T11:00:00Z",
+        }
+        reopened = {
+            "event": "reopened",
+            "created_at": "2026-07-17T12:00:00Z",
+        }
+        stale_success = "2026-07-17T10:00:00Z"
+
+        self.assertFalse(proof_is_fresh([first_label, relabel], stale_success))
+        self.assertFalse(proof_is_fresh([first_label, reopened], stale_success))
+        self.assertTrue(
+            proof_is_fresh(
+                [first_label, relabel, reopened],
+                "2026-07-17T12:00:00Z",
+            )
         )
 
     def test_review_success_drives_auto_staging_and_manual_production(self):

@@ -312,7 +312,12 @@ require_exact_release_application_state() {
         $domain.https == true and $domain.port == 8080 and $domain.path == "/" and
         $domain.domainType == "application" and $domain.applicationId == $id and
         $domain.composeId == null and $domain.previewDeploymentId == null and
-        $domain.certificateType == "none" and $domain.customCertResolver == null) and
+        $domain.certificateType == "none" and $domain.customCertResolver == null and
+        $domain.customEntrypoint == null and $domain.internalPath == "/" and
+        $domain.stripPath == false and $domain.middlewares == [] and
+        $domain.forwardAuthEnabled == false and $domain.serviceName == null) and
+      $before.redirects == [] and $actual.redirects == $before.redirects and
+      $before.security == [] and $actual.security == $before.security and
       ($actual.env | type) == "string" and
       ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_HOST="))) == ["BUILDHOUND_SITE_HOST=" + ($siteUrl | ltrimstr("https://"))]) and
       ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_DASHBOARD_URL="))) == ["BUILDHOUND_SITE_DASHBOARD_URL=" + $dashboardUrl]) and
@@ -350,7 +355,11 @@ require_site_application_binding() {
         $domain.https == true and $domain.port == 8080 and $domain.path == "/" and
         $domain.domainType == "application" and $domain.applicationId == $id and
         $domain.composeId == null and $domain.previewDeploymentId == null and
-        $domain.certificateType == "none" and $domain.customCertResolver == null) and
+        $domain.certificateType == "none" and $domain.customCertResolver == null and
+        $domain.customEntrypoint == null and $domain.internalPath == "/" and
+        $domain.stripPath == false and $domain.middlewares == [] and
+        $domain.forwardAuthEnabled == false and $domain.serviceName == null) and
+      .redirects == [] and .security == [] and
       (.env | type) == "string" and
       (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_HOST="))) == ["BUILDHOUND_SITE_HOST=" + ($siteUrl | ltrimstr("https://"))]) and
       (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_DASHBOARD_URL="))) == ["BUILDHOUND_SITE_DASHBOARD_URL=" + $dashboardUrl]) and
