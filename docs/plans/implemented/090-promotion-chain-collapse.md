@@ -242,6 +242,43 @@ staging pass proceeds independently.
   downloads ✓; prod job blocks pending approval ✓ (approval semantics beyond
   the block stay unexercised until Stage D).
 
+## Live verification log (Stage D — first production deploy, 2026-07-17)
+
+- Production manual anchor (Dokploy) took four attempts, each failing closed
+  pre-deploy or in the backup container and each producing a durable fix:
+  missing `BUILDHOUND_S3_CREDENTIALS_SECRET` env, the divergence-10 Traefik
+  collision, empty S3 secret values, the divergence-11 pgpass mode. Final
+  anchor: `stack.yaml` @ `78c088e5`. Production DB/S3/bootstrap credentials
+  were rotated mid-saga (chat-transcript exposure — operator pasted a failed
+  deploy command containing plaintext env; separate cause, not an H4 event).
+- Dispatch 1 (run 29573986636, `sha=78c088e5`, bootstrap): `resolve_dispatch`
+  green on its first live exercise — GHCR auth, `--source-ref` behavior, and
+  the attestation `gitCommit`-binding jq all held. Staging leg green. H3
+  approved; the production **Dokploy deploy step succeeded** — digests
+  server `sha256:a9f8019c…d19d70`, site `sha256:7d3e3229…9b5b4d`, backup
+  `sha256:04090e69…b7c238`, db `sha256:ee59888c…22a7c1` — but the post-deploy
+  verify failed (5×401): the GitHub `BUILDHOUND_INGEST_TOKEN`/`READ_TOKEN`
+  production secrets matched neither seeded token hash (rotation paste
+  error). Read-only step; no H4.
+- Failed-job rerun (bootstrap flag still set) failed closed in backup
+  selection: "latest successful deployment is not the explicit manual
+  deployment" — correct one-shot bootstrap semantics; the release deploy had
+  legitimately superseded the anchor.
+- Corrective dispatch (run 29578338947, same sha, non-bootstrap, backup
+  object `backups/buildhound-20260717T113513Z.dump.age` — produced by the
+  release deploy's own backup container, carrying the release id): fully
+  green including the authenticated ingest/read verify. Gate H3 exercised
+  three times; per-run approval semantics confirmed.
+- Same day, the labeled #70 merge push lost the qualify race
+  (`commits/{sha}/pulls` is eventually consistent; `deploy=false` six
+  seconds after a rebase merge). `gh run rerun` re-qualified and published.
+  Qualify retry hardening is tracked as follow-up work.
+- Post-deploy `review-env-verifier`: PASS (health, dashboard shell, TLS,
+  401 on unauthenticated ingest, rate-limit sanity, staging untouched).
+  Flagged: production serves `X-Robots-Tag: noindex, nofollow` (Dokploy env
+  value) while the plan-095 release gate expects `all` — must be reconciled
+  before the next tip deploy.
+
 ## Exit criteria
 
 - Merge to main: staging deploys green with **zero** cross-workflow artifact downloads.
