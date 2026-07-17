@@ -499,7 +499,7 @@ cmd_deploy_release() (
   local compose_deployment site_deployment rc has_success compose_server_id
   local workdir stack_file app_file app_before_file compose_state_file compose_before_file
   local compose_observed_file site_observed_file
-  local migration history release_schema manifest_field compose_environment_id dashboard_host
+  local migration history release_schema manifest_field compose_environment_id='' dashboard_host=''
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
