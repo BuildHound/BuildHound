@@ -35,8 +35,11 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         # names collide and 404 BOTH dashboards (first prod anchor,
         # 2026-07-17). Review stacks are exempt: their names carry the
         # interpolated ${BUILDHOUND_REVIEW_PROVIDER_ID} prefix.
+        # [^.]+ (not [a-z0-9-]+): a name with uppercase or underscores must
+        # still be captured, or a colliding name silently drops out of both
+        # sets and the test loses its detection power (PR #69 infra review).
         pattern = re.compile(
-            r"traefik\.http\.(?:routers|middlewares|services)\.([a-z0-9-]+)\."
+            r"traefik\.http\.(?:routers|middlewares|services)\.([^.]+)\."
         )
         names = {
             path: set(pattern.findall(self.read(path)))
@@ -54,6 +57,53 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertFalse(
             prod & staging,
             f"traefik object names shared between prod and staging: {prod & staging}",
+        )
+
+    def test_long_lived_router_middleware_references_resolve(self):
+        # A partial rename that updates a middleware definition but not the
+        # router's middlewares= list (or vice versa) silently detaches rate
+        # limiting / the robots header at runtime while the disjointness
+        # test still passes (PR #69 reviews). Pin reference integrity.
+        for path in (
+            "deploy/dokploy/stack.yaml",
+            "deploy/dokploy/staging-stack.yaml",
+        ):
+            stack = self.read(path)
+            defined = set(
+                re.findall(r"traefik\.http\.middlewares\.([^.]+)\.", stack)
+            )
+            referenced = set()
+            for refs in re.findall(
+                r"traefik\.http\.routers\.[^.]+\.middlewares=([^\n]+)", stack
+            ):
+                referenced.update(ref.strip() for ref in refs.split(","))
+            with self.subTest(path=path):
+                self.assertTrue(referenced, f"no middleware references in {path}")
+                self.assertEqual(
+                    referenced,
+                    defined,
+                    f"router middlewares= list and middleware definitions "
+                    f"disagree in {path}",
+                )
+
+    def test_secret_modes_use_unambiguous_octal_literals(self):
+        # Docker's YAML 1.2 loader parses a bare leading-zero int (0400) as
+        # DECIMAL 400 = 0o620 — group-writable, so libpq ignores the pgpass
+        # file entirely (first prod anchor, 2026-07-17). Only the explicit
+        # 0o form (or a decimal) is parse-safe.
+        for path in sorted(
+            (ROOT / "deploy/dokploy").glob("*.yaml"),
+        ):
+            stack = path.read_text()
+            with self.subTest(path=path.name):
+                self.assertNotRegex(
+                    stack,
+                    r"mode:\s*0[0-9]",
+                    "bare leading-zero mode literal parses as decimal under "
+                    "YAML 1.2 — use the 0o form",
+                )
+        self.assertEqual(
+            self.read("deploy/dokploy/stack.yaml").count("mode: 0o400"), 2
         )
 
     def test_long_lived_services_use_environment_specific_placement(self):
@@ -136,7 +186,7 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
                     rf"target: {secret}\s+"
                     r'uid: "10001"\s+'
                     r'gid: "10001"\s+'
-                    r"mode: 0400",
+                    r"mode: 0o400",
                     re.MULTILINE,
                 ),
             )

@@ -99,17 +99,21 @@ services:
       BACKUP_INTERVAL_SECONDS: ${BUILDHOUND_BACKUP_INTERVAL_SECONDS:-82800}
       BUILDHOUND_DB_INSTANCE: ${BUILDHOUND_DB_INSTANCE}
       BUILDHOUND_RELEASE_ID: ${BUILDHOUND_RELEASE_ID:-manual}
+    # Secret modes are 0o-prefixed on purpose: docker's YAML 1.2 loader
+    # parses a bare leading-zero literal (0400) as DECIMAL 400 = 0o620 —
+    # group-writable, which makes libpq ignore the pgpass file entirely
+    # (first prod anchor, 2026-07-17). A regression test bans the bare form.
     secrets:
       - source: pgpass
         target: pgpass
         uid: "10001"
         gid: "10001"
-        mode: 0400
+        mode: 0o400
       - source: s3_credentials
         target: s3_credentials
         uid: "10001"
         gid: "10001"
-        mode: 0400
+        mode: 0o400
     networks: [private, backup_egress]
     read_only: true
     volumes:
