@@ -43,6 +43,10 @@ out=$(BUILDHOUND_SERVER_URL="https://staging.example.com/" BUILDHOUND_TOKEN="sec
     sh "$cli" "$work/p1.json" "$work/p2.json" 2>&1) || fail "success case exited non-zero"
 contains "$work/args" 'https://staging.example.com/v1/builds' "endpoint missing or trailing slash kept"
 contains "$work/args" 'Authorization: Bearer secret-tok' "token header missing"
+# Requests must be time-bounded: an unbounded POST to a hung server would stall the
+# calling job (the review path holds a global concurrency lock).
+contains "$work/args" '--connect-timeout 10' "connect timeout missing"
+contains "$work/args" '--max-time 20' "max-time bound missing"
 contains "$work/args" "@$work/p1.json" "first payload not posted"
 contains "$work/args" "@$work/p2.json" "second payload not posted"
 test "$(grep -c '/v1/builds' "$work/args")" = 2 || fail "expected exactly two POSTs"

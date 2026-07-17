@@ -78,6 +78,8 @@ __pycache__/
 
 # generated files
 bin/
+# ...but buildhound-ci-assets/bin holds committed CI scripts, not IDE build output
+!buildhound-ci-assets/bin/
 gen/
 out/
 generated/
