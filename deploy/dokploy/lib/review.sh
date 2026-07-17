@@ -9,9 +9,8 @@ source "$_review_lib_dir/common.sh"
 source "$_review_lib_dir/api.sh"
 _review_stack_template=$_review_lib_dir/../review-stack.yaml
 _review_anchor_template=$_review_lib_dir/../review-anchor.yaml
-_review_anchor_image=timescale/timescaledb:latest-pg16@sha256:ba149561ad4ddff5940d6eb0a0df60aefd1355cee1a450928f271267038fc888
 _review_supported_dokploy_version=v0.29.12
-readonly _review_lib_dir _review_stack_template _review_anchor_template _review_anchor_image
+readonly _review_lib_dir _review_stack_template _review_anchor_template
 readonly _review_supported_dokploy_version
 
 _review_require_supported_dokploy_version() {
@@ -114,14 +113,6 @@ review_hosts() {
     return 1
   fi
   printf '%s|%s\n' "$site" "$dashboard"
-}
-
-_review_environment_shape() {
-  jq -e '
-    type == "object" and
-    (.compose | type == "array") and
-    all(.compose[]; type == "object")
-  ' >/dev/null
 }
 
 # Strictly parses ownership metadata for every Compose, then returns exact-owned items.
