@@ -42,4 +42,11 @@ for service in backup db; do
   ' "$rendered"
 done
 if grep -Eiq '(password|token|secret): [^$<{]' "$rendered"; then exit 1; fi
+# Parser-truth check on secret file modes: 256 == 0o400. Source-text tests
+# cannot see what the deploying docker actually resolved (a bare 0400 renders
+# 256 on one docker generation and 400 on another — first prod anchor,
+# 2026-07-17); the rendered output is the ground truth.
+if grep -q 'mode:' "$rendered"; then
+  test "$(grep -c 'mode: 256' "$rendered")" -eq "$(grep -c 'mode:' "$rendered")"
+fi
 printf 'stack policy validated\n'
