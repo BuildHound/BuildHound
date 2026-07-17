@@ -130,7 +130,7 @@ run_failure() {
 
 # GET: normalized origin, required curl controls, JSON headers, and no token argv.
 reset_fake 200 0 '{"composeId":"c1"}'
-out=$(api_get 'compose.one?composeId=c1' 2> "$root/stderr")
+out=$(dokploy_api GET 'compose.one?composeId=c1' 2> "$root/stderr")
 assert_equal '{"composeId":"c1"}' "$out"
 [ ! -s "$root/stderr" ] || fail 'successful GET wrote diagnostics'
 assert_file_contains "$FAKE_CURL_META" 'method=GET'
@@ -152,7 +152,7 @@ fi
 # POST: the canonical JSON body is read from a private file and absent from curl argv.
 payload='{"composeId":"c1","secret":"request-body-secret"}'
 reset_fake 201 0 '{"updated":true}'
-out=$(api_post 'compose.update' "$payload" 2> "$root/stderr")
+out=$(dokploy_api POST 'compose.update' "$payload" 2> "$root/stderr")
 assert_equal '{"updated":true}' "$out"
 assert_equal '{"composeId":"c1","secret":"request-body-secret"}' "$(cat "$FAKE_CURL_BODY")"
 assert_file_contains "$FAKE_CURL_META" 'method=POST'
@@ -162,14 +162,14 @@ fi
 
 # A 2xx response still fails closed when it is not JSON, without exposing it.
 reset_fake 200 0 'successful-response-secret-not-json'
-run_failure 65 api_get 'compose.one?composeId=c1'
+run_failure 65 dokploy_api GET 'compose.one?composeId=c1'
 assert_file_contains "$root/stderr" 'dokploy_api method=GET path=compose.one status=invalid_json exit=65'
 if grep -Fq -- 'successful-response-secret-not-json' "$root/stderr"; then
   fail 'invalid JSON response appeared in diagnostics'
 fi
 for invalid_success in '' '{}{}'; do
   reset_fake 200 0 "$invalid_success"
-  run_failure 65 api_get 'compose.one?composeId=c1'
+  run_failure 65 dokploy_api GET 'compose.one?composeId=c1'
   assert_file_contains "$root/stderr" 'dokploy_api method=GET path=compose.one status=invalid_json exit=65'
 done
 
@@ -177,21 +177,21 @@ done
 for invalid_request in '' '{}{}'; do
   reset_fake 200 0 '{}'
   : > "$FAKE_CURL_ARGS"
-  run_failure 65 api_post 'compose.update' "$invalid_request"
+  run_failure 65 dokploy_api POST 'compose.update' "$invalid_request"
   assert_file_contains "$root/stderr" 'dokploy_api method=POST path=compose.update status=invalid_json exit=65'
   [ ! -s "$FAKE_CURL_ARGS" ] || fail 'curl ran for an invalid JSON request'
 done
 
 # Redirects and HTTP failures are rejected without exposing response content.
 reset_fake 302 0 'redirect-response-secret'
-run_failure 22 api_get 'compose.one?composeId=c1'
+run_failure 22 dokploy_api GET 'compose.one?composeId=c1'
 assert_file_contains "$root/stderr" 'dokploy_api method=GET path=compose.one status=302 exit=22'
 if grep -Fq -- 'redirect-response-secret' "$root/stderr"; then
   fail 'redirect response body appeared in diagnostics'
 fi
 
 reset_fake 403 0 "forbidden-response-secret-$DOKPLOY_TOKEN"
-run_failure 22 api_post 'compose.update' "$payload"
+run_failure 22 dokploy_api POST 'compose.update' "$payload"
 assert_file_contains "$root/stderr" 'dokploy_api method=POST path=compose.update status=403 exit=22'
 if grep -Fq -- 'forbidden-response-secret' "$root/stderr" || grep -Fq -- "$DOKPLOY_TOKEN" "$root/stderr"; then
   fail 'HTTP error diagnostics exposed response or token material'
@@ -199,7 +199,7 @@ fi
 
 # Transport errors preserve curl's exit code and hide any partial body.
 reset_fake 000 7 'transport-response-secret'
-run_failure 7 api_get 'environment.one?environmentId=e1'
+run_failure 7 dokploy_api GET 'environment.one?environmentId=e1'
 assert_file_contains "$root/stderr" 'dokploy_api method=GET path=environment.one status=000 exit=7'
 if grep -Fq -- 'transport-response-secret' "$root/stderr"; then
   fail 'transport diagnostics exposed a partial response body'
@@ -222,7 +222,7 @@ for invalid_origin in \
   DOKPLOY_URL=$invalid_origin
   export DOKPLOY_URL
   : > "$FAKE_CURL_ARGS"
-  run_failure 2 api_get 'compose.one?composeId=c1'
+  run_failure 2 dokploy_api GET 'compose.one?composeId=c1'
   assert_file_contains "$root/stderr" 'dokploy_api method=GET path=compose.one status=invalid_origin exit=2'
   [ ! -s "$FAKE_CURL_ARGS" ] || fail 'curl ran for an invalid origin'
 done
@@ -234,7 +234,7 @@ for invalid_token in '' $'bad\rvalue' $'bad\nvalue'; do
   DOKPLOY_TOKEN=$invalid_token
   export DOKPLOY_TOKEN
   : > "$FAKE_CURL_ARGS"
-  run_failure 2 api_get 'compose.one?composeId=c1'
+  run_failure 2 dokploy_api GET 'compose.one?composeId=c1'
   assert_file_contains "$root/stderr" 'dokploy_api method=GET path=compose.one status=invalid_token exit=2'
   [ ! -s "$FAKE_CURL_ARGS" ] || fail 'curl ran for an invalid token'
 done
@@ -252,7 +252,7 @@ for invalid_path in \
   'compose.one?value=has space' \
   $'compose.one\nsecond-line'; do
   : > "$FAKE_CURL_ARGS"
-  run_failure 2 api_get "$invalid_path"
+  run_failure 2 dokploy_api GET "$invalid_path"
   assert_file_contains "$root/stderr" 'dokploy_api method=GET path=invalid status=invalid_path exit=2'
   [ ! -s "$FAKE_CURL_ARGS" ] || fail 'curl ran for an invalid API path'
 done

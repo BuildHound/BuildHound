@@ -225,11 +225,3 @@ dokploy_api() (
       ;;
   esac
 )
-
-api_get() {
-  dokploy_api GET "${1-}"
-}
-
-api_post() {
-  dokploy_api POST "${1-}" "${2-}"
-}
