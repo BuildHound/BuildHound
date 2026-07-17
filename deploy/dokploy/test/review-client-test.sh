@@ -424,7 +424,7 @@ grep -F 'plan 091 tripwire' "$TEST_ROOT/step-summary" >/dev/null
 rm -f "$TEST_ROOT/step-summary"
 
 reset_fake version_above
-_review_require_supported_dokploy_version 2> "$TEST_ROOT/error.log" || \
+_review_require_supported_dokploy_version quiet 2> "$TEST_ROOT/error.log" || \
   fail 'newer Dokploy version was rejected on the quiet path'
 [[ ! -s $TEST_ROOT/error.log ]] || fail 'quiet lifecycle re-check emitted the tripwire warning'
 
