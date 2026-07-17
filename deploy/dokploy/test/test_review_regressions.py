@@ -67,6 +67,9 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         for path in (
             "deploy/dokploy/stack.yaml",
             "deploy/dokploy/staging-stack.yaml",
+            # Interpolated names work too: ${BUILDHOUND_REVIEW_PROVIDER_ID}
+            # contains no dot, so [^.]+ captures the full placeholder-name.
+            "deploy/dokploy/review-stack.yaml",
         ):
             stack = self.read(path)
             defined = set(
@@ -89,21 +92,37 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
     def test_secret_modes_use_unambiguous_octal_literals(self):
         # Docker's YAML 1.2 loader parses a bare leading-zero int (0400) as
         # DECIMAL 400 = 0o620 — group-writable, so libpq ignores the pgpass
-        # file entirely (first prod anchor, 2026-07-17). Only the explicit
-        # 0o form (or a decimal) is parse-safe.
-        for path in sorted(
-            (ROOT / "deploy/dokploy").glob("*.yaml"),
-        ):
-            stack = path.read_text()
-            with self.subTest(path=path.name):
-                self.assertNotRegex(
-                    stack,
-                    r"mode:\s*0[0-9]",
-                    "bare leading-zero mode literal parses as decimal under "
-                    "YAML 1.2 — use the 0o form",
-                )
+        # file entirely (first prod anchor, 2026-07-17). Allowlist, not
+        # blocklist (PR #70 security reviews: a bare decimal `mode: 400`,
+        # quoted "0400", or hex 0x190 all bypass a leading-zero ban and
+        # reproduce the same 0o620 result): every numeric-looking mode must
+        # be a bare 0o octal literal with no group/other bits — the same
+        # predicate libpq enforces at runtime. Non-numeric mode: values
+        # (e.g. a future swarm `mode: replicated`) are out of scope.
+        numeric_modes = []
+        for path in sorted((ROOT / "deploy/dokploy").rglob("*.y*ml")):
+            text = path.read_text()
+            for value in re.findall(r"\bmode:\s*(\S+)", text):
+                if not re.match(r"""["'0-9]""", value):
+                    continue
+                numeric_modes.append((path.name, value))
+                with self.subTest(path=path.name, value=value):
+                    match = re.fullmatch(r"0o([0-7]+)", value)
+                    self.assertIsNotNone(
+                        match,
+                        "file modes must be bare 0o octal literals — "
+                        "decimal, quoted, leading-zero, and hex forms parse "
+                        "ambiguously across docker generations",
+                    )
+                    self.assertEqual(
+                        int(match.group(1), 8) & 0o077,
+                        0,
+                        "secret file modes must not grant group/other bits",
+                    )
         self.assertEqual(
-            self.read("deploy/dokploy/stack.yaml").count("mode: 0o400"), 2
+            len(numeric_modes),
+            2,
+            f"expected exactly the two backup secret modes, saw: {numeric_modes}",
         )
 
     def test_long_lived_services_use_environment_specific_placement(self):
