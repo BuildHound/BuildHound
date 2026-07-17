@@ -26,7 +26,8 @@ Store `DOKPLOY_TOKEN` only in each Environment; store
 An unset protection rule or Environment secret is a rollout blocker, not permission to use a
 repository-wide credential.
 
-The review lifecycle first requires `settings.getDokployVersion` to return exactly `v0.29.12`.
+The review lifecycle first requires `settings.getDokployVersion` to report at least `v0.29.12`
+(older Dokploy releases fail closed; newer releases warn and proceed).
 The client then targets Dokploy's documented `x-api-key` API (`compose.create`, `compose.update`,
 `compose.one`, `compose.deploy`, `compose.cleanQueues`, `compose.stop`, and
 Application update/deploy; checked against v0.29.12 on 2026-07-13). Before production, record the installed Dokploy version and verify in staging: Stack

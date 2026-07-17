@@ -138,7 +138,7 @@ class ReviewPolicyTest(unittest.TestCase):
 
         client = (ROOT / "deploy/dokploy/lib/review.sh").read_text()
         self.assertIn("settings.getDokployVersion", client)
-        self.assertIn("_review_supported_dokploy_version=v0.29.12", client)
+        self.assertIn("_review_minimum_dokploy_version=v0.29.12", client)
         self.assertNotIn("docker.getStackContainersByAppName", client)
         cli = (ROOT / "deploy/dokploy/dokploy.sh").read_text()
         cli_review = cli.index("cmd_deploy_review()")

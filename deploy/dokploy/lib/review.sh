@@ -9,17 +9,54 @@ source "$_review_lib_dir/common.sh"
 source "$_review_lib_dir/api.sh"
 _review_stack_template=$_review_lib_dir/../review-stack.yaml
 _review_anchor_template=$_review_lib_dir/../review-anchor.yaml
-_review_supported_dokploy_version=v0.29.12
+# Design-2 version gate: the review client is validated against this documented
+# minimum Dokploy version. Older releases fail closed; this and newer releases
+# proceed, and a newer-than-baseline release warns (plan-091 tripwire — nothing
+# downstream observes what a newer Dokploy renders).
+_review_minimum_dokploy_version=v0.29.12
 readonly _review_lib_dir _review_stack_template _review_anchor_template
-readonly _review_supported_dokploy_version
+readonly _review_minimum_dokploy_version
+
+# Compares two vMAJOR.MINOR.PATCH strings by numeric segment. Prints -1, 0, or 1
+# for lhs less-than / equal / greater-than rhs; returns 2 if either side is not
+# a vN.N.N triple. Numeric per segment on purpose: a lexical compare orders
+# 0.29.9 after 0.29.12.
+_review_compare_dokploy_version() {
+  local lhs=${1#v} rhs=${2#v} old_ifs i
+  local -a lparts rparts
+  [[ $lhs =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $rhs =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 2
+  old_ifs=$IFS
+  IFS=.
+  # Intentional word splitting on the validated dotted triple.
+  # shellcheck disable=SC2206
+  lparts=($lhs)
+  # shellcheck disable=SC2206
+  rparts=($rhs)
+  IFS=$old_ifs
+  for i in 0 1 2; do
+    if ((10#${lparts[i]} < 10#${rparts[i]})); then printf '%s\n' -1; return 0; fi
+    if ((10#${lparts[i]} > 10#${rparts[i]})); then printf '%s\n' 1; return 0; fi
+  done
+  printf '%s\n' 0
+}
 
 _review_require_supported_dokploy_version() {
-  local response
+  local response version comparison
   response=$(dokploy_api GET settings.getDokployVersion) || return 1
-  if ! jq -e --arg expected "$_review_supported_dokploy_version" \
-      'type == "string" and . == $expected' <<< "$response" >/dev/null; then
-    die "review lifecycle requires Dokploy $_review_supported_dokploy_version"
+  if ! version=$(jq -er 'select(type == "string")' <<< "$response"); then
+    die "review lifecycle could not read the reported Dokploy version"
     return 1
+  fi
+  if ! comparison=$(_review_compare_dokploy_version "$version" "$_review_minimum_dokploy_version"); then
+    die "review lifecycle received an unrecognized Dokploy version"
+    return 1
+  fi
+  if [[ $comparison == -1 ]]; then
+    die "review lifecycle requires Dokploy $_review_minimum_dokploy_version or newer"
+    return 1
+  fi
+  if [[ $comparison == 1 ]]; then
+    printf '%s\n' "warning: Dokploy $version is newer than the validated baseline $_review_minimum_dokploy_version; proceeding" >&2
   fi
 }
 
