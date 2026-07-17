@@ -70,11 +70,45 @@ jobs:
               .base.ref == $base
             )][0].number
           ' <<<"$pulls")
-          if gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' | grep -Fx deploy-review; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-          else
+          head_sha=$(jq -er --arg repository "$GITHUB_REPOSITORY" --arg base "$DEFAULT_BRANCH" --arg sha "$GITHUB_SHA" '
+            [.[] | select(
+              .merged_at != null and .merge_commit_sha == $sha and
+              .head.repo.full_name == $repository and .base.repo.full_name == $repository and
+              .base.ref == $base
+            )][0].head.sha | select(type == "string" and test("^[0-9a-f]{40}$"))
+          ' <<<"$pulls")
+          if ! gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' | grep -Fx deploy-review; then
             echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # A label alone is insufficient: promotion consumes the newest
+          # exact-context status on the merged PR's *head* commit, then
+          # verifies that it points at a successful protected review run.
+          # Reruns leave status history, so selecting exactly one record would
+          # incorrectly reject a valid later proof.
+          statuses=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/$head_sha/statuses?per_page=100")
+          proof=$(jq -se --arg context "buildhound/review-deployed/pr-$pr" '
+            [ .[][] | select(.context == $context) ]
+            | sort_by(.created_at) | last // empty
+          ' <<<"$statuses")
+          state=$(jq -er '.state | select(type == "string")' <<<"$proof")
+          creator=$(jq -er '.creator.login | select(type == "string")' <<<"$proof")
+          target_url=$(jq -er '.target_url | select(type == "string")' <<<"$proof")
+          test "$state" = success
+          test "$creator" = 'github-actions[bot]'
+          [[ "$target_url" =~ ^https://github\.com/${GITHUB_REPOSITORY}/actions/runs/([0-9]+)$ ]]
+          run_id=${BASH_REMATCH[1]}
+          run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id")
+          jq -e --arg repository "$GITHUB_REPOSITORY" --arg sha "$head_sha" --argjson pr "$pr" '
+            .status == "completed" and .conclusion == "success" and
+            .event == "pull_request_target" and
+            .path == ".github/workflows/review-environment.yml" and
+            .repository.full_name == $repository and
+            ((.pull_requests? | if type == "array" and length > 0 then
+              any(.number == $pr and .head.sha == $sha) else true end))
+          ' <<<"$run" >/dev/null
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
   publish:
     needs: qualify
     if: github.event_name == 'push' && needs.qualify.outputs.deploy == 'true'
@@ -355,6 +389,8 @@ jobs:
           DOKPLOY_REGISTRY_ID: ${{ secrets.DOKPLOY_REGISTRY_ID }}
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
           SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
+          BUILDHOUND_SITE_URL: ${{ vars.BUILDHOUND_SITE_URL }}
+          BUILDHOUND_DASHBOARD_URL: ${{ vars.BUILDHOUND_DASHBOARD_URL }}
           GH_TOKEN: ${{ github.token }}
           BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}
           ROLLBACK_COMPATIBLE: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_compatibility_attested || false }}
@@ -397,6 +433,9 @@ jobs:
             --compose-id "$COMPOSE_ID" \
             --app-role staging \
             --site-application-id "$SITE_APPLICATION_ID" \
+            --site-url "$BUILDHOUND_SITE_URL" \
+            --site-dashboard-url "$BUILDHOUND_DASHBOARD_URL" \
+            --site-noindex true \
             "${compatibility[@]}" "${bootstrap[@]}" \
             "${predecessor[@]}" > deployment-evidence.json
           jq -e '.siteDeploymentId | type == "string" and length > 0' deployment-evidence.json >/dev/null
@@ -409,6 +448,7 @@ jobs:
           # Pinned here, not read from the Dokploy environment: the check must
           # stay independent of the environment it audits (plan 095).
           BUILDHOUND_EXPECTED_ROBOTS_HEADER: "noindex, nofollow"
+          BUILDHOUND_EXPECT_NOINDEX: true
         run: deploy/dokploy/verify-release.sh
   deploy-production:
     needs: [publish, resolve_dispatch, deploy-staging]

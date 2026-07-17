@@ -29,6 +29,7 @@ Commands:
   require-manual-current --compose-id ID
   staging-bootstrap-state --compose-id ID
   deploy-release RELEASE --compose-id ID (--site-application-id ID | --skip-site) --app-role ROLE [OPTIONS]
+    staging site target: --site-url HTTPS_URL --site-dashboard-url HTTPS_URL --site-noindex true|false
   deploy-review [OPTIONS]
   count-reviews --base-repo REPO --environment-id ID [--exclude-pr PR]
   list-reviews --base-repo REPO --environment-id ID
@@ -74,6 +75,17 @@ require_app_role() {
     staging|prod) ;;
     *) fail "app role must be staging or prod" ;;
   esac
+}
+
+require_site_url() {
+  local host
+  case "${1-}" in https://*/*|https://|'') fail "site URL is invalid"; return 1 ;; https://*) ;; *) fail "site URL is invalid"; return 1 ;; esac
+  host=${1#https://}
+  case "$host" in ''|.*|*.) fail "site URL is invalid"; return 1 ;; *[!A-Za-z0-9.-]*) fail "site URL is invalid"; return 1 ;; esac
+}
+
+require_site_noindex() {
+  case "${1-}" in true|false) ;; *) fail "site noindex value is invalid" ;; esac
 }
 
 deployment_ids() {
@@ -252,10 +264,13 @@ require_exact_release_compose_state() {
 
 require_exact_release_application_state() {
   local state_file=${1-} original_file=${2-} application_id=${3-}
-  local image=${4-} registry_host=${5-} app_role=${6-}
-  if [ "$#" -ne 6 ]; then return 2; fi
+  local image=${4-} registry_host=${5-} app_role=${6-} environment_id=${7-}
+  local server_id=${8-} site_url=${9-} dashboard_url=${10-} noindex=${11-}
+  if [ "$#" -ne 11 ]; then return 2; fi
   jq -e --slurpfile original "$original_file" --arg id "$application_id" \
-    --arg image "$image" --arg host "$registry_host" --arg appRole "$app_role" '
+    --arg image "$image" --arg host "$registry_host" --arg appRole "$app_role" \
+    --arg environmentId "$environment_id" --arg serverId "$server_id" \
+    --arg siteUrl "$site_url" --arg dashboardUrl "$dashboard_url" --arg noindex "$noindex" '
     . as $actual |
     $original[0] as $before |
     ($before | type) == "object" and
@@ -264,6 +279,20 @@ require_exact_release_application_state() {
       "buildRegistry","rollbackRegistry"] - ($actual | keys) | length) == 0 and
     $actual.applicationId == $id and $actual.dockerImage == $image and
     $actual.sourceType == "docker" and $actual.autoDeploy == false and
+    (if $siteUrl == "" then true else
+      $actual.environmentId == $environmentId and
+      (if $serverId == "" then $actual.serverId == null else $actual.serverId == $serverId end) and
+      ($actual.domains | type) == "array" and
+      ($actual.domains | length) == 1 and
+      ($actual.domains[0].host? == ($siteUrl | ltrimstr("https://"))) and
+      ($actual.env | type) == "string" and
+      ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_HOST="))) == ["BUILDHOUND_SITE_HOST=" + ($siteUrl | ltrimstr("https://"))]) and
+      ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_DASHBOARD_URL="))) == ["BUILDHOUND_SITE_DASHBOARD_URL=" + $dashboardUrl]) and
+      ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_NOINDEX="))) == ["BUILDHOUND_SITE_NOINDEX=" + $noindex]) and
+      $actual.environmentId == $before.environmentId and
+      $actual.serverId == $before.serverId and
+      $actual.domains == $before.domains and $actual.env == $before.env
+    end) and
     $actual.registryUrl == $host and
     ($actual.username | type) == "string" and ($actual.username | length) > 0 and
     ($actual.password | type) == "string" and ($actual.password | length) > 0 and
@@ -274,6 +303,24 @@ require_exact_release_application_state() {
     $actual.registry == null and $actual.buildRegistry == null and
     $actual.rollbackRegistry == null and
     $actual.placementSwarm == {Constraints:["node.labels.role==" + $appRole]}
+  ' "$state_file" >/dev/null 2>&1
+}
+
+require_site_application_binding() {
+  local state_file=$1 application_id=$2 environment_id=$3 server_id=$4
+  local site_url=$5 dashboard_url=$6 noindex=$7
+  jq -e --arg id "$application_id" --arg environmentId "$environment_id" --arg serverId "$server_id" \
+    --arg siteUrl "$site_url" --arg dashboardUrl "$dashboard_url" --arg noindex "$noindex" '
+    type == "object" and .applicationId == $id and .environmentId == $environmentId and
+    (if $serverId == "" then .serverId == null else .serverId == $serverId end) and
+    (if $siteUrl == "" then true else
+      (.domains | type) == "array" and (.domains | length) == 1 and
+      (.domains[0].host? == ($siteUrl | ltrimstr("https://"))) and
+      (.env | type) == "string" and
+      (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_HOST="))) == ["BUILDHOUND_SITE_HOST=" + ($siteUrl | ltrimstr("https://"))]) and
+      (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_DASHBOARD_URL="))) == ["BUILDHOUND_SITE_DASHBOARD_URL=" + $dashboardUrl]) and
+      (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_NOINDEX="))) == ["BUILDHOUND_SITE_NOINDEX=" + $noindex])
+    end)
   ' "$state_file" >/dev/null 2>&1
 }
 
@@ -362,24 +409,27 @@ cmd_staging_bootstrap_state() {
 cmd_deploy_release() (
   if [ "$#" -lt 1 ]; then usage; return 2; fi
   local release=$1 compose_id='' site_application_id='' proven_release_id='' base_repo=''
-  local expected_current_release_id='' app_role=''
+  local expected_current_release_id='' app_role='' site_url='' site_dashboard_url='' site_noindex=''
   local manifest="$SCRIPT_DIR/stack.yaml" volume_guard="$SCRIPT_DIR/volume-guard.sh"
   local rollback_compatible=false bootstrap_manual_current=false skip_site=false
   local rid title expected manifest_hash guard_hash deployments current
   local old_compose old_site body server_image site_image registry_host release_image image_host key
   local compose_deployment site_deployment rc has_success compose_server_id
   local workdir stack_file app_file app_before_file compose_state_file compose_before_file
-  local migration history release_schema manifest_field
+  local migration history release_schema manifest_field compose_environment_id
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --base-repo|--compose-id|--site-application-id|--app-role|--proven-release-id|--expected-current-release-id|--manifest|--volume-guard)
+      --base-repo|--compose-id|--site-application-id|--app-role|--site-url|--site-dashboard-url|--site-noindex|--proven-release-id|--expected-current-release-id|--manifest|--volume-guard)
         if [ "$#" -lt 2 ]; then usage; return 2; fi
         case "$1" in
           --base-repo) base_repo=$2 ;;
           --compose-id) compose_id=$2 ;;
           --site-application-id) site_application_id=$2 ;;
           --app-role) app_role=$2 ;;
+          --site-url) site_url=$2 ;;
+          --site-dashboard-url) site_dashboard_url=$2 ;;
+          --site-noindex) site_noindex=$2 ;;
           --proven-release-id) proven_release_id=$2 ;;
           --expected-current-release-id) expected_current_release_id=$2 ;;
           --manifest) manifest=$2 ;;
@@ -401,11 +451,23 @@ cmd_deploy_release() (
     fail "skip-site conflicts with a site application ID"
     return 2
   fi
+  if [ "$skip_site" = true ] && { [ -n "$site_url" ] || [ -n "$site_dashboard_url" ] || [ -n "$site_noindex" ]; }; then
+    fail "skip-site conflicts with site configuration"
+    return 2
+  fi
   if [ -z "$base_repo" ] || [ -z "$compose_id" ] || [ -z "$app_role" ]; then usage; return 2; fi
   if [ "$skip_site" != true ] && [ -z "$site_application_id" ]; then usage; return 2; fi
+  if [ "$skip_site" != true ] && [ "$app_role" = staging ] && { [ -z "$site_url" ] || [ -z "$site_dashboard_url" ] || [ -z "$site_noindex" ]; }; then usage; return 2; fi
+  if { [ -n "$site_url" ] || [ -n "$site_dashboard_url" ] || [ -n "$site_noindex" ]; } &&
+     { [ -z "$site_url" ] || [ -z "$site_dashboard_url" ] || [ -z "$site_noindex" ]; }; then usage; return 2; fi
   require_object_id "Compose ID" "$compose_id" || return 2
   if [ "$skip_site" != true ]; then
     require_object_id "site application ID" "$site_application_id" || return 2
+    if [ -n "$site_url" ]; then
+      require_site_url "$site_url" || return 2
+      require_site_url "$site_dashboard_url" || return 2
+      require_site_noindex "$site_noindex" || return 2
+    fi
   fi
   require_app_role "$app_role" || return 2
   if [ -n "$proven_release_id" ]; then require_release_id "$proven_release_id" || return 2; fi
@@ -499,18 +561,42 @@ cmd_deploy_release() (
     fail "Dokploy returned an invalid Compose deployment target"
     return 1
   }
+  if [ -n "$site_url" ]; then
+    compose_environment_id=$(jq -er --arg id "$compose_id" '
+      if type != "object" or .composeId != $id or (.environmentId | type) != "string" or
+         (.environmentId | test("^[A-Za-z0-9_-]{1,128}\\z") | not) then
+        error("invalid Compose environment")
+      else .environmentId end
+    ' "$compose_before_file") || {
+      fail "Dokploy returned an invalid Compose deployment target"
+      return 1
+    }
+  fi
   dokploy_require_integrations "$base_repo" "$registry_host" "$compose_server_id" || return 1
   if [ "$skip_site" != true ]; then
     dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_before_file" || return 1
-    if ! jq -e --arg id "$site_application_id" --arg host "$registry_host" '
+    if ! jq -e --arg id "$site_application_id" --arg host "$registry_host" --arg siteUrl "$site_url" '
       type == "object" and .applicationId == $id and .sourceType == "docker" and
       has("autoDeploy") and (.autoDeploy | type) == "boolean" and
       .registryUrl == $host and
       (.username | type) == "string" and (.username | length) > 0 and
-      (.password | type) == "string" and (.password | length) > 0
+      (.password | type) == "string" and (.password | length) > 0 and
+      (if $siteUrl == "" then true else
+        (.environmentId | type) == "string" and
+        (.serverId == null or ((.serverId | type) == "string" and
+          (.serverId | test("^[A-Za-z0-9_-]{1,128}\\z")))) and
+        (.env | type) == "string"
+      end)
     ' "$app_before_file" >/dev/null; then
       fail "site Application lacks Dokploy v0.29 Docker-provider pull credentials"
       return 1
+    fi
+    if [ -n "$site_url" ]; then
+      require_site_application_binding "$app_before_file" "$site_application_id" "$compose_environment_id" \
+        "$compose_server_id" "$site_url" "$site_dashboard_url" "$site_noindex" || {
+        fail "site Application is not bound to the release Compose target or expected site configuration"
+        return 1
+      }
     fi
   fi
   deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return
@@ -608,7 +694,8 @@ cmd_deploy_release() (
     dokploy_api POST application.update "$body" >/dev/null || return
     dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
     require_exact_release_application_state "$app_file" "$app_before_file" \
-      "$site_application_id" "$site_image" "$registry_host" "$app_role" || {
+      "$site_application_id" "$site_image" "$registry_host" "$app_role" "$compose_environment_id" \
+      "$compose_server_id" "$site_url" "$site_dashboard_url" "$site_noindex" || {
       fail "Dokploy persisted unexpected release Application state"
       return 1
     }
@@ -642,7 +729,8 @@ cmd_deploy_release() (
     fi
     dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
     require_exact_release_application_state "$app_file" "$app_before_file" \
-      "$site_application_id" "$site_image" "$registry_host" "$app_role" || {
+      "$site_application_id" "$site_image" "$registry_host" "$app_role" "$compose_environment_id" \
+      "$compose_server_id" "$site_url" "$site_dashboard_url" "$site_noindex" || {
       fail "deployed site image, pull credentials, or registry isolation differs from release"
       return 1
     }

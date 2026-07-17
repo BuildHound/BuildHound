@@ -274,6 +274,21 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('--data-binary "@$request_payload"', verify)
         self.assertIn('v1/builds/$build_id', verify)
 
+    def test_staging_release_verification_proves_site_response_and_dashboard_link(self):
+        verify = self.read("deploy/dokploy/verify-release.sh")
+        deploy = self.read(".github/workflows/deploy.yml")
+        staging = deploy[deploy.index("  deploy-staging:") : deploy.index("  deploy-production:")]
+        self.assertIn('site_headers=$(mktemp)', verify)
+        self.assertIn('site_body=$(mktemp)', verify)
+        self.assertIn("--dump-header \"$site_headers\" --output \"$site_body\"", verify)
+        self.assertIn('[[ "$site_status" =~ ^2[0-9]{2}$ ]]', verify)
+        self.assertIn('attributes.get("href") == sys.argv[2]', verify)
+        self.assertIn('BUILDHOUND_EXPECT_NOINDEX', verify)
+        self.assertIn("X-Robots-Tag: noindex, nofollow", verify)
+        self.assertIn('BUILDHOUND_SITE_URL/robots.txt', verify)
+        self.assertIn("printf 'User-agent: *\\nDisallow: /\\n' | cmp -s", verify)
+        self.assertIn("BUILDHOUND_EXPECT_NOINDEX: true", staging)
+
     def test_release_verification_validates_exact_https_origins_before_curl(self):
         verify = self.read("deploy/dokploy/verify-release.sh")
         validation = verify.index("from urllib.parse import urlsplit")
@@ -333,15 +348,18 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         site_noindex = workflow.index(
             "X-Robots-Tag: noindex, nofollow", site_status
         )
+        site_link = workflow.index("review site dashboard link does not match", site_noindex)
         dashboard_probe = workflow.index(
             'status=$(curl "${common[@]}" --dump-header /tmp/review-dashboard-headers',
-            site_noindex,
+            site_link,
         )
         ingest = workflow.index('"$dashboard_url/v1/builds"', dashboard_probe)
         read = workflow.index('"$dashboard_url/v1/builds/$build_id"', ingest)
         attestation = workflow.index("name: review-attestation", read)
         self.assertLess(site_probe, site_status)
         self.assertLess(site_status, site_noindex)
+        self.assertLess(site_noindex, site_link)
+        self.assertLess(site_link, dashboard_probe)
         self.assertLess(site_noindex, dashboard_probe)
         self.assertLess(dashboard_probe, ingest)
         self.assertLess(ingest, read)
@@ -407,6 +425,14 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         )
         self.assertIn('.base.ref == $base', workflow)
         self.assertIn("grep -Fx deploy-review", workflow)
+        self.assertIn('commits/$head_sha/statuses?per_page=100', workflow)
+        self.assertIn('context "buildhound/review-deployed/pr-$pr"', workflow)
+        self.assertIn('sort_by(.created_at) | last', workflow)
+        self.assertIn("test \"$state\" = success", workflow)
+        self.assertIn("test \"$creator\" = 'github-actions[bot]'", workflow)
+        self.assertIn('actions/runs/$run_id', workflow)
+        self.assertIn('.event == "pull_request_target"', workflow)
+        self.assertIn('.path == ".github/workflows/review-environment.yml"', workflow)
         self.assertIn('echo "deploy=false" >> "$GITHUB_OUTPUT"', workflow)
         self.assertIn("needs.qualify.outputs.deploy == 'true'", workflow)
         # Role -> manifest binding lives solely in job wiring (the plan-090
@@ -416,6 +442,10 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         staging_body = workflow[staging_job:production_job]
         production_body = workflow[production_job:]
         self.assertIn("--app-role staging", staging_body)
+        self.assertIn('--site-application-id "$SITE_APPLICATION_ID"', staging_body)
+        self.assertIn('--site-url "$BUILDHOUND_SITE_URL"', staging_body)
+        self.assertIn('--site-dashboard-url "$BUILDHOUND_DASHBOARD_URL"', staging_body)
+        self.assertIn("--site-noindex true", staging_body)
         self.assertIn("--manifest /tmp/release/staging-stack.yaml", staging_body)
         self.assertNotIn("--manifest /tmp/release/stack.yaml", staging_body)
         self.assertIn("--app-role prod", production_body)
