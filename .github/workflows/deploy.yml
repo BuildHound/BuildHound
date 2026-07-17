@@ -39,7 +39,7 @@ jobs:
   qualify:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    permissions: {contents: read, pull-requests: read}
+    permissions: {contents: read, pull-requests: read, actions: read}
     outputs:
       deploy: ${{ steps.pr.outputs.deploy }}
     steps:
@@ -77,6 +77,13 @@ jobs:
               .base.ref == $base
             )][0].head.sha | select(type == "string" and test("^[0-9a-f]{40}$"))
           ' <<<"$pulls")
+          head_branch=$(jq -er --arg repository "$GITHUB_REPOSITORY" --arg base "$DEFAULT_BRANCH" --arg sha "$GITHUB_SHA" '
+            [.[] | select(
+              .merged_at != null and .merge_commit_sha == $sha and
+              .head.repo.full_name == $repository and .base.repo.full_name == $repository and
+              .base.ref == $base
+            )][0].head.ref | select(type == "string" and length > 0)
+          ' <<<"$pulls")
           if ! gh api "repos/${GITHUB_REPOSITORY}/issues/$pr/labels" --jq '.[].name' | grep -Fx deploy-review; then
             echo "deploy=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -90,7 +97,7 @@ jobs:
           statuses=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/$head_sha/statuses?per_page=100")
           proof=$(jq -se --arg context "buildhound/review-deployed/pr-$pr" '
             [ .[][] | select(.context == $context) ]
-            | sort_by(.created_at) | last // empty
+            | sort_by(.updated_at, .id) | last // empty
           ' <<<"$statuses")
           state=$(jq -er '.state | select(type == "string")' <<<"$proof")
           creator=$(jq -er '.creator.login | select(type == "string")' <<<"$proof")
@@ -99,15 +106,35 @@ jobs:
           test "$creator" = 'github-actions[bot]'
           [[ "$target_url" =~ ^https://github\.com/${GITHUB_REPOSITORY}/actions/runs/([0-9]+)$ ]]
           run_id=${BASH_REMATCH[1]}
+          workflow_id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/review-environment.yml" --jq '.id')
+          [[ "$workflow_id" =~ ^[0-9]+$ ]]
           run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$run_id")
-          jq -e --arg repository "$GITHUB_REPOSITORY" --arg sha "$head_sha" --argjson pr "$pr" '
+          run_attempt=$(jq -er '.run_attempt | select(type == "number" and . >= 1 and floor == .)' <<<"$run")
+          jq -e --arg repository "$GITHUB_REPOSITORY" --arg sha "$head_sha" --arg branch "$head_branch" --argjson workflow_id "$workflow_id" '
             .status == "completed" and .conclusion == "success" and
             .event == "pull_request_target" and
-            .path == ".github/workflows/review-environment.yml" and
-            .repository.full_name == $repository and
-            ((.pull_requests? | if type == "array" and length > 0 then
-              any(.number == $pr and .head.sha == $sha) else true end))
+            .workflow_id == $workflow_id and .repository.full_name == $repository and
+            .head_sha == $sha and .head_branch == $branch
           ' <<<"$run" >/dev/null
+          proof_dir=$(mktemp -d)
+          trap 'rm -rf "$proof_dir"' EXIT
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name review-attestation --dir "$proof_dir"
+          proof_file=$(find "$proof_dir" -type f -name review.json -print -quit)
+          test -n "$proof_file"
+          jq -e -s --arg repository "$GITHUB_REPOSITORY" --argjson pr "$pr" \
+            --arg sha "$head_sha" --arg run_id "$run_id" --argjson run_attempt "$run_attempt" '
+            length == 1 and .[0] as $proof and
+            ($proof | type) == "object" and
+            ($proof | keys) == ["attemptId","composeId","deploymentId","headSha","pr","repository","runAttempt","runId","schema","serverDigest","serverImage","siteDigest","siteImage"] and
+            $proof.schema == 1 and $proof.repository == $repository and $proof.pr == $pr and
+            $proof.headSha == $sha and $proof.runId == $run_id and $proof.runAttempt == $run_attempt and
+            $proof.attemptId == ($run_id + "." + ($run_attempt | tostring)) and
+            ($proof.serverImage | type) == "string" and ($proof.siteImage | type) == "string" and
+            ($proof.serverDigest | type) == "string" and ($proof.serverDigest | test("^sha256:[0-9a-f]{64}$")) and
+            ($proof.siteDigest | type) == "string" and ($proof.siteDigest | test("^sha256:[0-9a-f]{64}$")) and
+            ($proof.serverImage | endswith("@" + $proof.serverDigest)) and
+            ($proof.siteImage | endswith("@" + $proof.siteDigest))
+          ' "$proof_file" >/dev/null
           echo "deploy=true" >> "$GITHUB_OUTPUT"
   publish:
     needs: qualify
@@ -436,8 +463,9 @@ jobs:
             --site-url "$BUILDHOUND_SITE_URL" \
             --site-dashboard-url "$BUILDHOUND_DASHBOARD_URL" \
             --site-noindex true \
+            --evidence-file deployment-evidence.json \
             "${compatibility[@]}" "${bootstrap[@]}" \
-            "${predecessor[@]}" > deployment-evidence.json
+            "${predecessor[@]}" > /tmp/deployment-result.json
           jq -e '.siteDeploymentId | type == "string" and length > 0' deployment-evidence.json >/dev/null
       - name: Verify public site and authenticated data path
         env:
@@ -450,6 +478,10 @@ jobs:
           BUILDHOUND_EXPECTED_ROBOTS_HEADER: "noindex, nofollow"
           BUILDHOUND_EXPECT_NOINDEX: true
         run: deploy/dokploy/verify-release.sh
+      - name: Upload deployment evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with: {name: staging-deployment-evidence, path: deployment-evidence.json, if-no-files-found: warn, retention-days: 90}
   deploy-production:
     needs: [publish, resolve_dispatch, deploy-staging]
     if: ${{ !cancelled() && needs.deploy-staging.result == 'success' && (github.event_name == 'push' || inputs.target == 'production') }}

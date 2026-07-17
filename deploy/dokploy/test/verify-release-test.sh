@@ -80,6 +80,15 @@ set -e
 test "$status" -ne 0
 test "$(wc -l < "$curl_log")" -eq 2
 
+: > "$curl_log"
+set +e
+TEST_SITE_HEADERS='X-Robots-Tag: noindex, nofollow
+X-Robots-Tag: noindex, nofollow' run_verify https://site.example.test https://dashboard.example.test >/dev/null 2>&1
+status=$?
+set -e
+test "$status" -ne 0
+test "$(wc -l < "$curl_log")" -eq 2
+
 # Staging's noindex header is exact, not merely present.
 : > "$curl_log"
 set +e
