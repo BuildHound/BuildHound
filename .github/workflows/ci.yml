@@ -86,8 +86,12 @@ jobs:
       #    (plan 094 §5) — ingest-scope only, fork-excluded, revocable.
       - name: Build
         env:
-          BUILDHOUND_SERVER_URL: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.BUILDHOUND_PROD_SERVER_URL || '' }}
-          BUILDHOUND_TOKEN: ${{ secrets.BUILDHOUND_PROD_INGEST_TOKEN }}
+          # DOGFOOD-namespaced (093 §3.2 review): the bare BUILDHOUND_SERVER_URL name is the
+          # plugin's plan-027 convention fallback for server.url and would arm uploads in the
+          # TestKit fixture builds nested inside `gradle build`; only the dogfood init script
+          # reads the _DOGFOOD_ names.
+          BUILDHOUND_DOGFOOD_SERVER_URL: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.BUILDHOUND_PROD_SERVER_URL || '' }}
+          BUILDHOUND_DOGFOOD_TOKEN: ${{ secrets.BUILDHOUND_PROD_INGEST_TOKEN }}
         run: gradle build -I .github/buildhound-dogfood.init.gradle.kts
 
       # The plugin writes the payload even when the build fails (spec §3.2), so upload it

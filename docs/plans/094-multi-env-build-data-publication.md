@@ -28,10 +28,12 @@ fan-out; backfilling review/staging gaps (only prod has spool-backed delivery).
 ## 3. Design
 
 **Production (authoritative record).** The plan-093 init script gets real values in the
-`build` job: `BUILDHOUND_SERVER_URL` = prod dashboard origin (repo variable
-`BUILDHOUND_PROD_SERVER_URL`), `BUILDHOUND_TOKEN` = **new ingest-scope-only token**
-minted on prod for the `buildhound` project, stored as repo secret
-`BUILDHOUND_PROD_INGEST_TOKEN`. Inline CI upload keeps the spool/retry path, so prod is
+`build` job: `BUILDHOUND_DOGFOOD_SERVER_URL` = prod dashboard origin (repo variable
+`BUILDHOUND_PROD_SERVER_URL`), `BUILDHOUND_DOGFOOD_TOKEN` = **new ingest-scope-only
+token** minted on prod for the `buildhound` project, stored as repo secret
+`BUILDHOUND_PROD_INGEST_TOKEN`. (The dogfood env contract is `_DOGFOOD_`-namespaced —
+093 §3.2 review — so the plugin's plan-027 convention fallback `BUILDHOUND_SERVER_URL`
+never sees job-level env and cannot arm uploads in nested TestKit fixture builds.) Inline CI upload keeps the spool/retry path, so prod is
 the loss-protected copy. *Implementation note:* the URL env is blanked for fork PRs with
 an expression-level same-repo condition — repo **variables**, unlike secrets, are
 readable from fork runs, and a URL without a token would make the plugin attempt (and
