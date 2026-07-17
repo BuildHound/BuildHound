@@ -73,12 +73,15 @@ jobs:
       # Production publication (plan 094): the init script wires server.url/server.token
       # from these env vars via providers.environmentVariable(...); the in-plugin upload
       # keeps the spool/retry path, so prod is the loss-protected copy of every CI build.
-      #  - Fork PRs: secrets are never exposed to fork runs, and the URL is blanked
-      #    explicitly below — repo *variables*, unlike secrets, are readable from fork
-      #    runs, and an URL without a token would make the plugin attempt (and soft-fail)
-      #    an unauthenticated upload instead of skipping. With both empty, UploadGate
-      #    skips with "no server configured" — that skip IS the fork gate (plan 094 §2);
-      #    no separate same-repo job conditional is needed.
+      #  - UploadGate keys on the URL alone — a blank token merely drops the Authorization
+      #    header and the plugin would POST unauthenticated — so the URL expression below
+      #    is the actual gate. It collapses to '' unless the prod token secret is present
+      #    AND the run is a main push or a same-repo PR. That covers fork PRs (no secrets;
+      #    repo *variables* ARE readable from fork runs, hence the explicit condition),
+      #    Dependabot PRs (variables but not repo secrets), and partial provisioning (URL
+      #    variable created before the token secret) — every one collapses to UploadGate's
+      #    clean "no server configured" skip instead of unauthenticated prod POSTs
+      #    (plan 094 §2); no separate same-repo job conditional is needed.
       #  - Variable/secret not yet minted: same clean skip, so this YAML is safe to merge
       #    before the owner creates BUILDHOUND_PROD_SERVER_URL /
       #    BUILDHOUND_PROD_INGEST_TOKEN (plan 094 §6).
@@ -90,7 +93,7 @@ jobs:
           # plugin's plan-027 convention fallback for server.url and would arm uploads in the
           # TestKit fixture builds nested inside `gradle build`; only the dogfood init script
           # reads the _DOGFOOD_ names.
-          BUILDHOUND_DOGFOOD_SERVER_URL: ${{ (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.BUILDHOUND_PROD_SERVER_URL || '' }}
+          BUILDHOUND_DOGFOOD_SERVER_URL: ${{ secrets.BUILDHOUND_PROD_INGEST_TOKEN != '' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) && vars.BUILDHOUND_PROD_SERVER_URL || '' }}
           BUILDHOUND_DOGFOOD_TOKEN: ${{ secrets.BUILDHOUND_PROD_INGEST_TOKEN }}
         run: gradle build -I .github/buildhound-dogfood.init.gradle.kts
 
@@ -174,7 +177,10 @@ jobs:
     #  - The publish script exits 0 on missing env (credentials not yet minted — this
     #    YAML is merge-safe before the owner creates BUILDHOUND_STAGING_SERVER_URL /
     #    BUILDHOUND_STAGING_INGEST_TOKEN), on 4xx, and on an unreachable staging: a dead
-    #    staging must never redden a PR.
+    #    staging must never redden a PR. Token-less same-repo contexts (Dependabot gets
+    #    variables but not repo secrets; partial provisioning) also land in that
+    #    missing-token skip — unlike the plugin path, the script checks the token before
+    #    sending, so no unauthenticated POST is ever fired from here.
     #  - continue-on-error additionally keeps step-level infrastructure failures
     #    (checkout, artifact download) from reddening the PR — the image-scan advisory
     #    precedent; gh-ci-babysitter surfaces continue-on-error failures, so breakage
@@ -192,6 +198,8 @@ jobs:
       # Both producer jobs upload if: always() with if-no-files-found: warn, so either
       # artifact may be missing; the pattern download tolerates that (zero matches is
       # not an error) and the find below handles an empty result.
+      # WARNING: do not add merge-multiple/flat-dir options — both artifacts contain a
+      # file literally named build-payload.json and would silently collapse to one.
       - name: Download payload artifacts
         uses: actions/download-artifact@v4
         with:
