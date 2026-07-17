@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-: "${BUILDHOUND_SITE_URL:?}" "${BUILDHOUND_DASHBOARD_URL:?}" "${BUILDHOUND_READ_TOKEN:?}" "${BUILDHOUND_INGEST_TOKEN:?}"
+: "${BUILDHOUND_SITE_URL:?}" "${BUILDHOUND_DASHBOARD_URL:?}" "${BUILDHOUND_READ_TOKEN:?}" "${BUILDHOUND_INGEST_TOKEN:?}" "${BUILDHOUND_EXPECTED_ROBOTS_HEADER:?}"
 python3 - "$BUILDHOUND_SITE_URL" "$BUILDHOUND_DASHBOARD_URL" <<'PY'
 import sys
 from urllib.parse import urlsplit
@@ -49,6 +49,19 @@ for _ in $(seq 1 20); do
 done
 # The server's health contract is JSON (Routes.kt: HealthResponse(status="ok")).
 test "$retry_ok" = true
+
+# The stack manifests default BUILDHOUND_ROBOTS_HEADER to "all", so a reset
+# staging Dokploy environment silently becomes indexable (plan 095). The
+# expectation is pinned per environment in deploy.yml, independent of the
+# Dokploy environment this audits. GET, not HEAD: the health contract above
+# only guarantees GET. A missing or duplicated header also mismatches.
+robots_header=$(curl -fsS -D - -o /dev/null "$BUILDHOUND_DASHBOARD_URL/health" \
+  | tr -d '\r' | awk 'tolower($0) ~ /^x-robots-tag:/ {sub(/^[^:]*:[ \t]*/, ""); print}')
+if [ "$robots_header" != "$BUILDHOUND_EXPECTED_ROBOTS_HEADER" ]; then
+  printf 'X-Robots-Tag mismatch: expected "%s", observed "%s"\n' \
+    "$BUILDHOUND_EXPECTED_ROBOTS_HEADER" "$robots_header" >&2
+  exit 1
+fi
 
 # Owner decision (plan 088): staging serves no site yet; the dashboard checks
 # stay mandatory. Only the exact value "true" skips.

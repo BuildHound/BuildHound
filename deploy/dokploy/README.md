@@ -74,6 +74,10 @@ deployment evidence.
    to `deploy-release --app-role`; deploy exact image digests explicitly. Use the staging
    manifest—not the production manifest—for the one-time raw manual staging deployment.
 4. Set `BUILDHOUND_ROBOTS_HEADER=noindex, nofollow` in staging and `all` in production.
+   This is enforced post-deploy: `verify-release.sh` asserts the served `X-Robots-Tag`
+   against `BUILDHOUND_EXPECTED_ROBOTS_HEADER`, which the deploy workflow pins per
+   environment, so a reset Dokploy environment (defaulting the label to `all`) fails
+   staging verification instead of silently becoming indexable.
    Reject `storage: IN-MEMORY` in logs. Verify authenticated DB read/write, restart
    persistence, a ceiling-sized public ingest returning 202, and a Traefik 429 response.
 5. Bootstrap with `openssl rand -hex 32`, then remove bootstrap values after first boot.
