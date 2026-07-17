@@ -105,7 +105,20 @@ adopting it buys no shrink and adds a Node supply-chain surface.
    idempotent-proceed semantics; the port required teaching the test double
    to model the scrub deployment appearing, a harness gap, not a behavior
    change).
-5. **Kept, explicitly out of 091 scope** (audit "unsure" items resolved to
+5. **Design 3 (token-env composite action) retired as net-negative (owner
+   decision, 2026-07-17).** The boilerplate is 2 lines × 9 sites; a composite
+   action cannot inject env into sibling steps, so the only shapes are a
+   `$GITHUB_ENV` writer — which makes `DOKPLOY_TOKEN` ambient to every later
+   step of the calling job, widening today's per-step least-privilege
+   scoping — or a command-wrapper that swallows the multi-line run scripts.
+   Both cost more lines than they save and degrade security or readability.
+   The *real* dedup plan 090 divergence 7 pointed here (the repeated
+   render→backup→deploy→verify step sequences in the two deploy jobs) is
+   deliberately deferred to its own future plan: that surface is the
+   freshest-live-verified code in the repo and is concurrently being
+   reshaped by the plan-095/096 site rollout.
+
+6. **Kept, explicitly out of 091 scope** (audit "unsure" items resolved to
    keep): exact-attempt bookkeeping and the reconciler's legacy empty-attempt
    fallbacks (live on every converge, test-pinned, and a Dokploy
    data-migration question), `current_release` legacy/bare-title parsing
