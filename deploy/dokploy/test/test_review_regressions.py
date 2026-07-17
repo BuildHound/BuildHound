@@ -285,7 +285,9 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('test "$site_status" = 200', verify)
         self.assertIn('attributes.get("href") == sys.argv[2]', verify)
         self.assertIn('BUILDHOUND_EXPECT_NOINDEX', verify)
-        self.assertIn("X-Robots-Tag: noindex, nofollow", verify)
+        self.assertIn('tolower($0) ~ /^x-robots-tag:/', verify)
+        self.assertIn('value == "noindex, nofollow"', verify)
+        self.assertNotIn("IGNORECASE", verify)
         self.assertIn("count=0; exact=0", verify)
         self.assertIn('BUILDHOUND_SITE_URL/robots.txt', verify)
         self.assertIn('test "$robots_status" = 200', verify)
@@ -356,9 +358,7 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         workflow = self.read(".github/workflows/review-environment.yml")
         site_probe = workflow.index('status=$(curl "${common[@]}" --dump-header /tmp/review-site-headers')
         site_status = workflow.index('test "$status" = 200', site_probe)
-        site_noindex = workflow.index(
-            "X-Robots-Tag: noindex, nofollow", site_status
-        )
+        site_noindex = workflow.index('value == "noindex, nofollow"', site_status)
         site_link = workflow.index("review site dashboard link does not match", site_noindex)
         dashboard_probe = workflow.index(
             'status=$(curl "${common[@]}" --dump-header /tmp/review-dashboard-headers',
@@ -400,6 +400,10 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
 
         self.assertEqual(
             classify("X-Robots-Tag: noindex, nofollow\n"),
+            "1:1",
+        )
+        self.assertEqual(
+            classify("x-robots-tag: noindex, nofollow\n"),
             "1:1",
         )
         self.assertEqual(
