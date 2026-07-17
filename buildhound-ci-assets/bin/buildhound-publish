@@ -8,8 +8,14 @@
 #
 # The server URL comes from --server or BUILDHOUND_SERVER_URL (URLs are not secret, so a
 # flag is fine). The token comes ONLY from the BUILDHOUND_TOKEN environment variable and
-# rides an Authorization header — never a script flag, so it never lands on this script's
-# command line or in `ps`, and it is never echoed (same contract as buildhound-metric).
+# is never echoed. Precisely (094 §3.2 review): env-only input keeps the token off THIS
+# script's argv; the Authorization header it builds IS on the spawned curl process's argv
+# and visible in a same-host process list while the request runs — the same trade-off
+# buildhound-metric ships, accepted on ephemeral single-tenant CI runners.
+#
+# Requests are bounded (--connect-timeout 10 --max-time 20, mirroring the review
+# workflow's curl defaults): a hung server must never stall the calling job — the review
+# path runs under a global, non-preemptible concurrency lock.
 #
 # Delivery posture (plan 094): staging/review copies are non-authoritative — production
 # gets a direct, spool-backed upload from the plugin — so this script NEVER fails the
@@ -65,6 +71,7 @@ for payload in "$@"; do
     # Token is passed via a header from the env — never on this script's command line.
     http_code="$(
         curl -s -o "$response" -w '%{http_code}' \
+            --connect-timeout 10 --max-time 20 \
             -X POST "$endpoint" \
             -H "Authorization: Bearer ${BUILDHOUND_TOKEN}" \
             -H "Content-Type: application/json" \
