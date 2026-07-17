@@ -23,7 +23,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "$url" in
-  https://site.example.test/) body=${TEST_SITE_BODY-'<a class="primary" href="https://dashboard.example.test">Open dashboard</a> Track every Gradle build'}; code=200; headers_value=${TEST_SITE_HEADERS-'X-Robots-Tag: noindex, nofollow'} ;;
+  https://site.example.test/) body=${TEST_SITE_BODY-'<a class="primary" href="https://dashboard.example.test">Open dashboard</a> Track every Gradle build'}; code=200; headers_value=${TEST_SITE_HEADERS-'x-robots-tag: noindex, nofollow'} ;;
   https://site.example.test/robots.txt)
     count=$(sed -n '1p' "$TEST_ROBOTS_COUNT_FILE"); count=${count:-0}; count=$((count + 1))
     printf '%s\n' "$count" > "$TEST_ROBOTS_COUNT_FILE"

@@ -108,7 +108,7 @@ if parser.matches != 1:
 PY
       # Exactly one total X-Robots-Tag field is accepted; a duplicate or a
       # different value can be interpreted differently by intermediaries.
-      test "$(tr -d '\r' < "$site_headers" | awk 'BEGIN { IGNORECASE=1; count=0; exact=0 } /^X-Robots-Tag:/ { count++; if ($0 == "X-Robots-Tag: noindex, nofollow") exact++ } END { print count ":" exact }')" = '1:1' || return 1
+      test "$(tr -d '\r' < "$site_headers" | awk 'BEGIN { count=0; exact=0 } tolower($0) ~ /^x-robots-tag:/ { count++; value=$0; sub(/^[^:]*:[ \t]*/, "", value); if (value == "noindex, nofollow") exact++ } END { print count ":" exact }')" = '1:1' || return 1
       robots_status=$(curl -sS --dump-header "$robots_headers" --output "$robots_body" \
         --connect-timeout 10 --max-time 20 --write-out '%{http_code}' \
         "$BUILDHOUND_SITE_URL/robots.txt" 2>/dev/null) || return 1
