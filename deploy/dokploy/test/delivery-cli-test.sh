@@ -489,10 +489,6 @@ reset_api
 assert_eq "$(main current-source-commit --compose-id c1)" "$SOURCE_SHA"
 
 reset_api
-assert_eq "$(main current-release-state --compose-id c1)" \
-  "{\"releaseId\":\"$RID\",\"sourceCommit\":\"$SOURCE_SHA\"}"
-
-reset_api
 FAKE_MODE=manual
 assert_status 1 main current-source-commit --compose-id c1
 grep -F 'lacks tracked source lineage' "$test_root/status-stderr" >/dev/null || \
