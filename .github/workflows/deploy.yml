@@ -355,7 +355,6 @@ jobs:
           DOKPLOY_REGISTRY_ID: ${{ secrets.DOKPLOY_REGISTRY_ID }}
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
           SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
-          SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
           GH_TOKEN: ${{ github.token }}
           BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}
           ROLLBACK_COMPATIBLE: ${{ github.event_name == 'workflow_dispatch' && inputs.rollback_compatibility_attested || false }}
@@ -364,13 +363,6 @@ jobs:
           compatibility=()
           bootstrap=()
           predecessor=()
-          site=()
-          if [ "$SKIP_SITE" = true ]; then
-            echo "::warning::Site deployment skipped for this target (BUILDHOUND_SKIP_SITE_DEPLOY=true)"
-            site+=(--skip-site)
-          else
-            site+=(--site-application-id "$SITE_APPLICATION_ID")
-          fi
           if [ "$ROLLBACK_COMPATIBLE" = true ]; then compatibility+=(--rollback-compatible); fi
           if [ "$BOOTSTRAP" = true ]; then
             bootstrap+=(--bootstrap-manual-current)
@@ -404,15 +396,16 @@ jobs:
             --volume-guard /tmp/release/volume-guard.sh \
             --compose-id "$COMPOSE_ID" \
             --app-role staging \
-            "${site[@]}" "${compatibility[@]}" "${bootstrap[@]}" \
+            --site-application-id "$SITE_APPLICATION_ID" \
+            "${compatibility[@]}" "${bootstrap[@]}" \
             "${predecessor[@]}" > deployment-evidence.json
+          jq -e '.siteDeploymentId | type == "string" and length > 0' deployment-evidence.json >/dev/null
       - name: Verify public site and authenticated data path
         env:
           BUILDHOUND_SITE_URL: ${{ vars.BUILDHOUND_SITE_URL }}
           BUILDHOUND_DASHBOARD_URL: ${{ vars.BUILDHOUND_DASHBOARD_URL }}
           BUILDHOUND_READ_TOKEN: ${{ secrets.BUILDHOUND_READ_TOKEN }}
           BUILDHOUND_INGEST_TOKEN: ${{ secrets.BUILDHOUND_INGEST_TOKEN }}
-          BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
           # Pinned here, not read from the Dokploy environment: the check must
           # stay independent of the environment it audits (plan 095).
           BUILDHOUND_EXPECTED_ROBOTS_HEADER: "noindex, nofollow"

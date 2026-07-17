@@ -67,8 +67,8 @@ if [ "$robots_header" != "$BUILDHOUND_EXPECTED_ROBOTS_HEADER" ]; then
   exit 1
 fi
 
-# Owner decision (plan 088): staging serves no site yet; the dashboard checks
-# stay mandatory. Only the exact value "true" skips.
+# The optional compatibility/emergency skip leaves dashboard checks mandatory.
+# Only the exact value "true" skips the site probe.
 if [ "${BUILDHOUND_SKIP_SITE_CHECKS-}" = true ]; then
   printf '%s\n' 'site check skipped (BUILDHOUND_SKIP_SITE_CHECKS=true)' >&2
 else

@@ -447,14 +447,25 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('require-manual-current --compose-id "$COMPOSE_ID"', production_body)
         self.assertIn('test "$ROLLBACK_COMPATIBLE" = true', production_body)
         self.assertIn('select-backup.sh --object "$BACKUP_OBJECT"', production_body)
-        # Skip-site stays environment-variable gated in both deploy jobs.
-        self.assertEqual(workflow.count("site+=(--skip-site)"), 2)
-        self.assertEqual(
-            workflow.count("SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}"), 2
+        # Staging has a provisioned separate Docker-image Application: it is
+        # mandatory, uses the exact BOM site image through the delivery client,
+        # and its deployment evidence plus public-site smoke cannot be skipped.
+        self.assertIn('SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}', staging_body)
+        self.assertIn('--site-application-id "$SITE_APPLICATION_ID"', staging_body)
+        self.assertIn(
+            "jq -e '.siteDeploymentId | type == \"string\" and length > 0' deployment-evidence.json >/dev/null",
+            staging_body,
         )
-        self.assertEqual(
-            workflow.count("BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}"),
-            2,
+        self.assertIn('BUILDHOUND_SITE_URL: ${{ vars.BUILDHOUND_SITE_URL }}', staging_body)
+        self.assertNotIn("BUILDHOUND_SKIP_SITE_DEPLOY", staging_body)
+        self.assertNotIn("--skip-site", staging_body)
+        self.assertNotIn("BUILDHOUND_SKIP_SITE_CHECKS", staging_body)
+        # Production retains the existing emergency skip wiring unchanged.
+        self.assertIn("SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}", production_body)
+        self.assertIn("site+=(--skip-site)", production_body)
+        self.assertIn(
+            "BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}",
+            production_body,
         )
         # Dispatch-supplied identities are never trusted as-is (plan 090 §4):
         # provenance from this repo's deploy workflow on main, AND the
