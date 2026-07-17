@@ -22,6 +22,11 @@ publish jobs for staging and review; ingest-token provisioning.
 | push to `main` | direct (plugin) | artifact job | — |
 | fork PR | — (no secrets → gate skips) | — | — |
 
+Matrix imprecision, intentional for now: `sample-springboot` payloads reach staging and
+review via the artifact paths but **not** production — the sample's `settings.gradle.kts`
+sets an explicit demo `server.url` (localhost), which wins over any convention fallback,
+so the direct-plugin production row effectively covers the root `build` job only.
+
 **Out:** plugin/server/schema changes; multi-target spool; proxy mirroring; `/v1/metrics`
 fan-out; backfilling review/staging gaps (only prod has spool-backed delivery).
 
@@ -38,8 +43,11 @@ the loss-protected copy. *Implementation note:* the URL env is blanked for fork 
 an expression-level same-repo condition — repo **variables**, unlike secrets, are
 readable from fork runs, and a URL without a token would make the plugin attempt (and
 soft-fail) an unauthenticated upload instead of producing the exit-criteria
-"no server configured" skip. This is the plan's fork row made deterministic, not an
-extra gate.
+"no server configured" skip (`UploadGate` keys on the URL alone). The expression is
+additionally keyed on token-secret presence (094 reviews), so token-less same-repo
+contexts — Dependabot PRs receive variables but not repo secrets; partial provisioning
+where the URL variable exists before the token secret — also collapse to the clean skip.
+This is the plan's fork row made deterministic, not an extra gate.
 
 **Staging.** New `ci.yml` job `publish-staging` (`needs: [build, sample-springboot]`,
 runs for same-repo PRs and `main` pushes): downloads the `buildhound-payload-*` artifacts
@@ -70,6 +78,11 @@ appears.
 duplicates return `"duplicate"` — so job re-runs, spool drains, and multi-env replays are
 all safe; each environment dedups independently.
 
+**Retention.** The new prod/staging copies fall under the spec's standard retention
+defaults (raw task/kotlin/ci-span data 90 d → build-level 13 mo → daily aggregates
+indefinite, enforced by the nightly `RetentionSweeper`, per-project overridable); review
+copies need no policy — they live in the per-PR stack's database and die with it.
+
 **Trust model.** Repo-level secrets hold *ingest-scope* tokens only (worst case: junk
 telemetry, bounded by payload caps + rate limiting). Admin/bootstrap tokens stay in the
 protected GitHub Environments. Fork PRs get no secrets → clean skips. The review step
@@ -85,8 +98,19 @@ an environment that runs that same PR's code anyway (blast radius nil).
 
 ## 5. Risks
 
-- **Prod ingest token in PR context** — accepted deliberately (owner decision, this plan):
-  scope-limited, fork-excluded, revocable; prerequisite below tightens the boundary first.
+- **Prod + staging ingest tokens in same-repo PR context** — accepted deliberately (owner
+  decision, this plan); the staging token shares the exposure exactly, it is not a lesser
+  case. The honest exposure class: (a) any **write-collaborator** can exfiltrate either
+  token *before any review* by editing the workflow or the publish script on a branch — a
+  plain `pull_request` event runs the PR's own version of both; (b) any **compromised
+  build-time dependency** executing inside `gradle build` can read the step env (bounded
+  by dependency verification, `gradle/verification-metadata.xml`, and step-scoped env
+  mapping). Mitigations: ingest-only scope (worst case junk telemetry, bounded by payload
+  caps + rate limiting), fork exclusion, revocability; the prerequisite below tightens
+  the environment boundary first. Alternatives rejected: Environment-scoped secrets with
+  approval gates would put a human approval in front of every PR build, and push-only
+  prod wiring loses the per-PR prod record — both incompatible with this plan's goal
+  (prod accumulates every build, PR builds included).
 - **Schema drift, accepted:** an older prod server drops unknown new payload fields
   (`ignoreUnknownKeys`) and first-write-wins means no backfill after upgrade. New fields
   are *validated* on review (runs the PR's server image) and staging — exactly the point
@@ -110,15 +134,24 @@ The merged YAML is deliberately safe *before* any of these exist — every publi
 skips cleanly (plugin: `UploadGate` "no server configured"; script: "skipping publish"
 log + exit 0) while they are unset. Nothing uploads until the owner:
 
-1. Mints an **ingest-scope-only** token on production and staging (each environment's
+1. Fixes the four GitHub Environments' protection rules per `deploy/dokploy/README.md`
+   **first** (2026-07-15 check found them unset — per that README a rollout blocker for
+   credentialed use, and explicitly *not* permission to fall back to repository-wide
+   credentials; §5's accepted-risk posture assumes this boundary is tightened before any
+   credential exists).
+2. Mints an **ingest-scope-only** token on production and staging (each environment's
    bootstrap-token admin path).
-2. Creates the repo **secrets**: `BUILDHOUND_PROD_INGEST_TOKEN`,
+3. Verifies each fresh token's scope **before** storing it (a `verify-release.sh`-style
+   probe): `POST /v1/builds` returns 2xx AND a read endpoint (e.g.
+   `GET /v1/builds/<id>`) returns 401/403 — proving the token cannot read.
+4. Creates the repo **secrets**: `BUILDHOUND_PROD_INGEST_TOKEN`,
    `BUILDHOUND_STAGING_INGEST_TOKEN`.
-3. Creates the repo **variables** (dashboard origins, `https://…`, no trailing path):
-   `BUILDHOUND_PROD_SERVER_URL`, `BUILDHOUND_STAGING_SERVER_URL`.
-4. Fixes the four GitHub Environments' protection rules per `deploy/dokploy/README.md`
-   (2026-07-15 check found them unset — a rollout blocker for credentialed use, and
-   explicitly *not* permission to fall back to repository-wide credentials).
+5. Creates the repo **variables** (dashboard origins, `https://…`, no trailing path)
+   **last, and only after the matching token secret exists**:
+   `BUILDHOUND_PROD_SERVER_URL`, `BUILDHOUND_STAGING_SERVER_URL`. A URL-without-token
+   window would otherwise fire unauthenticated POSTs from every same-repo build; the
+   ci.yml expression also blanks the URL while the token secret is absent — two layers,
+   rely on neither alone.
 
 The review path needs no owner action: it reuses the per-run `BUILDHOUND_REVIEW_TOKEN`
 minted inside `review-environment.yml`.
