@@ -346,6 +346,27 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: env.REVIEW_ACTION == 'deploy' && steps.deploy.outcome == 'success'
         with: {name: review-attestation, path: /tmp/review-attestation/review.json, retention-days: 90}
+      - id: deploy_status
+        name: Capture deploy step outcome
+        if: ${{ always() }}
+        env:
+          OUTCOME: "${{ steps.deploy.outcome }}"
+          PUBLISH_OUTCOME: "${{ steps.publish.outcome }}"
+        run: |
+          case "$OUTCOME" in success|failure|cancelled|skipped) ;; *) exit 1;; esac
+          case "$PUBLISH_OUTCOME" in success|failure|cancelled|skipped) ;; *) exit 1;; esac
+          echo "outcome=$OUTCOME" >> "$GITHUB_OUTPUT"
+          echo "publish_outcome=$PUBLISH_OUTCOME" >> "$GITHUB_OUTPUT"
+      - name: Delete superseded exact-owned review images
+        if: env.REVIEW_ACTION == 'deploy' && steps.deploy.outcome == 'success'
+        env:
+          GH_TOKEN: "${{ github.token }}"
+          REVIEW_PR: "${{ env.REVIEW_PR }}"
+          KEEP_SHA: "${{ env.REVIEW_SHA }}"
+        run: |
+          if ! deploy/dokploy/delete-review-images.sh; then
+            echo "::warning::Superseded review-image cleanup failed; the next deploy or strict retirement will retry it"
+          fi
       # Plan 094: replay this PR's CI build payloads into the freshly deployed review
       # environment, so a deploy-review PR shows its own telemetry end to end.
       #
@@ -361,6 +382,11 @@ jobs:
       # this SHA may legitimately still be building (ordering race, plan 094 §5 — accepted).
       # Polling is bounded (~10×30 s, so the global review concurrency lock is never held
       # long); a missing run/artifact is a step-summary note and exit 0, never a red job.
+      #
+      # Ordering (defense-in-depth, 094 §3.2 review): this step extracts a PR-controlled
+      # artifact zip (gh CLI extraction — the zip-slip class), so it deliberately runs
+      # AFTER the job's last privileged action (the packages:write superseded-image
+      # cleanup above): a hostile archive can no longer precede anything privileged here.
       - name: Publish CI payloads to the review environment
         if: env.REVIEW_ACTION == 'deploy' && steps.deploy.outcome == 'success'
         env:
@@ -400,6 +426,9 @@ jobs:
             note "buildhound review publish: ci.yml run $run_id produced no buildhound-payload-* artifacts within the polling budget — review copy skipped (non-authoritative, plan 094)"
             exit 0
           fi
+          # WARNING: keep the default per-artifact subdirectories (no flattening) — both
+          # artifacts contain a file literally named build-payload.json and a flat dir
+          # would silently collapse them to one.
           if ! gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --pattern 'buildhound-payload-*' --dir /tmp/review-ci-payloads; then
             note "buildhound review publish: artifact download failed — review copy skipped (non-authoritative, plan 094)"
             exit 0
@@ -409,27 +438,6 @@ jobs:
           # (ingest dedups on (project_id, build_id)).
           find /tmp/review-ci-payloads -type f -name '*.json' -exec buildhound-ci-assets/bin/buildhound-publish {} +
           exit 0
-      - id: deploy_status
-        name: Capture deploy step outcome
-        if: ${{ always() }}
-        env:
-          OUTCOME: "${{ steps.deploy.outcome }}"
-          PUBLISH_OUTCOME: "${{ steps.publish.outcome }}"
-        run: |
-          case "$OUTCOME" in success|failure|cancelled|skipped) ;; *) exit 1;; esac
-          case "$PUBLISH_OUTCOME" in success|failure|cancelled|skipped) ;; *) exit 1;; esac
-          echo "outcome=$OUTCOME" >> "$GITHUB_OUTPUT"
-          echo "publish_outcome=$PUBLISH_OUTCOME" >> "$GITHUB_OUTPUT"
-      - name: Delete superseded exact-owned review images
-        if: env.REVIEW_ACTION == 'deploy' && steps.deploy.outcome == 'success'
-        env:
-          GH_TOKEN: "${{ github.token }}"
-          REVIEW_PR: "${{ env.REVIEW_PR }}"
-          KEEP_SHA: "${{ env.REVIEW_SHA }}"
-        run: |
-          if ! deploy/dokploy/delete-review-images.sh; then
-            echo "::warning::Superseded review-image cleanup failed; the next deploy or strict retirement will retry it"
-          fi
       - name: Converge review environments (close/unlabel fast path)
         if: env.REVIEW_ACTION == 'retire'
         env:
