@@ -413,6 +413,9 @@ jobs:
           BUILDHOUND_READ_TOKEN: ${{ secrets.BUILDHOUND_READ_TOKEN }}
           BUILDHOUND_INGEST_TOKEN: ${{ secrets.BUILDHOUND_INGEST_TOKEN }}
           BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
+          # Pinned here, not read from the Dokploy environment: the check must
+          # stay independent of the environment it audits (plan 095).
+          BUILDHOUND_EXPECTED_ROBOTS_HEADER: "noindex, nofollow"
         run: deploy/dokploy/verify-release.sh
   deploy-production:
     needs: [publish, resolve_dispatch, deploy-staging]
@@ -555,4 +558,5 @@ jobs:
           BUILDHOUND_READ_TOKEN: ${{ secrets.BUILDHOUND_READ_TOKEN }}
           BUILDHOUND_INGEST_TOKEN: ${{ secrets.BUILDHOUND_INGEST_TOKEN }}
           BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
+          BUILDHOUND_EXPECTED_ROBOTS_HEADER: all
         run: deploy/dokploy/verify-release.sh
