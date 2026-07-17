@@ -120,6 +120,16 @@ an environment that runs that same PR's code anyway (blast radius nil).
   non-authoritative).
 - **Workflow contention:** touches `ci.yml` + `review-environment.yml` — coordinate with
   the open CI-recovery plans 088–090.
+- **Silent total-collection failure, re-accepted (closes plan 093 §6's forward-pointer):**
+  093 §6 deferred this to "094+, whose publish jobs are natural detectors for a missing
+  artifact." As built, the publish jobs are *not* detectors: `publish-staging` (`count -eq
+  0` → "producer jobs uploaded none", exit 0) and the review step (`artifact_count -eq 0` →
+  "review copy skipped") both green-skip on zero payloads, indistinguishable from a genuine
+  collection failure where the plugin wrote nothing. This is deliberately re-accepted, not
+  fixed: the staging/review copies are non-authoritative, prod has the spool-backed plugin
+  upload, and a hard detector would redden PRs on every legitimate empty case (docs-only
+  change, fork, a failed producer job). No missing-artifact alarm is added; if one is ever
+  wanted it belongs on the prod path (the authoritative copy), not the artifact consumers.
 
 ## 6. Prerequisites & exit criteria
 
