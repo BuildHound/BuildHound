@@ -57,51 +57,6 @@ history_hash() {
   printf '%s\n' "$canonical" | sha256_stdin
 }
 
-write_v1() {
-  local file=$1 migration_id=${2:-V1__initial}
-  jq -n \
-    --arg sourceCommit "$SOURCE_SHA" \
-    --arg serverImage "$SERVER_IMAGE" \
-    --arg siteImage "$SITE_IMAGE" \
-    --arg backupImage "$BACKUP_IMAGE" \
-    --arg postgresImage "$POSTGRES_IMAGE" \
-    --arg manifestSha256 "$H5" \
-    --arg volumeGuardSha256 "$H6" \
-    --arg migrationId "$migration_id" \
-    '{schema:1,sourceCommit:$sourceCommit,serverImage:$serverImage,siteImage:$siteImage,
-      backupImage:$backupImage,postgresImage:$postgresImage,manifestSha256:$manifestSha256,
-      volumeGuardSha256:$volumeGuardSha256,migrationId:$migrationId}' > "$file"
-}
-
-write_v2() {
-  local file=$1 history=$2 migration_id history_sha
-  if [[ $# -ge 3 ]]; then
-    migration_id=$3
-  else
-    migration_id=$(jq -er '.[-1].id' <<< "$history")
-  fi
-  if [[ $# -ge 4 ]]; then
-    history_sha=$4
-  else
-    history_sha=$(history_hash "$history")
-  fi
-  jq -n \
-    --arg sourceCommit "$SOURCE_SHA" \
-    --arg serverImage "$SERVER_IMAGE" \
-    --arg siteImage "$SITE_IMAGE" \
-    --arg backupImage "$BACKUP_IMAGE" \
-    --arg postgresImage "$POSTGRES_IMAGE" \
-    --arg manifestSha256 "$H5" \
-    --arg volumeGuardSha256 "$H6" \
-    --arg migrationId "$migration_id" \
-    --argjson migrationHistory "$history" \
-    --arg migrationHistorySha256 "$history_sha" \
-    '{schema:2,sourceCommit:$sourceCommit,serverImage:$serverImage,siteImage:$siteImage,
-      backupImage:$backupImage,postgresImage:$postgresImage,manifestSha256:$manifestSha256,
-      volumeGuardSha256:$volumeGuardSha256,migrationId:$migrationId,
-      migrationHistory:$migrationHistory,migrationHistorySha256:$migrationHistorySha256}' > "$file"
-}
-
 write_v3() {
   local file=$1 history=$2 migration_id history_sha
   if [[ $# -ge 3 ]]; then
@@ -180,27 +135,21 @@ assert_fails "uppercase source SHA rejected" is_source_sha "$UPPER_SOURCE_SHA"
 assert_ok "digest reference accepted" is_digest_reference "$SERVER_IMAGE"
 assert_fails "moving image tag rejected" is_digest_reference "ghcr.io/buildhound/server:latest"
 
-V1="$tmp/release-v1.json"
 HISTORY_2_10=$(jq -cn --arg h7 "$H7" --arg h8 "$H8" \
   '[{id:"V2__earlier",sha256:$h7},{id:"V10__later",sha256:$h8}]')
-V2="$tmp/release-v2.json"
-write_v1 "$V1"
-write_v2 "$V2" "$HISTORY_2_10"
 V3="$tmp/release-v3.json"
 write_v3 "$V3" "$HISTORY_2_10"
-assert_ok "schema 1 release accepted" release_validate "$V1"
-assert_ok "schema 2 release accepted with numeric order" release_validate "$V2"
-assert_ok "schema 3 release accepts target manifests" release_validate "$V3"
+assert_ok "schema 3 release accepts target manifests and numeric order" release_validate "$V3"
+jq '.schema = 2' "$V3" > "$tmp/schema-2.json"
+assert_fails "schema 2 release rejected" release_validate "$tmp/schema-2.json"
+jq '.schema = 1' "$V3" > "$tmp/schema-1.json"
+assert_fails "schema 1 release rejected" release_validate "$tmp/schema-1.json"
 
-canonical=$(canonical_json "$V2")
+canonical=$(canonical_json "$V3")
 expected_id="sha256:$(printf '%s\n' "$canonical" | sha256_stdin)"
-assert_eq "release ID hashes canonical BOM" "$expected_id" "$(release_id "$V2")"
-assert_eq "schema 1 title is legacy migration-bound form" \
-  "$(release_id "$V1")|V1__initial" "$(release_title "$V1")"
-assert_eq "schema 2 title includes history hash and source lineage" \
-  "$expected_id|V10__later|$(history_hash "$HISTORY_2_10")|$SOURCE_SHA" "$(release_title "$V2")"
+assert_eq "release ID hashes canonical BOM" "$expected_id" "$(release_id "$V3")"
 assert_eq "schema 3 title includes history hash and source lineage" \
-  "$(release_id "$V3")|V10__later|$(history_hash "$HISTORY_2_10")|$SOURCE_SHA" \
+  "$expected_id|V10__later|$(history_hash "$HISTORY_2_10")|$SOURCE_SHA" \
   "$(release_title "$V3")"
 
 v3_id=$(release_id "$V3")
@@ -211,57 +160,55 @@ if [[ $(release_id "$tmp/staging-manifest-change.json") == "$v3_id" ]]; then
   fail "staging manifest hash did not change the release ID"
 fi
 
-jq '.extra = true' "$V2" > "$tmp/extra.json"
+jq '.extra = true' "$V3" > "$tmp/extra.json"
 assert_fails "extra release key rejected" release_validate "$tmp/extra.json"
-jq 'del(.siteImage)' "$V2" > "$tmp/missing.json"
+jq 'del(.siteImage)' "$V3" > "$tmp/missing.json"
 assert_fails "missing release key rejected" release_validate "$tmp/missing.json"
-jq '.sourceCommit = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"' "$V2" > "$tmp/source.json"
+jq '.sourceCommit = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"' "$V3" > "$tmp/source.json"
 assert_fails "uppercase source commit rejected" release_validate "$tmp/source.json"
-jq --arg value "$SOURCE_SHA"$'\n' '.sourceCommit = $value' "$V2" > "$tmp/source-newline.json"
+jq --arg value "$SOURCE_SHA"$'\n' '.sourceCommit = $value' "$V3" > "$tmp/source-newline.json"
 assert_fails "source commit with trailing newline rejected" release_validate "$tmp/source-newline.json"
-jq '.serverImage = "ghcr.io/buildhound/server:latest"' "$V2" > "$tmp/tag.json"
+jq '.serverImage = "ghcr.io/buildhound/server:latest"' "$V3" > "$tmp/tag.json"
 assert_fails "non-digest release image rejected" release_validate "$tmp/tag.json"
-jq --arg value "$SERVER_IMAGE"$'\n' '.serverImage = $value' "$V2" > "$tmp/image-newline.json"
+jq --arg value "$SERVER_IMAGE"$'\n' '.serverImage = $value' "$V3" > "$tmp/image-newline.json"
 assert_fails "digest with trailing newline rejected" release_validate "$tmp/image-newline.json"
-jq '.manifestSha256 = "ABC"' "$V2" > "$tmp/manifest.json"
-assert_fails "invalid manifest checksum rejected" release_validate "$tmp/manifest.json"
-jq --arg value "$H5"$'\n' '.manifestSha256 = $value' "$V2" > "$tmp/manifest-newline.json"
-assert_fails "checksum with trailing newline rejected" release_validate "$tmp/manifest-newline.json"
 jq '.productionManifestSha256 = "ABC"' "$V3" > "$tmp/production-manifest.json"
 assert_fails "invalid production manifest checksum rejected" release_validate "$tmp/production-manifest.json"
+jq --arg value "$H5"$'\n' '.productionManifestSha256 = $value' "$V3" > "$tmp/production-manifest-newline.json"
+assert_fails "manifest checksum with trailing newline rejected" release_validate "$tmp/production-manifest-newline.json"
 jq '.stagingManifestSha256 = "ABC"' "$V3" > "$tmp/staging-manifest.json"
 assert_fails "invalid staging manifest checksum rejected" release_validate "$tmp/staging-manifest.json"
-jq '.volumeGuardSha256 = "ABC"' "$V2" > "$tmp/guard.json"
+jq '.volumeGuardSha256 = "ABC"' "$V3" > "$tmp/guard.json"
 assert_fails "invalid guard checksum rejected" release_validate "$tmp/guard.json"
-jq '.migrationId = "1_initial"' "$V2" > "$tmp/migration.json"
+jq '.migrationId = "1_initial"' "$V3" > "$tmp/migration.json"
 assert_fails "invalid migration ID rejected" release_validate "$tmp/migration.json"
-jq --arg value 'V10__later'$'\n' '.migrationId = $value' "$V2" > "$tmp/migration-newline.json"
+jq --arg value 'V10__later'$'\n' '.migrationId = $value' "$V3" > "$tmp/migration-newline.json"
 assert_fails "migration ID with trailing newline rejected" release_validate "$tmp/migration-newline.json"
 
-write_v2 "$tmp/empty-history.json" '[]' 'V1__initial' "$H0"
+write_v3 "$tmp/empty-history.json" '[]' 'V1__initial' "$H0"
 assert_fails "empty migration history rejected" release_validate "$tmp/empty-history.json"
 BAD_ENTRY=$(jq -cn --arg h7 "$H7" '[{id:"V1__initial",sha256:$h7,extra:true}]')
-write_v2 "$tmp/bad-entry.json" "$BAD_ENTRY" 'V1__initial'
+write_v3 "$tmp/bad-entry.json" "$BAD_ENTRY" 'V1__initial'
 assert_fails "migration history entry keys are exact" release_validate "$tmp/bad-entry.json"
-jq --arg value 'V2__earlier'$'\n' '.migrationHistory[0].id = $value' "$V2" > "$tmp/history-id-newline.json"
+jq --arg value 'V2__earlier'$'\n' '.migrationHistory[0].id = $value' "$V3" > "$tmp/history-id-newline.json"
 assert_fails "history ID with trailing newline rejected" release_validate "$tmp/history-id-newline.json"
-jq --arg value "$H7"$'\n' '.migrationHistory[0].sha256 = $value' "$V2" > "$tmp/history-hash-newline.json"
+jq --arg value "$H7"$'\n' '.migrationHistory[0].sha256 = $value' "$V3" > "$tmp/history-hash-newline.json"
 assert_fails "history checksum with trailing newline rejected" release_validate "$tmp/history-hash-newline.json"
 UNORDERED=$(jq -cn --arg h7 "$H7" --arg h8 "$H8" \
   '[{id:"V10__later",sha256:$h8},{id:"V2__earlier",sha256:$h7}]')
-write_v2 "$tmp/unordered.json" "$UNORDERED"
+write_v3 "$tmp/unordered.json" "$UNORDERED"
 assert_fails "numeric migration order required" release_validate "$tmp/unordered.json"
 EQUAL_VERSION=$(jq -cn --arg h7 "$H7" --arg h8 "$H8" \
   '[{id:"V02__first",sha256:$h7},{id:"V2__second",sha256:$h8}]')
-write_v2 "$tmp/equal-version.json" "$EQUAL_VERSION"
+write_v3 "$tmp/equal-version.json" "$EQUAL_VERSION"
 assert_fails "leading-zero duplicate migration version rejected" release_validate "$tmp/equal-version.json"
-write_v2 "$tmp/last-mismatch.json" "$HISTORY_2_10" 'V11__missing'
+write_v3 "$tmp/last-mismatch.json" "$HISTORY_2_10" 'V11__missing'
 assert_fails "latest migration must match history tail" release_validate "$tmp/last-mismatch.json"
-write_v2 "$tmp/history-hash.json" "$HISTORY_2_10" 'V10__later' "$H0"
+write_v3 "$tmp/history-hash.json" "$HISTORY_2_10" 'V10__later' "$H0"
 assert_fails "migration history checksum mismatch rejected" release_validate "$tmp/history-hash.json"
-{ printf '{}\n'; cat "$V2"; } > "$tmp/prefixed-json.json"
+{ printf '{}\n'; cat "$V3"; } > "$tmp/prefixed-json.json"
 assert_fails "prefixed JSON document rejected" release_validate "$tmp/prefixed-json.json"
-{ cat "$V2"; printf '{}\n'; } > "$tmp/suffixed-json.json"
+{ cat "$V3"; printf '{}\n'; } > "$tmp/suffixed-json.json"
 assert_fails "suffixed JSON document rejected" release_validate "$tmp/suffixed-json.json"
 
 assert_command_empty "no successful deployment produces no latest evidence" \
@@ -343,17 +290,17 @@ assert_fails "manual sentinel with trailing newline rejected" \
   require_manual_current '[{"status":"done","title":"Manual deployment\n","createdAt":"2026-07-13T12:00:00Z"}]'
 assert_fails "manual current requires a successful deployment" require_manual_current '[]'
 
-assert_ok "missing current release is compatible" require_migration_compatibility '' "$V2" false
+assert_ok "missing current release is compatible" require_migration_compatibility '' "$V3" false
 assert_ok "identical release is compatible" require_migration_compatibility \
-  "$(current_bare "$(release_id "$V2")")" "$V2" false
+  "$(current_bare "$(release_id "$V3")")" "$V3" false
 assert_fails "missing migration identity requires attestation" require_migration_compatibility \
-  "$(current_bare "$RID")" "$V2" false
+  "$(current_bare "$RID")" "$V3" false
 assert_ok "missing migration identity accepts attestation" require_migration_compatibility \
-  "$(current_bare "$RID")" "$V2" true
+  "$(current_bare "$RID")" "$V3" true
 
 ROLLBACK_HISTORY=$(jq -cn --arg h7 "$H7" '[{id:"V1__initial",sha256:$h7}]')
 ROLLBACK="$tmp/rollback.json"
-write_v2 "$ROLLBACK" "$ROLLBACK_HISTORY"
+write_v3 "$ROLLBACK" "$ROLLBACK_HISTORY"
 CURRENT_HISTORY=$(jq -cn --arg h7 "$H7" --arg h8 "$H8" \
   '[{id:"V1__initial",sha256:$h7},{id:"V2__current",sha256:$h8}]')
 CURRENT_FULL=$(current_full "$RID" 'V2__current' "$(history_hash "$CURRENT_HISTORY")")
@@ -363,14 +310,14 @@ assert_ok "rollback accepts attestation" require_migration_compatibility "$CURRE
 RENAMED_HISTORY=$(jq -cn --arg h7 "$H7" --arg h8 "$H8" \
   '[{id:"V1__initial",sha256:$h7},{id:"V2__renamed",sha256:$h8}]')
 RENAMED="$tmp/renamed.json"
-write_v2 "$RENAMED" "$RENAMED_HISTORY"
+write_v3 "$RENAMED" "$RENAMED_HISTORY"
 assert_fails "same-version rewrite is always rejected" \
   require_migration_compatibility "$CURRENT_FULL" "$RENAMED" true
 
 FORWARD_HISTORY=$(jq -cn --arg h7 "$H7" --arg h8 "$H8" --arg h9 "$H9" \
   '[{id:"V1__initial",sha256:$h7},{id:"V2__current",sha256:$h8},{id:"V3__next",sha256:$h9}]')
 FORWARD="$tmp/forward.json"
-write_v2 "$FORWARD" "$FORWARD_HISTORY"
+write_v3 "$FORWARD" "$FORWARD_HISTORY"
 assert_ok "forward migration accepts unchanged history prefix" \
   require_migration_compatibility "$CURRENT_FULL" "$FORWARD" false
 FORWARD_V3="$tmp/forward-v3.json"
@@ -381,7 +328,7 @@ assert_ok "schema 3 forward migration accepts unchanged history prefix" \
 REWRITTEN_HISTORY=$(jq -cn --arg h0 "$H0" --arg h8 "$H8" --arg h9 "$H9" \
   '[{id:"V1__initial",sha256:$h0},{id:"V2__current",sha256:$h8},{id:"V3__next",sha256:$h9}]')
 REWRITTEN="$tmp/rewritten.json"
-write_v2 "$REWRITTEN" "$REWRITTEN_HISTORY"
+write_v3 "$REWRITTEN" "$REWRITTEN_HISTORY"
 assert_fails "forward rewritten prefix rejected despite attestation" \
   require_migration_compatibility "$CURRENT_FULL" "$REWRITTEN" true
 
@@ -391,10 +338,6 @@ assert_fails "legacy current history requires attestation" \
 assert_ok "legacy current history accepts attestation" \
   require_migration_compatibility "$LEGACY_CURRENT" "$FORWARD" true
 
-V1_FORWARD="$tmp/v1-forward.json"
-write_v1 "$V1_FORWARD" 'V3__next'
-assert_fails "forward candidate without full history rejected" \
-  require_migration_compatibility "$CURRENT_FULL" "$V1_FORWARD" false
 assert_fails "invalid current release evidence rejected" \
   require_migration_compatibility '{}' "$FORWARD" false
 BAD_CURRENT=$(current_bare "$RID")
@@ -438,7 +381,7 @@ HUGE_CANDIDATE='V1000000000000000000000__candidate'
 HUGE_HISTORY=$(jq -cn --arg previous "$HUGE_PREVIOUS" --arg candidate "$HUGE_CANDIDATE" \
   --arg h7 "$H7" --arg h8 "$H8" '[{id:$previous,sha256:$h7},{id:$candidate,sha256:$h8}]')
 HUGE="$tmp/huge.json"
-write_v2 "$HUGE" "$HUGE_HISTORY"
+write_v3 "$HUGE" "$HUGE_HISTORY"
 HUGE_PREFIX=$(jq -cn --arg previous "$HUGE_PREVIOUS" --arg h7 "$H7" '[{id:$previous,sha256:$h7}]')
 assert_ok "arbitrary-length migration versions do not overflow" require_migration_compatibility \
   "$(current_full "$RID" "$HUGE_PREVIOUS" "$(history_hash "$HUGE_PREFIX")")" "$HUGE" false

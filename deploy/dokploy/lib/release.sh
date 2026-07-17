@@ -8,7 +8,7 @@ unset _release_lib_dir
 
 release_validate() {
   local file=${1:-}
-  local schema key value history expected_hash actual_hash
+  local key value history expected_hash actual_hash
 
   if [[ $# -ne 1 || ! -r $file ]]; then
     die "readable release file required"
@@ -22,15 +22,6 @@ release_validate() {
   fi
 
   if ! jq -e '
-    def v1_keys: [
-      "backupImage", "manifestSha256", "migrationId", "postgresImage",
-      "schema", "serverImage", "siteImage", "sourceCommit", "volumeGuardSha256"
-    ];
-    def v2_keys: [
-      "backupImage", "manifestSha256", "migrationHistory", "migrationHistorySha256",
-      "migrationId", "postgresImage", "schema", "serverImage", "siteImage",
-      "sourceCommit", "volumeGuardSha256"
-    ];
     def v3_keys: [
       "backupImage", "migrationHistory", "migrationHistorySha256", "migrationId",
       "postgresImage", "productionManifestSha256", "schema", "serverImage",
@@ -38,20 +29,16 @@ release_validate() {
     ];
     . as $root
       | type == "object"
-      and (.schema == 1 or .schema == 2 or .schema == 3)
-      and (keys == (if .schema == 1 then v1_keys elif .schema == 2 then v2_keys else v3_keys end))
+      and (.schema == 3)
+      and (keys == v3_keys)
       and (.sourceCommit | type == "string" and test("^[0-9a-f]{40}\\z"))
       and all(["serverImage", "siteImage", "backupImage", "postgresImage"][];
         . as $key
         | ($root[$key] | type == "string"
            and test("^[a-z0-9./_-]+(:[a-z0-9._-]+)?@sha256:[0-9a-f]{64}\\z"))
       )
-      and (if .schema < 3 then
-        (.manifestSha256 | type == "string" and test("^[0-9a-f]{64}\\z"))
-      else
-        (.productionManifestSha256 | type == "string" and test("^[0-9a-f]{64}\\z")) and
-        (.stagingManifestSha256 | type == "string" and test("^[0-9a-f]{64}\\z"))
-      end)
+      and (.productionManifestSha256 | type == "string" and test("^[0-9a-f]{64}\\z"))
+      and (.stagingManifestSha256 | type == "string" and test("^[0-9a-f]{64}\\z"))
       and (.volumeGuardSha256 | type == "string" and test("^[0-9a-f]{64}\\z"))
       and (.migrationId | type == "string" and test("^V[0-9]+__[A-Za-z0-9_.-]+\\z"))
   ' "$file" >/dev/null; then
@@ -59,7 +46,6 @@ release_validate() {
     return 1
   fi
 
-  schema=$(jq -er '.schema' "$file") || return 1
   for key in serverImage siteImage backupImage postgresImage; do
     value=$(jq -er --arg key "$key" '.[$key] | select(type == "string")' "$file") || {
       die "$key is not digest-addressed"
@@ -71,21 +57,13 @@ release_validate() {
     fi
   done
 
-  if [[ $schema -lt 3 ]]; then
-    value=$(jq -er '.manifestSha256 | select(type == "string")' "$file") || true
+  for key in productionManifestSha256 stagingManifestSha256; do
+    value=$(jq -er --arg key "$key" '.[$key] | select(type == "string")' "$file") || true
     if ! is_sha256 "$value"; then
-      die "invalid manifest checksum"
+      die "invalid target manifest checksum"
       return 1
     fi
-  else
-    for key in productionManifestSha256 stagingManifestSha256; do
-      value=$(jq -er --arg key "$key" '.[$key] | select(type == "string")' "$file") || true
-      if ! is_sha256 "$value"; then
-        die "invalid target manifest checksum"
-        return 1
-      fi
-    done
-  fi
+  done
   value=$(jq -er '.volumeGuardSha256 | select(type == "string")' "$file") || true
   if ! is_sha256 "$value"; then
     die "invalid volume guard checksum"
@@ -97,8 +75,7 @@ release_validate() {
     return 1
   fi
 
-  if [[ $schema -ge 2 ]]; then
-    if ! jq -e '
+  if ! jq -e '
       def normalized_version:
         capture("^V(?<version>[0-9]+)__[A-Za-z0-9_.-]+\\z").version
         | sub("^0+"; "")
@@ -126,17 +103,16 @@ release_validate() {
           | all
         )
     ' "$file" >/dev/null; then
-      die "invalid or unordered migration history"
-      return 1
-    fi
+    die "invalid or unordered migration history"
+    return 1
+  fi
 
-    history=$(jq -cS '.migrationHistory' "$file") || return 1
-    actual_hash=$(printf '%s\n' "$history" | sha256_stdin) || return 1
-    expected_hash=$(jq -er '.migrationHistorySha256 | select(type == "string")' "$file") || true
-    if ! is_sha256 "$expected_hash" || [[ $expected_hash != "$actual_hash" ]]; then
-      die "migration history checksum differs from ordered migration set"
-      return 1
-    fi
+  history=$(jq -cS '.migrationHistory' "$file") || return 1
+  actual_hash=$(printf '%s\n' "$history" | sha256_stdin) || return 1
+  expected_hash=$(jq -er '.migrationHistorySha256 | select(type == "string")' "$file") || true
+  if ! is_sha256 "$expected_hash" || [[ $expected_hash != "$actual_hash" ]]; then
+    die "migration history checksum differs from ordered migration set"
+    return 1
   fi
 }
 
@@ -155,22 +131,17 @@ release_id() {
 
 release_title() {
   local file=${1:-}
-  local schema id migration history_hash source_commit
+  local id migration history_hash source_commit
   if [[ $# -ne 1 ]]; then
     die "release_title expects one release file"
     return 1
   fi
   release_validate "$file" || return 1
-  schema=$(jq -er '.schema' "$file") || return 1
   id=$(release_id "$file") || return 1
   migration=$(jq -er '.migrationId' "$file") || return 1
-  if [[ $schema -ge 2 ]]; then
-    history_hash=$(jq -er '.migrationHistorySha256' "$file") || return 1
-    source_commit=$(jq -er '.sourceCommit' "$file") || return 1
-    printf '%s|%s|%s|%s\n' "$id" "$migration" "$history_hash" "$source_commit"
-  else
-    printf '%s|%s\n' "$id" "$migration"
-  fi
+  history_hash=$(jq -er '.migrationHistorySha256' "$file") || return 1
+  source_commit=$(jq -er '.sourceCommit' "$file") || return 1
+  printf '%s|%s|%s|%s\n' "$id" "$migration" "$history_hash" "$source_commit"
 }
 
 _canonical_utc_created_at() {
