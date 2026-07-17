@@ -32,8 +32,14 @@ later); any plugin, schema, or server change; changing local-developer builds.
 2. `gradle build -I .github/buildhound-dogfood.init.gradle.kts` — the init script resolves
    the plugin from `mavenLocal()`, applies `dev.buildhound` to Settings via `beforeSettings`
    (the Develocity/CCUD CI-injection pattern), and sets `server.url`/`server.token` from
-   `BUILDHOUND_SERVER_URL`/`BUILDHOUND_TOKEN` environment *providers* (architecture §6 —
-   unset in this plan) plus low-cardinality `tags` (job name, trigger).
+   `BUILDHOUND_DOGFOOD_SERVER_URL`/`BUILDHOUND_DOGFOOD_TOKEN` environment *providers*
+   (architecture §6 — unset in this plan) plus low-cardinality `tags` (job name, trigger).
+   The dogfood contract is deliberately namespaced (`_DOGFOOD_`, §3.2 review, applied with
+   plan 094): the bare `BUILDHOUND_SERVER_URL` name is the plugin's plan-027 convention
+   fallback for `server.url`, read by any instrumented build that leaves it unset in DSL —
+   job-level env under that name would arm uploads in the TestKit fixture builds nested
+   inside `gradle build`. The dogfood namespace must not collide with the plugin's
+   documented convention-fallback namespace.
 
 Local builds are untouched: no `settings.gradle.kts` change; a maintainer opts in by passing
 the same `-I` flag.

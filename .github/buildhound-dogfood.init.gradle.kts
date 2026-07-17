@@ -86,12 +86,21 @@ beforeSettings {
             // Environment-variable providers only (never a literal / gradleProperty): tracked
             // CC inputs whose values stay out of the serialized configuration-cache entry.
             // Unset in plan 093 → UploadGate skips the upload with "no server configured".
+            //
+            // DOGFOOD-namespaced on purpose (093 §3.2 review): BUILDHOUND_SERVER_URL is the
+            // plugin's documented plan-027 convention fallback for server.url, read by ANY
+            // BuildHound-instrumented build whose DSL leaves it unset — including the many
+            // functionalTest fixture builds nested inside `gradle build`. Job-level env under
+            // the convention name would arm uploads in all of them (junk POSTs at the real
+            // server; the token stays out via ConfigOverrides.EXCLUDED_KEY, but rate-limit
+            // fallout could still cost the legit dogfood payload its delivery). The dogfood
+            // contract therefore lives in its own namespace, which no convention fallback reads.
             @Suppress("UNCHECKED_CAST")
             val url = server.javaClass.getMethod("getUrl").invoke(server) as Property<String>
-            url.set(settings.providers.environmentVariable("BUILDHOUND_SERVER_URL"))
+            url.set(settings.providers.environmentVariable("BUILDHOUND_DOGFOOD_SERVER_URL"))
             @Suppress("UNCHECKED_CAST")
             val token = server.javaClass.getMethod("getToken").invoke(server) as Property<String>
-            token.set(settings.providers.environmentVariable("BUILDHOUND_TOKEN"))
+            token.set(settings.providers.environmentVariable("BUILDHOUND_DOGFOOD_TOKEN"))
 
             // Low-cardinality dimensions (spec §3.4): the CI job name and trigger. Read eagerly
             // through environment providers (tracked CC inputs, the ConfigOverrides pattern) and
