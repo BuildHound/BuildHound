@@ -149,6 +149,21 @@ workflows (088/089), client internals beyond what the collapse deletes (091).
    `publish-gradle-plugin.yml`, actionlint config, plugin/server code, and
    docs.
 
+10. **Traefik object names were swarm-global-colliding between the two
+    long-lived stacks (found at the first production anchor, 2026-07-17).**
+    `stack.yaml` and `staging-stack.yaml` both declared router `buildhound`,
+    middlewares `buildhound-ratelimit`/`buildhound-robots`, and service
+    `buildhound`. Traefik's swarm provider treats these names as global, so
+    the first time the production stack coexisted with staging, both
+    dashboards 404'd (the review stacks were always safe — their names carry
+    the `${BUILDHOUND_REVIEW_PROVIDER_ID}` prefix). The broken production
+    stack was removed to restore staging. Names are now role-suffixed
+    (`buildhound-prod-*` / `buildhound-staging-*`) and a regression test pins
+    the two stacks' Traefik object-name sets as disjoint. Consequences:
+    the production manual anchor must be pasted from the fixed `stack.yaml`,
+    and the Stage D dispatch sha must contain this fix (the dispatch deploys
+    the candidate tree's own manifests).
+
 ## Test strategy
 
 `deploy-release-resolver-test.sh` retires with the resolver; replacement tests assert:

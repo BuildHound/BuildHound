@@ -12,18 +12,49 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         return (ROOT / path).read_text()
 
     def test_long_lived_tls_uses_hetzner_dns_challenge_resolver(self):
-        for path in ("deploy/dokploy/stack.yaml", "deploy/dokploy/staging-stack.yaml"):
+        routers = {
+            "deploy/dokploy/stack.yaml": "buildhound-prod",
+            "deploy/dokploy/staging-stack.yaml": "buildhound-staging",
+        }
+        for path, router in routers.items():
             stack = self.read(path)
             with self.subTest(path=path):
                 self.assertIn(
-                    "traefik.http.routers.buildhound.tls.certresolver="
+                    f"traefik.http.routers.{router}.tls.certresolver="
                     "letsencrypt-dns-hetzner",
                     stack,
                 )
                 self.assertNotIn(
-                    "traefik.http.routers.buildhound.tls.certresolver=letsencrypt\n",
+                    f"traefik.http.routers.{router}.tls.certresolver=letsencrypt\n",
                     stack,
                 )
+
+    def test_long_lived_traefik_object_names_are_disjoint(self):
+        # Traefik router/middleware/service names are swarm-global. The
+        # staging and production stacks coexist on one swarm; identical
+        # names collide and 404 BOTH dashboards (first prod anchor,
+        # 2026-07-17). Review stacks are exempt: their names carry the
+        # interpolated ${BUILDHOUND_REVIEW_PROVIDER_ID} prefix.
+        pattern = re.compile(
+            r"traefik\.http\.(?:routers|middlewares|services)\.([a-z0-9-]+)\."
+        )
+        names = {
+            path: set(pattern.findall(self.read(path)))
+            for path in (
+                "deploy/dokploy/stack.yaml",
+                "deploy/dokploy/staging-stack.yaml",
+            )
+        }
+        prod = names["deploy/dokploy/stack.yaml"]
+        staging = names["deploy/dokploy/staging-stack.yaml"]
+        self.assertTrue(prod, "no traefik object names found in stack.yaml")
+        self.assertTrue(
+            staging, "no traefik object names found in staging-stack.yaml"
+        )
+        self.assertFalse(
+            prod & staging,
+            f"traefik object names shared between prod and staging: {prod & staging}",
+        )
 
     def test_long_lived_services_use_environment_specific_placement(self):
         for path in ("deploy/dokploy/stack.yaml", "deploy/dokploy/staging-stack.yaml"):
