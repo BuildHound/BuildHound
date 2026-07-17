@@ -248,7 +248,7 @@ jobs:
           common=(--silent --show-error --fail --retry 30 --retry-delay 5 --retry-max-time 300 --retry-all-errors --connect-timeout 10 --max-time 20 --write-out '%{http_code}')
           status=$(curl "${common[@]}" --dump-header /tmp/review-site-headers --output /tmp/review-site-body "$site_url/")
           test "$status" = 200
-          tr -d '\r' < /tmp/review-site-headers | grep -Fxi 'X-Robots-Tag: noindex, nofollow'
+          test "$(tr -d '\r' < /tmp/review-site-headers | awk 'BEGIN { IGNORECASE=1; count=0; exact=0 } /^X-Robots-Tag:/ { count++; if ($0 == "X-Robots-Tag: noindex, nofollow") exact++ } END { print count ":" exact }')" = '1:1'
           python3 - /tmp/review-site-body "$dashboard_url" <<'PY'
           import sys
           from html.parser import HTMLParser

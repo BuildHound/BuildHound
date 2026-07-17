@@ -39,7 +39,7 @@ jobs:
   qualify:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    permissions: {contents: read, pull-requests: read, actions: read}
+    permissions: {contents: read, pull-requests: read, actions: read, statuses: read, issues: read}
     outputs:
       deploy: ${{ steps.pr.outputs.deploy }}
     steps:
@@ -89,6 +89,23 @@ jobs:
             exit 0
           fi
 
+          # A success from before the latest review request must not survive
+          # an unlabel/relabel cycle or a close/reopen cycle. Other label and
+          # cleanup events share the workflow, so bind to the PR lifecycle
+          # instead of naively requiring the newest workflow run.
+          events=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/$pr/events?per_page=100")
+          review_cutoff=$(jq -ser '
+            [ .[][] |
+              select(
+                (.event == "labeled" and .label.name == "deploy-review") or
+                .event == "reopened"
+              ) |
+              .created_at |
+              select(type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+            ] | max // empty
+          ' <<<"$events")
+          test -n "$review_cutoff"
+
           # A label alone is insufficient: promotion consumes the newest
           # exact-context status on the merged PR's *head* commit, then
           # verifies that it points at a successful protected review run.
@@ -99,6 +116,9 @@ jobs:
             [ .[][] | select(.context == $context) ]
             | sort_by(.updated_at, .id) | last // empty
           ' <<<"$statuses")
+          jq -e --arg cutoff "$review_cutoff" '
+            (.updated_at | type) == "string" and .updated_at >= $cutoff
+          ' <<<"$proof" >/dev/null
           state=$(jq -er '.state | select(type == "string")' <<<"$proof")
           creator=$(jq -er '.creator.login | select(type == "string")' <<<"$proof")
           target_url=$(jq -er '.target_url | select(type == "string")' <<<"$proof")

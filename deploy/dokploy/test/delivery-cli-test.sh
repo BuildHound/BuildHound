@@ -268,7 +268,7 @@ dokploy_api() {
             rollbackRegistry:null,autoDeploy:false,placementSwarm:{Constraints:["node.labels.role==staging"]},
             registryUrl:"ghcr.io",username:"robot",password:"pull-token",environmentId:"wrong-environment",serverId:(if $serverId == "" then null else $serverId end),
             env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://wrong-dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=false",
-            domains:[{domainId:"domain1",host:"wrong-site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null}]}'
+            redirects:[],security:[],domains:[{domainId:"domain1",host:"wrong-site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null,customEntrypoint:null,internalPath:"/",stripPath:false,middlewares:[],forwardAuthEnabled:false,serviceName:null}]}'
         return 0
       else
         auto_deploy=${APPLICATION_AUTO_DEPLOY_BEFORE-true}
@@ -283,7 +283,7 @@ dokploy_api() {
             rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
             registryUrl:"ghcr.io",username:"",password:"",environmentId:"env1",serverId:(if $serverId == "" then null else $serverId end),
             env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-            domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null}]}'
+            redirects:[],security:[],domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null,customEntrypoint:null,internalPath:"/",stripPath:false,middlewares:[],forwardAuthEnabled:false,serviceName:null}]}'
       elif [[ $FAKE_MODE == deploy_registry_drift && -f $test_root/site-deployed ]]; then
         jq -cn --arg image "$SITE_IMAGE" --arg serverId "${COMPOSE_SERVER_ID-}" --argjson autoDeploy "$auto_deploy" --argjson placement "$placement" \
           '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:"registry2",
@@ -291,7 +291,7 @@ dokploy_api() {
             buildRegistry:null,rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
             registryUrl:"ghcr.io",username:"robot",password:"pull-token",environmentId:"env1",serverId:(if $serverId == "" then null else $serverId end),
             env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-            domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null}]}'
+            redirects:[],security:[],domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null,customEntrypoint:null,internalPath:"/",stripPath:false,middlewares:[],forwardAuthEnabled:false,serviceName:null}]}'
       else
         jq -cn --arg image "$SITE_IMAGE" --arg serverId "${COMPOSE_SERVER_ID-}" --argjson autoDeploy "$auto_deploy" --argjson placement "$placement" \
           '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:null,
@@ -299,7 +299,7 @@ dokploy_api() {
             rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
             registryUrl:"ghcr.io",username:"robot",password:"pull-token",environmentId:"env1",serverId:(if $serverId == "" then null else $serverId end),
             env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-            domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null}]}'
+            redirects:[],security:[],domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null,customEntrypoint:null,internalPath:"/",stripPath:false,middlewares:[],forwardAuthEnabled:false,serviceName:null}]}'
       fi
       ;;
     *)
@@ -331,7 +331,8 @@ jq -cn --arg image "$SITE_IMAGE" '
    buildRegistry:null,rollbackRegistry:null,registryUrl:"ghcr.io",username:"robot",
    password:"pull-token",environmentId:"env1",serverId:null,
    env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-   domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null}],placementSwarm:{Constraints:["node.labels.role==staging"]}}
+   redirects:[],security:[],
+   domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null,customEntrypoint:null,internalPath:"/",stripPath:false,middlewares:[],forwardAuthEnabled:false,serviceName:null}],placementSwarm:{Constraints:["node.labels.role==staging"]}}
 ' > "$test_root/bound-site-app.json"
 jq '.domains += [{host:"attacker.example.test"}]' "$test_root/bound-site-app.json" > "$test_root/extra-domain-app.json"
 if require_site_application_binding "$test_root/extra-domain-app.json" a1 env1 '' \
@@ -353,6 +354,40 @@ jq '.domains[0].certificateType = "letsencrypt" | .domains[0].customCertResolver
 if require_site_application_binding "$test_root/certificate-drift-app.json" a1 env1 '' \
     https://site.example.test https://dashboard.example.test true; then
   fail_test 'site certificate/resolver drift passed the binding check'
+fi
+jq '.domains[0].middlewares = ["redirect-to-attacker"]' \
+  "$test_root/bound-site-app.json" > "$test_root/middleware-drift-app.json"
+if require_site_application_binding "$test_root/middleware-drift-app.json" a1 env1 '' \
+    https://site.example.test https://dashboard.example.test true; then
+  fail_test 'site middleware drift passed the binding check'
+fi
+jq '.domains[0].forwardAuthEnabled = true' \
+  "$test_root/bound-site-app.json" > "$test_root/forward-auth-drift-app.json"
+if require_site_application_binding "$test_root/forward-auth-drift-app.json" a1 env1 '' \
+    https://site.example.test https://dashboard.example.test true; then
+  fail_test 'site forward-auth drift passed the binding check'
+fi
+jq '.redirects = [{redirectId:"redirect1",regex:".*",replacement:"https://attacker.example"}]' \
+  "$test_root/bound-site-app.json" > "$test_root/redirect-drift-app.json"
+if require_site_application_binding "$test_root/redirect-drift-app.json" a1 env1 '' \
+    https://site.example.test https://dashboard.example.test true; then
+  fail_test 'pre-update Application redirect drift passed the binding check'
+fi
+if require_exact_release_application_state "$test_root/redirect-drift-app.json" \
+    "$test_root/bound-site-app.json" a1 "$SITE_IMAGE" ghcr.io staging env1 '' \
+    https://site.example.test https://dashboard.example.test true; then
+  fail_test 'post-update Application redirect drift passed the exact-state check'
+fi
+jq '.security = [{securityId:"security1",username:"attacker",password:"secret"}]' \
+  "$test_root/bound-site-app.json" > "$test_root/security-drift-app.json"
+if require_site_application_binding "$test_root/security-drift-app.json" a1 env1 '' \
+    https://site.example.test https://dashboard.example.test true; then
+  fail_test 'pre-update Application security drift passed the binding check'
+fi
+if require_exact_release_application_state "$test_root/security-drift-app.json" \
+    "$test_root/bound-site-app.json" a1 "$SITE_IMAGE" ghcr.io staging env1 '' \
+    https://site.example.test https://dashboard.example.test true; then
+  fail_test 'post-update Application security drift passed the exact-state check'
 fi
 
 reset_api
