@@ -145,7 +145,12 @@ log + exit 0) while they are unset. Nothing uploads until the owner:
    probe): `POST /v1/builds` returns 2xx AND a read endpoint (e.g.
    `GET /v1/builds/<id>`) returns 401/403 — proving the token cannot read.
 4. Creates the repo **secrets**: `BUILDHOUND_PROD_INGEST_TOKEN`,
-   `BUILDHOUND_STAGING_INGEST_TOKEN`.
+   `BUILDHOUND_STAGING_INGEST_TOKEN`. The two ingest tokens are **secrets, never
+   variables** — a repo *variable* is stored and served in plaintext (readable in the UI
+   and via the API) and is exposed to fork PR runs, which would hand the ingest credential
+   to exactly the untrusted context the fork gate exists to exclude. ci.yml reads the
+   tokens from `secrets.*` (`BUILDHOUND_DOGFOOD_TOKEN`, `publish-staging`), so a token
+   placed in `vars` is also silently empty → uploads skip.
 5. Creates the repo **variables** (dashboard origins, `https://…`, no trailing path)
    **last, and only after the matching token secret exists**:
    `BUILDHOUND_PROD_SERVER_URL`, `BUILDHOUND_STAGING_SERVER_URL`. A URL-without-token
