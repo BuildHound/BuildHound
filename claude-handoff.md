@@ -4,8 +4,8 @@
 
 This handoff accompanies two approved, already-committed plans, implemented **in order**:
 
-1. [`docs/plans/093-dogfood-buildhound-telemetry.md`](docs/plans/093-dogfood-buildhound-telemetry.md) — collection only, no server URL/credentials.
-2. [`docs/plans/094-multi-env-build-data-publication.md`](docs/plans/094-multi-env-build-data-publication.md) — routing + credentials, depends on 093's artifacts.
+1. [`docs/plans/implemented/093-dogfood-buildhound-telemetry.md`](docs/plans/implemented/093-dogfood-buildhound-telemetry.md) — collection only, no server URL/credentials.
+2. [`docs/plans/implemented/094-multi-env-build-data-publication.md`](docs/plans/implemented/094-multi-env-build-data-publication.md) — routing + credentials, depends on 093's artifacts.
 
 **093 must fully land — implemented, tested, both fresh-context reviews clean — before 094
 starts.** 094 adds real ingest tokens and new workflow jobs on top of the init script and
@@ -172,7 +172,7 @@ must run per plan and findings fixed or explicitly accepted before merge.
 
 ## Kickoff prompt for the next agent
 
-> Implement plan 093 from `docs/plans/093-dogfood-buildhound-telemetry.md` on a fresh branch
+> Implement plan 093 from `docs/plans/implemented/093-dogfood-buildhound-telemetry.md` on a fresh branch
 > off latest `origin/main`. Treat `claude-handoff.md` at the repo root
 > as authoritative for verified codebase facts, hard constraints, and the task list — do not
 > re-derive them. Implement every task under 093 in that handoff's task list (init script,
@@ -188,5 +188,5 @@ must run per plan and findings fixed or explicitly accepted before merge.
 > and `infra-reviewer` (`ci.yml`), plus the mandatory §3.2 security & privacy review (token
 > handling in the init script, no secrets in workflow YAML). Fix findings or
 > record explicit owner acceptance before considering 093 done. If implementation diverges
-> from the plan, update `docs/plans/093-dogfood-buildhound-telemetry.md` in the same PR and
+> from the plan, update `docs/plans/implemented/093-dogfood-buildhound-telemetry.md` in the same PR and
 > say why.
