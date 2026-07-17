@@ -393,10 +393,10 @@ cmd_deploy_release() (
       *) usage; return 2 ;;
     esac
   done
-  # Owner decision (plan 088 live verification): the staging site Application
-  # is not provisioned yet; --skip-site deploys the compose stack only. The
-  # flag and a site application ID are mutually exclusive so a skipped site
-  # deploy is always an explicit, visible choice — never a fallback.
+  # --skip-site remains an explicit target compatibility/emergency path; normal
+  # staging delivery supplies its provisioned site Application ID. The flag and
+  # an application ID are mutually exclusive so a skipped site deploy is always
+  # visible — never a fallback.
   if [ "$skip_site" = true ] && [ -n "$site_application_id" ]; then
     fail "skip-site conflicts with a site application ID"
     return 2

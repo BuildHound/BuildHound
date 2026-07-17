@@ -550,8 +550,8 @@ jq -e --arg title "$TITLE" \
 jq -e --arg title "$TITLE" \
   '. == {applicationId:"a1",title:$title}' "$test_root/body-11.json" >/dev/null
 
-# --skip-site (owner decision, plan 088): dashboard-only deploy touches no
-# application.* endpoint and reports a null site deployment.
+# --skip-site is an explicit target compatibility/emergency path: dashboard-only
+# deploy touches no application.* endpoint and reports a null site deployment.
 reset_api
 FAKE_MODE=deploy
 assert_status 2 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \

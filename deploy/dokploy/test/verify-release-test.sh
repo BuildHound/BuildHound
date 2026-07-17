@@ -94,8 +94,8 @@ set -e
 test "$status" -ne 0
 test ! -s "$curl_log"
 
-# Skip-site mode (owner decision, plan 088): the site probe is skipped, the
-# dashboard checks stay mandatory, URL validation still applies.
+# Compatibility/emergency skip mode: the site probe is skipped, the three
+# dashboard checks stay mandatory, and URL validation still applies.
 : > "$curl_log"
 BUILDHOUND_SKIP_SITE_CHECKS=true run_verify https://site.example.test https://dashboard.example.test
 test "$(wc -l < "$curl_log")" -eq 3
