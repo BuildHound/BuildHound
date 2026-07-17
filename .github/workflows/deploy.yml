@@ -156,12 +156,14 @@ jobs:
           gh run download "$run_id" --repo "$GITHUB_REPOSITORY" --name review-attestation --dir "$proof_dir"
           proof_file=$(find "$proof_dir" -type f -name review.json -print -quit)
           test -n "$proof_file"
+          # review-proof-validator:start
           jq -e -s --arg legacy_bootstrap "$legacy_bootstrap" --arg registry "$IMAGE_REGISTRY_PREFIX" --arg repository "$GITHUB_REPOSITORY" --argjson pr "$pr" \
             --arg sha "$head_sha" --arg run_id "$run_id" --argjson run_attempt "$run_attempt" \
             --arg review_request_event_id "$review_request_event_id" '
-            length == 1 and .[0] as $proof and
+            (length == 1) and
+            (.[0] as $proof |
             ($proof | type) == "object" and
-            if $legacy_bootstrap == "true" then
+            (if $legacy_bootstrap == "true" then
               ($proof | keys) == ["attemptId","composeId","deploymentId","headSha","pr","repository","runId","schema","serverImage","siteImage"] and
               $proof.schema == 1 and $proof.repository == $repository and $proof.pr == $pr and
               $proof.headSha == $sha and $proof.runId == $run_id and
@@ -183,8 +185,9 @@ jobs:
               ($proof.siteDigest | type) == "string" and ($proof.siteDigest | test("^sha256:[0-9a-f]{64}$")) and
               ($proof.serverImage == ($registry + "/buildhound-server@" + $proof.serverDigest)) and
               ($proof.siteImage == ($registry + "/buildhound-site@" + $proof.siteDigest))
-            end
+            end))
           ' "$proof_file" >/dev/null
+          # review-proof-validator:end
           echo "deploy=true" >> "$GITHUB_OUTPUT"
   publish:
     needs: qualify
