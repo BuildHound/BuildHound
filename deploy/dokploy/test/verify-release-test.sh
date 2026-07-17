@@ -10,18 +10,24 @@ curl_log="$root/curl.log"
 cat > "$bin/curl" <<'EOF'
 #!/usr/bin/env sh
 printf '%s\n' "$*" >> "$CURL_LOG"
-dump_headers=false
+dump_target=''
+previous=''
 for argument do
-  [ "$argument" = -D ] && dump_headers=true
+  [ "$previous" = -D ] && dump_target=$argument
+  previous=$argument
   url=$argument
 done
-if [ "$dump_headers" = true ]; then
-  printf 'HTTP/2 200\r\n'
-  if [ "${MOCK_ROBOTS_OMIT-}" != true ]; then
-    printf 'x-robots-tag: %s\r\n' "${MOCK_ROBOTS_VALUE-noindex, nofollow}"
-  fi
-  printf '\r\n'
-  exit 0
+if [ -n "$dump_target" ]; then
+  {
+    printf 'HTTP/2 200\r\n'
+    if [ "${MOCK_ROBOTS_OMIT-}" != true ]; then
+      printf 'x-robots-tag: %s\r\n' "${MOCK_ROBOTS_VALUE-noindex, nofollow}"
+      if [ "${MOCK_ROBOTS_DUPLICATE-}" = true ]; then
+        printf 'x-robots-tag: %s\r\n' "${MOCK_ROBOTS_VALUE-noindex, nofollow}"
+      fi
+    fi
+    printf '\r\n'
+  } > "$dump_target"
 fi
 case "$url" in
   https://site.example.test/) printf 'Track every Gradle build\n' ;;
@@ -51,28 +57,35 @@ run_verify() (
 
 : > "$curl_log"
 run_verify https://site.example.test https://dashboard.example.test
-test "$(wc -l < "$curl_log")" -eq 5
+test "$(wc -l < "$curl_log")" -eq 4
 
 # Robots-header gate (plan 095): the expectation is value-agnostic (production
-# pins "all"); a wrong or missing served header fails right after the probe
-# (health + probe = 2 calls); an unset expectation fails before any curl.
+# pins "all"); a wrong, missing, or duplicated served header fails right after
+# the health gate (1 call); an unset expectation fails before any curl.
 : > "$curl_log"
 EXPECTED_ROBOTS=all MOCK_ROBOTS_VALUE=all run_verify https://site.example.test https://dashboard.example.test
-test "$(wc -l < "$curl_log")" -eq 5
+test "$(wc -l < "$curl_log")" -eq 4
 : > "$curl_log"
 set +e
 MOCK_ROBOTS_VALUE=all run_verify https://site.example.test https://dashboard.example.test >/dev/null 2>&1
 status=$?
 set -e
 test "$status" -ne 0
-test "$(wc -l < "$curl_log")" -eq 2
+test "$(wc -l < "$curl_log")" -eq 1
 : > "$curl_log"
 set +e
 MOCK_ROBOTS_OMIT=true run_verify https://site.example.test https://dashboard.example.test >/dev/null 2>&1
 status=$?
 set -e
 test "$status" -ne 0
-test "$(wc -l < "$curl_log")" -eq 2
+test "$(wc -l < "$curl_log")" -eq 1
+: > "$curl_log"
+set +e
+MOCK_ROBOTS_DUPLICATE=true run_verify https://site.example.test https://dashboard.example.test >/dev/null 2>&1
+status=$?
+set -e
+test "$status" -ne 0
+test "$(wc -l < "$curl_log")" -eq 1
 : > "$curl_log"
 set +e
 EXPECTED_ROBOTS_UNSET=true run_verify https://site.example.test https://dashboard.example.test >/dev/null 2>&1
@@ -82,10 +95,10 @@ test "$status" -ne 0
 test ! -s "$curl_log"
 
 # Skip-site mode (owner decision, plan 088): the site probe is skipped, the
-# three dashboard checks stay mandatory, URL validation still applies.
+# dashboard checks stay mandatory, URL validation still applies.
 : > "$curl_log"
 BUILDHOUND_SKIP_SITE_CHECKS=true run_verify https://site.example.test https://dashboard.example.test
-test "$(wc -l < "$curl_log")" -eq 4
+test "$(wc -l < "$curl_log")" -eq 3
 if grep -q 'site.example.test' "$curl_log"; then
   printf 'skip-site smoke still probed the site\n' >&2
   exit 1

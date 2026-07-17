@@ -31,7 +31,8 @@ for label, value in zip(("site URL", "dashboard URL"), sys.argv[1:]):
 PY
 payload=buildhound-commons/src/jvmTest/resources/golden/build-payload-v1-ci-env.json
 request_payload=$(mktemp)
-trap 'rm -f "$request_payload"' EXIT
+header_dump=$(mktemp)
+trap 'rm -f "$request_payload" "$header_dump"' EXIT
 new_build_id=$(python3 -c 'import uuid; print(uuid.uuid4())')
 jq --arg build_id "$new_build_id" '.buildId = $build_id' "$payload" > "$request_payload"
 build_id=$(jq -er .buildId "$request_payload")
@@ -40,7 +41,7 @@ build_id=$(jq -er .buildId "$request_payload")
 # the first contact with each service instead of failing on the race.
 retry_ok=false
 for _ in $(seq 1 20); do
-  if body=$(curl -fsS "$BUILDHOUND_DASHBOARD_URL/health" 2>/dev/null) &&
+  if body=$(curl -fsS -D "$header_dump" "$BUILDHOUND_DASHBOARD_URL/health" 2>/dev/null) &&
      jq -e '.status == "ok"' >/dev/null 2>&1 <<<"$body"; then
     retry_ok=true
     break
@@ -53,10 +54,13 @@ test "$retry_ok" = true
 # The stack manifests default BUILDHOUND_ROBOTS_HEADER to "all", so a reset
 # staging Dokploy environment silently becomes indexable (plan 095). The
 # expectation is pinned per environment in deploy.yml, independent of the
-# Dokploy environment this audits. GET, not HEAD: the health contract above
-# only guarantees GET. A missing or duplicated header also mismatches.
-robots_header=$(curl -fsS -D - -o /dev/null "$BUILDHOUND_DASHBOARD_URL/health" \
-  | tr -d '\r' | awk 'tolower($0) ~ /^x-robots-tag:/ {sub(/^[^:]*:[ \t]*/, ""); print}')
+# Dokploy environment this audits. The headers were captured (-D) from the
+# same request that proved health, inheriting its rollout-race retry; -D
+# receives headers only, so the response body can never forge an
+# x-robots-tag line into this parse. The value comparison is byte-exact on
+# purpose: a missing, duplicated, or re-cased header value all mismatch.
+robots_header=$(tr -d '\r' < "$header_dump" \
+  | awk 'tolower($0) ~ /^x-robots-tag:/ {sub(/^[^:]*:[ \t]*/, ""); print}')
 if [ "$robots_header" != "$BUILDHOUND_EXPECTED_ROBOTS_HEADER" ]; then
   printf 'X-Robots-Tag mismatch: expected "%s", observed "%s"\n' \
     "$BUILDHOUND_EXPECTED_ROBOTS_HEADER" "$robots_header" >&2

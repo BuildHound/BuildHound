@@ -23,20 +23,25 @@ repo), review environments (ephemeral, never DNS-published).
 ## Design
 
 - `verify-release.sh` requires a new env `BUILDHOUND_EXPECTED_ROBOTS_HEADER` (fail-closed
-  `:?` like the existing four). After the health retry loop proves `/health` is up, one
-  `curl -fsS -D - -o /dev/null "$BUILDHOUND_DASHBOARD_URL/health"` captures response
-  headers (GET, not HEAD — no assumption the server routes HEAD); the `X-Robots-Tag`
-  value must equal the expectation exactly. Missing or duplicated headers both mismatch.
+  `:?` like the existing four). The health retry loop's own `curl` gains `-D "$header_dump"`,
+  so headers are captured from the exact request that proved `/health` (GET, not HEAD — no
+  assumption the server routes HEAD); the `X-Robots-Tag` value must equal the expectation
+  exactly. Missing or duplicated headers both mismatch.
+  *(Divergence from the committed plan, applied during review: originally a separate
+  single-shot probe after the loop; both reviewers flagged that it uniquely lacked the
+  rollout-race retry every other network check has. Folding the capture into the health
+  loop inherits the retry and drops one request.)*
 - `deploy.yml` verify steps pin the expectation in the workflow itself — staging
   `noindex, nofollow`, production `all` — so the check is independent of the very Dokploy
   environment it audits.
 
 ## Test strategy
 
-Extend the mock `curl` in `verify-release-test.sh` to emit a header block for `-D` calls
-(`MOCK_ROBOTS_VALUE` / `MOCK_ROBOTS_OMIT` knobs). Cases: matching header passes (call
-count grows 4→5; skip-site 3→4), wrong value fails, absent header fails, unset
-expectation fails before any curl. `dokploy-policy.yml` already runs this test in CI.
+Extend the mock `curl` in `verify-release-test.sh` to write a header block to the `-D`
+target (`MOCK_ROBOTS_VALUE` / `MOCK_ROBOTS_OMIT` / `MOCK_ROBOTS_DUPLICATE` knobs). Cases:
+matching header passes (call counts unchanged: 4 full, 3 skip-site), wrong value fails,
+absent header fails, duplicated header fails, unset expectation fails before any curl.
+`dokploy-policy.yml` already runs this test in CI.
 
 ## Risks
 
