@@ -132,6 +132,23 @@ workflows (088/089), client internals beyond what the collapse deletes (091).
    `main`** — environment protection is the sole barrier around deployment
    secrets for dispatched refs.
 
+9. **The Stage C merge landed unlabeled; live verification runs on a
+   follow-up labeled merge.** PR #59 was rebase-merged on 2026-07-16
+   (merge tip `b1394fd`) without the `deploy-review` label. The qualify
+   gate behaved exactly as designed: the merge push run (29479666439)
+   produced `deploy=false` — publish and both deploy jobs skipped — so the
+   Stage C merge itself deployed nothing and left no waiting
+   `deploy-production` run. The roadmap's Stage C live verification
+   (one-run `qualify`→`publish`→`deploy-staging` green, `deploy-production`
+   Waiting) is therefore decoupled from the Stage C merge and runs on the
+   first labeled merge after the `production` environment gains required
+   reviewers (Gate H2 remainder — without reviewers, a labeled merge would
+   *run* `deploy-production` instead of holding it). The PR carrying this
+   divergence entry is that vehicle. `deploy.yml` is unchanged on main
+   since `b1394fd`; intervening merges touched only `ci.yml`,
+   `publish-gradle-plugin.yml`, actionlint config, plugin/server code, and
+   docs.
+
 ## Test strategy
 
 `deploy-release-resolver-test.sh` retires with the resolver; replacement tests assert:
