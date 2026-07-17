@@ -209,11 +209,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: {persist-credentials: false}
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - id: build_server
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: buildhound-server/Dockerfile
@@ -222,7 +222,7 @@ jobs:
           provenance: true
           sbom: true
       - id: build_site
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: site/Dockerfile
@@ -231,7 +231,7 @@ jobs:
           provenance: true
           sbom: true
       - id: build_backup
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/dokploy/backup/Dockerfile
@@ -240,7 +240,7 @@ jobs:
           provenance: true
           sbom: true
       - id: build_db
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/dokploy/db/Dockerfile
@@ -250,22 +250,22 @@ jobs:
           sbom: true
       # GitHub-native provenance: this is what `gh attestation verify` checks
       # before any dispatch redeploy/rollback trusts a digest.
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-server
           subject-digest: ${{ steps.build_server.outputs.digest }}
           push-to-registry: true
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-site
           subject-digest: ${{ steps.build_site.outputs.digest }}
           push-to-registry: true
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-backup
           subject-digest: ${{ steps.build_backup.outputs.digest }}
           push-to-registry: true
-      - uses: actions/attest-build-provenance@v3
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-db
           subject-digest: ${{ steps.build_db.outputs.digest }}
@@ -307,7 +307,7 @@ jobs:
             --migrations-dir buildhound-server/src/main/resources/db/migration
           mkdir release-artifact
           cp release.json deploy/dokploy/stack.yaml deploy/dokploy/staging-stack.yaml deploy/dokploy/volume-guard.sh release-artifact/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: {name: "release-${{ github.sha }}", path: release-artifact, retention-days: 90}
   resolve_dispatch:
     if: github.event_name == 'workflow_dispatch'
@@ -322,7 +322,7 @@ jobs:
       # gh attestation verify on an oci:// URL reads the registry through the
       # local Docker credential store; the packages are private, so the
       # rollback path needs an explicit login (infra review).
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
       - id: verify
         env:
