@@ -172,10 +172,17 @@ workflows (088/089), client internals beyond what the collapse deletes (091).
     has group or world access") and `pg_dump` got no password. Same latency
     class as divergence 10: only the production stack mounts Swarm secrets, so
     the bug could not surface before the first prod anchor. Fixed as
-    `mode: 0o400`; a regression test bans bare leading-zero mode literals in
-    all dokploy manifests. The production anchor must again be re-pasted from
-    the fixed manifest, and this fix's labeled merge supersedes `480008c0`
-    (merged unlabeled — no published images) as the Stage D dispatch candidate.
+    `mode: 0o400`; a regression test allowlists file modes (bare `0o` octal,
+    no group/other bits — a leading-zero *ban* alone is bypassable by bare
+    decimal `mode: 400`, which reproduces the identical 0o620 result). The
+    production anchor must again be re-pasted from the fixed manifest, and
+    this fix's labeled merge supersedes `480008c0` (merged unlabeled — no
+    published images) as the Stage D dispatch candidate. §3.2 exposure
+    assessment: the 0o620 window was fail-closed and availability-only — the
+    stray bit was group-*write*, gid 10001's sole member is the owning uid,
+    and libpq refused the file rather than using it — so no confidentiality
+    widening occurred and **no credential rotation was warranted** for this
+    specific bug.
 
 ## Test strategy
 
