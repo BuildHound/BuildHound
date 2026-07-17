@@ -52,6 +52,10 @@ _review_compare_dokploy_version() {
 # that works from a nested process; the lib stays runner-agnostic otherwise.
 _review_require_supported_dokploy_version() {
   local warn=${1:-} response version comparison message
+  case $warn in
+    warn|quiet) ;;
+    *) die "version gate requires an explicit warn|quiet argument"; return 1 ;;
+  esac
   response=$(dokploy_api GET settings.getDokployVersion) || return 1
   if ! version=$(jq -er 'select(type == "string")' <<< "$response"); then
     die "review lifecycle could not read the reported Dokploy version"
@@ -656,7 +660,7 @@ deploy_review() (
   local mutation_possible=false deploy_may_be_active=false terminal=false
 
   review_validate_deploy_args "$@" || return 1
-  _review_require_supported_dokploy_version || return 1
+  _review_require_supported_dokploy_version quiet || return 1
   name=$(review_name "$pr") || return 1
   provider_id=$(review_provider_id "$base_repo" "$pr") || return 1
   hosts=$(review_hosts "$name" "$dns_suffix") || return 1
@@ -935,7 +939,7 @@ scrub_review() (
   local persisted_file old_file title body deployment_id retired scrub_epoch
   [[ $# -eq 7 ]] || { die "scrub_review requires seven arguments"; return 1; }
   _review_validate_cleanup_args "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id" || return 1
-  _review_require_supported_dokploy_version || return 1
+  _review_require_supported_dokploy_version quiet || return 1
   record=$(_review_get_exact_record "$base_repo" "$pr" "$environment_id" "$compose_id" "$sha" "$attempt_id") || return 1
   name=$(review_name "$pr") || return 1
   provider_id=$(review_provider_id "$base_repo" "$pr") || return 1
@@ -998,7 +1002,7 @@ retire_review() (
   local update_file persisted_file retired_at
   [[ $# -eq 7 ]] || { die "retire_review requires seven arguments"; return 1; }
   _review_validate_cleanup_args "$base_repo" "$pr" "$environment_id" "$dns_suffix" "$compose_id" "$sha" "$attempt_id" || return 1
-  _review_require_supported_dokploy_version || return 1
+  _review_require_supported_dokploy_version quiet || return 1
   record=$(_review_get_exact_record "$base_repo" "$pr" "$environment_id" "$compose_id" "$sha" "$attempt_id") || return 1
   name=$(review_name "$pr") || return 1
   provider_id=$(review_provider_id "$base_repo" "$pr") || return 1
