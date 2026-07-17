@@ -153,11 +153,11 @@ dokploy_api() {
   printf '%s|%s\n' "$method" "$path" >> "$TEST_ROOT/calls.log"
   case "$method|$path" in
     'GET|settings.getDokployVersion')
-      if [[ $FAKE_MODE == version_drift ]]; then
-        printf '"v0.29.13"\n'
-      else
-        printf '"v0.29.12"\n'
-      fi
+      case "$FAKE_MODE" in
+        version_below) printf '"v0.29.11"\n' ;;
+        version_above) printf '"v0.29.13"\n' ;;
+        *) printf '"v0.29.12"\n' ;;
+      esac
       ;;
     'GET|environment.one?environmentId=env1')
       case "$FAKE_MODE" in
@@ -371,13 +371,33 @@ deploy_args=(
   "$ATTEMPT"
 )
 
-reset_fake version_drift
+# Design-2 version gate: a version below the documented minimum fails closed
+# before any environment mutation; the minimum and newer versions pass, and a
+# newer-than-baseline version warns and proceeds.
+reset_fake version_below
 if deploy_review "${deploy_args[@]}" >/dev/null 2> "$TEST_ROOT/error.log"; then
-  fail 'unsupported Dokploy version was accepted'
+  fail 'below-minimum Dokploy version was accepted'
 fi
-grep -F 'review lifecycle requires Dokploy v0.29.12' "$TEST_ROOT/error.log" >/dev/null
+grep -F 'review lifecycle requires Dokploy v0.29.12 or newer' "$TEST_ROOT/error.log" >/dev/null
 assert_log_lacks 'GET|environment.one?environmentId=env1'
 assert_log_lacks 'POST|compose.create'
+
+reset_fake success
+_review_require_supported_dokploy_version 2> "$TEST_ROOT/error.log" || \
+  fail 'minimum Dokploy version was rejected'
+[[ ! -s $TEST_ROOT/error.log ]] || fail 'minimum Dokploy version emitted a warning'
+
+reset_fake version_above
+_review_require_supported_dokploy_version 2> "$TEST_ROOT/error.log" || \
+  fail 'newer Dokploy version was rejected'
+grep -F 'newer than the validated baseline' "$TEST_ROOT/error.log" >/dev/null
+
+# End-to-end: a newer-than-baseline version warns but still completes a full
+# deploy — the Design-2 motivation (patch releases no longer break the client).
+reset_fake version_above
+result=$(deploy_review "${deploy_args[@]}" 2> "$TEST_ROOT/error.log")
+jq -e '.name == "mr42" and .composeId == "c1" and .deploymentId == "d1"' >/dev/null <<< "$result"
+grep -F 'newer than the validated baseline' "$TEST_ROOT/error.log" >/dev/null
 
 reset_fake success
 result=$(deploy_review "${deploy_args[@]}")
