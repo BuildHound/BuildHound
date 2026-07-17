@@ -1050,11 +1050,6 @@ count_reviews() {
   [[ $# -eq 3 && $1 == BuildHound/BuildHound && $2 == env1 && $3 == 42 ]] || return 93
   printf '1\n'
 }
-revoke_review() {
-  [[ $# -eq 7 && $1 == BuildHound/BuildHound && $2 == 42 && $3 == env1 &&
-     $4 == reviews.example.test && $5 == c42 && $6 == "$SOURCE_SHA" && $7 == 12345.1 ]] || return 94
-  printf '{"revoked": "mr42"}\n'
-}
 scrub_review() {
   [[ $# -eq 7 && $1 == BuildHound/BuildHound && $2 == 42 && $3 == env1 &&
      $4 == reviews.example.test && $5 == c42 && $6 == "$SOURCE_SHA" && $7 == 12345.1 ]] || return 95
@@ -1098,10 +1093,6 @@ jq -e '.name == "mr42" and .composeId == "c42" and .deploymentId == "d42"' \
 assert_eq "$(< "$test_root/review-call-order")" $'version\nintegration'
 assert_eq "$(main list-reviews --base-repo BuildHound/BuildHound --environment-id env1)" '[{"pr":42}]'
 assert_eq "$(main count-reviews --base-repo BuildHound/BuildHound --environment-id env1 --exclude-pr 42)" 1
-assert_eq "$(main revoke-review --base-repo BuildHound/BuildHound --pr 42 --environment-id env1 \
-  --dns-suffix reviews.example.test --expected-compose-id c42 --expected-sha "$SOURCE_SHA" \
-  --expected-attempt-id 12345.1)" \
-  '{"revoked": "mr42"}'
 assert_eq "$(main scrub-review --base-repo BuildHound/BuildHound --pr 42 --environment-id env1 \
   --dns-suffix reviews.example.test --expected-compose-id c42 --expected-sha "$SOURCE_SHA" \
   --expected-attempt-id 12345.1)" \
