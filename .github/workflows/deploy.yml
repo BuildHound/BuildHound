@@ -54,21 +54,35 @@ jobs:
           # commits/{sha}/pulls is eventually consistent: six seconds after a
           # rebase merge it can return no association yet (run 29572242790,
           # 2026-07-17 — a labeled merge published nothing until a manual
-          # rerun). Re-ask before concluding no/ambiguous association; the
-          # qualifying predicate itself is unchanged and never weakened.
+          # rerun). Re-ask before concluding no association; the qualifying
+          # predicate itself is unchanged and never weakened. Hard gh api /
+          # jq failures retry too — a bare pulls=$(gh api ...) would trip the
+          # runner's default errexit mid-loop (PR #75 infra review).
+          # Ambiguity note: merge_commit_sha is unique and immutable per
+          # merge, so the qualifying count only ever grows 0→1; a 2→1
+          # flicker is structurally unreachable. If this predicate is ever
+          # loosened, redo that analysis (PR #75 §3.2 + infra-security).
           count=0
-          for attempt in 1 2 3 4 5 6; do
-            pulls=$(gh api "repos/${GITHUB_REPOSITORY}/commits/$GITHUB_SHA/pulls")
-            count=$(jq -er --arg repository "$GITHUB_REPOSITORY" --arg base "$DEFAULT_BRANCH" --arg sha "$GITHUB_SHA" '
-              [.[] | select(
-                .merged_at != null and .merge_commit_sha == $sha and
-                .head.repo.full_name == $repository and .base.repo.full_name == $repository and
-                .base.ref == $base
-              )] | length
-            ' <<<"$pulls")
-            [ "$count" -eq 1 ] && break
-            echo "attempt $attempt: qualifying-PR count=$count (association may lag the merge); retrying in 10s"
-            sleep 10
+          for attempt in 1 2 3 4 5; do
+            if pulls=$(gh api "repos/${GITHUB_REPOSITORY}/commits/$GITHUB_SHA/pulls"); then
+              count=$(jq -er --arg repository "$GITHUB_REPOSITORY" --arg base "$DEFAULT_BRANCH" --arg sha "$GITHUB_SHA" '
+                [.[] | select(
+                  .merged_at != null and .merge_commit_sha == $sha and
+                  .head.repo.full_name == $repository and .base.repo.full_name == $repository and
+                  .base.ref == $base
+                )] | length
+              ' <<<"$pulls" 2>/dev/null || echo 0)
+              [ "$count" -eq 1 ] && break
+              reason="qualifying-PR count=$count (association may lag the merge)"
+            else
+              reason="gh api request failed"
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "attempt $attempt: $reason; retrying in 5s"
+              sleep 5
+            else
+              echo "attempt $attempt: $reason"
+            fi
           done
           if [ "$count" -ne 1 ]; then
             echo "no single qualifying PR after $attempt attempts (count=$count)"
