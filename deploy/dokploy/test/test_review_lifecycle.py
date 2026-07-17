@@ -10,6 +10,27 @@ class ReviewPolicyTest(unittest.TestCase):
         stack = (ROOT / "deploy/dokploy/review-stack.yaml").read_text()
         site = stack.split("  site:", 1)[1].split("  server:", 1)[0]
         server = stack.split("  server:", 1)[1].split("  db:", 1)[0]
+        # The review site remains an image-only service in the trusted Stack;
+        # site/compose.yml is deliberately not a Swarm template.
+        self.assertIn("image: ${BUILDHOUND_SITE_IMAGE}", site)
+        self.assertIn(
+            "BUILDHOUND_SITE_DASHBOARD_URL: https://${BUILDHOUND_REVIEW_DASHBOARD_HOST}",
+            site,
+        )
+        self.assertIn("BUILDHOUND_SITE_NOINDEX: \"true\"", site)
+        self.assertIn("BUILDHOUND_SITE_HOST: ${BUILDHOUND_REVIEW_SITE_HOST}", site)
+        self.assertIn("BUILDHOUND_SITE_ROBOTS: noindex, nofollow", site)
+        self.assertIn("constraints: [node.labels.role == review]", site)
+        self.assertIn(
+            "traefik.http.routers.${BUILDHOUND_REVIEW_PROVIDER_ID}-site.rule="
+            "Host(`${BUILDHOUND_REVIEW_SITE_HOST}`)",
+            site,
+        )
+        self.assertIn(
+            "traefik.http.services.${BUILDHOUND_REVIEW_PROVIDER_ID}-site."
+            "loadbalancer.server.port=8080",
+            site,
+        )
         self.assertIn('user: "101:101"', site)
         self.assertIn('user: "10001:10001"', server)
         for service in (site, server):

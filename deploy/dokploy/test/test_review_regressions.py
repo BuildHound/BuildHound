@@ -298,18 +298,54 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn("push: false", publisher)
         self.assertIn("persist-credentials: false", publisher)
         source_checkout = workflow.index("- name: Check out the exact untrusted review source")
-        build = workflow.index("- name: Build review server without registry credentials")
+        build_server = workflow.index("- name: Build review server without registry credentials")
+        build_site = workflow.index("- name: Build review site without registry credentials")
         login = workflow.index("- uses: docker/login-action@v3")
         publish = workflow.index("name: Publish exact review images and record push digests")
         deploy = workflow.index("- name: Deploy and verify trusted review manifest")
-        self.assertLess(source_checkout, build)
-        self.assertLess(build, login)
+        self.assertLess(source_checkout, build_server)
+        self.assertLess(build_server, build_site)
+        self.assertLess(build_site, login)
         self.assertLess(login, publish)
         self.assertLess(publish, deploy)
-        self.assertIn("persist-credentials: false", workflow[:build])
+        self.assertIn("review-source/site/Dockerfile", workflow[build_site:login])
+        self.assertIn(
+            "${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-site:pr-"
+            "${{ env.REVIEW_PR }}-${{ env.REVIEW_SHA }}",
+            workflow[build_site:login],
+        )
+        self.assertIn("persist-credentials: false", workflow[:build_server])
         self.assertIn('docker push "$image" >"$log" || return 1', workflow[publish:deploy])
+        self.assertIn('site="$IMAGE_REGISTRY_PREFIX/buildhound-site:pr-$PR-$SHA"', workflow[publish:deploy])
+        self.assertIn('site_digest=$(push_digest "$site"', workflow[publish:deploy])
+        self.assertIn("site:{image:$siteImage,digest:$siteDigest}", workflow[publish:deploy])
         self.assertIn("runId:$runId", workflow[publish:deploy])
+        deploy_body = workflow[deploy:]
+        self.assertIn("site=$(jq -er .images.site.image", deploy_body)
+        self.assertIn("site_digest=$(jq -er .images.site.digest", deploy_body)
+        self.assertIn('--site-image "$site@$site_digest"', deploy_body)
         self.assertNotIn("docker buildx imagetools inspect", workflow)
+
+    def test_review_site_probe_precedes_dashboard_ingest_and_attestation(self):
+        workflow = self.read(".github/workflows/review-environment.yml")
+        site_probe = workflow.index('status=$(curl "${common[@]}" --dump-header /tmp/review-site-headers')
+        site_status = workflow.index('test "$status" = 200', site_probe)
+        site_noindex = workflow.index(
+            "X-Robots-Tag: noindex, nofollow", site_status
+        )
+        dashboard_probe = workflow.index(
+            'status=$(curl "${common[@]}" --dump-header /tmp/review-dashboard-headers',
+            site_noindex,
+        )
+        ingest = workflow.index('"$dashboard_url/v1/builds"', dashboard_probe)
+        read = workflow.index('"$dashboard_url/v1/builds/$build_id"', ingest)
+        attestation = workflow.index("name: review-attestation", read)
+        self.assertLess(site_probe, site_status)
+        self.assertLess(site_status, site_noindex)
+        self.assertLess(site_noindex, dashboard_probe)
+        self.assertLess(dashboard_probe, ingest)
+        self.assertLess(ingest, read)
+        self.assertLess(read, attestation)
 
     def test_review_smoke_uses_derived_hosts(self):
         workflow = self.read(".github/workflows/review-environment.yml")
