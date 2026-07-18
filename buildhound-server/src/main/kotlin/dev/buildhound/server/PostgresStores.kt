@@ -1630,24 +1630,78 @@ class PostgresBuildStore(
 
 class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
 
+    /**
+     * The predicate's third disjunct (plan 097) is the auth-path defense-in-depth: an unactivated
+     * token past its deadline is rejected here even if the sweep hasn't run yet. On a match with
+     * `activated_at IS NULL`, the first-use activation UPDATE runs on the same connection, keyed by
+     * `token_hash` (unique, like `id`) so [TokenPrincipal]/this query's column list stay unchanged —
+     * idempotent under concurrent first use (`WHERE … AND activated_at IS NULL`).
+     */
     override fun resolve(tokenHash: String): TokenPrincipal? =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
+            val resolved = connection.prepareStatement(
                 """
-                SELECT p.id, p.project_key, t.scope FROM api_tokens t
+                SELECT p.id, p.project_key, t.scope, t.activated_at FROM api_tokens t
                 JOIN projects p ON p.id = t.project_id
                 WHERE t.token_hash = ? AND t.revoked_at IS NULL
+                  AND (t.activated_at IS NOT NULL OR t.expires_unused_at IS NULL OR t.expires_unused_at > now())
                 """.trimIndent(),
             ).use { statement ->
                 statement.setString(1, tokenHash)
                 statement.executeQuery().use { rows ->
-                    if (!rows.next()) null
-                    else TokenPrincipal(
-                        project = ProjectRef(id = rows.getString(1), key = rows.getString(2)),
-                        scope = rows.getString(3),
-                    )
+                    if (!rows.next()) {
+                        null
+                    } else {
+                        val principal = TokenPrincipal(
+                            project = ProjectRef(id = rows.getString(1), key = rows.getString(2)),
+                            scope = rows.getString(3),
+                        )
+                        val needsActivation = rows.getObject(4, OffsetDateTime::class.java) == null
+                        principal to needsActivation
+                    }
                 }
             }
+            if (resolved != null && resolved.second) {
+                connection.prepareStatement(
+                    "UPDATE api_tokens SET activated_at = now() WHERE token_hash = ? AND activated_at IS NULL",
+                ).use { statement ->
+                    statement.setString(1, tokenHash)
+                    statement.executeUpdate()
+                }
+            }
+            resolved?.first
+        }
+
+    /**
+     * Mints an `ingest`-scoped (or other) token hash for [projectId] with a [TOKEN_UNUSED_TTL]
+     * activation deadline computed by the DB clock (`now() + interval '6 hours'`) — the same clock
+     * [resolve]'s predicate reads, so mint and validation can never skew. Returns the stored deadline.
+     */
+    override fun mintToken(projectId: String, tokenHash: String, scope: String): Instant =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                """
+                INSERT INTO api_tokens (project_id, token_hash, scope, expires_unused_at)
+                VALUES (?, ?, ?, now() + interval '6 hours')
+                RETURNING expires_unused_at
+                """.trimIndent(),
+            ).use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setString(2, tokenHash)
+                statement.setString(3, scope)
+                statement.executeQuery().use { rows ->
+                    rows.next()
+                    rows.getObject(1, OffsetDateTime::class.java).toInstant()
+                }
+            }
+        }
+
+    /** Sweep (plan 097): a never-activated token has authenticated nothing, so hard delete is safe. */
+    override fun deleteExpiredUnactivatedTokens(): Int =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(
+                "DELETE FROM api_tokens WHERE activated_at IS NULL AND expires_unused_at < now()",
+            ).use { statement -> statement.executeUpdate() }
         }
 
     override fun ensureProjectWithToken(projectKey: String, tokenHash: String, scope: String): ProjectRef =

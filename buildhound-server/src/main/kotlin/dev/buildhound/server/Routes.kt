@@ -31,7 +31,9 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.put
 import io.ktor.server.routing.route
 import java.io.ByteArrayInputStream
+import java.security.SecureRandom
 import java.sql.SQLException
+import java.util.Base64
 import java.util.zip.GZIPInputStream
 import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
@@ -44,6 +46,10 @@ data class IngestResponse(val buildId: String, val status: String)
 
 @Serializable
 data class ApiError(val error: String)
+
+/** `POST /v1/admin/tokens` response (plan 097) — the only place the plaintext ever exists. */
+@Serializable
+data class MintedTokenResponse(val token: String, val scope: String, val expiresUnusedAt: String)
 
 /** Compressed request cap; the decompressed cap is the zip-bomb guard (plan 009). */
 const val MAX_COMPRESSED_BYTES: Int = 32 * 1024 * 1024
@@ -369,9 +375,10 @@ fun Route.settingsRoutes(settings: SettingsStore, tokens: TokenStore) {
 }
 
 /**
- * `GET/PUT /v1/admin/retention` (plan 042): per-tenant retention windows. Admin-scoped — a `read`
- * token gets 403, a missing token 401. Invalid windows → 400. Tenant comes from the token, never the
- * body, so an admin token can only ever change its own project's retention.
+ * `GET/PUT /v1/admin/retention` (plan 042): per-tenant retention windows. `POST /tokens` (plan 097):
+ * mints an ingest-scope token for the dashboard's "Generate ingest token" action. All admin-scoped —
+ * a `read` token gets 403, a missing token 401. Tenant comes from the token, never the body/params, so
+ * an admin token can only ever act on its own project.
  */
 fun Route.adminRoutes(settings: SettingsStore, tokens: TokenStore) {
     route("/v1/admin") {
@@ -389,6 +396,20 @@ fun Route.adminRoutes(settings: SettingsStore, tokens: TokenStore) {
             cfg.validationError()?.let { return@put call.respond(HttpStatusCode.BadRequest, ApiError(it)) }
             call.runQuery { settings.setRetention(project.id, cfg) } ?: return@put
             call.respond(cfg)
+        }
+        post("/tokens") {
+            val project = call.authenticatedProject(tokens, TokenScope::allowsAdmin) ?: return@post
+            // 32 SecureRandom bytes, URL-safe base64 without padding — plaintext exists only in the
+            // response body and is never logged; only its SHA-256 hash (Auth.kt) reaches storage.
+            val randomBytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
+            val plaintext = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes)
+            val expiresUnusedAt = call.runQuery {
+                tokens.mintToken(project.id, sha256Hex(plaintext), TokenScope.INGEST)
+            } ?: return@post
+            call.respond(
+                HttpStatusCode.Created,
+                MintedTokenResponse(token = plaintext, scope = TokenScope.INGEST, expiresUnusedAt = expiresUnusedAt.value.toString()),
+            )
         }
     }
 }
