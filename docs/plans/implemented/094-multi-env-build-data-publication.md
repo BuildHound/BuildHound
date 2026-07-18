@@ -134,39 +134,69 @@ an environment that runs that same PR's code anyway (blast radius nil).
 ## 6. Prerequisites & exit criteria
 
 Prerequisites: mint ingest-scope tokens on staging + production (via each environment's
-bootstrap-token admin path) and store the two repo secrets; verify the four GitHub
+bootstrap-token admin path) and store the two repo secrets; verify the GitHub
 Environments' protection rules match `deploy/dokploy/README.md` (a 2026-07-15 live check
-found them unset — per that README this is a rollout blocker for adding credentials).
+found them unset — per that README a rollout blocker for adding credentials).
+
+**Status (2026-07-18, live-verified).** The rollout is *partially* complete:
+
+- **Environment protection rules — done.** Matches the README's design (§ "trust root"):
+  `production` has a required reviewer (`aegis123`, the sole maintainer, with
+  *Prevent self-review* off so a one-person team can approve its own prod deploy — a
+  single required reviewer is valid) plus a protected-branches deployment policy;
+  `staging` is protected-branches-restricted with no human gate; `review` and
+  `review-cleanup` are deliberately **free of any human approval gate** so the
+  label-driven deploy/teardown flows stay automatic. A reviewer on those three would
+  break the design, so their absence is correct, not a gap. (Optional, not required:
+  a custom deployment-branch policy on `review`/`review-cleanup` for defence-in-depth on
+  their secrets — omitted because those deploys run off PR heads, not `main`, so a
+  protected-branches policy would block them; the workflow's own label + same-repo guards
+  are the primary control.)
+- **Repo secrets + variables — set** (`BUILDHOUND_PROD_INGEST_TOKEN`,
+  `BUILDHOUND_STAGING_INGEST_TOKEN` as secrets; `BUILDHOUND_PROD_SERVER_URL`,
+  `BUILDHOUND_STAGING_SERVER_URL` as variables).
+- **Remaining blocker — token *values* are not yet valid.** A live run on 2026-07-18
+  showed prod POSTs rejected 4xx and staging 401: the stored secrets are strings the
+  servers do not recognise. The fail-safe held (payloads dropped/spooled, no PR reddened,
+  no junk landed). Owner action items 2–3 below (mint each token *server-side* through the
+  bootstrap-token path, then scope-probe it) are what actually close this out; item 3 was
+  the check that would have caught the 401 before storing.
 
 ### Owner actions required before enabling
 
 The merged YAML is deliberately safe *before* any of these exist — every publish path
 skips cleanly (plugin: `UploadGate` "no server configured"; script: "skipping publish"
-log + exit 0) while they are unset. Nothing uploads until the owner:
+log + exit 0) while they are unset. The ordering below still matters (protection first,
+then token *before* URL); the ☑/☐ marks the 2026-07-18 state.
 
-1. Fixes the four GitHub Environments' protection rules per `deploy/dokploy/README.md`
-   **first** (2026-07-15 check found them unset — per that README a rollout blocker for
-   credentialed use, and explicitly *not* permission to fall back to repository-wide
-   credentials; §5's accepted-risk posture assumes this boundary is tightened before any
-   credential exists).
-2. Mints an **ingest-scope-only** token on production and staging (each environment's
-   bootstrap-token admin path).
-3. Verifies each fresh token's scope **before** storing it (a `verify-release.sh`-style
-   probe): `POST /v1/builds` returns 2xx AND a read endpoint (e.g.
-   `GET /v1/builds/<id>`) returns 401/403 — proving the token cannot read.
-4. Creates the repo **secrets**: `BUILDHOUND_PROD_INGEST_TOKEN`,
-   `BUILDHOUND_STAGING_INGEST_TOKEN`. The two ingest tokens are **secrets, never
-   variables** — a repo *variable* is stored and served in plaintext (readable in the UI
-   and via the API) and is exposed to fork PR runs, which would hand the ingest credential
-   to exactly the untrusted context the fork gate exists to exclude. ci.yml reads the
-   tokens from `secrets.*` (`BUILDHOUND_DOGFOOD_TOKEN`, `publish-staging`), so a token
-   placed in `vars` is also silently empty → uploads skip.
-5. Creates the repo **variables** (dashboard origins, `https://…`, no trailing path)
-   **last, and only after the matching token secret exists**:
-   `BUILDHOUND_PROD_SERVER_URL`, `BUILDHOUND_STAGING_SERVER_URL`. A URL-without-token
-   window would otherwise fire unauthenticated POSTs from every same-repo build; the
-   ci.yml expression also blanks the URL while the token secret is absent — two layers,
-   rely on neither alone.
+1. ☑ **Protection rules** per `deploy/dokploy/README.md` — done. `production` gated by a
+   required reviewer + protected-branches policy; `staging` protected-branches-restricted;
+   `review`/`review-cleanup` intentionally human-gate-free. The README makes an unset rule
+   a rollout blocker and explicitly *not* permission to fall back to a repository-wide
+   credential; §5's accepted-risk posture assumes this boundary is tightened before any
+   credential exists — it now is.
+2. ☐ **Mint an ingest-scope-only token** on production and staging (each environment's
+   bootstrap-token admin path). **This is the outstanding blocker** — the current secrets
+   hold values the servers reject (prod 4xx, staging 401 on the 2026-07-18 run), i.e. they
+   were stored without being minted server-side.
+3. ☐ **Scope-probe each fresh token before storing** (a `verify-release.sh`-style probe):
+   `POST /v1/builds` returns 2xx AND a read endpoint (e.g. `GET /v1/builds/<id>`) returns
+   401/403 — proving the token can write but not read. Running this on the current values
+   would have caught the 401 before they were stored.
+4. ☑ **Repo secrets** created: `BUILDHOUND_PROD_INGEST_TOKEN`,
+   `BUILDHOUND_STAGING_INGEST_TOKEN` (values pending re-mint per items 2–3). The two
+   ingest tokens are **secrets, never variables** — a repo *variable* is stored and served
+   in plaintext (readable in the UI and via the API) and is exposed to fork PR runs, which
+   would hand the ingest credential to exactly the untrusted context the fork gate exists
+   to exclude. ci.yml reads the tokens from `secrets.*` (`BUILDHOUND_DOGFOOD_TOKEN`,
+   `publish-staging`), so a token placed in `vars` is also silently empty → uploads skip.
+   (An earlier attempt stored these as *variables*; the plaintext values that exposed must
+   be treated as compromised and rotated, not reused.)
+5. ☑ **Repo variables** created (dashboard origins, `https://…`, no trailing path):
+   `BUILDHOUND_PROD_SERVER_URL`, `BUILDHOUND_STAGING_SERVER_URL`. Create these only after
+   the matching token secret exists: a URL-without-token window would otherwise fire
+   unauthenticated POSTs from every same-repo build; the ci.yml expression also blanks the
+   URL while the token secret is absent — two layers, rely on neither alone.
 
 The review path needs no owner action: it reuses the per-run `BUILDHOUND_REVIEW_TOKEN`
 minted inside `review-environment.yml`.
