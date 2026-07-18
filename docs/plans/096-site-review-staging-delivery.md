@@ -28,6 +28,9 @@ but does not otherwise change production delivery.
   `BUILDHOUND_SITE_SHA256` image, validated dashboard origin/host/noindex inputs, loopback
   port, and container hardening. It is not a Swarm template; the long-lived site remains a
   Dokploy Docker-image Application and review remains the trusted combined Stack.
+  *(Superseded 2026-07-18: plan 097 moves the long-lived site to a Dokploy Compose Stack,
+  `deploy/dokploy/site-stack.yaml`; the standalone-contract role of `site/compose.yml` is
+  unchanged.)*
 - Before changing repository configuration, create the staging Application through Dokploy
   with registry pull access and no source build/auto-deploy. Bind its exact public hostname to
   the TLS-enabled staging route, the Application's runtime image/port contract, and its sole

@@ -129,7 +129,19 @@ its own decision).
 
 ## Implementation divergences
 
-(record during implementation)
+- **`--site-manifest` override flag added** (not in Design 2). The site stack is not part
+  of the release BOM, so `deploy-release` defaults to the trusted workflow revision's
+  `deploy/dokploy/site-stack.yaml`; the flag exists so the policy suite can render a
+  fixture. The workflow passes no override.
+- **The site Compose readback keeps a binding check.** Design 2 deletes the Application
+  binding machinery; its Compose replacement still requires the site Compose to sit in
+  the release Compose's `environmentId` on its exact `serverId` (and to carry no attached
+  domains/mounts/backups) before any mutation — otherwise a wrong-environment site could
+  be updated and deployed, and worker pull authorization would be unproven for a foreign
+  manager. This is a retained guarantee, not new surface.
+- **"Uncertain" site-wait coverage** (Design 4) is exercised through structurally invalid
+  deployment evidence rather than a poll timeout: the real timeout is 10 minutes and
+  cannot run inside the unit suite. The terminal path is covered exactly.
 
 ## Live verification log
 

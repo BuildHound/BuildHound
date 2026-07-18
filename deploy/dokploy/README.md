@@ -29,10 +29,10 @@ repository-wide credential.
 The review lifecycle first requires `settings.getDokployVersion` to report at least `v0.29.12`
 (older Dokploy releases fail closed; newer releases warn and proceed).
 The client then targets Dokploy's documented `x-api-key` API (`compose.create`, `compose.update`,
-`compose.one`, `compose.deploy`, `compose.cleanQueues`, `compose.stop`, and
-Application update/deploy; checked against v0.29.12 on 2026-07-13). Before production, record the installed Dokploy version and verify in staging: Stack
+`compose.one`, `compose.deploy`, `compose.cleanQueues`, and `compose.stop`;
+checked against v0.29.12 on 2026-07-13). Before production, record the installed Dokploy version and verify in staging: Stack
 `env_file`, external secret scoping, `deploy.labels`, digest pulls on every worker,
-Compose/Application deploy endpoints, isolated review networking, and idempotent domain IDs.
+Compose deploy endpoints, isolated review networking, and idempotent domain IDs.
 Also verify separate least-privilege tokens, Hetzner versioning/lifecycle/noncurrent-version
 behavior, and OCI artifact support for `release.json`. A failed row blocks that feature; it
 does not authorize a weaker fallback. The current repository cannot truthfully pre-fill
@@ -42,7 +42,7 @@ The public delivery entrypoint is `dokploy.sh`. It requires Bash, `curl`, `jq`, 
 `sha256sum` or `shasum`; `render-release.py` remains Python because it constructs the release
 artifact rather than calling Dokploy. The shell client canonicalizes JSON and keeps API
 headers, request bodies, and transport responses in per-call mode-`0700` temporary workspaces
-on the ephemeral Actions runner. Long-lived credential-bearing registry, Application, and
+on the ephemeral Actions runner. Long-lived credential-bearing registry and
 Compose responses plus rendered Stacks are redirected into command-level private workspaces;
 traps remove both workspace layers on normal exit and signals. Credential-bearing response
 payloads are never emitted; machine-readable stdout contains only validated non-secret IDs and
@@ -61,7 +61,7 @@ deployment evidence.
    requires scoped external secrets; staging intentionally uses protected Dokploy environment
    values under the owner-approved plan-087 exception. The release client constrains both the
    server Stack service and the separate site
-   Application to the role derived from the trusted deployment target. Build and deploy the digest-addressed
+   Compose Stack to the role derived from the trusted deployment target. Build and deploy the digest-addressed
    `deploy/dokploy/db/Dockerfile` image so the trusted volume guard is available on every
    worker; raw Dokploy delivery never depends on a checkout-local file.
 2. Set `BUILDHOUND_DB_ALLOW_INIT=true` for the first deployment only. After the marker is
@@ -129,16 +129,32 @@ if backward compatibility is not proven.
 ## Site and delivery
 
 Build `site/Dockerfile`, run it non-root with read-only root plus bounded tmpfs for `/tmp`
-(which contains the rendered page), then create separate production/staging Dokploy Applications and deploy
-the exact digest. `BUILDHOUND_SITE_DASHBOARD_URL` must be an HTTPS origin; staging sets
-noindex. `security.txt` is intentionally absent until an owner supplies a monitored contact.
+(which contains the rendered page). The long-lived site is delivered as its own Dokploy
+**Compose** app per environment (plan 097): compose type Stack, source raw, auto-deploy
+off, created once with placeholder content in the same Dokploy environment (and on the
+same manager) as that environment's release Compose, its ID stored as the per-environment
+GitHub secret `DOKPLOY_SITE_COMPOSE_ID`. On every release, `deploy-release` renders the
+trusted-revision `deploy/dokploy/site-stack.yaml` client-side — exact BOM `siteImage`
+digest, app role, `BUILDHOUND_SITE_HOST`, `BUILDHOUND_SITE_DASHBOARD_URL`, and
+`BUILDHOUND_SITE_NOINDEX` substituted from CLI flags so the stored file is
+readback-verifiable — then updates, re-reads, deploys, and awaits the site Compose with
+the same exact-state machinery as the dashboard Compose. The site flags are required for
+both roles unless `--skip-site` is passed. `${DOKPLOY_INGRESS_NETWORK}` stays
+Dokploy-environment interpolation, so that value must be present in the shared Dokploy
+environment. `BUILDHOUND_SITE_DASHBOARD_URL` must be an HTTPS origin and must match the
+release Compose's effective dashboard host; staging sets noindex, production passes
+`--site-noindex false`. `security.txt` is intentionally absent until an owner supplies a
+monitored contact.
 
 For Swarm Stacks, express bounded `/tmp` mounts under long-form `volumes` with
-`type: tmpfs`; this applies to the review site/server and long-lived server/backup. Do not
+`type: tmpfs`; this applies to the site, the review site/server, and the long-lived
+server/backup. Do not
 use the separate service-level `tmpfs` field. Docker 29.6.1 preserves that field in
 `docker stack config` output but omits it from the converted Swarm service mounts, which
-leaves a read-only service without writable temporary storage. The separate Dokploy site
-Application continues to use its bounded application-level tmpfs setting.
+leaves a read-only service without writable temporary storage. `validate-stack.sh` bans
+the short form in every rendered stack, and keeps `site-stack.yaml` hardening-paired
+with the standalone `site/compose.yml` contract (image repo, user, `cap_drop`,
+`read_only`, tmpfs target, env var names) so the two cannot drift apart silently.
 
 `render-release.py` creates canonical schema-3 `release.json`, binding the staging Stack,
 production Stack, volume guard, and the numerically ordered `{migration ID, source checksum}`
@@ -197,28 +213,27 @@ runs Dokploy's credential test against the exact local or remote manager selecte
 Compose to refresh that manager's Docker login. Dokploy deploys raw Stacks with
 `--with-registry-auth`, so workers receive that pull authorization. Review Composes constrain
 all services to `role=review`; the same manager credential preflight supplies worker pull
-authorization. The separately managed site
-remains a Docker-source Application. On Dokploy v0.29.12, attaching any of `registryId`,
-`buildRegistryId`, or `rollbackRegistryId` makes that Application re-tag and push its source
-image; this is incompatible with the protected digest reference and is not needed for pulls.
-The client therefore clears and reasserts all three registry relations. The site's actual
-`RegistryAuth` path reads the Application's legacy Docker-provider `username`, `password`, and
-`registryUrl` fields. Configure those fields once on each staging/production site Application.
-The client verifies their non-empty presence and exact registry host before any mutation,
-preserves them during the image update, disables Application auto-deploy so refresh hooks cannot
-bypass promotion, and reasserts both properties after deployment. In this Dokploy
-version, both `registry.one` and `application.one` return stored credentials, so the protected
-runner and deploy token necessarily receive those values over TLS during preflight and state
-verification. The client confines those responses to trapped mode-`0700` temporary workspaces,
-keeps xtrace disabled, and never prints, resends, or stores the credentials in shell variables
-or GitHub secrets. Treat access to the protected Environment runner and deploy token as access
-to those Dokploy credentials; this is an upstream v0.29.12 security boundary.
+authorization. The separately managed site rides the identical path: it is a raw site
+Compose Stack in the release Compose's environment on the same manager, so the one
+instance-level registry preflight covers its pulls and no per-app credential exists
+anywhere (plan 097 removed the legacy Docker-provider site Application and its
+per-Application `username`/`password` model). In this Dokploy version `registry.one`
+returns stored credentials, so the protected runner and deploy token necessarily receive
+those values over TLS during preflight. The client confines those responses to trapped
+mode-`0700` temporary workspaces, keeps xtrace disabled, and never prints, resends, or
+stores the credentials in shell variables or GitHub secrets. Treat access to the protected
+Environment runner and deploy token as access to those Dokploy credentials; this is an
+upstream v0.29.12 security boundary.
 
-Before each release deployment, the client also clears and reasserts the raw Compose's custom
-command, provider, auto-deploy, randomization, and isolation fields. Attached Dokploy domains,
+Before each release deployment, the client also clears and reasserts each raw Compose's
+custom command, provider, auto-deploy, randomization, and isolation fields — the dashboard
+and site Composes alike. Attached Dokploy domains,
 mounts, or backups are rejected before mutation; routing, storage, and backup behavior must
-come only from the release-bound Stack. Required Compose, Environment, and Project environment
-values are preserved exactly and verified after the update.
+come only from the release-bound Stacks. Required Compose, Environment, and Project environment
+values are preserved exactly and verified after the update. The dashboard Compose deploys
+and is verified first; staging re-reads both Compose states and the effective dashboard
+host before submitting the site deploy, production submits both jointly, and the site's
+Compose deployment ID lands in the release evidence.
 
 Store the parent Git-provider ID in the protected Environment secret
 `DOKPLOY_GIT_PROVIDER_ID` and the registry ID in `DOKPLOY_REGISTRY_ID` for `review`, `staging`,
