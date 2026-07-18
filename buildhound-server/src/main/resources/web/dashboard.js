@@ -1864,6 +1864,64 @@
         const form = el("div", null, "retention-form");
         app.append(form);
 
+        // Ingest-token generation (plan 097): mints a fresh ingest-scope token for the caller's
+        // project via POST /v1/admin/tokens, reusing the same admin-token bar above. The plaintext
+        // exists only in the response body and this one DOM node — never sessionStorage,
+        // localStorage, the URL/hash, console, or any log — and is gone the moment the view
+        // re-renders or the tab navigates away. A second generation replaces the first display
+        // rather than stacking both on the page.
+        app.append(el("p", "Generate ingest token", "summary-sentence"));
+        const tokenGenStatus = el("p", "", "muted");
+        app.append(tokenGenStatus);
+        function sayTokenGen(text, cls) { tokenGenStatus.textContent = text; tokenGenStatus.className = cls || "muted"; }
+        const genBtn = el("button", "Generate token");
+        app.append(genBtn);
+        const tokenResult = el("div", null, "token-result");
+        app.append(tokenResult);
+
+        function renderMintedToken(minted) {
+            tokenResult.append(el("pre", minted.token, "snippet"));
+            const copyBtn = el("button", "Copy");
+            copyBtn.addEventListener("click", () => {
+                if (typeof navigator === "undefined" || !navigator.clipboard || !navigator.clipboard.writeText) {
+                    sayTokenGen("Clipboard unavailable — copy the token manually.", "error");
+                    return;
+                }
+                navigator.clipboard.writeText(minted.token).then(
+                    () => sayTokenGen("Copied.", "muted"),
+                    () => sayTokenGen("Copy failed — copy the token manually.", "error"),
+                );
+            });
+            tokenResult.append(copyBtn);
+            const expiresLocal = new Date(minted.expiresUnusedAt).toLocaleString();
+            tokenResult.append(el("p",
+                "Shown once — this token will be deleted if not used within 6 hours (expires " + expiresLocal + ").",
+                "notice-warn"));
+        }
+
+        genBtn.addEventListener("click", async () => {
+            if (genBtn.disabled) return;
+            genBtn.disabled = true;
+            tokenResult.textContent = ""; // drop any previously displayed plaintext immediately
+            sayTokenGen("Generating…");
+            try {
+                const res = await fetch("/v1/admin/tokens", { method: "POST", headers: { Authorization: "Bearer " + adminToken() } });
+                if (mySeq !== renderSeq) return; // navigated away mid-request
+                // Mirrors the retention form's own 401/403 messaging above — same admin token bar,
+                // same "not admin-scoped" failure mode.
+                if (res.status === 401 || res.status === 403) return sayTokenGen("An admin-scoped token is required.", "error");
+                if (!res.ok) return sayTokenGen("Could not generate token: " + res.status, "error");
+                const minted = await res.json();
+                if (mySeq !== renderSeq) return;
+                sayTokenGen("");
+                renderMintedToken(minted);
+            } catch (e) {
+                if (mySeq === renderSeq) sayTokenGen("Could not generate token: " + (e && e.message || e), "error");
+            } finally {
+                genBtn.disabled = false;
+            }
+        });
+
         function adminFetch(method, body) {
             const opts = { method: method, headers: { Authorization: "Bearer " + adminToken() } };
             if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = body; }
