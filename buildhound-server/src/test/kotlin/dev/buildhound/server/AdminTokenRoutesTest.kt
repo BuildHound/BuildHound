@@ -20,7 +20,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * `POST /v1/admin/tokens` (plan 097): auth/scope matrix, response shape, the minted plaintext
+ * `POST /v1/admin/tokens` (plan 098): auth/scope matrix, response shape, the minted plaintext
  * authenticating ingest, and the 6-hour activation window — first-use activation, the auth-path
  * deadline rejection (defense-in-depth, independent of the sweep), and the bootstrap-token exemption.
  * The clock is injected via [InMemoryTokenStore]'s [InstantSource] so the deadline moves without a

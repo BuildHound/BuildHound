@@ -20,7 +20,7 @@ fun ApplicationCall.bearerToken(): String? {
 }
 
 /**
- * Starts the unactivated-token sweep on a daemon thread (plan 097), only from `main()` so
+ * Starts the unactivated-token sweep on a daemon thread (plan 098), only from `main()` so
  * `testApplication` never spawns it — tests call [TokenStore.deleteExpiredUnactivatedTokens] directly.
  * [sweepMinutes] `<= 0` disables it entirely (logged, distinguishable), mirroring
  * [startRetentionSweeper]'s single-thread scheduled-executor pattern.

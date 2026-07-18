@@ -1,4 +1,4 @@
--- Dashboard ingest-token generation (plan 097). Additive only: two nullable columns on
+-- Dashboard ingest-token generation (plan 098). Additive only: two nullable columns on
 -- `api_tokens`, plus one partial index for the sweep. Existing rows keep both NULL —
 -- NULL `expires_unused_at` means "no activation deadline" (bootstrap/pre-existing tokens
 -- are exempt by construction, not by a special-cased predicate).

@@ -1635,7 +1635,7 @@ class PostgresBuildStore(
 class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
 
     /**
-     * The predicate's third disjunct (plan 097) is the auth-path defense-in-depth: an unactivated
+     * The predicate's third disjunct (plan 098) is the auth-path defense-in-depth: an unactivated
      * token past its deadline is rejected here even if the sweep hasn't run yet. On a match with
      * `activated_at IS NULL`, the first-use activation UPDATE runs on the same connection, keyed by
      * `token_hash` (unique, like `id`) so [TokenPrincipal]/this query's column list stay unchanged —
@@ -1717,7 +1717,7 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
             }
         }
 
-    /** Sweep (plan 097): a never-activated token has authenticated nothing, so hard delete is safe. */
+    /** Sweep (plan 098): a never-activated token has authenticated nothing, so hard delete is safe. */
     override fun deleteExpiredUnactivatedTokens(): Int =
         dataSource.connection.use { connection ->
             connection.prepareStatement(

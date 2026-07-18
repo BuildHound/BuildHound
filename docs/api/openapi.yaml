@@ -526,7 +526,7 @@ paths:
         "403": { $ref: '#/components/responses/Forbidden' }
   /v1/admin/tokens:
     post:
-      summary: Mint an ingest-scope token for this project (plan 097). Admin scope.
+      summary: Mint an ingest-scope token for this project (plan 098). Admin scope.
       description: >
         Generates 32 SecureRandom bytes, stores only the SHA-256 hash, and returns the plaintext once —
         it is never logged or re-readable. The token must be used (any authenticated request) within 6

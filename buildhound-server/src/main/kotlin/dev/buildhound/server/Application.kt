@@ -113,7 +113,7 @@ fun main() {
         RetentionSweeper(stores.builds, stores.settings),
         sweepHours = env["BUILDHOUND_RETENTION_SWEEP_HOURS"]?.toLongOrNull() ?: 24,
     )
-    // Unactivated-token sweep (plan 097): dashboard-minted tokens unused past their 6h deadline are
+    // Unactivated-token sweep (plan 098): dashboard-minted tokens unused past their 6h deadline are
     // hard-deleted. Default 15m; 0 disables. Same instance-local caveat as the retention sweep.
     startTokenSweeper(
         stores.tokens,
