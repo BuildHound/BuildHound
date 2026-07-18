@@ -120,15 +120,23 @@ class PostgresStoresIntegrationTest {
         }
 
     @Test
-    fun `mintToken stores an expires_unused_at six hours out on the DB clock`() {
+    fun `mintToken stores an expires_unused_at TOKEN_UNUSED_TTL out on the DB clock`() {
         val project = tokens.ensureProjectWithToken("mint-project", sha256Hex("mint-admin"))
         val before = OffsetDateTime.now(ZoneOffset.UTC)
 
         val deadline = tokens.mintToken(project.id, sha256Hex("minted-pg-1"), TokenScope.INGEST)
 
-        // Loose bounds (test-runtime jitter, not clock skew) around the DB-computed `now() + 6h`.
-        assertTrue(deadline.isAfter(before.plusMinutes(5 * 60 + 58).toInstant()), "roughly 6h ahead: $deadline vs $before")
-        assertTrue(deadline.isBefore(before.plusMinutes(6 * 60 + 2).toInstant()), "roughly 6h ahead: $deadline vs $before")
+        // Loose bounds (test-runtime jitter, not clock skew) around the DB-computed
+        // `now() + TOKEN_UNUSED_TTL`, derived from the constant rather than a hardcoded ~6h literal.
+        val ttlMinutes = TOKEN_UNUSED_TTL.toMinutes()
+        assertTrue(
+            deadline.isAfter(before.plusMinutes(ttlMinutes - 2).toInstant()),
+            "roughly ${ttlMinutes}m ahead: $deadline vs $before",
+        )
+        assertTrue(
+            deadline.isBefore(before.plusMinutes(ttlMinutes + 2).toInstant()),
+            "roughly ${ttlMinutes}m ahead: $deadline vs $before",
+        )
         assertNotNull(tokens.resolve(sha256Hex("minted-pg-1")), "freshly minted, well inside the window, resolves")
     }
 

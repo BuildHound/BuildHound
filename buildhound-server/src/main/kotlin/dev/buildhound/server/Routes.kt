@@ -16,6 +16,7 @@ import dev.buildhound.server.connector.EnrichmentQueue
 import dev.buildhound.server.connector.GradleShare
 import dev.buildhound.server.connector.StoredCiRun
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.request.header
@@ -49,11 +50,18 @@ data class ApiError(val error: String)
 
 /** `POST /v1/admin/tokens` response (plan 097) — the only place the plaintext ever exists. */
 @Serializable
-data class MintedTokenResponse(val token: String, val scope: String, val expiresUnusedAt: String)
+data class MintedTokenResponse(val token: String, val scope: String, val expiresUnusedAt: String) {
+    // Redacted so an accidental log of this object (e.g. a future debug log or exception message)
+    // can never leak the plaintext — this override must survive any future refactor of this class.
+    override fun toString(): String = "MintedTokenResponse(token=<redacted>, scope=$scope, expiresUnusedAt=$expiresUnusedAt)"
+}
 
 /** Compressed request cap; the decompressed cap is the zip-bomb guard (plan 009). */
 const val MAX_COMPRESSED_BYTES: Int = 32 * 1024 * 1024
 const val MAX_DECOMPRESSED_BYTES: Int = 64 * 1024 * 1024
+
+/** Shared across mint requests (plan 097 review) — `SecureRandom` is thread-safe, so a per-request instance is wasted setup. */
+private val tokenRandom = SecureRandom()
 
 fun Route.healthRoutes() {
     get("/health") {
@@ -401,11 +409,13 @@ fun Route.adminRoutes(settings: SettingsStore, tokens: TokenStore) {
             val project = call.authenticatedProject(tokens, TokenScope::allowsAdmin) ?: return@post
             // 32 SecureRandom bytes, URL-safe base64 without padding — plaintext exists only in the
             // response body and is never logged; only its SHA-256 hash (Auth.kt) reaches storage.
-            val randomBytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
+            val randomBytes = ByteArray(32).also { tokenRandom.nextBytes(it) }
             val plaintext = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes)
             val expiresUnusedAt = call.runQuery {
                 tokens.mintToken(project.id, sha256Hex(plaintext), TokenScope.INGEST)
             } ?: return@post
+            // The body carries the only copy of the plaintext (RFC 6749 §5.1) — never cached.
+            call.response.header(HttpHeaders.CacheControl, "no-store")
             call.respond(
                 HttpStatusCode.Created,
                 MintedTokenResponse(token = plaintext, scope = TokenScope.INGEST, expiresUnusedAt = expiresUnusedAt.value.toString()),

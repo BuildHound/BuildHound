@@ -16,6 +16,7 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.JsonElement
 import org.flywaydb.core.Flyway
 import org.postgresql.util.PGobject
+import org.slf4j.LoggerFactory
 
 /** Hikari pool + Flyway migration on boot (architecture §5). */
 fun createDataSource(jdbcUrl: String, user: String, password: String): DataSource {
@@ -39,6 +40,9 @@ fun migrate(dataSource: DataSource) {
 
 /** Retention purge batch size (plan 042): bounds per-statement lock time on a large delete. */
 private const val PURGE_BATCH: Int = 5000
+
+/** Shared with [startTokenSweeper]/[startRetentionSweeper]'s naming convention: one logger per concern. */
+private val authLogger = LoggerFactory.getLogger("dev.buildhound.server.Auth")
 
 class PostgresBuildStore(
     private val dataSource: DataSource,
@@ -1636,6 +1640,13 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
      * `activated_at IS NULL`, the first-use activation UPDATE runs on the same connection, keyed by
      * `token_hash` (unique, like `id`) so [TokenPrincipal]/this query's column list stay unchanged —
      * idempotent under concurrent first use (`WHERE … AND activated_at IS NULL`).
+     *
+     * Accepted race with [startTokenSweeper] (review finding): the SELECT above and the activation
+     * UPDATE below are two statements, not one transaction. A sweep `DELETE` that lands in between them
+     * — on a token that is, at that instant, exactly at its unused deadline — lets this one request
+     * still succeed (it already read a valid principal) even though the row is now gone; the UPDATE
+     * below then simply affects zero rows. Indistinguishable from the token expiring immediately after
+     * the request completed, so it is accepted as-is.
      */
     override fun resolve(tokenHash: String): TokenPrincipal? =
         dataSource.connection.use { connection ->
@@ -1662,11 +1673,19 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
                 }
             }
             if (resolved != null && resolved.second) {
-                connection.prepareStatement(
-                    "UPDATE api_tokens SET activated_at = now() WHERE token_hash = ? AND activated_at IS NULL",
-                ).use { statement ->
-                    statement.setString(1, tokenHash)
-                    statement.executeUpdate()
+                // Bookkeeping only — never let a failure here fail an otherwise-authenticated request
+                // (a bare 500 out of an auth path this deep would be worse than a missed activation
+                // stamp, which just costs that one token a wasted sweep cycle). No token data logged:
+                // the hash/plaintext never appear, only the exception's class name.
+                runCatching {
+                    connection.prepareStatement(
+                        "UPDATE api_tokens SET activated_at = now() WHERE token_hash = ? AND activated_at IS NULL",
+                    ).use { statement ->
+                        statement.setString(1, tokenHash)
+                        statement.executeUpdate()
+                    }
+                }.onFailure {
+                    authLogger.warn("token activation stamp failed: {}", it::class.java.simpleName)
                 }
             }
             resolved?.first
@@ -1674,21 +1693,23 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
 
     /**
      * Mints an `ingest`-scoped (or other) token hash for [projectId] with a [TOKEN_UNUSED_TTL]
-     * activation deadline computed by the DB clock (`now() + interval '6 hours'`) — the same clock
-     * [resolve]'s predicate reads, so mint and validation can never skew. Returns the stored deadline.
+     * activation deadline computed by the DB clock (`now() + (? * interval '1 second')`, bound from
+     * [TOKEN_UNUSED_TTL] rather than a hardcoded literal) — the same clock [resolve]'s predicate reads,
+     * so mint and validation can never skew. Returns the stored deadline.
      */
     override fun mintToken(projectId: String, tokenHash: String, scope: String): Instant =
         dataSource.connection.use { connection ->
             connection.prepareStatement(
                 """
                 INSERT INTO api_tokens (project_id, token_hash, scope, expires_unused_at)
-                VALUES (?, ?, ?, now() + interval '6 hours')
+                VALUES (?, ?, ?, now() + (? * interval '1 second'))
                 RETURNING expires_unused_at
                 """.trimIndent(),
             ).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setString(2, tokenHash)
                 statement.setString(3, scope)
+                statement.setLong(4, TOKEN_UNUSED_TTL.toSeconds())
                 statement.executeQuery().use { rows ->
                     rows.next()
                     rows.getObject(1, OffsetDateTime::class.java).toInstant()

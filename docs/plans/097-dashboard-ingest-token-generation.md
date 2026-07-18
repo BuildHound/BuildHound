@@ -88,6 +88,40 @@ issuance/rotation, configurable window length, any change to bootstrap
 - No payload-schema change (server DB only) — golden files untouched. No plugin code
   touched — CC not in play.
 
+## Implementation divergences & review outcome (same-PR update)
+
+Divergences from the design sketch, per the CLAUDE.md divergence rule:
+
+- `mintToken` takes no `ttl` parameter — the 6h window is the `TOKEN_UNUSED_TTL` constant
+  (single source, bound into the SQL interval), consistent with this plan's own
+  "configurable window length" being out of scope. The sketch's param was a
+  contradiction; scope won.
+- `web/index.html` ended up untouched: every class the new section uses pre-exists, so
+  the conditional CSP-hash clause resolved to a no-op.
+- `docs/api/openapi.yaml` gained the `/v1/admin/tokens` entry (unlisted here) — required
+  by plan 042's bidirectional route↔spec drift guard.
+- Activation is folded into `resolve()` (no separate `markActivated` API), matching this
+  plan's auth-path bullet; the activation UPDATE is keyed by `token_hash` (unique) so
+  `TokenPrincipal` stays unchanged.
+
+Both §3 reviews (kotlin-gradle + security/privacy, fresh contexts) returned
+merge-ready with no blockers/majors; all pre-merge minors were fixed (sweeper
+logging, `Cache-Control: no-store` on the 201, TTL single-sourcing, degrade-not-500
+activation stamp, `toString()` redaction, in-memory mint parity, smoke-test Bearer
+assertion). Accepted risks, noted deliberately:
+
+- **Scope-rejected requests still activate**: `resolve()` stamps `activated_at` on any
+  successful hash match, even if the scope check then 403s. Not exploitable (caller
+  already holds the plaintext; activation grants no scope); the future token
+  listing/revocation UI is the real mitigation.
+- **ms-scale sweep TOCTOU**: a sweep DELETE between resolve's SELECT and the activation
+  UPDATE lets that one request succeed on a just-deleted token — indistinguishable from
+  expiring right after the request. Commented in code, accepted.
+- **Bounded table growth** under an admin-credential mint flood (~120/min per token via
+  the query limiter; instance-local limiter caveat is the pre-existing arch §5 posture).
+- **Unsalted SHA-256 at rest** — pre-existing spec §8 design, fine for 256-bit random
+  tokens.
+
 ## Exit criteria
 
 `./gradlew :buildhound-server:test` green including the new matrix; migration applies on
