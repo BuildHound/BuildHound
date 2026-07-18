@@ -33,12 +33,15 @@ assert_status() {
 
 manifest=$test_root/stack.yaml
 production_manifest=$test_root/production-stack.yaml
+site_manifest=$test_root/site-stack.yaml
 guard=$test_root/volume-guard.sh
 release=$test_root/release.json
 # Intentional literal release-template placeholders.
 # shellcheck disable=SC2016
 printf 'services:\n  server:\n    image: ${BUILDHOUND_SERVER_IMAGE}\n    deploy:\n      placement:\n        constraints:\n          - node.labels.role == ${BUILDHOUND_APP_ROLE}\n  backup:\n    image: ${BUILDHOUND_BACKUP_IMAGE}\n  db:\n    image: ${BUILDHOUND_POSTGRES_IMAGE}\n    labels:\n      release: ${BUILDHOUND_RELEASE_ID:-manual}\n\n' > "$manifest"
 printf 'services:\n  production: {}\n' > "$production_manifest"
+# shellcheck disable=SC2016
+printf 'services:\n  site:\n    image: ${BUILDHOUND_SITE_IMAGE}\n    environment:\n      BUILDHOUND_SITE_HOST: ${BUILDHOUND_SITE_HOST}\n      BUILDHOUND_SITE_DASHBOARD_URL: ${BUILDHOUND_SITE_DASHBOARD_URL}\n      BUILDHOUND_SITE_NOINDEX: "${BUILDHOUND_SITE_NOINDEX}"\n    deploy:\n      placement:\n        constraints:\n          - node.labels.role == ${BUILDHOUND_APP_ROLE}\n' > "$site_manifest"
 printf '#!/bin/sh\nexit 0\n' > "$guard"
 
 SERVER_IMAGE="ghcr.io/buildhound/server@sha256:$(printf '1%.0s' {1..64})"
@@ -82,14 +85,16 @@ jq -cn \
 ' > "$release"
 cp -- "$release" "$test_root/original-release.json"
 cp -- "$manifest" "$test_root/original-stack.yaml"
+cp -- "$site_manifest" "$test_root/original-site-stack.yaml"
 export TEST_RELEASE_SOURCE=$release
 export TEST_MANIFEST_SOURCE=$manifest
+export TEST_SITE_MANIFEST_SOURCE=$site_manifest
 
 RID=$(main release-id "$release")
 [[ $RID =~ ^sha256:[0-9a-f]{64}$ ]] || fail_test 'release-id returned an invalid digest'
 TITLE=$(release_title "$release")
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role prod
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role prod --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex false
 grep -F 'release manifest checksum differs from trusted stack' "$test_root/status-stderr" >/dev/null || \
   fail_test 'production accepted the staging manifest'
 DRIFT_RID="sha256:$(printf '6%.0s' {1..64})"
@@ -118,6 +123,44 @@ render_release_stack "$manifest" "$release" "$RID" "$prod_rendered" prod
 grep -F 'node.labels.role == prod' "$prod_rendered" >/dev/null || \
   fail_test 'release renderer did not bind the production app role'
 
+# The committed site stack must render completely from release values: exact
+# image, role-suffixed Traefik names, host, and no unresolved site placeholder.
+site_rendered=$test_root/site-rendered.yaml
+render_site_stack "$root/deploy/dokploy/site-stack.yaml" "$SITE_IMAGE" staging \
+  https://site.example.test https://dashboard.example.test true "$site_rendered"
+grep -F "image: $SITE_IMAGE" "$site_rendered" >/dev/null || \
+  fail_test 'site renderer did not bind the release site image'
+grep -F 'node.labels.role == staging' "$site_rendered" >/dev/null || \
+  fail_test 'site renderer did not bind the staging app role'
+# shellcheck disable=SC2016 # literal backticks in the Traefik Host rule
+grep -F 'traefik.http.routers.buildhound-staging-site.rule=Host(`site.example.test`)' \
+  "$site_rendered" >/dev/null || \
+  fail_test 'site renderer did not bind the role-suffixed Traefik router'
+grep -F 'BUILDHOUND_SITE_NOINDEX: "true"' "$site_rendered" >/dev/null || \
+  fail_test 'site renderer did not bind the noindex value'
+# shellcheck disable=SC2016
+if grep -F '${BUILDHOUND_SITE' "$site_rendered" >/dev/null || \
+   grep -F '${BUILDHOUND_APP_ROLE}' "$site_rendered" >/dev/null; then
+  fail_test 'site renderer left an unresolved site placeholder'
+fi
+# shellcheck disable=SC2016
+grep -F '${DOKPLOY_INGRESS_NETWORK}' "$site_rendered" >/dev/null || \
+  fail_test 'site renderer must leave the ingress network to Dokploy interpolation'
+assert_status 1 render_site_stack "$root/deploy/dokploy/site-stack.yaml" "$SITE_IMAGE" staging \
+  https://site.example.test https://dashboard.example.test bogus "$test_root/site-invalid.yaml"
+grep -F 'site noindex value is invalid' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'site renderer accepted an invalid noindex value'
+assert_status 2 render_site_stack "$root/deploy/dokploy/site-stack.yaml" "$SITE_IMAGE" staging \
+  https://site.example.test https://dashboard.example.test true
+invalid_utf8_site=$test_root/invalid-utf8-site.yaml
+# shellcheck disable=SC2016
+printf 'left\377${BUILDHOUND_SITE_IMAGE}\n' > "$invalid_utf8_site"
+if render_site_stack "$invalid_utf8_site" "$SITE_IMAGE" staging \
+    https://site.example.test https://dashboard.example.test true \
+    "$test_root/invalid-site-rendered.yaml" >/dev/null 2>&1; then
+  fail_test 'site renderer normalized invalid UTF-8'
+fi
+
 export DOKPLOY_URL=https://dokploy.example.test
 export DOKPLOY_TOKEN=test-token
 export DOKPLOY_REGISTRY_ID=registry1
@@ -141,8 +184,8 @@ reset_api() {
   : > "$test_root/calls"
   : > "$test_root/integration-targets"
   rm -f -- "$test_root"/body-*.json "$test_root"/compose-deployed "$test_root"/site-deployed \
-    "$test_root"/missing-app-creds "$test_root"/compose-update-body.json \
-    "$test_root"/application-update-body.json "$test_root"/predecessor-read
+    "$test_root"/compose-update-body.json "$test_root"/site-update-body.json \
+    "$test_root"/predecessor-read
 }
 
 next_call() {
@@ -166,10 +209,31 @@ fake_release_compose() {
   '
 }
 
+fake_site_compose() {
+  jq -cn --arg serverId "${SITE_COMPOSE_SERVER_ID-${COMPOSE_SERVER_ID-}}" \
+    --arg environmentId "${SITE_COMPOSE_ENVIRONMENT_ID-env1}" \
+    --argjson domains "${SITE_COMPOSE_DOMAINS-[]}" --argjson mounts "${SITE_COMPOSE_MOUNTS-[]}" '
+    {
+      composeId:"s1",name:"BuildHound site",appName:"buildhound-site",environmentId:$environmentId,
+      serverId:(if $serverId == "" then null else $serverId end),
+      env:"",domains:$domains,mounts:$mounts,backups:[],
+      environment:{env:"",project:{env:""}},
+      github:null,gitlab:null,bitbucket:null,gitea:null
+    }
+  '
+}
+
 dokploy_api() {
-  local method=${1-} path=${2-} body=${3-} number auto_deploy placement mounts ports endpoint_spec compose_drift
+  local method=${1-} path=${2-} body=${3-} number compose_target='' compose_drift site_drift state_drift
   number=$(next_call)
-  printf '%s|%s\n' "$method" "$path" >> "$test_root/calls"
+  if [[ $method == POST && -n $body ]]; then
+    compose_target=$(jq -r '.composeId // empty' <<<"$body")
+  fi
+  if [[ -n $compose_target ]]; then
+    printf '%s|%s|%s\n' "$method" "$path" "$compose_target" >> "$test_root/calls"
+  else
+    printf '%s|%s\n' "$method" "$path" >> "$test_root/calls"
+  fi
   if [[ -n $body ]]; then printf '%s\n' "$body" > "$test_root/body-$number.json"; fi
   case "$FAKE_MODE|$method|$path" in
     'current|GET|deployment.allByCompose?composeId=c1')
@@ -201,7 +265,7 @@ dokploy_api() {
           '[{deploymentId:"current",status:"done",title:$title,createdAt:"2026-07-13T12:00:00Z"}]'
       fi
       ;;
-    'deploy|GET|deployment.allByCompose?composeId=c1'|'deploy_terminal|GET|deployment.allByCompose?composeId=c1'|'deploy_site_terminal|GET|deployment.allByCompose?composeId=c1'|'deploy_registry_drift|GET|deployment.allByCompose?composeId=c1')
+    'deploy|GET|deployment.allByCompose?composeId=c1'|'deploy_terminal|GET|deployment.allByCompose?composeId=c1'|'deploy_site_terminal|GET|deployment.allByCompose?composeId=c1'|'deploy_site_uncertain|GET|deployment.allByCompose?composeId=c1'|'deploy_site_state_drift|GET|deployment.allByCompose?composeId=c1')
       if [[ -f $test_root/compose-deployed ]]; then
         if [[ $FAKE_MODE == deploy_terminal ]]; then
           jq -cn --arg title "$TITLE" \
@@ -219,6 +283,7 @@ dokploy_api() {
         if [[ $FAKE_MODE == deploy && ! -f $test_root/sources-mutated ]]; then
           printf '{}\n' > "$TEST_RELEASE_SOURCE"
           printf 'attacker-controlled-stack\n' > "$TEST_MANIFEST_SOURCE"
+          printf 'attacker-controlled-site\n' > "$TEST_SITE_MANIFEST_SOURCE"
           : > "$test_root/sources-mutated"
         fi
         if [[ ${STALE_RELEASE_BASELINES-false} == true && -f $test_root/compose-update-body.json ]]; then
@@ -229,9 +294,13 @@ dokploy_api() {
         fi
       fi
       ;;
-    'deploy|GET|deployment.all?applicationId=a1'|'deploy_terminal|GET|deployment.all?applicationId=a1'|'deploy_site_terminal|GET|deployment.all?applicationId=a1'|'deploy_registry_drift|GET|deployment.all?applicationId=a1'|'deploy_predecessor_drift|GET|deployment.all?applicationId=a1')
+    'deploy|GET|deployment.allByCompose?composeId=s1'|'deploy_terminal|GET|deployment.allByCompose?composeId=s1'|'deploy_site_terminal|GET|deployment.allByCompose?composeId=s1'|'deploy_site_uncertain|GET|deployment.allByCompose?composeId=s1'|'deploy_site_state_drift|GET|deployment.allByCompose?composeId=s1'|'deploy_predecessor_drift|GET|deployment.allByCompose?composeId=s1')
       if [[ -f $test_root/site-deployed ]]; then
-        if [[ ${STALE_RELEASE_BASELINES-false} == true ]]; then
+        if [[ $FAKE_MODE == deploy_site_uncertain ]]; then
+          # Structurally invalid deployment evidence: the wait must give up
+          # with "uncertain", never a terminal verdict.
+          printf '{}\n'
+        elif [[ ${STALE_RELEASE_BASELINES-false} == true ]]; then
           jq -cn --arg title "$TITLE" '[
             {deploymentId:"site-intervening",status:"done",title:$title},
             {deploymentId:"site-new",status:"done",title:$title}
@@ -247,15 +316,29 @@ dokploy_api() {
         printf '[]\n'
       fi
       ;;
-    'deploy|POST|compose.update'|'deploy_terminal|POST|compose.update'|'deploy_site_terminal|POST|compose.update'|'deploy_registry_drift|POST|compose.update')
-      printf '%s\n' "$body" > "$test_root/compose-update-body.json"
+    'deploy|POST|compose.update'|'deploy_terminal|POST|compose.update'|'deploy_site_terminal|POST|compose.update'|'deploy_site_uncertain|POST|compose.update'|'deploy_site_state_drift|POST|compose.update')
+      case "$compose_target" in
+        c1) printf '%s\n' "$body" > "$test_root/compose-update-body.json" ;;
+        s1) printf '%s\n' "$body" > "$test_root/site-update-body.json" ;;
+        *)
+          printf 'unexpected compose.update target: %s\n' "$compose_target" >&2
+          return 90
+          ;;
+      esac
       printf '{}\n'
       ;;
-    'deploy|POST|application.update'|'deploy_terminal|POST|application.update'|'deploy_site_terminal|POST|application.update'|'deploy_registry_drift|POST|application.update')
-      printf '%s\n' "$body" > "$test_root/application-update-body.json"
+    'deploy|POST|compose.deploy'|'deploy_terminal|POST|compose.deploy'|'deploy_site_terminal|POST|compose.deploy'|'deploy_site_uncertain|POST|compose.deploy'|'deploy_site_state_drift|POST|compose.deploy')
+      case "$compose_target" in
+        c1) : > "$test_root/compose-deployed" ;;
+        s1) : > "$test_root/site-deployed" ;;
+        *)
+          printf 'unexpected compose.deploy target: %s\n' "$compose_target" >&2
+          return 90
+          ;;
+      esac
       printf '{}\n'
       ;;
-    'deploy|GET|compose.one?composeId=c1'|'deploy_terminal|GET|compose.one?composeId=c1'|'deploy_site_terminal|GET|compose.one?composeId=c1'|'deploy_registry_drift|GET|compose.one?composeId=c1'|'deploy_predecessor_drift|GET|compose.one?composeId=c1')
+    'deploy|GET|compose.one?composeId=c1'|'deploy_terminal|GET|compose.one?composeId=c1'|'deploy_site_terminal|GET|compose.one?composeId=c1'|'deploy_site_uncertain|GET|compose.one?composeId=c1'|'deploy_site_state_drift|GET|compose.one?composeId=c1'|'deploy_predecessor_drift|GET|compose.one?composeId=c1')
       if [[ -f $test_root/compose-update-body.json ]]; then
         compose_drift=false
         if [[ ${COMPOSE_DRIFT_AFTER_DEPLOY-false} == true && -f $test_root/compose-deployed ]]; then
@@ -279,72 +362,28 @@ dokploy_api() {
         fake_release_compose
       fi
       ;;
-    'deploy|POST|compose.deploy'|'deploy_terminal|POST|compose.deploy'|'deploy_site_terminal|POST|compose.deploy'|'deploy_registry_drift|POST|compose.deploy')
-      : > "$test_root/compose-deployed"; printf '{}\n'
-      ;;
-    'deploy|POST|application.deploy'|'deploy_terminal|POST|application.deploy'|'deploy_site_terminal|POST|application.deploy'|'deploy_registry_drift|POST|application.deploy')
-      : > "$test_root/site-deployed"; printf '{}\n'
-      ;;
-    'deploy|GET|application.one?applicationId=a1'|'deploy_terminal|GET|application.one?applicationId=a1'|'deploy_site_terminal|GET|application.one?applicationId=a1'|'deploy_registry_drift|GET|application.one?applicationId=a1'|'deploy_predecessor_drift|GET|application.one?applicationId=a1'|'application_binding_drift|GET|application.one?applicationId=a1')
-      if [[ -f $test_root/application-update-body.json ]]; then
-        auto_deploy=$(jq -cr '.autoDeploy' "$test_root/application-update-body.json")
-        placement=$(jq -cr '.placementSwarm' "$test_root/application-update-body.json")
-      elif [[ $FAKE_MODE == application_binding_drift ]]; then
-        jq -cn --arg image "$SITE_IMAGE" --arg serverId "${COMPOSE_SERVER_ID-}" \
-          '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:null,
-            buildRegistryId:null,rollbackRegistryId:null,registry:null,buildRegistry:null,
-            rollbackRegistry:null,autoDeploy:false,placementSwarm:{Constraints:["node.labels.role==staging"]},
-            registryUrl:"ghcr.io",username:"robot",password:"pull-token",environmentId:"wrong-environment",serverId:(if $serverId == "" then null else $serverId end),
-            env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://wrong-dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=false",
-            redirects:[],security:[],domains:[{domainId:"domain1",host:"wrong-site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null,customEntrypoint:null,internalPath:"/",stripPath:false,middlewares:[],forwardAuthEnabled:false,serviceName:null}]}'
-        return 0
+    'deploy|GET|compose.one?composeId=s1'|'deploy_terminal|GET|compose.one?composeId=s1'|'deploy_site_terminal|GET|compose.one?composeId=s1'|'deploy_site_uncertain|GET|compose.one?composeId=s1'|'deploy_site_state_drift|GET|compose.one?composeId=s1'|'deploy_predecessor_drift|GET|compose.one?composeId=s1')
+      if [[ -f $test_root/site-update-body.json ]]; then
+        site_drift=false
+        if [[ ${SITE_COMPOSE_DRIFT_AFTER_DEPLOY-false} == true && -f $test_root/compose-deployed && ! -f $test_root/site-deployed ]]; then
+          site_drift=true
+        fi
+        state_drift=false
+        if [[ $FAKE_MODE == deploy_site_state_drift && -f $test_root/site-deployed ]]; then
+          state_drift=true
+        fi
+        fake_site_compose | jq -c \
+          --slurpfile update "$test_root/site-update-body.json" \
+          --arg command "${SITE_COMPOSE_PERSISTED_COMMAND-}" \
+          --argjson fileDrift "${SITE_COMPOSE_PERSISTED_FILE_DRIFT-false}" \
+          --argjson siteDrift "$site_drift" --argjson stateDrift "$state_drift" '
+          . + $update[0]
+          | (if $command == "" then . else .command = $command end)
+          | (if $fileDrift then .composeFile = (.composeFile + "\n# attacker") else . end)
+          | (if $siteDrift or $stateDrift then .command = "docker compose -f attacker.yaml up -d" else . end)
+        '
       else
-        auto_deploy=${APPLICATION_AUTO_DEPLOY_BEFORE-true}
-        placement=${APPLICATION_PLACEMENT_BEFORE-null}
-      fi
-      auto_deploy=${APPLICATION_PERSISTED_AUTO_DEPLOY-$auto_deploy}
-      placement=${APPLICATION_PERSISTED_PLACEMENT-$placement}
-      mounts=${APPLICATION_MOUNTS_BEFORE-[]}
-      ports=${APPLICATION_PORTS_BEFORE-[]}
-      endpoint_spec=${APPLICATION_ENDPOINT_SPEC_BEFORE-null}
-      if [[ -f $test_root/application-update-body.json ]]; then
-        mounts=${APPLICATION_PERSISTED_MOUNTS-$mounts}
-        ports=${APPLICATION_PERSISTED_PORTS-$ports}
-        endpoint_spec=${APPLICATION_PERSISTED_ENDPOINT_SPEC-$endpoint_spec}
-      fi
-      if [[ -f $test_root/site-deployed ]]; then
-        mounts=${APPLICATION_DEPLOYED_MOUNTS-$mounts}
-        ports=${APPLICATION_DEPLOYED_PORTS-$ports}
-        endpoint_spec=${APPLICATION_DEPLOYED_ENDPOINT_SPEC-$endpoint_spec}
-      fi
-      if [[ ${APPLICATION_DRIFT_AFTER_COMPOSE-false} == true &&
-            -f $test_root/compose-deployed && ! -f $test_root/site-deployed ]]; then
-        mounts='[{"mountId":"drift","hostPath":"/attacker","containerPath":"/data"}]'
-      fi
-      if [[ -f $test_root/missing-app-creds ]]; then
-        jq -cn --arg image "$SITE_IMAGE" --arg serverId "${COMPOSE_SERVER_ID-}" --argjson autoDeploy "$auto_deploy" --argjson placement "$placement" --argjson mounts "$mounts" --argjson ports "$ports" --argjson endpointSpec "$endpoint_spec" \
-          '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:null,
-            buildRegistryId:null,rollbackRegistryId:null,registry:null,buildRegistry:null,
-            rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
-            registryUrl:"ghcr.io",username:"",password:"",environmentId:"env1",serverId:(if $serverId == "" then null else $serverId end),
-            env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-            redirects:[],security:[],mounts:$mounts,ports:$ports,endpointSpecSwarm:$endpointSpec,domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null,customEntrypoint:null,internalPath:"/",stripPath:false,middlewares:[],forwardAuthEnabled:false,serviceName:null}]}'
-      elif [[ $FAKE_MODE == deploy_registry_drift && -f $test_root/site-deployed ]]; then
-        jq -cn --arg image "$SITE_IMAGE" --arg serverId "${COMPOSE_SERVER_ID-}" --argjson autoDeploy "$auto_deploy" --argjson placement "$placement" --argjson mounts "$mounts" --argjson ports "$ports" --argjson endpointSpec "$endpoint_spec" \
-          '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:"registry2",
-            buildRegistryId:null,rollbackRegistryId:null,registry:{registryId:"registry2"},
-            buildRegistry:null,rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
-            registryUrl:"ghcr.io",username:"robot",password:"pull-token",environmentId:"env1",serverId:(if $serverId == "" then null else $serverId end),
-            env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-            redirects:[],security:[],mounts:$mounts,ports:$ports,endpointSpecSwarm:$endpointSpec,domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null,customEntrypoint:null,internalPath:"/",stripPath:false,middlewares:[],forwardAuthEnabled:false,serviceName:null}]}'
-      else
-        jq -cn --arg image "$SITE_IMAGE" --arg serverId "${COMPOSE_SERVER_ID-}" --argjson autoDeploy "$auto_deploy" --argjson placement "$placement" --argjson mounts "$mounts" --argjson ports "$ports" --argjson endpointSpec "$endpoint_spec" \
-          '{applicationId:"a1",dockerImage:$image,sourceType:"docker",registryId:null,
-            buildRegistryId:null,rollbackRegistryId:null,registry:null,buildRegistry:null,
-            rollbackRegistry:null,autoDeploy:$autoDeploy,placementSwarm:$placement,
-            registryUrl:"ghcr.io",username:"robot",password:"pull-token",environmentId:"env1",serverId:(if $serverId == "" then null else $serverId end),
-            env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-            redirects:[],security:[],mounts:$mounts,ports:$ports,endpointSpecSwarm:$endpointSpec,domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null,customEntrypoint:null,internalPath:"/",stripPath:false,middlewares:[],forwardAuthEnabled:false,serviceName:null}]}'
+        fake_site_compose
       fi
       ;;
     *)
@@ -356,134 +395,6 @@ dokploy_api() {
 
 reset_api
 assert_eq "$(main current-release-id --compose-id c1)" "$RID"
-
-# Production has no site configuration arguments: preserve its historic
-# Application response contract rather than requiring staging-only binding fields.
-jq -cn --arg image "$SITE_IMAGE" '
-  {applicationId:"a1",dockerImage:$image,sourceType:"docker",autoDeploy:false,
-   registryId:null,buildRegistryId:null,rollbackRegistryId:null,registry:null,
-   buildRegistry:null,rollbackRegistry:null,registryUrl:"ghcr.io",username:"robot",
-   password:"pull-token",placementSwarm:{Constraints:["node.labels.role==prod"]}}
-' > "$test_root/legacy-production-app.json"
-cp -- "$test_root/legacy-production-app.json" "$test_root/legacy-production-app-before.json"
-require_exact_release_application_state "$test_root/legacy-production-app.json" \
-  "$test_root/legacy-production-app-before.json" a1 "$SITE_IMAGE" ghcr.io prod '' '' '' '' '' || \
-  fail_test 'production compatibility unexpectedly requires staging Application binding fields'
-
-jq -cn --arg image "$SITE_IMAGE" '
-  {applicationId:"a1",dockerImage:$image,sourceType:"docker",autoDeploy:false,
-   registryId:null,buildRegistryId:null,rollbackRegistryId:null,registry:null,
-   buildRegistry:null,rollbackRegistry:null,registryUrl:"ghcr.io",username:"robot",
-   password:"pull-token",environmentId:"env1",serverId:null,
-   env:"BUILDHOUND_SITE_HOST=site.example.test\nBUILDHOUND_SITE_DASHBOARD_URL=https://dashboard.example.test\nBUILDHOUND_SITE_NOINDEX=true",
-   redirects:[],security:[],mounts:[],ports:[],endpointSpecSwarm:null,
-   domains:[{domainId:"domain1",host:"site.example.test",https:true,port:8080,path:"/",domainType:"application",applicationId:"a1",composeId:null,previewDeploymentId:null,certificateType:"none",customCertResolver:null,customEntrypoint:null,internalPath:"/",stripPath:false,middlewares:[],forwardAuthEnabled:false,serviceName:null}],placementSwarm:{Constraints:["node.labels.role==staging"]}}
-' > "$test_root/bound-site-app.json"
-# Dokploy v0.29.12 has three equivalent inactive endpoint representations.
-# Bind each exact object form directly, while the main fixture exercises null.
-jq '.endpointSpecSwarm = {Mode:"vip"}' "$test_root/bound-site-app.json" > "$test_root/vip-endpoint-app.json"
-require_site_application_binding "$test_root/vip-endpoint-app.json" a1 env1 '' \
-  https://site.example.test https://dashboard.example.test true || \
-  fail_test 'inactive vip endpoint object failed the binding check'
-require_exact_release_application_state "$test_root/vip-endpoint-app.json" \
-  "$test_root/vip-endpoint-app.json" a1 "$SITE_IMAGE" ghcr.io staging env1 '' \
-  https://site.example.test https://dashboard.example.test true || \
-  fail_test 'inactive vip endpoint object failed the exact-state check'
-jq '.endpointSpecSwarm = {Mode:"vip",Ports:[]}' "$test_root/bound-site-app.json" > "$test_root/vip-empty-ports-endpoint-app.json"
-require_site_application_binding "$test_root/vip-empty-ports-endpoint-app.json" a1 env1 '' \
-  https://site.example.test https://dashboard.example.test true || \
-  fail_test 'inactive vip empty-ports endpoint object failed the binding check'
-require_exact_release_application_state "$test_root/vip-empty-ports-endpoint-app.json" \
-  "$test_root/vip-empty-ports-endpoint-app.json" a1 "$SITE_IMAGE" ghcr.io staging env1 '' \
-  https://site.example.test https://dashboard.example.test true || \
-  fail_test 'inactive vip empty-ports endpoint object failed the exact-state check'
-jq '.domains += [{host:"attacker.example.test"}]' "$test_root/bound-site-app.json" > "$test_root/extra-domain-app.json"
-if require_site_application_binding "$test_root/extra-domain-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'extra site Application domain passed the binding check'
-fi
-jq '.env += "\nBUILDHOUND_SITE_NOINDEX=false"' "$test_root/bound-site-app.json" > "$test_root/duplicate-env-app.json"
-if require_site_application_binding "$test_root/duplicate-env-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'duplicate conflicting site environment entry passed the binding check'
-fi
-jq '.domains[0].port = 3000' "$test_root/bound-site-app.json" > "$test_root/wrong-port-app.json"
-if require_site_application_binding "$test_root/wrong-port-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'wrong site domain port passed the binding check'
-fi
-jq '.domains[0].certificateType = "letsencrypt" | .domains[0].customCertResolver = "attacker"' \
-  "$test_root/bound-site-app.json" > "$test_root/certificate-drift-app.json"
-if require_site_application_binding "$test_root/certificate-drift-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'site certificate/resolver drift passed the binding check'
-fi
-jq '.domains[0].middlewares = ["redirect-to-attacker"]' \
-  "$test_root/bound-site-app.json" > "$test_root/middleware-drift-app.json"
-if require_site_application_binding "$test_root/middleware-drift-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'site middleware drift passed the binding check'
-fi
-jq '.domains[0].forwardAuthEnabled = true' \
-  "$test_root/bound-site-app.json" > "$test_root/forward-auth-drift-app.json"
-if require_site_application_binding "$test_root/forward-auth-drift-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'site forward-auth drift passed the binding check'
-fi
-jq '.redirects = [{redirectId:"redirect1",regex:".*",replacement:"https://attacker.example"}]' \
-  "$test_root/bound-site-app.json" > "$test_root/redirect-drift-app.json"
-if require_site_application_binding "$test_root/redirect-drift-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'pre-update Application redirect drift passed the binding check'
-fi
-if require_exact_release_application_state "$test_root/redirect-drift-app.json" \
-    "$test_root/bound-site-app.json" a1 "$SITE_IMAGE" ghcr.io staging env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'post-update Application redirect drift passed the exact-state check'
-fi
-jq '.security = [{securityId:"security1",username:"attacker",password:"secret"}]' \
-  "$test_root/bound-site-app.json" > "$test_root/security-drift-app.json"
-if require_site_application_binding "$test_root/security-drift-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'pre-update Application security drift passed the binding check'
-fi
-if require_exact_release_application_state "$test_root/security-drift-app.json" \
-    "$test_root/bound-site-app.json" a1 "$SITE_IMAGE" ghcr.io staging env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'post-update Application security drift passed the exact-state check'
-fi
-jq '.mounts = [{mountId:"mount1",hostPath:"/attacker",containerPath:"/data"}]' \
-  "$test_root/bound-site-app.json" > "$test_root/mount-drift-app.json"
-if require_site_application_binding "$test_root/mount-drift-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'pre-update Application mount drift passed the binding check'
-fi
-if require_exact_release_application_state "$test_root/mount-drift-app.json" \
-    "$test_root/bound-site-app.json" a1 "$SITE_IMAGE" ghcr.io staging env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'post-update Application mount drift passed the exact-state check'
-fi
-jq '.ports = [{publishedPort:8443,targetPort:8080}]' "$test_root/bound-site-app.json" > "$test_root/port-drift-app.json"
-if require_site_application_binding "$test_root/port-drift-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'pre-update Application published port passed the binding check'
-fi
-if require_exact_release_application_state "$test_root/port-drift-app.json" \
-    "$test_root/bound-site-app.json" a1 "$SITE_IMAGE" ghcr.io staging env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'post-update Application published port passed the exact-state check'
-fi
-jq '.endpointSpecSwarm.Ports = [{PublishedPort:8443,TargetPort:8080,Protocol:"tcp"}]' \
-  "$test_root/bound-site-app.json" > "$test_root/endpoint-port-drift-app.json"
-if require_site_application_binding "$test_root/endpoint-port-drift-app.json" a1 env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'pre-update Application endpoint publish state passed the binding check'
-fi
-if require_exact_release_application_state "$test_root/endpoint-port-drift-app.json" \
-    "$test_root/bound-site-app.json" a1 "$SITE_IMAGE" ghcr.io staging env1 '' \
-    https://site.example.test https://dashboard.example.test true; then
-  fail_test 'post-update Application endpoint publish state passed the exact-state check'
-fi
 
 reset_api
 assert_eq "$(main current-source-commit --compose-id c1)" "$SOURCE_SHA"
@@ -513,10 +424,10 @@ assert_status 2 main current-source-commit --compose-id 'c1&applicationId=attack
 
 reset_api
 assert_status 2 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1
 [[ ! -s $test_root/calls ]] || fail_test 'missing app role reached Dokploy APIs'
 assert_status 2 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role production
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --app-role production
 grep -F 'app role must be staging or prod' "$test_root/status-stderr" >/dev/null || \
   fail_test 'invalid app role was not rejected explicitly'
 [[ ! -s $test_root/calls ]] || fail_test 'invalid app role reached Dokploy APIs'
@@ -526,7 +437,7 @@ jq --arg image "registry.example.test/buildhound/backup@sha256:$(printf '3%.0s' 
 reset_api
 assert_status 1 main deploy-release "$test_root/mixed-registry-release.json" \
   --manifest "$manifest" --volume-guard "$guard" --base-repo BuildHound/BuildHound \
-  --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+  --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
 [[ ! -s $test_root/calls ]] || fail_test 'mixed release registry reached Dokploy APIs'
 
 xtrace_secret=xtrace-secret-must-not-appear
@@ -572,31 +483,81 @@ assert_status 2 main staging-bootstrap-state --bad c1
 assert_status 2 main staging-bootstrap-state --compose-id 'c1&applicationId=attacker'
 [[ ! -s $test_root/calls ]] || fail_test 'invalid staging-bootstrap-state ID reached the API'
 
+# The site Compose must be bound to the release Compose's environment before
+# any mutation: a wrong environment can neither be updated nor deployed.
 reset_api
 FAKE_MODE=deploy
-: > "$test_root/missing-app-creds"
+SITE_COMPOSE_ENVIRONMENT_ID=wrong-environment
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
-grep -F 'lacks Dokploy v0.29 Docker-provider pull credentials' "$test_root/status-stderr" >/dev/null || \
-  fail_test 'missing site pull credentials were not rejected explicitly'
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+grep -F 'site Compose is not bound to the release Compose target' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'cross-environment site Compose was not rejected explicitly'
 if grep -q '^POST|' "$test_root/calls"; then
-  fail_test 'missing site pull credentials reached a Dokploy mutation'
+  fail_test 'cross-environment site Compose reached a Dokploy mutation'
 fi
+unset SITE_COMPOSE_ENVIRONMENT_ID
 
+# The site Compose must select the release Compose's exact manager: worker
+# pull authorization is only proven for that manager.
 reset_api
 FAKE_MODE=deploy
 COMPOSE_SERVER_ID=server1
-: > "$test_root/missing-app-creds"
+SITE_COMPOSE_SERVER_ID=server2
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+grep -F 'site Compose is not bound to the release Compose target' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'foreign-manager site Compose was not rejected explicitly'
+if grep -q '^POST|' "$test_root/calls"; then
+  fail_test 'foreign-manager site Compose reached a Dokploy mutation'
+fi
+unset COMPOSE_SERVER_ID SITE_COMPOSE_SERVER_ID
+
+# Attached Dokploy domains or mounts on the site Compose are transforms the
+# client refuses: routing and storage come only from the rendered site Stack.
+reset_api
+FAKE_MODE=deploy
+SITE_COMPOSE_DOMAINS='[{"domainId":"domain1"}]'
+assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+grep -F 'site Compose is not bound to the release Compose target' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'attached site Compose domain was not rejected explicitly'
+if grep -q '^POST|' "$test_root/calls"; then
+  fail_test 'attached site Compose domain reached a Dokploy mutation'
+fi
+unset SITE_COMPOSE_DOMAINS
+
+reset_api
+FAKE_MODE=deploy
+SITE_COMPOSE_MOUNTS='[{"mountId":"mount1","hostPath":"/attacker","containerPath":"/data"}]'
+assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+grep -F 'site Compose is not bound to the release Compose target' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'attached site Compose mount was not rejected explicitly'
+if grep -q '^POST|' "$test_root/calls"; then
+  fail_test 'attached site Compose mount reached a Dokploy mutation'
+fi
+unset SITE_COMPOSE_MOUNTS
+
+# A remote-manager Compose passes its exact server ID through the registry
+# credential preflight; the mirrored site Compose deploys with it. This first
+# deploy-mode run to reach the deployment history also triggers the fake's
+# one-shot source mutation, proving the client deploys its private snapshots.
+reset_api
+FAKE_MODE=deploy
+COMPOSE_SERVER_ID=server1
+main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true >/dev/null
 assert_eq "$(cat "$test_root/integration-targets")" server1
 unset COMPOSE_SERVER_ID
+cp -- "$test_root/original-release.json" "$release"
+cp -- "$test_root/original-stack.yaml" "$manifest"
+cp -- "$test_root/original-site-stack.yaml" "$site_manifest"
 
 reset_api
 FAKE_MODE=deploy
 COMPOSE_SERVER_ID='server1&registryId=attacker'
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
 [[ ! -s $test_root/integration-targets ]] || fail_test 'invalid Compose server target reached registry preflight'
 if grep -q '^POST|' "$test_root/calls"; then
   fail_test 'invalid Compose server target reached a Dokploy mutation'
@@ -607,7 +568,7 @@ reset_api
 FAKE_MODE=deploy
 COMPOSE_DOMAINS='[{"domainId":"domain1"}]'
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
 [[ ! -s $test_root/integration-targets ]] || fail_test 'attached Compose domain reached registry preflight'
 if grep -q '^POST|' "$test_root/calls"; then
   fail_test 'attached Compose domain reached a Dokploy mutation'
@@ -619,146 +580,97 @@ FAKE_MODE=deploy
 COMPOSE_SERVER_ID=server1
 COMPOSE_PERSISTED_SERVER_ID=server2
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
 grep -F 'persisted unexpected release Compose state' "$test_root/status-stderr" >/dev/null || \
   fail_test 'remote Compose target drift was not rejected explicitly'
-if grep -q '^POST|compose.deploy$' "$test_root/calls"; then
+if grep -q '^POST|compose.deploy|' "$test_root/calls"; then
   fail_test 'remote Compose target drift reached deployment'
 fi
 unset COMPOSE_SERVER_ID COMPOSE_PERSISTED_SERVER_ID
 
 cp -- "$test_root/original-release.json" "$release"
 cp -- "$test_root/original-stack.yaml" "$manifest"
+cp -- "$test_root/original-site-stack.yaml" "$site_manifest"
 reset_api
 FAKE_MODE=deploy
 COMPOSE_PERSISTED_COMMAND='docker compose -f attacker.yaml up -d'
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
 grep -F 'persisted unexpected release Compose state' "$test_root/status-stderr" >/dev/null || \
   fail_test 'persisted custom Compose command was not rejected explicitly'
-if grep -q '^POST|compose.deploy$' "$test_root/calls"; then
+if grep -q '^POST|compose.deploy|' "$test_root/calls"; then
   fail_test 'persisted custom Compose command reached deployment'
 fi
 unset COMPOSE_PERSISTED_COMMAND
 
+# The site compose.update is readback-verified exactly like the dashboard's:
+# a persisted custom command blocks both deploy submissions.
 reset_api
 FAKE_MODE=deploy
-APPLICATION_PERSISTED_AUTO_DEPLOY=true
+SITE_COMPOSE_PERSISTED_COMMAND='docker compose -f attacker.yaml up -d'
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
-grep -F 'persisted unexpected release Application state' "$test_root/status-stderr" >/dev/null || \
-  fail_test 'persisted site auto-deploy was not rejected explicitly'
-if grep -q '^POST|application.deploy$' "$test_root/calls"; then
-  fail_test 'persisted site auto-deploy reached deployment'
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+grep -F 'persisted unexpected site Compose state' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'persisted custom site Compose command was not rejected explicitly'
+if grep -q '^POST|compose.deploy|' "$test_root/calls"; then
+  fail_test 'persisted custom site Compose command reached deployment'
 fi
-unset APPLICATION_PERSISTED_AUTO_DEPLOY
+unset SITE_COMPOSE_PERSISTED_COMMAND
 
+# A stored site composeFile that differs from the rendered bytes must fail the
+# readback, proving the deployed file is exactly what the client sent.
 reset_api
 FAKE_MODE=deploy
-APPLICATION_PERSISTED_PLACEMENT='{"Constraints":["node.labels.role==prod"]}'
+SITE_COMPOSE_PERSISTED_FILE_DRIFT=true
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
-grep -F 'persisted unexpected release Application state' "$test_root/status-stderr" >/dev/null || \
-  fail_test 'persisted site placement drift was not rejected explicitly'
-if grep -q '^POST|application.deploy$' "$test_root/calls"; then
-  fail_test 'persisted site placement drift reached deployment'
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+grep -F 'persisted unexpected site Compose state' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'stored site Compose file drift was not rejected explicitly'
+if grep -q '^POST|compose.deploy|' "$test_root/calls"; then
+  fail_test 'stored site Compose file drift reached deployment'
 fi
-unset APPLICATION_PERSISTED_PLACEMENT
-
-# A staging site Application must be transform-free before the first release
-# mutation; a persisted mount is therefore a hard fail before compose.update.
-reset_api
-FAKE_MODE=deploy
-APPLICATION_MOUNTS_BEFORE='[{"mountId":"mount1","hostPath":"/attacker","containerPath":"/data"}]'
-assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
-if grep -q '^POST|' "$test_root/calls"; then
-  fail_test 'persisted site mount reached a Dokploy mutation'
-fi
-unset APPLICATION_MOUNTS_BEFORE
-
-# A published port injected after application.update must be detected before
-# deployment, proving the Application port set remains the pre-bound empty set.
-reset_api
-FAKE_MODE=deploy
-APPLICATION_PERSISTED_PORTS='[{"publishedPort":8443,"targetPort":8080}]'
-assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
-grep -F 'persisted unexpected release Application state' "$test_root/status-stderr" >/dev/null || \
-  fail_test 'persisted site published port was not rejected explicitly'
-if grep -q '^POST|application.deploy$' "$test_root/calls"; then
-  fail_test 'persisted site published port reached deployment'
-fi
-unset APPLICATION_PERSISTED_PORTS
-
-# Swarm's advanced endpoint publisher is distinct from Dokploy's ports array;
-# it must remain at the exact inactive endpoint spec before deployment.
-reset_api
-FAKE_MODE=deploy
-APPLICATION_PERSISTED_ENDPOINT_SPEC='{"Mode":"vip","Ports":[{"PublishedPort":8443,"TargetPort":8080}]}'
-assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
-grep -F 'persisted unexpected release Application state' "$test_root/status-stderr" >/dev/null || \
-  fail_test 'persisted site endpoint publisher was not rejected explicitly'
-if grep -q '^POST|application.deploy$' "$test_root/calls"; then
-  fail_test 'persisted site endpoint publisher reached deployment'
-fi
-unset APPLICATION_PERSISTED_ENDPOINT_SPEC
+unset SITE_COMPOSE_PERSISTED_FILE_DRIFT
 
 # The site dashboard link is independently bound to the effective Compose
 # environment, before any update call can mutate either target.
 reset_api
 FAKE_MODE=deploy
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://other-dashboard.example.test --site-noindex true
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://other-dashboard.example.test --site-noindex true
 grep -F 'site dashboard URL does not match the release Compose dashboard host' "$test_root/status-stderr" >/dev/null || \
   fail_test 'cross-environment dashboard URL was not rejected explicitly'
 if grep -q '^POST|' "$test_root/calls"; then
   fail_test 'cross-environment dashboard URL reached a Dokploy mutation'
 fi
 
-# Re-read after deployment must retain the same empty mount set, not merely
-# the one observed immediately after application.update.
+# Both roles require the full site contract when the site is not skipped.
 reset_api
 FAKE_MODE=deploy
-APPLICATION_DEPLOYED_MOUNTS='[{"mountId":"mount1","hostPath":"/attacker","containerPath":"/data"}]'
-assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
-grep -F 'deployed site image, pull credentials, or registry isolation differs from release' "$test_root/status-stderr" >/dev/null || \
-  fail_test 'post-deployment site mount was not rejected explicitly'
-unset APPLICATION_DEPLOYED_MOUNTS
-
-reset_api
-FAKE_MODE=deploy
-APPLICATION_DEPLOYED_ENDPOINT_SPEC='{"Mode":"vip","Ports":[{"PublishedPort":8443,"TargetPort":8080}]}'
-assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
-grep -F 'deployed site image, pull credentials, or registry isolation differs from release' "$test_root/status-stderr" >/dev/null || \
-  fail_test 'post-deployment site endpoint publisher was not rejected explicitly'
-unset APPLICATION_DEPLOYED_ENDPOINT_SPEC
-
-reset_api
-FAKE_MODE=application_binding_drift
-assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
-if grep -q '^POST|' "$test_root/calls"; then
-  fail_test 'stale Application environment or site configuration reached a Dokploy mutation'
-fi
+assert_status 2 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging
+[[ ! -s $test_root/calls ]] || fail_test 'staging deploy without site values reached the API'
+assert_status 2 main deploy-release "$release" --manifest "$production_manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role prod
+[[ ! -s $test_root/calls ]] || fail_test 'production deploy without site values reached the API'
+assert_status 2 main deploy-release "$release" --manifest "$production_manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-manifest "$site_manifest" --app-role prod \
+  --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex false
+[[ ! -s $test_root/calls ]] || fail_test 'production deploy without a site Compose ID reached the API'
 
 # A mistyped target ID must never reach an update/deploy endpoint, even when
 # the Compose target and release BOM are otherwise valid.
 reset_api
 FAKE_MODE=deploy
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id stale_a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id stale_s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
 if grep -q '^POST|' "$test_root/calls"; then
-  fail_test 'mistyped site Application ID reached a Dokploy mutation'
+  fail_test 'mistyped site Compose ID reached a Dokploy mutation'
 fi
 
 reset_api
 FAKE_MODE=deploy
 evidence=$(main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true)
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true)
 jq -e --arg rid "$RID" --arg history "$HISTORY_HASH" '
   . == {
     releaseId:$rid,
@@ -773,30 +685,33 @@ reset_api
 FAKE_MODE=deploy
 evidence_file=$test_root/release-evidence.json
 evidence=$(main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
   --evidence-file "$evidence_file")
 cmp -s <(printf '%s\n' "$evidence") "$evidence_file" || fail_test 'success evidence file differs from stdout evidence'
 
+# Staging ordering is pinned end-to-end: the dashboard Compose is updated,
+# verified, deployed, and awaited before the site Compose is re-verified and
+# deployed. The site deploy submission comes only after the dashboard wait.
 expected_calls=$(cat <<'EOF'
 GET|compose.one?composeId=c1
-GET|application.one?applicationId=a1
+GET|compose.one?composeId=s1
 GET|deployment.allByCompose?composeId=c1
-GET|deployment.all?applicationId=a1
+GET|deployment.allByCompose?composeId=s1
 GET|deployment.allByCompose?composeId=c1
-POST|compose.update
+POST|compose.update|c1
 GET|compose.one?composeId=c1
 GET|deployment.allByCompose?composeId=c1
-POST|application.update
-GET|application.one?applicationId=a1
+POST|compose.update|s1
+GET|compose.one?composeId=s1
 GET|deployment.allByCompose?composeId=c1
-POST|compose.deploy
+POST|compose.deploy|c1
 GET|deployment.allByCompose?composeId=c1
-GET|application.one?applicationId=a1
+GET|compose.one?composeId=s1
 GET|compose.one?composeId=c1
-GET|deployment.all?applicationId=a1
-POST|application.deploy
-GET|deployment.all?applicationId=a1
-GET|application.one?applicationId=a1
+GET|deployment.allByCompose?composeId=s1
+POST|compose.deploy|s1
+GET|deployment.allByCompose?composeId=s1
+GET|compose.one?composeId=s1
 EOF
 )
 assert_eq "$(cat "$test_root/calls")" "$expected_calls"
@@ -806,54 +721,61 @@ printf 'services:\n  server:\n    image: %s\n    deploy:\n      placement:\n    
 jq -jr '.composeFile' "$test_root/compose-update-body.json" > "$test_root/actual-stack.yaml"
 cmp -s "$test_root/expected-stack.yaml" "$test_root/actual-stack.yaml" || \
   fail_test 'deploy-release changed trusted manifest bytes'
-jq -e --arg id c1 '
-  (keys | sort) == ([
-    "composeId","composeFile","composeType","sourceType","command","autoDeploy",
-    "enableSubmodules","composePath","suffix","randomize","isolatedDeployment",
-    "isolatedDeploymentsVolume","triggerType","watchPaths","repository","owner","branch",
-    "githubId","gitlabProjectId","gitlabRepository","gitlabOwner","gitlabBranch",
-    "gitlabPathNamespace","gitlabId","bitbucketRepository","bitbucketRepositorySlug",
-    "bitbucketOwner","bitbucketBranch","bitbucketId","giteaRepository","giteaOwner",
-    "giteaBranch","giteaId","customGitUrl","customGitBranch","customGitSSHKeyId"
-  ] | sort) and
-  .composeId == $id and .composeType == "stack" and .sourceType == "raw" and
-  (.composeFile | type) == "string" and .command == "" and .autoDeploy == false and
-  .enableSubmodules == false and .composePath == "./docker-compose.yml" and
-  .suffix == "" and .randomize == false and .isolatedDeployment == false and
-  .isolatedDeploymentsVolume == false and .triggerType == "push" and .watchPaths == [] and
-  ([.repository,.owner,.branch,.githubId,.gitlabProjectId,.gitlabRepository,.gitlabOwner,
-    .gitlabBranch,.gitlabPathNamespace,.gitlabId,.bitbucketRepository,
-    .bitbucketRepositorySlug,.bitbucketOwner,.bitbucketBranch,.bitbucketId,
-    .giteaRepository,.giteaOwner,.giteaBranch,.giteaId,.customGitUrl,.customGitBranch,
-    .customGitSSHKeyId] | all(. == null))
-' "$test_root/compose-update-body.json" >/dev/null
-jq -e --arg image "$SITE_IMAGE" '
-  . == {applicationId:"a1",dockerImage:$image,sourceType:"docker",autoDeploy:false,registryId:null,
-        buildRegistryId:null,rollbackRegistryId:null,
-        placementSwarm:{Constraints:["node.labels.role==staging"]}}
-' "$test_root/body-9.json" >/dev/null
+printf 'services:\n  site:\n    image: %s\n    environment:\n      BUILDHOUND_SITE_HOST: site.example.test\n      BUILDHOUND_SITE_DASHBOARD_URL: https://dashboard.example.test\n      BUILDHOUND_SITE_NOINDEX: "true"\n    deploy:\n      placement:\n        constraints:\n          - node.labels.role == staging\n' \
+  "$SITE_IMAGE" > "$test_root/expected-site-stack.yaml"
+jq -jr '.composeFile' "$test_root/site-update-body.json" > "$test_root/actual-site-stack.yaml"
+cmp -s "$test_root/expected-site-stack.yaml" "$test_root/actual-site-stack.yaml" || \
+  fail_test 'deploy-release did not render the exact site stack bytes'
+for update_target in c1 s1; do
+  case "$update_target" in
+    c1) update_body=$test_root/compose-update-body.json ;;
+    s1) update_body=$test_root/site-update-body.json ;;
+  esac
+  jq -e --arg id "$update_target" '
+    (keys | sort) == ([
+      "composeId","composeFile","composeType","sourceType","command","autoDeploy",
+      "enableSubmodules","composePath","suffix","randomize","isolatedDeployment",
+      "isolatedDeploymentsVolume","triggerType","watchPaths","repository","owner","branch",
+      "githubId","gitlabProjectId","gitlabRepository","gitlabOwner","gitlabBranch",
+      "gitlabPathNamespace","gitlabId","bitbucketRepository","bitbucketRepositorySlug",
+      "bitbucketOwner","bitbucketBranch","bitbucketId","giteaRepository","giteaOwner",
+      "giteaBranch","giteaId","customGitUrl","customGitBranch","customGitSSHKeyId"
+    ] | sort) and
+    .composeId == $id and .composeType == "stack" and .sourceType == "raw" and
+    (.composeFile | type) == "string" and .command == "" and .autoDeploy == false and
+    .enableSubmodules == false and .composePath == "./docker-compose.yml" and
+    .suffix == "" and .randomize == false and .isolatedDeployment == false and
+    .isolatedDeploymentsVolume == false and .triggerType == "push" and .watchPaths == [] and
+    ([.repository,.owner,.branch,.githubId,.gitlabProjectId,.gitlabRepository,.gitlabOwner,
+      .gitlabBranch,.gitlabPathNamespace,.gitlabId,.bitbucketRepository,
+      .bitbucketRepositorySlug,.bitbucketOwner,.bitbucketBranch,.bitbucketId,
+      .giteaRepository,.giteaOwner,.giteaBranch,.giteaId,.customGitUrl,.customGitBranch,
+      .customGitSSHKeyId] | all(. == null))
+  ' "$update_body" >/dev/null || fail_test "compose update body for $update_target is not the full clearing payload"
+done
 jq -e --arg title "$TITLE" \
   '. == {composeId:"c1",title:$title}' "$test_root/body-12.json" >/dev/null
 jq -e --arg title "$TITLE" \
-  '. == {applicationId:"a1",title:$title}' "$test_root/body-17.json" >/dev/null
+  '. == {composeId:"s1",title:$title}' "$test_root/body-17.json" >/dev/null
 
-# A site binding can drift while Compose is running. Staging must detect that
-# after recording Compose success and before submitting application.deploy.
+# The site Compose can drift while the dashboard Compose is deploying. Staging
+# must detect that after recording Compose success and before submitting the
+# site compose.deploy.
 reset_api
 FAKE_MODE=deploy
-APPLICATION_DRIFT_AFTER_COMPOSE=true
-evidence_file=$test_root/application-window-drift-evidence.json
+SITE_COMPOSE_DRIFT_AFTER_DEPLOY=true
+evidence_file=$test_root/site-window-drift-evidence.json
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
   --evidence-file "$evidence_file"
-grep -F 'site Application drifted while the release Compose deployed' "$test_root/status-stderr" >/dev/null || \
-  fail_test 'Application drift during the Compose wait was not rejected explicitly'
-if grep -q '^POST|application.deploy$' "$test_root/calls"; then
-  fail_test 'Application drift during the Compose wait reached site deployment'
+grep -F 'site Compose drifted while the release Compose deployed' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'site Compose drift during the Compose wait was not rejected explicitly'
+if grep -q '^POST|compose.deploy|s1$' "$test_root/calls"; then
+  fail_test 'site Compose drift during the Compose wait reached site deployment'
 fi
 jq -e '.composeDeploymentId == "compose-new" and .siteDeploymentId == null' \
-  "$evidence_file" >/dev/null || fail_test 'Application window drift lost Compose evidence'
-unset APPLICATION_DRIFT_AFTER_COMPOSE
+  "$evidence_file" >/dev/null || fail_test 'site Compose window drift lost Compose evidence'
+unset SITE_COMPOSE_DRIFT_AFTER_DEPLOY
 
 # Compose environment/server state can also drift during its deployment. The
 # staging site must remain blocked even though the Compose deployment succeeded.
@@ -862,11 +784,11 @@ FAKE_MODE=deploy
 COMPOSE_DRIFT_AFTER_DEPLOY=true
 evidence_file=$test_root/compose-window-drift-evidence.json
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
   --evidence-file "$evidence_file"
 grep -F 'release Compose drifted while it deployed' "$test_root/status-stderr" >/dev/null || \
   fail_test 'Compose drift during the deployment wait was not rejected explicitly'
-if grep -q '^POST|application.deploy$' "$test_root/calls"; then
+if grep -q '^POST|compose.deploy|s1$' "$test_root/calls"; then
   fail_test 'Compose drift during the deployment wait reached site deployment'
 fi
 jq -e '.composeDeploymentId == "compose-new" and .siteDeploymentId == null' \
@@ -879,7 +801,7 @@ reset_api
 FAKE_MODE=deploy
 STALE_RELEASE_BASELINES=true
 evidence=$(main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true)
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true)
 jq -e '
   .composeDeploymentId == "compose-new" and .siteDeploymentId == "site-new"
 ' >/dev/null <<< "$evidence" || fail_test 'intervening same-title deployment was attributed to this run'
@@ -892,46 +814,51 @@ unset STALE_RELEASE_BASELINES
 reset_api
 FAKE_MODE=deploy
 evidence=$(main deploy-release "$release" --manifest "$production_manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role prod)
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role prod --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex false)
 jq -e '
   .composeDeploymentId == "compose-new" and .siteDeploymentId == "site-new"
 ' >/dev/null <<< "$evidence"
 expected_production_calls=$(cat <<'EOF'
 GET|compose.one?composeId=c1
-GET|application.one?applicationId=a1
+GET|compose.one?composeId=s1
 GET|deployment.allByCompose?composeId=c1
-GET|deployment.all?applicationId=a1
+GET|deployment.allByCompose?composeId=s1
 GET|deployment.allByCompose?composeId=c1
-POST|compose.update
+POST|compose.update|c1
 GET|compose.one?composeId=c1
-POST|application.update
-GET|application.one?applicationId=a1
-POST|compose.deploy
-POST|application.deploy
+POST|compose.update|s1
+GET|compose.one?composeId=s1
+POST|compose.deploy|c1
+POST|compose.deploy|s1
 GET|deployment.allByCompose?composeId=c1
-GET|deployment.all?applicationId=a1
-GET|application.one?applicationId=a1
+GET|deployment.allByCompose?composeId=s1
+GET|compose.one?composeId=s1
 EOF
 )
 assert_eq "$(cat "$test_root/calls")" "$expected_production_calls"
+jq -jr '.composeFile' "$test_root/site-update-body.json" > "$test_root/actual-prod-site-stack.yaml"
+grep -F 'node.labels.role == prod' "$test_root/actual-prod-site-stack.yaml" >/dev/null || \
+  fail_test 'production site stack was not rendered for the prod role'
+grep -F 'BUILDHOUND_SITE_NOINDEX: "false"' "$test_root/actual-prod-site-stack.yaml" >/dev/null || \
+  fail_test 'production site stack did not bind the indexable noindex value'
 
-# Production without a site remains Compose-only.
+# Production without a site remains Compose-only against the dashboard target.
 reset_api
 FAKE_MODE=deploy
 main deploy-release "$release" --manifest "$production_manifest" --volume-guard "$guard" \
   --base-repo BuildHound/BuildHound --compose-id c1 --skip-site --app-role prod >/dev/null
-if grep -q 'application' "$test_root/calls"; then
-  fail_test 'production skip-site deploy touched an application endpoint'
+if grep -q 's1' "$test_root/calls"; then
+  fail_test 'production skip-site deploy touched the site Compose'
 fi
 
 # --skip-site is an explicit target compatibility/emergency path: dashboard-only
-# deploy touches no application.* endpoint and reports a null site deployment.
+# deploy touches no site Compose endpoint and reports a null site deployment.
 reset_api
 FAKE_MODE=deploy
 assert_status 2 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --skip-site --app-role staging
-grep -F 'skip-site conflicts with a site application ID' "$test_root/status-stderr" >/dev/null || \
-  fail_test 'skip-site with a site application ID was not rejected explicitly'
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --skip-site --app-role staging
+grep -F 'skip-site conflicts with a site compose ID' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'skip-site with a site compose ID was not rejected explicitly'
 [[ ! -s $test_root/calls ]] || fail_test 'conflicting skip-site arguments reached the API'
 
 reset_api
@@ -956,17 +883,17 @@ jq -e --arg rid "$RID" --arg history "$HISTORY_HASH" '
     siteDeploymentId:null
   }
 ' >/dev/null <<< "$evidence"
-if grep -q 'application' "$test_root/calls"; then
-  fail_test 'skip-site deploy touched an application endpoint'
+if grep -q 's1' "$test_root/calls"; then
+  fail_test 'skip-site deploy touched the site Compose'
 fi
 expected_skip_calls=$(cat <<'EOF'
 GET|compose.one?composeId=c1
 GET|deployment.allByCompose?composeId=c1
 GET|deployment.allByCompose?composeId=c1
-POST|compose.update
+POST|compose.update|c1
 GET|compose.one?composeId=c1
 GET|deployment.allByCompose?composeId=c1
-POST|compose.deploy
+POST|compose.deploy|c1
 GET|deployment.allByCompose?composeId=c1
 EOF
 )
@@ -974,10 +901,11 @@ assert_eq "$(cat "$test_root/calls")" "$expected_skip_calls"
 
 cp -- "$test_root/original-release.json" "$release"
 cp -- "$test_root/original-stack.yaml" "$manifest"
+cp -- "$test_root/original-site-stack.yaml" "$site_manifest"
 reset_api
 FAKE_MODE=deploy_predecessor_drift
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
   --expected-current-release-id "$RID"
 grep -F 'current release changed after backup selection' "$test_root/status-stderr" >/dev/null || \
   fail_test 'predecessor drift was not rejected explicitly'
@@ -991,13 +919,13 @@ reset_api
 FAKE_MODE=deploy_terminal
 evidence_file=$test_root/compose-failure-evidence.json
 assert_status 42 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
   --evidence-file "$evidence_file"
 grep -F 'Dokploy deployment reached a failed terminal state' "$test_root/status-stderr" >/dev/null || \
   fail_test 'terminal release failure lost its distinct diagnostic'
-[[ $(grep -c '^GET|deployment.all?applicationId=a1$' "$test_root/calls") -eq 1 ]] || \
+[[ $(grep -c '^GET|deployment.allByCompose?composeId=s1$' "$test_root/calls") -eq 1 ]] || \
   fail_test 'terminal Compose failure continued polling the site deployment'
-if grep -q '^POST|application.deploy$' "$test_root/calls"; then
+if grep -q '^POST|compose.deploy|s1$' "$test_root/calls"; then
   fail_test 'terminal Compose failure submitted the site deployment'
 fi
 jq -e --arg rid "$RID" --arg history "$HISTORY_HASH" '
@@ -1011,21 +939,39 @@ reset_api
 FAKE_MODE=deploy_site_terminal
 evidence_file=$test_root/site-failure-evidence.json
 assert_status 42 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
   --evidence-file "$evidence_file"
 jq -e --arg rid "$RID" --arg history "$HISTORY_HASH" '
   . == {releaseId:$rid,migrationId:"V1__initial",migrationHistorySha256:$history,
         composeDeploymentId:"compose-new",siteDeploymentId:"site-new"}
 ' "$evidence_file" >/dev/null || fail_test 'site failure did not retain both observed deployment IDs'
 
+# Invalid site deployment evidence after submission is uncertainty, never a
+# terminal verdict: the run fails with the distinct site diagnostic and the
+# evidence keeps the Compose deployment with a null site deployment.
 cp -- "$test_root/original-release.json" "$release"
 cp -- "$test_root/original-stack.yaml" "$manifest"
 reset_api
-FAKE_MODE=deploy_registry_drift
+FAKE_MODE=deploy_site_uncertain
+evidence_file=$test_root/site-uncertain-evidence.json
 assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
-  --base-repo BuildHound/BuildHound --compose-id c1 --site-application-id a1 --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
-grep -F 'registry isolation differs' "$test_root/status-stderr" >/dev/null || \
-  fail_test 'final registry drift was not rejected explicitly'
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true \
+  --evidence-file "$evidence_file"
+grep -F 'site deployment failed or remained uncertain' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'uncertain site deployment lost its distinct diagnostic'
+jq -e --arg rid "$RID" --arg history "$HISTORY_HASH" '
+  . == {releaseId:$rid,migrationId:"V1__initial",migrationHistorySha256:$history,
+        composeDeploymentId:"compose-new",siteDeploymentId:null}
+' "$evidence_file" >/dev/null || fail_test 'uncertain site deployment did not retain the Compose deployment ID'
+
+cp -- "$test_root/original-release.json" "$release"
+cp -- "$test_root/original-stack.yaml" "$manifest"
+reset_api
+FAKE_MODE=deploy_site_state_drift
+assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+grep -F 'deployed site Compose state differs from release' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'final site Compose state drift was not rejected explicitly'
 
 deploy_review() {
   [[ $# -eq 11 && $1 == BuildHound/BuildHound && $2 == BuildHound/BuildHound &&

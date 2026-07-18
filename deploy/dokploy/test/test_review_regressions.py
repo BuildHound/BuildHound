@@ -545,7 +545,7 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         staging_body = workflow[staging_job:production_job]
         production_body = workflow[production_job:]
         self.assertIn("--app-role staging", staging_body)
-        self.assertIn('--site-application-id "$SITE_APPLICATION_ID"', staging_body)
+        self.assertIn('--site-compose-id "$SITE_COMPOSE_ID"', staging_body)
         self.assertIn('--site-url "$BUILDHOUND_SITE_URL"', staging_body)
         self.assertIn('--site-dashboard-url "$BUILDHOUND_DASHBOARD_URL"', staging_body)
         self.assertIn("--site-noindex true", staging_body)
@@ -580,11 +580,11 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertIn('require-manual-current --compose-id "$COMPOSE_ID"', production_body)
         self.assertIn('test "$ROLLBACK_COMPATIBLE" = true', production_body)
         self.assertIn('select-backup.sh --object "$BACKUP_OBJECT"', production_body)
-        # Staging has a provisioned separate Docker-image Application: it is
+        # Staging has a provisioned separate site Compose (plan 097): it is
         # mandatory, uses the exact BOM site image through the delivery client,
         # and its deployment evidence plus public-site smoke cannot be skipped.
-        self.assertIn('SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}', staging_body)
-        self.assertIn('--site-application-id "$SITE_APPLICATION_ID"', staging_body)
+        self.assertIn('SITE_COMPOSE_ID: ${{ secrets.DOKPLOY_SITE_COMPOSE_ID }}', staging_body)
+        self.assertIn('--site-compose-id "$SITE_COMPOSE_ID"', staging_body)
         self.assertIn(
             "jq -e '.siteDeploymentId | type == \"string\" and length > 0' deployment-evidence.json >/dev/null",
             staging_body,
@@ -597,9 +597,17 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertNotIn("BUILDHOUND_SKIP_SITE_DEPLOY", staging_body)
         self.assertNotIn("--skip-site", staging_body)
         self.assertNotIn("BUILDHOUND_SKIP_SITE_CHECKS", staging_body)
-        # Production retains the existing emergency skip wiring unchanged.
+        # Production retains the existing emergency skip wiring; when the site
+        # is not skipped it supplies the full site Compose contract (plan 097):
+        # the client renders the site stack for both roles, so production
+        # passes explicit values and an indexable robots posture.
         self.assertIn("SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}", production_body)
         self.assertIn("site+=(--skip-site)", production_body)
+        self.assertIn('SITE_COMPOSE_ID: ${{ secrets.DOKPLOY_SITE_COMPOSE_ID }}', production_body)
+        self.assertIn('site+=(--site-compose-id "$SITE_COMPOSE_ID")', production_body)
+        self.assertIn('site+=(--site-url "$BUILDHOUND_SITE_URL")', production_body)
+        self.assertIn('site+=(--site-dashboard-url "$BUILDHOUND_DASHBOARD_URL")', production_body)
+        self.assertIn("site+=(--site-noindex false)", production_body)
         self.assertIn(
             "BUILDHOUND_SKIP_SITE_CHECKS: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}",
             production_body,
@@ -945,14 +953,17 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         self.assertNotIn('persisted=$(dokploy_api GET "compose.one', review_client)
         self.assertNotIn('compose=$(dokploy_api GET "compose.one', review_client)
         self.assertNotIn('result=$(dokploy_api POST compose.create', review_client)
-        self.assertIn('registryId:null', delivery_client)
-        self.assertIn('buildRegistryId:null', delivery_client)
-        self.assertIn('rollbackRegistryId:null', delivery_client)
         self.assertIn('autoDeploy:false', delivery_client)
-        self.assertIn("site Application lacks Dokploy v0.29 Docker-provider pull credentials", delivery_client)
-        application_update = delivery_client.split("POST application.update", 1)[0].rsplit("body=$(jq", 1)[1]
-        self.assertNotIn("username:", application_update)
-        self.assertNotIn("password:", application_update)
+        # Plan 097: the site ships as a raw site Compose Stack. The delivery
+        # client no longer touches Application endpoints or the legacy
+        # Docker-provider per-Application credential model.
+        self.assertNotIn("application.update", delivery_client)
+        self.assertNotIn("application.deploy", delivery_client)
+        self.assertNotIn("application.one", delivery_client)
+        self.assertNotIn("Docker-provider", delivery_client)
+        self.assertNotIn("registryUrl", delivery_client)
+        self.assertNotIn("username", delivery_client)
+        self.assertNotIn("password", delivery_client)
         self.assertIn("github.githubProviders", integrations)
         self.assertIn("github.getGithubRepositories", integrations)
 
