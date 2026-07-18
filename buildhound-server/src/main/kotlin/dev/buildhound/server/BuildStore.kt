@@ -1455,7 +1455,14 @@ class InMemoryTokenStore(private val clock: java.time.InstantSource = java.time.
 
     override fun mintToken(projectId: String, tokenHash: String, scope: String): Instant {
         val expiresUnusedAt = clock.instant().plus(TOKEN_UNUSED_TTL)
-        tokens[tokenHash] = TokenRecord(projectId = projectId, scope = scope, expiresUnusedAt = expiresUnusedAt, activatedAt = null)
+        val record = TokenRecord(projectId = projectId, scope = scope, expiresUnusedAt = expiresUnusedAt, activatedAt = null)
+        // putIfAbsent, not a blind assign: a hash collision must never silently rebind an existing
+        // token (Postgres unique-violates the same case) — practically unreachable with 256-bit
+        // randoms, but kept at parity with ensureProjectWithToken's cross-tenant guard below.
+        val existing = tokens.putIfAbsent(tokenHash, record)
+        check(existing == null) {
+            "token hash collision on mint — refusing to silently rebind an existing token"
+        }
         return expiresUnusedAt
     }
 

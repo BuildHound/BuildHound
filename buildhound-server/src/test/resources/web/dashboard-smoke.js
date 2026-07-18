@@ -403,6 +403,9 @@ async function fetchStub(path, opts) {
     if (path === "/v1/admin/tokens") {
         if (opts.method !== "POST") throw new Error("token mint must POST, got " + opts.method);
         if (opts.body) throw new Error("token mint must send no request body");
+        if (opts.headers.Authorization !== "Bearer " + store["buildhound.adminToken"]) {
+            throw new Error("token mint must use the admin bearer token, got " + opts.headers.Authorization);
+        }
         if (mintStatus !== 201) {
             return { ok: false, status: mintStatus, json: async () => ({ error: "forbidden" }), headers: headersOnly };
         }

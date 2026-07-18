@@ -35,7 +35,11 @@ fun startTokenSweeper(tokens: TokenStore, sweepMinutes: Long) {
         Thread(runnable, "buildhound-token-sweep").apply { isDaemon = true }
     }
     executor.scheduleAtFixedRate(
-        { runCatching { tokens.deleteExpiredUnactivatedTokens() } },
+        {
+            runCatching { tokens.deleteExpiredUnactivatedTokens() }
+                .onSuccess { count -> if (count > 0) logger.info("token sweep: deleted {} unactivated token(s)", count) }
+                .onFailure { logger.warn("token sweep failed", it) }
+        },
         sweepMinutes, sweepMinutes, TimeUnit.MINUTES,
     )
     logger.info("token sweep: every {}m", sweepMinutes)
