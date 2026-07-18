@@ -48,7 +48,7 @@ data class IngestResponse(val buildId: String, val status: String)
 @Serializable
 data class ApiError(val error: String)
 
-/** `POST /v1/admin/tokens` response (plan 097) — the only place the plaintext ever exists. */
+/** `POST /v1/admin/tokens` response (plan 098) — the only place the plaintext ever exists. */
 @Serializable
 data class MintedTokenResponse(val token: String, val scope: String, val expiresUnusedAt: String) {
     // Redacted so an accidental log of this object (e.g. a future debug log or exception message)
@@ -60,7 +60,7 @@ data class MintedTokenResponse(val token: String, val scope: String, val expires
 const val MAX_COMPRESSED_BYTES: Int = 32 * 1024 * 1024
 const val MAX_DECOMPRESSED_BYTES: Int = 64 * 1024 * 1024
 
-/** Shared across mint requests (plan 097 review) — `SecureRandom` is thread-safe, so a per-request instance is wasted setup. */
+/** Shared across mint requests (plan 098 review) — `SecureRandom` is thread-safe, so a per-request instance is wasted setup. */
 private val tokenRandom = SecureRandom()
 
 fun Route.healthRoutes() {
@@ -383,7 +383,7 @@ fun Route.settingsRoutes(settings: SettingsStore, tokens: TokenStore) {
 }
 
 /**
- * `GET/PUT /v1/admin/retention` (plan 042): per-tenant retention windows. `POST /tokens` (plan 097):
+ * `GET/PUT /v1/admin/retention` (plan 042): per-tenant retention windows. `POST /tokens` (plan 098):
  * mints an ingest-scope token for the dashboard's "Generate ingest token" action. All admin-scoped —
  * a `read` token gets 403, a missing token 401. Tenant comes from the token, never the body/params, so
  * an admin token can only ever act on its own project.

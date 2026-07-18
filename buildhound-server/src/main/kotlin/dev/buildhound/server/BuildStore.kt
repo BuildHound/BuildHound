@@ -793,7 +793,7 @@ object TokenScope {
 data class TokenPrincipal(val project: ProjectRef, val scope: String)
 
 /**
- * Activation window for a freshly minted token (plan 097): unused past this deadline, it is
+ * Activation window for a freshly minted token (plan 098): unused past this deadline, it is
  * hard-deleted by the sweep and rejected by [TokenStore.resolve]'s auth-path predicate even if the
  * sweep hasn't run yet. Not configurable (owner scope decision) — [TokenStore.mintToken] bakes it in.
  */
@@ -803,7 +803,7 @@ val TOKEN_UNUSED_TTL: java.time.Duration = java.time.Duration.ofHours(6)
 interface TokenStore {
     /**
      * Resolves an active token, activating it on first successful use if it carries an unused-token
-     * deadline (plan 097: `activated_at IS NULL`, idempotent under concurrent first use). A token past
+     * deadline (plan 098: `activated_at IS NULL`, idempotent under concurrent first use). A token past
      * its deadline and never activated resolves to null, independent of whether the sweep has run.
      */
     fun resolve(tokenHash: String): TokenPrincipal?
@@ -813,7 +813,7 @@ interface TokenStore {
 
     /**
      * Mints a token hash for [projectId]/[scope] with a [TOKEN_UNUSED_TTL] activation deadline (plan
-     * 097 — dashboard-generated ingest tokens). Returns the deadline actually stored, so mint and
+     * 098 — dashboard-generated ingest tokens). Returns the deadline actually stored, so mint and
      * validation share one clock (DB clock for Postgres, the store's [java.time.InstantSource] in-memory).
      */
     fun mintToken(projectId: String, tokenHash: String, scope: String): Instant
@@ -1407,7 +1407,7 @@ class InMemoryAddonStore : AddonStore {
 }
 
 /**
- * [clock] is injectable (plan 097) so tests can move time past a minted token's activation deadline
+ * [clock] is injectable (plan 098) so tests can move time past a minted token's activation deadline
  * without a real sleep; production uses the default wall clock. `expiresUnusedAt = null` mirrors
  * Postgres's NULL-means-exempt convention for bootstrap tokens minted via [ensureProjectWithToken].
  */

@@ -377,7 +377,7 @@ const totals = {
     "/v1/builds?branch=none&limit=50&offset=0": 0,
 };
 
-// Ingest-token generation (plan 097): mutable canned status/body for POST /v1/admin/tokens so the
+// Ingest-token generation (plan 098): mutable canned status/body for POST /v1/admin/tokens so the
 // smoke can drive both the 201 happy path (with a changeable plaintext, to prove regeneration
 // replaces rather than accumulates) and the 403 wrong-scope path.
 let mintStatus = 201;
@@ -909,7 +909,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     clickButton(byId["app"], "Save"); await tick(); await tick();
     if (!hasText(byId["app"], "Rejected")) throw new Error("admin invalid save did not show the validation error");
 
-    // Ingest-token generation (plan 097): the section renders under the retention form on the same
+    // Ingest-token generation (plan 098): the section renders under the retention form on the same
     // #/admin page, a click POSTs to /v1/admin/tokens with the admin bearer token, and a 201 renders
     // the plaintext exactly once via textContent alongside the one-time / 6-hour warning.
     if (!hasText(byId["app"], "Generate ingest token")) throw new Error("token-gen section header missing on #/admin");
@@ -925,7 +925,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], expectedExpiresLocal)) throw new Error("rendered warning is missing the local-time expiresUnusedAt: " + expectedExpiresLocal);
     if (findTag(byId["app"], "button").filter(b => (b.textContent || "") === "Copy").length === 0) throw new Error("Copy control missing after a successful mint");
     // The plaintext must reach only that one DOM node — never sessionStorage (nor, by extension,
-    // localStorage/URL/logs) — the exact property plan 097's security review is built to probe.
+    // localStorage/URL/logs) — the exact property plan 098's security review is built to probe.
     if (Object.values(store).some(v => (v || "").indexOf(mintBody.token) >= 0)) {
         throw new Error("minted plaintext must never be persisted to sessionStorage");
     }

@@ -1864,7 +1864,7 @@
         const form = el("div", null, "retention-form");
         app.append(form);
 
-        // Ingest-token generation (plan 097): mints a fresh ingest-scope token for the caller's
+        // Ingest-token generation (plan 098): mints a fresh ingest-scope token for the caller's
         // project via POST /v1/admin/tokens, reusing the same admin-token bar above. The plaintext
         // exists only in the response body and this one DOM node — never sessionStorage,
         // localStorage, the URL/hash, console, or any log — and is gone the moment the view
