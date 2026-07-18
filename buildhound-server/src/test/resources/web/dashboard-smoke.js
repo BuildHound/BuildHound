@@ -377,6 +377,12 @@ const totals = {
     "/v1/builds?branch=none&limit=50&offset=0": 0,
 };
 
+// Ingest-token generation (plan 097): mutable canned status/body for POST /v1/admin/tokens so the
+// smoke can drive both the 201 happy path (with a changeable plaintext, to prove regeneration
+// replaces rather than accumulates) and the 403 wrong-scope path.
+let mintStatus = 201;
+const mintBody = { token: "ing-mint-abc123XYZ", scope: "ingest", expiresUnusedAt: "2026-07-18T18:00:00.000Z" };
+
 const fetched = [];
 async function fetchStub(path, opts) {
     fetched.push(path);
@@ -393,6 +399,14 @@ async function fetchStub(path, opts) {
             return { ok: true, status: 200, json: async () => cfg, headers: headersOnly };
         }
         return { ok: true, status: 200, json: async () => ({ rawDays: 90, buildDays: 395 }), headers: headersOnly };
+    }
+    if (path === "/v1/admin/tokens") {
+        if (opts.method !== "POST") throw new Error("token mint must POST, got " + opts.method);
+        if (opts.body) throw new Error("token mint must send no request body");
+        if (mintStatus !== 201) {
+            return { ok: false, status: mintStatus, json: async () => ({ error: "forbidden" }), headers: headersOnly };
+        }
+        return { ok: true, status: 201, json: async () => mintBody, headers: headersOnly };
     }
     const body = responses[path];
     const headers = { get: name => (name === "X-Total-Count" && totals[path] != null ? String(totals[path]) : null) };
@@ -891,6 +905,44 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     numInputs()[0].value = "200"; numInputs()[1].value = "100"; // buildDays < rawDays → rejected
     clickButton(byId["app"], "Save"); await tick(); await tick();
     if (!hasText(byId["app"], "Rejected")) throw new Error("admin invalid save did not show the validation error");
+
+    // Ingest-token generation (plan 097): the section renders under the retention form on the same
+    // #/admin page, a click POSTs to /v1/admin/tokens with the admin bearer token, and a 201 renders
+    // the plaintext exactly once via textContent alongside the one-time / 6-hour warning.
+    if (!hasText(byId["app"], "Generate ingest token")) throw new Error("token-gen section header missing on #/admin");
+    let genMark = fetched.length;
+    clickButton(byId["app"], "Generate token");
+    await tick(); await tick();
+    if (!fetched.slice(genMark).includes("/v1/admin/tokens")) throw new Error("generate button did not POST /v1/admin/tokens");
+    if (!hasExact(byId["app"], mintBody.token)) throw new Error("minted plaintext token was not rendered via textContent");
+    if (!hasText(byId["app"], "Shown once")) throw new Error("one-time warning missing after a successful mint");
+    if (!hasText(byId["app"], "6 hours")) throw new Error("6-hour activation-deadline warning missing");
+    // The warning must actually name the returned deadline (as a local time), not just the literal "6 hours".
+    const expectedExpiresLocal = new Date(mintBody.expiresUnusedAt).toLocaleString();
+    if (!hasText(byId["app"], expectedExpiresLocal)) throw new Error("rendered warning is missing the local-time expiresUnusedAt: " + expectedExpiresLocal);
+    if (findTag(byId["app"], "button").filter(b => (b.textContent || "") === "Copy").length === 0) throw new Error("Copy control missing after a successful mint");
+    // The plaintext must reach only that one DOM node — never sessionStorage (nor, by extension,
+    // localStorage/URL/logs) — the exact property plan 097's security review is built to probe.
+    if (Object.values(store).some(v => (v || "").indexOf(mintBody.token) >= 0)) {
+        throw new Error("minted plaintext must never be persisted to sessionStorage");
+    }
+
+    // Regenerating replaces the previously displayed token rather than stacking both on the page.
+    const firstMintedToken = mintBody.token;
+    mintBody.token = "ing-mint-second-999";
+    clickButton(byId["app"], "Generate token");
+    await tick(); await tick();
+    if (!hasExact(byId["app"], mintBody.token)) throw new Error("second generation did not render the new plaintext");
+    if (hasText(byId["app"], firstMintedToken)) throw new Error("regenerating must replace, not accumulate, the displayed token");
+
+    // 403 (wrong scope) mirrors the retention form's existing "admin-scoped token required" messaging,
+    // and must never render a plaintext token for the rejected request.
+    mintStatus = 403;
+    clickButton(byId["app"], "Generate token");
+    await tick(); await tick();
+    if (!hasText(byId["app"], "An admin-scoped token is required.")) throw new Error("403 token-gen error path missing the scope message");
+    if (hasText(byId["app"], mintBody.token)) throw new Error("a rejected mint must not leave a token displayed");
+    mintStatus = 201; // restore for any later admin-page exercise
 
     // Project selector (plan 077): switching to two distinct keys reveals the header select.
     // Re-saving the token (same value) re-fetches the key list, matching the token-change hook —
