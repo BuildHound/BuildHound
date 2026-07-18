@@ -11,6 +11,9 @@ import dev.buildhound.commons.payload.ChangedModulesInfo
 import dev.buildhound.commons.payload.ConfigurationCacheState
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TaskOutcome
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
+import java.util.UUID
 import javax.sql.DataSource
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -84,6 +87,115 @@ class PostgresStoresIntegrationTest {
         tokens.ensureProjectWithToken("pilot", sha256Hex("ingest-only"), TokenScope.INGEST)
         assertEquals(TokenScope.INGEST, tokens.resolve(sha256Hex("ingest-only"))?.scope)
         assertEquals(TokenScope.ALL, tokens.resolve(sha256Hex("secret-1"))?.scope)
+    }
+
+    /** Bypasses [PostgresTokenStore.mintToken] to plant an arbitrary (possibly past) deadline. */
+    private fun insertToken(
+        projectId: String,
+        tokenHash: String,
+        scope: String = TokenScope.INGEST,
+        activatedAt: OffsetDateTime? = null,
+        expiresUnusedAt: OffsetDateTime? = null,
+    ) {
+        dataSource.connection.use { c ->
+            c.prepareStatement(
+                "INSERT INTO api_tokens (project_id, token_hash, scope, activated_at, expires_unused_at) VALUES (?, ?, ?, ?, ?)",
+            ).use { s ->
+                s.setObject(1, UUID.fromString(projectId))
+                s.setString(2, tokenHash)
+                s.setString(3, scope)
+                s.setObject(4, activatedAt)
+                s.setObject(5, expiresUnusedAt)
+                s.executeUpdate()
+            }
+        }
+    }
+
+    private fun activatedAtColumn(tokenHash: String): OffsetDateTime? =
+        dataSource.connection.use { c ->
+            c.prepareStatement("SELECT activated_at FROM api_tokens WHERE token_hash = ?").use { s ->
+                s.setString(1, tokenHash)
+                s.executeQuery().use { r -> if (r.next()) r.getObject(1, OffsetDateTime::class.java) else null }
+            }
+        }
+
+    @Test
+    fun `mintToken stores an expires_unused_at six hours out on the DB clock`() {
+        val project = tokens.ensureProjectWithToken("mint-project", sha256Hex("mint-admin"))
+        val before = OffsetDateTime.now(ZoneOffset.UTC)
+
+        val deadline = tokens.mintToken(project.id, sha256Hex("minted-pg-1"), TokenScope.INGEST)
+
+        // Loose bounds (test-runtime jitter, not clock skew) around the DB-computed `now() + 6h`.
+        assertTrue(deadline.isAfter(before.plusMinutes(5 * 60 + 58).toInstant()), "roughly 6h ahead: $deadline vs $before")
+        assertTrue(deadline.isBefore(before.plusMinutes(6 * 60 + 2).toInstant()), "roughly 6h ahead: $deadline vs $before")
+        assertNotNull(tokens.resolve(sha256Hex("minted-pg-1")), "freshly minted, well inside the window, resolves")
+    }
+
+    @Test
+    fun `resolve activates an unactivated token exactly once, and ignores the deadline once activated`() {
+        val project = tokens.ensureProjectWithToken("activation-project", sha256Hex("activation-admin"))
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+
+        insertToken(project.id, sha256Hex("about-to-activate"), expiresUnusedAt = now.plusHours(1))
+        assertNull(activatedAtColumn(sha256Hex("about-to-activate")), "starts unactivated")
+
+        assertNotNull(tokens.resolve(sha256Hex("about-to-activate")), "resolves while inside the window")
+        val stampedAt = activatedAtColumn(sha256Hex("about-to-activate"))
+        assertNotNull(stampedAt, "the first successful resolve stamps activated_at")
+
+        // A second resolve (a later ingest, say) must not re-stamp the timestamp — exactly once.
+        assertNotNull(tokens.resolve(sha256Hex("about-to-activate")))
+        assertEquals(stampedAt, activatedAtColumn(sha256Hex("about-to-activate")), "activated_at is set exactly once")
+
+        // Past its original deadline but activated: the deadline is moot once activated_at is set.
+        insertToken(
+            project.id, sha256Hex("expired-but-activated"),
+            activatedAt = now.minusDays(1), expiresUnusedAt = now.minusHours(1),
+        )
+        assertNotNull(tokens.resolve(sha256Hex("expired-but-activated")), "an activated token ignores its deadline")
+
+        // Past its deadline, never activated: the auth-path predicate rejects it directly, no sweep needed.
+        insertToken(project.id, sha256Hex("expired-unactivated"), expiresUnusedAt = now.minusHours(1))
+        assertNull(
+            tokens.resolve(sha256Hex("expired-unactivated")),
+            "an expired, unactivated token is rejected even before any sweep runs",
+        )
+    }
+
+    @Test
+    fun `a NULL expires_unused_at (bootstrap or pre-existing) token has no deadline, ever`() {
+        val project = tokens.ensureProjectWithToken("legacy-project", sha256Hex("legacy-admin"))
+        insertToken(project.id, sha256Hex("legacy-token")) // activated_at and expires_unused_at both NULL
+
+        assertNotNull(tokens.resolve(sha256Hex("legacy-token")), "NULL deadline means exempt by construction")
+    }
+
+    @Test
+    fun `the sweep hard-deletes only expired, unactivated tokens`() {
+        // PER_CLASS lifecycle shares one schema across every test method with no per-test reset — an
+        // earlier method's expired-unactivated fixture (e.g. "expired-unactivated" above) can still be
+        // sitting in the table. Sweep it away first so this test's own delta is exactly its own fixtures.
+        tokens.deleteExpiredUnactivatedTokens()
+
+        val project = tokens.ensureProjectWithToken("sweep-project", sha256Hex("sweep-admin"))
+        val now = OffsetDateTime.now(ZoneOffset.UTC)
+
+        insertToken(project.id, sha256Hex("sweep-expired-unactivated"), expiresUnusedAt = now.minusMinutes(1))
+        insertToken(
+            project.id, sha256Hex("sweep-expired-activated"),
+            activatedAt = now.minusDays(2), expiresUnusedAt = now.minusDays(1),
+        )
+        insertToken(project.id, sha256Hex("sweep-not-yet-expired"), expiresUnusedAt = now.plusHours(1))
+        insertToken(project.id, sha256Hex("sweep-null-deadline")) // bootstrap-shaped row
+
+        val deleted = tokens.deleteExpiredUnactivatedTokens()
+
+        assertEquals(1, deleted)
+        assertNull(tokens.resolve(sha256Hex("sweep-expired-unactivated")), "swept")
+        assertNotNull(tokens.resolve(sha256Hex("sweep-expired-activated")), "activated survives despite its original deadline")
+        assertNotNull(tokens.resolve(sha256Hex("sweep-not-yet-expired")), "not-yet-due survives")
+        assertNotNull(tokens.resolve(sha256Hex("sweep-null-deadline")), "NULL-deadline tokens are never swept")
     }
 
     @Test

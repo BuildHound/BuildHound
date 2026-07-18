@@ -792,12 +792,34 @@ object TokenScope {
 
 data class TokenPrincipal(val project: ProjectRef, val scope: String)
 
+/**
+ * Activation window for a freshly minted token (plan 097): unused past this deadline, it is
+ * hard-deleted by the sweep and rejected by [TokenStore.resolve]'s auth-path predicate even if the
+ * sweep hasn't run yet. Not configurable (owner scope decision) — [TokenStore.mintToken] bakes it in.
+ */
+val TOKEN_UNUSED_TTL: java.time.Duration = java.time.Duration.ofHours(6)
+
 /** Token lookups by hash — plaintext tokens never reach a store (spec §8). */
 interface TokenStore {
+    /**
+     * Resolves an active token, activating it on first successful use if it carries an unused-token
+     * deadline (plan 097: `activated_at IS NULL`, idempotent under concurrent first use). A token past
+     * its deadline and never activated resolves to null, independent of whether the sweep has run.
+     */
     fun resolve(tokenHash: String): TokenPrincipal?
 
-    /** Idempotent pilot bootstrap: create the project and attach the token hash. */
+    /** Idempotent pilot bootstrap: create the project and attach the token hash. No activation deadline. */
     fun ensureProjectWithToken(projectKey: String, tokenHash: String, scope: String = TokenScope.ALL): ProjectRef
+
+    /**
+     * Mints a token hash for [projectId]/[scope] with a [TOKEN_UNUSED_TTL] activation deadline (plan
+     * 097 — dashboard-generated ingest tokens). Returns the deadline actually stored, so mint and
+     * validation share one clock (DB clock for Postgres, the store's [java.time.InstantSource] in-memory).
+     */
+    fun mintToken(projectId: String, tokenHash: String, scope: String): Instant
+
+    /** Hard-deletes tokens whose activation deadline passed without ever being used. Returns the count deleted. */
+    fun deleteExpiredUnactivatedTokens(): Int
 }
 
 class InMemoryBuildStore(
@@ -1384,24 +1406,65 @@ class InMemoryAddonStore : AddonStore {
             .associate { it.key.third to it.value }
 }
 
-class InMemoryTokenStore : TokenStore {
+/**
+ * [clock] is injectable (plan 097) so tests can move time past a minted token's activation deadline
+ * without a real sleep; production uses the default wall clock. `expiresUnusedAt = null` mirrors
+ * Postgres's NULL-means-exempt convention for bootstrap tokens minted via [ensureProjectWithToken].
+ */
+class InMemoryTokenStore(private val clock: java.time.InstantSource = java.time.InstantSource.system()) : TokenStore {
+    private data class TokenRecord(
+        val projectId: String,
+        val scope: String,
+        val expiresUnusedAt: Instant?,
+        val activatedAt: Instant?,
+    )
+
     private val projects = ConcurrentHashMap<String, ProjectRef>() // key -> project
-    private val tokens = ConcurrentHashMap<String, Pair<String, String>>() // tokenHash -> (projectId, scope)
+    private val tokens = ConcurrentHashMap<String, TokenRecord>() // tokenHash -> record
 
     override fun resolve(tokenHash: String): TokenPrincipal? {
-        val (projectId, scope) = tokens[tokenHash] ?: return null
-        val project = projects.values.firstOrNull { it.id == projectId } ?: return null
-        return TokenPrincipal(project, scope)
+        val now = clock.instant()
+        // Mirrors PostgresTokenStore.resolve's predicate: activated, or no deadline, or deadline not
+        // yet passed. Re-checked under the same computeIfPresent below so a losing racer never observes
+        // a stale "still valid" record it then activates past its own deadline.
+        val record = tokens.computeIfPresent(tokenHash) { _, existing ->
+            val stillValid = existing.activatedAt != null ||
+                existing.expiresUnusedAt == null ||
+                existing.expiresUnusedAt.isAfter(now)
+            if (stillValid && existing.activatedAt == null) existing.copy(activatedAt = now) else existing
+        } ?: return null
+        val stillValid = record.activatedAt != null || record.expiresUnusedAt == null || record.expiresUnusedAt.isAfter(now)
+        if (!stillValid) return null
+        val project = projects.values.firstOrNull { it.id == record.projectId } ?: return null
+        return TokenPrincipal(project, record.scope)
     }
 
     override fun ensureProjectWithToken(projectKey: String, tokenHash: String, scope: String): ProjectRef {
         val project = projects.computeIfAbsent(projectKey) {
             ProjectRef(id = java.util.UUID.randomUUID().toString(), key = projectKey)
         }
-        val existing = tokens.putIfAbsent(tokenHash, project.id to scope)
-        check(existing == null || existing.first == project.id) {
+        val existing = tokens.putIfAbsent(
+            tokenHash,
+            TokenRecord(projectId = project.id, scope = scope, expiresUnusedAt = null, activatedAt = null),
+        )
+        check(existing == null || existing.projectId == project.id) {
             "token is already bound to another project — refusing silent cross-tenant reuse"
         }
         return project
+    }
+
+    override fun mintToken(projectId: String, tokenHash: String, scope: String): Instant {
+        val expiresUnusedAt = clock.instant().plus(TOKEN_UNUSED_TTL)
+        tokens[tokenHash] = TokenRecord(projectId = projectId, scope = scope, expiresUnusedAt = expiresUnusedAt, activatedAt = null)
+        return expiresUnusedAt
+    }
+
+    override fun deleteExpiredUnactivatedTokens(): Int {
+        val now = clock.instant()
+        val expired = tokens.filterValues {
+            it.activatedAt == null && it.expiresUnusedAt != null && it.expiresUnusedAt.isBefore(now)
+        }.keys
+        expired.forEach(tokens::remove)
+        return expired.size
     }
 }

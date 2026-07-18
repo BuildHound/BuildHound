@@ -113,6 +113,12 @@ fun main() {
         RetentionSweeper(stores.builds, stores.settings),
         sweepHours = env["BUILDHOUND_RETENTION_SWEEP_HOURS"]?.toLongOrNull() ?: 24,
     )
+    // Unactivated-token sweep (plan 097): dashboard-minted tokens unused past their 6h deadline are
+    // hard-deleted. Default 15m; 0 disables. Same instance-local caveat as the retention sweep.
+    startTokenSweeper(
+        stores.tokens,
+        sweepMinutes = env["BUILDHOUND_TOKEN_SWEEP_MINUTES"]?.toLongOrNull() ?: 15,
+    )
     embeddedServer(Netty, port = port, host = "0.0.0.0") { buildHoundModule(stores, rateLimits) }
         .start(wait = true)
 }

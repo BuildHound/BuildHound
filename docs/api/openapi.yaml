@@ -524,6 +524,17 @@ paths:
         "413": { description: Config body too large. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/admin/tokens:
+    post:
+      summary: Mint an ingest-scope token for this project (plan 097). Admin scope.
+      description: >
+        Generates 32 SecureRandom bytes, stores only the SHA-256 hash, and returns the plaintext once —
+        it is never logged or re-readable. The token must be used (any authenticated request) within 6
+        hours or it is hard-deleted, both by the background sweep and by the auth path itself.
+      responses:
+        "201": { description: The plaintext token, its scope, and the activation deadline (ISO-8601). }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
   /v1/metrics:
     post:
       summary: Ingest a custom measure from the metric CLI (plan 025). Ingest scope.
