@@ -1,0 +1,62 @@
+version: "3.8"
+
+# Public-site Swarm Stack for the staging and production Dokploy Compose apps
+# (plan 097). One parameterized file serves both roles. The delivery client
+# substitutes ${BUILDHOUND_SITE_IMAGE}, ${BUILDHOUND_APP_ROLE},
+# ${BUILDHOUND_SITE_HOST}, ${BUILDHOUND_SITE_DASHBOARD_URL}, and
+# ${BUILDHOUND_SITE_NOINDEX} client-side so the stored composeFile is exact and
+# readback-verifiable; ${DOKPLOY_INGRESS_NETWORK} stays Dokploy-environment
+# interpolation exactly like the dashboard stacks. Hardening mirrors the
+# standalone contract in site/compose.yml; a parity check in
+# deploy/dokploy/validate-stack.sh keeps the two from drifting apart.
+
+services:
+  site:
+    image: ${BUILDHOUND_SITE_IMAGE}
+    user: "101:101"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      BUILDHOUND_SITE_HOST: ${BUILDHOUND_SITE_HOST}
+      BUILDHOUND_SITE_DASHBOARD_URL: ${BUILDHOUND_SITE_DASHBOARD_URL}
+      # The X-Robots-Tag header is rendered by the site image itself; plan
+      # 095's Traefik robots middleware stays dashboard-only.
+      BUILDHOUND_SITE_NOINDEX: "${BUILDHOUND_SITE_NOINDEX}"
+    networks: [ingress]
+    read_only: true
+    # Long-form tmpfs on purpose: Docker's stack conversion drops the
+    # short-form service-level tmpfs field (README "tmpfs" note).
+    volumes:
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 33554432
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.role == ${BUILDHOUND_APP_ROLE}
+      update_config:
+        order: stop-first
+        failure_action: pause
+      resources:
+        reservations: {cpus: "0.05", memory: 32M}
+        limits: {cpus: "0.5", memory: 128M}
+      restart_policy: {condition: on-failure, delay: 5s, max_attempts: 5}
+      labels:
+        - traefik.enable=true
+        - traefik.swarm.network=${DOKPLOY_INGRESS_NETWORK}
+        # Traefik object names are swarm-global: the role-suffixed
+        # buildhound-${BUILDHOUND_APP_ROLE}-site names MUST stay disjoint from
+        # stack.yaml, staging-stack.yaml, and the review stacks, or the first
+        # coexistence of two stacks silently 404s both routers (first prod
+        # anchor, 2026-07-17).
+        - traefik.http.routers.buildhound-${BUILDHOUND_APP_ROLE}-site.rule=Host(`${BUILDHOUND_SITE_HOST}`)
+        - traefik.http.routers.buildhound-${BUILDHOUND_APP_ROLE}-site.entrypoints=websecure
+        - traefik.http.routers.buildhound-${BUILDHOUND_APP_ROLE}-site.tls.certresolver=letsencrypt-dns-hetzner
+        - traefik.http.services.buildhound-${BUILDHOUND_APP_ROLE}-site.loadbalancer.server.port=8080
+
+networks:
+  ingress:
+    external: true
+    name: ${DOKPLOY_INGRESS_NETWORK}
