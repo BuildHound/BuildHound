@@ -49,9 +49,17 @@ jobs:
           BUILDHOUND_S3_REGION: eu-central
           BUILDHOUND_DASHBOARD_HOST: dashboard.example.test
           DOKPLOY_INGRESS_NETWORK: ingress
+          # The site image fixture repo must match site/compose.yml's pinned
+          # repo: validate-stack.sh's parity check compares them (plan 097).
+          BUILDHOUND_SITE_IMAGE: ghcr.io/buildhound/buildhound-site@sha256:5555555555555555555555555555555555555555555555555555555555555555
+          BUILDHOUND_SITE_HOST: site.example.test
+          BUILDHOUND_SITE_DASHBOARD_URL: https://dashboard.example.test
+          BUILDHOUND_SITE_NOINDEX: "true"
         run: |
           BUILDHOUND_APP_ROLE=staging deploy/dokploy/validate-stack.sh deploy/dokploy/staging-stack.yaml
           BUILDHOUND_APP_ROLE=prod deploy/dokploy/validate-stack.sh deploy/dokploy/stack.yaml
+          BUILDHOUND_APP_ROLE=staging deploy/dokploy/validate-stack.sh deploy/dokploy/site-stack.yaml
+          BUILDHOUND_APP_ROLE=prod deploy/dokploy/validate-stack.sh deploy/dokploy/site-stack.yaml
       - name: Render trusted review Stack
         env:
           BUILDHOUND_SERVER_IMAGE: ghcr.io/buildhound/server@sha256:1111111111111111111111111111111111111111111111111111111111111111
