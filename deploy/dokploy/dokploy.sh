@@ -27,8 +27,9 @@ Commands:
   current-source-commit --compose-id ID
   require-manual-current --compose-id ID
   staging-bootstrap-state --compose-id ID
-  deploy-release RELEASE --compose-id ID (--site-application-id ID | --skip-site) --app-role ROLE [OPTIONS]
-    staging site target: --site-url HTTPS_URL --site-dashboard-url HTTPS_URL --site-noindex true|false
+  deploy-release RELEASE --compose-id ID (--site-compose-id ID | --skip-site) --app-role ROLE [OPTIONS]
+    site target (required for both roles unless --skip-site):
+      --site-url HTTPS_URL --site-dashboard-url HTTPS_URL --site-noindex true|false
     optional retainable evidence: --evidence-file PATH
   deploy-review [OPTIONS]
   count-reviews --base-repo REPO --environment-id ID [--exclude-pr PR]
@@ -249,6 +250,108 @@ render_release_stack() {
   done
 }
 
+# Render the trusted site Stack with the exact release values. Unlike the
+# dashboard stacks, the site Stack is not part of the release BOM: it ships
+# from the trusted workflow revision, and the site host, dashboard URL, and
+# noindex value are substituted client-side so the stored composeFile is exact
+# and readback-verifiable. ${DOKPLOY_INGRESS_NETWORK} intentionally stays
+# Dokploy-environment interpolation, exactly like the dashboard stacks.
+render_site_stack() {
+  local manifest=${1-} site_image=${2-} app_role=${3-} site_url=${4-}
+  local dashboard_url=${5-} noindex=${6-} output=${7-}
+  local site_host source_hash roundtrip_hash placeholder
+  if [ "$#" -ne 7 ]; then return 2; fi
+  require_app_role "$app_role" || return 1
+  require_site_url "$site_url" || return 1
+  require_site_url "$dashboard_url" || return 1
+  require_site_noindex "$noindex" || return 1
+  site_host=${site_url#https://}
+  source_hash=$(sha256_file "$manifest") || return 1
+  if ! jq -Rjs . "$manifest" > "$output"; then
+    fail "trusted site Stack is not valid UTF-8"
+    return 1
+  fi
+  roundtrip_hash=$(sha256_file "$output") || return 1
+  if [ "$source_hash" != "$roundtrip_hash" ]; then
+    fail "trusted site Stack is not valid UTF-8"
+    return 1
+  fi
+  if ! jq -Rjs \
+      --arg site "$site_image" --arg appRole "$app_role" --arg host "$site_host" \
+      --arg dashboard "$dashboard_url" --arg noindex "$noindex" '
+        gsub("\\$\\{BUILDHOUND_SITE_IMAGE\\}"; $site)
+        | gsub("\\$\\{BUILDHOUND_APP_ROLE\\}"; $appRole)
+        | gsub("\\$\\{BUILDHOUND_SITE_HOST\\}"; $host)
+        | gsub("\\$\\{BUILDHOUND_SITE_DASHBOARD_URL\\}"; $dashboard)
+        | gsub("\\$\\{BUILDHOUND_SITE_NOINDEX\\}"; $noindex)
+      ' "$manifest" > "$output"; then
+    fail "unable to render trusted site Stack"
+    return 1
+  fi
+  for placeholder in \
+      "\${BUILDHOUND_SITE_IMAGE}" "\${BUILDHOUND_APP_ROLE}" \
+      "\${BUILDHOUND_SITE_HOST}" "\${BUILDHOUND_SITE_DASHBOARD_URL}" \
+      "\${BUILDHOUND_SITE_NOINDEX}"; do
+    if LC_ALL=C grep -Fq -- "$placeholder" "$output"; then
+      fail "trusted site Stack contains an unresolved site placeholder"
+      return 1
+    else
+      local grep_rc=$?
+      if [ "$grep_rc" -ne 1 ]; then
+        fail "unable to inspect rendered site Stack"
+        return 1
+      fi
+    fi
+  done
+}
+
+# Full-body compose.update payload: every field that can replace or transform
+# the protected raw Stack is cleared and reasserted on each release deploy.
+compose_update_body() {
+  local compose_id=${1-} stack_file=${2-}
+  if [ "$#" -ne 2 ]; then return 2; fi
+  jq -cn --arg id "$compose_id" --rawfile composeFile "$stack_file" '
+    {
+      composeId:$id,
+      composeFile:$composeFile,
+      composeType:"stack",
+      sourceType:"raw",
+      command:"",
+      autoDeploy:false,
+      enableSubmodules:false,
+      composePath:"./docker-compose.yml",
+      suffix:"",
+      randomize:false,
+      isolatedDeployment:false,
+      isolatedDeploymentsVolume:false,
+      triggerType:"push",
+      watchPaths:[],
+      repository:null,
+      owner:null,
+      branch:null,
+      githubId:null,
+      gitlabProjectId:null,
+      gitlabRepository:null,
+      gitlabOwner:null,
+      gitlabBranch:null,
+      gitlabPathNamespace:null,
+      gitlabId:null,
+      bitbucketRepository:null,
+      bitbucketRepositorySlug:null,
+      bitbucketOwner:null,
+      bitbucketBranch:null,
+      bitbucketId:null,
+      giteaRepository:null,
+      giteaOwner:null,
+      giteaBranch:null,
+      giteaId:null,
+      customGitUrl:null,
+      customGitBranch:null,
+      customGitSSHKeyId:null
+    }
+  '
+}
+
 # Verify every persisted field that can replace or transform the protected raw
 # Stack. Environment values are intentionally preserved byte-for-byte because
 # the long-lived Stack consumes them during Dokploy's environment expansion.
@@ -307,103 +410,6 @@ require_exact_release_compose_state() {
     ($actual.environment.project.env == $before.environment.project.env)
   ' "$state_file" >/dev/null 2>&1
 }
-
-require_exact_release_application_state() {
-  local state_file=${1-} original_file=${2-} application_id=${3-}
-  local image=${4-} registry_host=${5-} app_role=${6-} environment_id=${7-}
-  local server_id=${8-} site_url=${9-} dashboard_url=${10-} noindex=${11-}
-  if [ "$#" -ne 11 ]; then return 2; fi
-  jq -e --slurpfile original "$original_file" --arg id "$application_id" \
-    --arg image "$image" --arg host "$registry_host" --arg appRole "$app_role" \
-    --arg environmentId "$environment_id" --arg serverId "$server_id" \
-    --arg siteUrl "$site_url" --arg dashboardUrl "$dashboard_url" --arg noindex "$noindex" '
-    . as $actual |
-    $original[0] as $before |
-    ($before | type) == "object" and
-    ($actual | type) == "object" and
-    (["autoDeploy","registryId","buildRegistryId","rollbackRegistryId","registry",
-      "buildRegistry","rollbackRegistry"] - ($actual | keys) | length) == 0 and
-    $actual.applicationId == $id and $actual.dockerImage == $image and
-    $actual.sourceType == "docker" and $actual.autoDeploy == false and
-    (if $siteUrl == "" then true else
-      $actual.environmentId == $environmentId and
-      (if $serverId == "" then $actual.serverId == null else $actual.serverId == $serverId end) and
-      ($actual.domains | type) == "array" and
-      ($actual.domains | length) == 1 and
-      ($actual.domains[0] as $domain |
-        ($domain.domainId | type) == "string" and
-        ($domain.domainId | test("^[A-Za-z0-9_-]{1,128}\\z")) and
-        $domain.host == ($siteUrl | ltrimstr("https://")) and
-        $domain.https == true and $domain.port == 8080 and $domain.path == "/" and
-        $domain.domainType == "application" and $domain.applicationId == $id and
-        $domain.composeId == null and $domain.previewDeploymentId == null and
-        $domain.certificateType == "none" and $domain.customCertResolver == null and
-        $domain.customEntrypoint == null and $domain.internalPath == "/" and
-        $domain.stripPath == false and $domain.middlewares == [] and
-        $domain.forwardAuthEnabled == false and $domain.serviceName == null) and
-      $before.redirects == [] and $actual.redirects == $before.redirects and
-      $before.security == [] and $actual.security == $before.security and
-      $before.mounts == [] and $actual.mounts == $before.mounts and
-      $before.ports == [] and $actual.ports == $before.ports and
-      ($before.endpointSpecSwarm == null or
-       $before.endpointSpecSwarm == {Mode:"vip"} or
-       $before.endpointSpecSwarm == {Mode:"vip",Ports:[]}) and
-      $actual.endpointSpecSwarm == $before.endpointSpecSwarm and
-      ($actual.env | type) == "string" and
-      ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_HOST="))) == ["BUILDHOUND_SITE_HOST=" + ($siteUrl | ltrimstr("https://"))]) and
-      ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_DASHBOARD_URL="))) == ["BUILDHOUND_SITE_DASHBOARD_URL=" + $dashboardUrl]) and
-      ($actual.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_NOINDEX="))) == ["BUILDHOUND_SITE_NOINDEX=" + $noindex]) and
-      $actual.environmentId == $before.environmentId and
-      $actual.serverId == $before.serverId and
-      $actual.domains == $before.domains and $actual.env == $before.env
-    end) and
-    $actual.registryUrl == $host and
-    ($actual.username | type) == "string" and ($actual.username | length) > 0 and
-    ($actual.password | type) == "string" and ($actual.password | length) > 0 and
-    $actual.username == $before.username and $actual.password == $before.password and
-    $actual.registryUrl == $before.registryUrl and
-    $actual.registryId == null and $actual.buildRegistryId == null and
-    $actual.rollbackRegistryId == null and
-    $actual.registry == null and $actual.buildRegistry == null and
-    $actual.rollbackRegistry == null and
-    $actual.placementSwarm == {Constraints:["node.labels.role==" + $appRole]}
-  ' "$state_file" >/dev/null 2>&1
-}
-
-require_site_application_binding() {
-  local state_file=$1 application_id=$2 environment_id=$3 server_id=$4
-  local site_url=$5 dashboard_url=$6 noindex=$7
-  jq -e --arg id "$application_id" --arg environmentId "$environment_id" --arg serverId "$server_id" \
-    --arg siteUrl "$site_url" --arg dashboardUrl "$dashboard_url" --arg noindex "$noindex" '
-    type == "object" and .applicationId == $id and .environmentId == $environmentId and
-    (if $serverId == "" then .serverId == null else .serverId == $serverId end) and
-    (if $siteUrl == "" then true else
-      (.domains | type) == "array" and (.domains | length) == 1 and
-      (.domains[0] as $domain |
-        ($domain.domainId | type) == "string" and
-        ($domain.domainId | test("^[A-Za-z0-9_-]{1,128}\\z")) and
-        $domain.host == ($siteUrl | ltrimstr("https://")) and
-        $domain.https == true and $domain.port == 8080 and $domain.path == "/" and
-        $domain.domainType == "application" and $domain.applicationId == $id and
-        $domain.composeId == null and $domain.previewDeploymentId == null and
-        $domain.certificateType == "none" and $domain.customCertResolver == null and
-        $domain.customEntrypoint == null and $domain.internalPath == "/" and
-        $domain.stripPath == false and $domain.middlewares == [] and
-        $domain.forwardAuthEnabled == false and $domain.serviceName == null) and
-      .redirects == [] and .security == [] and
-      (.mounts | type) == "array" and .mounts == [] and
-      (.ports | type) == "array" and .ports == [] and
-      (.endpointSpecSwarm == null or
-       .endpointSpecSwarm == {Mode:"vip"} or
-       .endpointSpecSwarm == {Mode:"vip",Ports:[]}) and
-      (.env | type) == "string" and
-      (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_HOST="))) == ["BUILDHOUND_SITE_HOST=" + ($siteUrl | ltrimstr("https://"))]) and
-      (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_DASHBOARD_URL="))) == ["BUILDHOUND_SITE_DASHBOARD_URL=" + $dashboardUrl]) and
-      (.env | split("\n") | map(select(startswith("BUILDHOUND_SITE_NOINDEX="))) == ["BUILDHOUND_SITE_NOINDEX=" + $noindex])
-    end)
-  ' "$state_file" >/dev/null 2>&1
-}
-
 cmd_release_id() {
   if [ "$#" -ne 1 ]; then usage; return 2; fi
   release_id "$1"
@@ -472,31 +478,34 @@ cmd_staging_bootstrap_state() {
 
 cmd_deploy_release() (
   if [ "$#" -lt 1 ]; then usage; return 2; fi
-  local release=$1 compose_id='' site_application_id='' base_repo=''
+  local release=$1 compose_id='' site_compose_id='' base_repo=''
   local expected_current_release_id='' app_role='' site_url='' site_dashboard_url='' site_noindex='' evidence_file=''
   local manifest="$SCRIPT_DIR/stack.yaml" volume_guard="$SCRIPT_DIR/volume-guard.sh"
+  local site_manifest="$SCRIPT_DIR/site-stack.yaml"
   local rollback_compatible=false bootstrap_manual_current=false skip_site=false
   local rid title expected manifest_hash guard_hash deployments current
   local old_compose old_site body server_image site_image registry_host release_image image_host key
   local compose_deployment site_deployment rc has_success compose_server_id
-  local workdir stack_file app_file app_before_file compose_state_file compose_before_file
+  local workdir stack_file site_stack_file compose_state_file compose_before_file
+  local site_state_file site_before_file
   local compose_observed_file site_observed_file
   local migration history manifest_field compose_environment_id='' dashboard_host=''
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --base-repo|--compose-id|--site-application-id|--app-role|--site-url|--site-dashboard-url|--site-noindex|--expected-current-release-id|--manifest|--volume-guard|--evidence-file)
+      --base-repo|--compose-id|--site-compose-id|--app-role|--site-url|--site-dashboard-url|--site-noindex|--expected-current-release-id|--manifest|--site-manifest|--volume-guard|--evidence-file)
         if [ "$#" -lt 2 ]; then usage; return 2; fi
         case "$1" in
           --base-repo) base_repo=$2 ;;
           --compose-id) compose_id=$2 ;;
-          --site-application-id) site_application_id=$2 ;;
+          --site-compose-id) site_compose_id=$2 ;;
           --app-role) app_role=$2 ;;
           --site-url) site_url=$2 ;;
           --site-dashboard-url) site_dashboard_url=$2 ;;
           --site-noindex) site_noindex=$2 ;;
           --expected-current-release-id) expected_current_release_id=$2 ;;
           --manifest) manifest=$2 ;;
+          --site-manifest) site_manifest=$2 ;;
           --volume-guard) volume_guard=$2 ;;
           --evidence-file) evidence_file=$2 ;;
         esac
@@ -509,11 +518,11 @@ cmd_deploy_release() (
     esac
   done
   # --skip-site remains an explicit target compatibility/emergency path; normal
-  # staging delivery supplies its provisioned site Application ID. The flag and
-  # an application ID are mutually exclusive so a skipped site deploy is always
+  # delivery supplies its provisioned site Compose ID. The flag and a site
+  # Compose ID are mutually exclusive so a skipped site deploy is always
   # visible — never a fallback.
-  if [ "$skip_site" = true ] && [ -n "$site_application_id" ]; then
-    fail "skip-site conflicts with a site application ID"
+  if [ "$skip_site" = true ] && [ -n "$site_compose_id" ]; then
+    fail "skip-site conflicts with a site compose ID"
     return 2
   fi
   if [ "$skip_site" = true ] && { [ -n "$site_url" ] || [ -n "$site_dashboard_url" ] || [ -n "$site_noindex" ]; }; then
@@ -521,24 +530,25 @@ cmd_deploy_release() (
     return 2
   fi
   if [ -z "$base_repo" ] || [ -z "$compose_id" ] || [ -z "$app_role" ]; then usage; return 2; fi
+  require_app_role "$app_role" || return 2
   if [ -n "$evidence_file" ] && [ ! -d "$(dirname -- "$evidence_file")" ]; then
     fail "evidence file directory is missing"
     return 2
   fi
-  if [ "$skip_site" != true ] && [ -z "$site_application_id" ]; then usage; return 2; fi
-  if [ "$skip_site" != true ] && [ "$app_role" = staging ] && { [ -z "$site_url" ] || [ -z "$site_dashboard_url" ] || [ -z "$site_noindex" ]; }; then usage; return 2; fi
-  if { [ -n "$site_url" ] || [ -n "$site_dashboard_url" ] || [ -n "$site_noindex" ]; } &&
-     { [ -z "$site_url" ] || [ -z "$site_dashboard_url" ] || [ -z "$site_noindex" ]; }; then usage; return 2; fi
+  # The site stack is client-rendered for both roles, so the site Compose ID
+  # and all three site values are required whenever the site is not skipped.
+  if [ "$skip_site" != true ] &&
+     { [ -z "$site_compose_id" ] || [ -z "$site_url" ] || [ -z "$site_dashboard_url" ] || [ -z "$site_noindex" ]; }; then
+    usage
+    return 2
+  fi
   require_object_id "Compose ID" "$compose_id" || return 2
   if [ "$skip_site" != true ]; then
-    require_object_id "site application ID" "$site_application_id" || return 2
-    if [ -n "$site_url" ]; then
-      require_site_url "$site_url" || return 2
-      require_site_url "$site_dashboard_url" || return 2
-      require_site_noindex "$site_noindex" || return 2
-    fi
+    require_object_id "site Compose ID" "$site_compose_id" || return 2
+    require_site_url "$site_url" || return 2
+    require_site_url "$site_dashboard_url" || return 2
+    require_site_noindex "$site_noindex" || return 2
   fi
-  require_app_role "$app_role" || return 2
   if [ -n "$expected_current_release_id" ]; then
     require_release_id "$expected_current_release_id" || return 2
   fi
@@ -547,6 +557,10 @@ cmd_deploy_release() (
     return 2
   fi
   if [ ! -f "$release" ] || [ ! -f "$manifest" ] || [ ! -f "$volume_guard" ]; then
+    fail "trusted release source is missing"
+    return 1
+  fi
+  if [ "$skip_site" != true ] && [ ! -f "$site_manifest" ]; then
     fail "trusted release source is missing"
     return 1
   fi
@@ -566,14 +580,22 @@ cmd_deploy_release() (
     fail "unable to snapshot trusted release source"
     return 1
   fi
+  if [ "$skip_site" != true ]; then
+    if ! cp -- "$site_manifest" "$workdir/source-site-stack.yaml"; then
+      fail "unable to snapshot trusted release source"
+      return 1
+    fi
+    site_manifest=$workdir/source-site-stack.yaml
+  fi
   release=$workdir/release.json
   manifest=$workdir/source-stack.yaml
   volume_guard=$workdir/volume-guard.sh
   stack_file=$workdir/rendered-stack.yaml
-  app_file=$workdir/site-application.json
-  app_before_file=$workdir/site-application-before.json
+  site_stack_file=$workdir/rendered-site-stack.yaml
   compose_state_file=$workdir/compose.json
   compose_before_file=$workdir/compose-before.json
+  site_state_file=$workdir/site-compose.json
+  site_before_file=$workdir/site-compose-before.json
   compose_observed_file=$workdir/compose-observed-deployment-id
   site_observed_file=$workdir/site-observed-deployment-id
 
@@ -627,7 +649,7 @@ cmd_deploy_release() (
     fail "Dokploy returned an invalid Compose deployment target"
     return 1
   }
-  if [ -n "$site_url" ]; then
+  if [ "$skip_site" != true ]; then
     compose_environment_id=$(jq -er --arg id "$compose_id" '
       if type != "object" or .composeId != $id or (.environmentId | type) != "string" or
          (.environmentId | test("^[A-Za-z0-9_-]{1,128}\\z") | not) then
@@ -648,29 +670,22 @@ cmd_deploy_release() (
   fi
   dokploy_require_integrations "$base_repo" "$registry_host" "$compose_server_id" || return 1
   if [ "$skip_site" != true ]; then
-    dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_before_file" || return 1
-    if ! jq -e --arg id "$site_application_id" --arg host "$registry_host" --arg siteUrl "$site_url" '
-      type == "object" and .applicationId == $id and .sourceType == "docker" and
-      has("autoDeploy") and (.autoDeploy | type) == "boolean" and
-      .registryUrl == $host and
-      (.username | type) == "string" and (.username | length) > 0 and
-      (.password | type) == "string" and (.password | length) > 0 and
-      (if $siteUrl == "" then true else
-        (.environmentId | type) == "string" and
-        (.serverId == null or ((.serverId | type) == "string" and
-          (.serverId | test("^[A-Za-z0-9_-]{1,128}\\z")))) and
-        (.env | type) == "string"
-      end)
-    ' "$app_before_file" >/dev/null; then
-      fail "site Application lacks Dokploy v0.29 Docker-provider pull credentials"
+    # The site Compose must live in the release Compose's own environment and
+    # on its exact manager: worker pull authorization rides the instance-level
+    # registry preflight already proven for that manager, and routing, storage,
+    # and backup behavior must come only from the client-rendered site Stack.
+    dokploy_api GET "compose.one?composeId=$site_compose_id" > "$site_before_file" || return 1
+    if ! jq -e --arg id "$site_compose_id" --arg environmentId "$compose_environment_id" \
+        --arg serverId "$compose_server_id" '
+      type == "object" and .composeId == $id and has("serverId") and
+      .domains == [] and .mounts == [] and .backups == [] and
+      (.environment | type) == "object" and
+      (.environment.project | type) == "object" and
+      .environmentId == $environmentId and
+      (if $serverId == "" then .serverId == null else .serverId == $serverId end)
+    ' "$site_before_file" >/dev/null; then
+      fail "site Compose is not bound to the release Compose target"
       return 1
-    fi
-    if [ -n "$site_url" ]; then
-      require_site_application_binding "$app_before_file" "$site_application_id" "$compose_environment_id" \
-        "$compose_server_id" "$site_url" "$site_dashboard_url" "$site_noindex" || {
-        fail "site Application is not bound to the release Compose target or expected site configuration"
-        return 1
-      }
     fi
   fi
   deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return
@@ -692,50 +707,15 @@ cmd_deploy_release() (
   require_migration_compatibility "$current" "$release" "$rollback_compatible" || return
   old_compose=$(deployment_ids <<<"$deployments") || { fail "invalid Compose deployment evidence"; return 1; }
   if [ "$skip_site" != true ]; then
-    deployments=$(dokploy_api GET "deployment.all?applicationId=$site_application_id") || return
+    deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$site_compose_id") || return
     old_site=$(deployment_ids <<<"$deployments") || { fail "invalid site deployment evidence"; return 1; }
   fi
   render_release_stack "$manifest" "$release" "$rid" "$stack_file" "$app_role" || return
-  body=$(jq -cn --arg id "$compose_id" --rawfile composeFile "$stack_file" '
-    {
-      composeId:$id,
-      composeFile:$composeFile,
-      composeType:"stack",
-      sourceType:"raw",
-      command:"",
-      autoDeploy:false,
-      enableSubmodules:false,
-      composePath:"./docker-compose.yml",
-      suffix:"",
-      randomize:false,
-      isolatedDeployment:false,
-      isolatedDeploymentsVolume:false,
-      triggerType:"push",
-      watchPaths:[],
-      repository:null,
-      owner:null,
-      branch:null,
-      githubId:null,
-      gitlabProjectId:null,
-      gitlabRepository:null,
-      gitlabOwner:null,
-      gitlabBranch:null,
-      gitlabPathNamespace:null,
-      gitlabId:null,
-      bitbucketRepository:null,
-      bitbucketRepositorySlug:null,
-      bitbucketOwner:null,
-      bitbucketBranch:null,
-      bitbucketId:null,
-      giteaRepository:null,
-      giteaOwner:null,
-      giteaBranch:null,
-      giteaId:null,
-      customGitUrl:null,
-      customGitBranch:null,
-      customGitSSHKeyId:null
-    }
-  ') || return
+  if [ "$skip_site" != true ]; then
+    render_site_stack "$site_manifest" "$site_image" "$app_role" "$site_url" \
+      "$site_dashboard_url" "$site_noindex" "$site_stack_file" || return
+  fi
+  body=$(compose_update_body "$compose_id" "$stack_file") || return
   # Bind backup and rollback decisions to the exact predecessor observed by the
   # workflow. This is deliberately the final read before the first mutation.
   deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$compose_id") || return
@@ -768,16 +748,12 @@ cmd_deploy_release() (
     }
   fi
   if [ "$skip_site" != true ]; then
-    body=$(jq -cn --arg id "$site_application_id" --arg image "$site_image" --arg appRole "$app_role" \
-      '{applicationId:$id,dockerImage:$image,sourceType:"docker",autoDeploy:false,registryId:null,
-        buildRegistryId:null,rollbackRegistryId:null,
-        placementSwarm:{Constraints:["node.labels.role==" + $appRole]}}') || return
-    dokploy_api POST application.update "$body" >/dev/null || return
-    dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
-    require_exact_release_application_state "$app_file" "$app_before_file" \
-      "$site_application_id" "$site_image" "$registry_host" "$app_role" "$compose_environment_id" \
-      "$compose_server_id" "$site_url" "$site_dashboard_url" "$site_noindex" || {
-      fail "Dokploy persisted unexpected release Application state"
+    body=$(compose_update_body "$site_compose_id" "$site_stack_file") || return
+    dokploy_api POST compose.update "$body" >/dev/null || return
+    dokploy_api GET "compose.one?composeId=$site_compose_id" > "$site_state_file" || return
+    require_exact_release_compose_state "$site_state_file" "$site_before_file" \
+      "$site_stack_file" "$site_compose_id" "$compose_server_id" || {
+      fail "Dokploy persisted unexpected site Compose state"
       return 1
     }
   fi
@@ -796,8 +772,8 @@ cmd_deploy_release() (
   if [ "$skip_site" != true ] && [ "$app_role" = prod ]; then
     # Preserve production's established joint-release behavior. Staging is
     # deliberately serialized so its Compose evidence precedes site mutation.
-    body=$(jq -cn --arg id "$site_application_id" --arg title "$title" '{applicationId:$id,title:$title}') || return
-    dokploy_api POST application.deploy "$body" >/dev/null || return
+    body=$(jq -cn --arg id "$site_compose_id" --arg title "$title" '{composeId:$id,title:$title}') || return
+    dokploy_api POST compose.deploy "$body" >/dev/null || return
   fi
   rc=0
   compose_deployment=$(wait_for_deployment "deployment.allByCompose?composeId=$compose_id" "$old_compose" "$title" "$compose_observed_file") || rc=$?
@@ -820,14 +796,13 @@ cmd_deploy_release() (
   site_deployment=''
   if [ "$skip_site" != true ]; then
     if [ "$app_role" = staging ]; then
-      # The Compose wait is an untrusted mutation window. Re-bind the
-      # Application and its deployment baseline immediately before submitting
-      # the staging site deploy.
-      dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
-      require_exact_release_application_state "$app_file" "$app_before_file" \
-        "$site_application_id" "$site_image" "$registry_host" "$app_role" "$compose_environment_id" \
-        "$compose_server_id" "$site_url" "$site_dashboard_url" "$site_noindex" || {
-        fail "site Application drifted while the release Compose deployed"
+      # The Compose wait is an untrusted mutation window. Re-bind the site
+      # Compose and its deployment baseline immediately before submitting the
+      # staging site deploy.
+      dokploy_api GET "compose.one?composeId=$site_compose_id" > "$site_state_file" || return
+      require_exact_release_compose_state "$site_state_file" "$site_before_file" \
+        "$site_stack_file" "$site_compose_id" "$compose_server_id" || {
+        fail "site Compose drifted while the release Compose deployed"
         return 1
       }
       dokploy_api GET "compose.one?composeId=$compose_id" > "$compose_state_file" || return
@@ -844,16 +819,16 @@ cmd_deploy_release() (
         fail "site dashboard URL no longer matches the release Compose dashboard host"
         return 1
       fi
-      deployments=$(dokploy_api GET "deployment.all?applicationId=$site_application_id") || return
+      deployments=$(dokploy_api GET "deployment.allByCompose?composeId=$site_compose_id") || return
       old_site=$(deployment_ids <<<"$deployments") || {
         fail "invalid site deployment evidence"
         return 1
       }
-      body=$(jq -cn --arg id "$site_application_id" --arg title "$title" '{applicationId:$id,title:$title}') || return
-      dokploy_api POST application.deploy "$body" >/dev/null || return
+      body=$(jq -cn --arg id "$site_compose_id" --arg title "$title" '{composeId:$id,title:$title}') || return
+      dokploy_api POST compose.deploy "$body" >/dev/null || return
     fi
     rc=0
-    site_deployment=$(wait_for_deployment "deployment.all?applicationId=$site_application_id" "$old_site" "$title" "$site_observed_file") || rc=$?
+    site_deployment=$(wait_for_deployment "deployment.allByCompose?composeId=$site_compose_id" "$old_site" "$title" "$site_observed_file") || rc=$?
     if [ -s "$site_observed_file" ]; then
       site_deployment=$(<"$site_observed_file")
       if [ -n "$evidence_file" ]; then
@@ -870,11 +845,10 @@ cmd_deploy_release() (
     if [ -n "$evidence_file" ] && [ ! -s "$site_observed_file" ]; then
       write_release_evidence "$evidence_file" "$rid" "$migration" "$history" "$compose_deployment" "$site_deployment" || return 1
     fi
-    dokploy_api GET "application.one?applicationId=$site_application_id" > "$app_file" || return
-    require_exact_release_application_state "$app_file" "$app_before_file" \
-      "$site_application_id" "$site_image" "$registry_host" "$app_role" "$compose_environment_id" \
-      "$compose_server_id" "$site_url" "$site_dashboard_url" "$site_noindex" || {
-      fail "deployed site image, pull credentials, or registry isolation differs from release"
+    dokploy_api GET "compose.one?composeId=$site_compose_id" > "$site_state_file" || return
+    require_exact_release_compose_state "$site_state_file" "$site_before_file" \
+      "$site_stack_file" "$site_compose_id" "$compose_server_id" || {
+      fail "deployed site Compose state differs from release"
       return 1
     }
   fi

@@ -503,7 +503,7 @@ jobs:
           DOKPLOY_GIT_PROVIDER_ID: ${{ secrets.DOKPLOY_GIT_PROVIDER_ID }}
           DOKPLOY_REGISTRY_ID: ${{ secrets.DOKPLOY_REGISTRY_ID }}
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
-          SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
+          SITE_COMPOSE_ID: ${{ secrets.DOKPLOY_SITE_COMPOSE_ID }}
           BUILDHOUND_SITE_URL: ${{ vars.BUILDHOUND_SITE_URL }}
           BUILDHOUND_DASHBOARD_URL: ${{ vars.BUILDHOUND_DASHBOARD_URL }}
           GH_TOKEN: ${{ github.token }}
@@ -547,7 +547,7 @@ jobs:
             --volume-guard /tmp/release/volume-guard.sh \
             --compose-id "$COMPOSE_ID" \
             --app-role staging \
-            --site-application-id "$SITE_APPLICATION_ID" \
+            --site-compose-id "$SITE_COMPOSE_ID" \
             --site-url "$BUILDHOUND_SITE_URL" \
             --site-dashboard-url "$BUILDHOUND_DASHBOARD_URL" \
             --site-noindex true \
@@ -662,7 +662,9 @@ jobs:
           DOKPLOY_GIT_PROVIDER_ID: ${{ secrets.DOKPLOY_GIT_PROVIDER_ID }}
           DOKPLOY_REGISTRY_ID: ${{ secrets.DOKPLOY_REGISTRY_ID }}
           COMPOSE_ID: ${{ secrets.DOKPLOY_COMPOSE_ID }}
-          SITE_APPLICATION_ID: ${{ secrets.DOKPLOY_SITE_APPLICATION_ID }}
+          SITE_COMPOSE_ID: ${{ secrets.DOKPLOY_SITE_COMPOSE_ID }}
+          BUILDHOUND_SITE_URL: ${{ vars.BUILDHOUND_SITE_URL }}
+          BUILDHOUND_DASHBOARD_URL: ${{ vars.BUILDHOUND_DASHBOARD_URL }}
           SKIP_SITE: ${{ vars.BUILDHOUND_SKIP_SITE_DEPLOY }}
           GH_TOKEN: ${{ github.token }}
           BOOTSTRAP: ${{ steps.backup.outputs.bootstrap }}
@@ -677,7 +679,10 @@ jobs:
             echo "::warning::Site deployment skipped for this target (BUILDHOUND_SKIP_SITE_DEPLOY=true)"
             site+=(--skip-site)
           else
-            site+=(--site-application-id "$SITE_APPLICATION_ID")
+            site+=(--site-compose-id "$SITE_COMPOSE_ID")
+            site+=(--site-url "$BUILDHOUND_SITE_URL")
+            site+=(--site-dashboard-url "$BUILDHOUND_DASHBOARD_URL")
+            site+=(--site-noindex false)
           fi
           if [ "$ROLLBACK_COMPATIBLE" = true ]; then compatibility+=(--rollback-compatible); fi
           if [ "$BOOTSTRAP" = true ]; then
