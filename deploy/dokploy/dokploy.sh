@@ -303,6 +303,7 @@ render_site_stack() {
       fi
     fi
   done
+  return 0
 }
 
 # Full-body compose.update payload: every field that can replace or transform

@@ -39,6 +39,10 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
         # [^.]+ (not [a-z0-9-]+): a name with uppercase or underscores must
         # still be captured, or a colliding name silently drops out of both
         # sets and the test loses its detection power (PR #69 infra review).
+        # Scope: stack.yaml vs staging-stack.yaml only; full disjointness —
+        # including site-stack.yaml expanded for both roles and
+        # review-stack.yaml — is enforced unconditionally by the all_names
+        # block in deploy/dokploy/validate-stack.sh.
         pattern = re.compile(
             r"traefik\.http\.(?:routers|middlewares|services)\.([^.]+)\."
         )

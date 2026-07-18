@@ -212,11 +212,12 @@ fake_release_compose() {
 fake_site_compose() {
   jq -cn --arg serverId "${SITE_COMPOSE_SERVER_ID-${COMPOSE_SERVER_ID-}}" \
     --arg environmentId "${SITE_COMPOSE_ENVIRONMENT_ID-env1}" \
-    --argjson domains "${SITE_COMPOSE_DOMAINS-[]}" --argjson mounts "${SITE_COMPOSE_MOUNTS-[]}" '
+    --argjson domains "${SITE_COMPOSE_DOMAINS-[]}" --argjson mounts "${SITE_COMPOSE_MOUNTS-[]}" \
+    --argjson backups "${SITE_COMPOSE_BACKUPS-[]}" '
     {
       composeId:"s1",name:"BuildHound site",appName:"buildhound-site",environmentId:$environmentId,
       serverId:(if $serverId == "" then null else $serverId end),
-      env:"",domains:$domains,mounts:$mounts,backups:[],
+      env:"",domains:$domains,mounts:$mounts,backups:$backups,
       environment:{env:"",project:{env:""}},
       github:null,gitlab:null,bitbucket:null,gitea:null
     }
@@ -432,6 +433,16 @@ grep -F 'app role must be staging or prod' "$test_root/status-stderr" >/dev/null
   fail_test 'invalid app role was not rejected explicitly'
 [[ ! -s $test_root/calls ]] || fail_test 'invalid app role reached Dokploy APIs'
 
+# An adversarial site URL (shell/Traefik-rule metacharacters riding the host)
+# must die in client-side validation before any API call.
+reset_api
+# shellcheck disable=SC2016 # literal backtick payload, no expansion intended
+assert_status 2 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url 'https://site.test`)/x' --site-dashboard-url https://dashboard.example.test --site-noindex true
+grep -F 'site URL is invalid' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'adversarial site URL was not rejected explicitly'
+[[ ! -s $test_root/calls ]] || fail_test 'adversarial site URL reached Dokploy APIs'
+
 jq --arg image "registry.example.test/buildhound/backup@sha256:$(printf '3%.0s' {1..64})" \
   '.backupImage = $image' "$release" > "$test_root/mixed-registry-release.json"
 reset_api
@@ -537,6 +548,18 @@ if grep -q '^POST|' "$test_root/calls"; then
   fail_test 'attached site Compose mount reached a Dokploy mutation'
 fi
 unset SITE_COMPOSE_MOUNTS
+
+reset_api
+FAKE_MODE=deploy
+SITE_COMPOSE_BACKUPS='[{"backupId":"backup1"}]'
+assert_status 1 main deploy-release "$release" --manifest "$manifest" --volume-guard "$guard" \
+  --base-repo BuildHound/BuildHound --compose-id c1 --site-compose-id s1 --site-manifest "$site_manifest" --app-role staging --site-url https://site.example.test --site-dashboard-url https://dashboard.example.test --site-noindex true
+grep -F 'site Compose is not bound to the release Compose target' "$test_root/status-stderr" >/dev/null || \
+  fail_test 'attached site Compose backup was not rejected explicitly'
+if grep -q '^POST|' "$test_root/calls"; then
+  fail_test 'attached site Compose backup reached a Dokploy mutation'
+fi
+unset SITE_COMPOSE_BACKUPS
 
 # A remote-manager Compose passes its exact server ID through the registry
 # credential preflight; the mirrored site Compose deploys with it. This first

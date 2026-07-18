@@ -43,6 +43,10 @@ grep -q 'read_only: true' "$rendered"
 # mount is allowed (README "tmpfs" note).
 if grep -q '^    tmpfs:' "$rendered"; then exit 1; fi
 if grep -Eiq '(password|token|secret): [^$<{]' "$rendered"; then exit 1; fi
+# A service carrying both swarm- and docker-provider network labels makes
+# Traefik's swarm provider skip it silently (routes 404); only the
+# traefik.swarm.network variant is allowed in any validated stack.
+if grep -q 'traefik\.docker\.network' "$rendered"; then exit 1; fi
 
 case "$file" in
   *site-stack.yaml)
@@ -56,6 +60,16 @@ case "$file" in
     grep -qF "traefik.http.routers.buildhound-$BUILDHOUND_APP_ROLE-site.tls.certresolver: letsencrypt-dns-hetzner" "$rendered"
     grep -qF "traefik.http.services.buildhound-$BUILDHOUND_APP_ROLE-site.loadbalancer.server.port: \"8080\"" "$rendered"
     grep -qF "traefik.swarm.network: $DOKPLOY_INGRESS_NETWORK" "$rendered"
+    # Resource ceilings are part of the shipped site contract: without them a
+    # single public-facing site task could starve its manager. `docker stack
+    # config` renders deploy.resources.limits.memory in bytes (128M).
+    grep -q '^        limits:' "$rendered"
+    grep -A2 '^        limits:' "$rendered" | grep -q 'cpus:'
+    grep -A2 '^        limits:' "$rendered" | grep -qF 'memory: "134217728"'
+    # Source-level parity only, not a runtime guarantee: `docker stack deploy`
+    # ignores security_opt (SwarmKit has no security-opt field), so this line
+    # merely keeps the stack derivative textually aligned with the standalone
+    # site/compose.yml contract, where no-new-privileges IS effective.
     grep -q 'no-new-privileges:true' "$rendered"
     # Hardening parity with the standalone contract: site/compose.yml stays
     # the pinned minimal Docker Compose contract (plan 096); the shipped

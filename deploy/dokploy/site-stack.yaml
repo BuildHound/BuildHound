@@ -15,6 +15,12 @@ services:
     image: ${BUILDHOUND_SITE_IMAGE}
     user: "101:101"
     cap_drop: [ALL]
+    # Inert under swarm: `docker stack deploy` silently ignores security_opt
+    # (SwarmKit has no security-opt field; Docker 29.6.1 logs "Ignoring
+    # unsupported options: security_opt" and the task's HostConfig.SecurityOpt
+    # stays empty). Retained only as source parity with the standalone
+    # site/compose.yml contract — effective hardening under swarm is the
+    # 101:101 user + cap_drop ALL + read_only root + tmpfs /tmp.
     security_opt: ["no-new-privileges:true"]
     environment:
       BUILDHOUND_SITE_HOST: ${BUILDHOUND_SITE_HOST}
