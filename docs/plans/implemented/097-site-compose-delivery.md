@@ -111,6 +111,9 @@ its own decision).
   apps (one in each environment of the existing project): compose type **Stack**,
   source **raw**, auto-deploy **off**, placeholder content (the client overwrites
   the file on first deploy). No per-app registry credential.
+  **Set `DOKPLOY_INGRESS_NETWORK=dokploy-network` on each new Compose app** (learned
+  live: the dashboard Compose defines it at app level, so new apps do not inherit it;
+  see the live verification log).
 - GitHub: set per-environment secret `DOKPLOY_SITE_COMPOSE_ID` (staging + production)
   to the new Compose ids; delete `DOKPLOY_SITE_APPLICATION_ID` from both
   environments.
@@ -145,4 +148,34 @@ its own decision).
 
 ## Live verification log
 
-(record after the merge run)
+**2026-07-18 — run 29652884251** (`deploy.yml` push run for main `575a4723`, the labeled
+rebase-merge of PR #83). Digests: server `d7dd7cb46e8e…`, site `3e0693f322de…`, backup
+`2b663af8af63…`, db `6c9d7d5c99ca…` (attested, published in-run).
+
+- **Attempt 1:** `qualify` ✓ (first try), `publish` ✓. `deploy-staging` failed at the
+  site Compose deploy — Dokploy log 16:59:55Z:
+  `Service cannot be explicitly attached to the ingress network "ingress"`.
+  Cause: `DOKPLOY_INGRESS_NETWORK` was unset on the new site Compose app (the dashboard
+  Compose defines it at app level, so the site app did not inherit it); the empty
+  interpolation made the external network name fall back to the YAML key `ingress`,
+  which Swarm refuses. The dashboard Compose deployment in the same client run
+  succeeded and converged (staging `server` service observed on the new digest via
+  read-only host inspection). Gate H4 assessed **not triggered**: the failed deployment
+  was the site Compose, whose deploy command and stack contain no credentials.
+  The same Dokploy log also reproduced the §3.1 review's empirical finding verbatim
+  (`Ignoring unsupported options: security_opt`).
+- **Fix:** operator set `DOKPLOY_INGRESS_NETWORK=dokploy-network` on both site Compose
+  apps (value confirmed from the running dashboard service's networks).
+- **Attempt 2** (`rerun --failed`): `deploy-staging` ✓ — site delivered via
+  `compose.deploy`, staging tuple independently re-verified
+  (`https://staging.buildhound.dev/` 200, exactly one `X-Robots-Tag: noindex, nofollow`,
+  `robots.txt` = `Disallow: /`, page content + dashboard link). Owner then set
+  production `BUILDHOUND_SKIP_SITE_DEPLOY=false` **before** approving, so the
+  environment values bound at job start and the approval delivered the production site
+  in the same gated run: `deploy-production` ✓. Live: `https://buildhound.dev/` 200,
+  `X-Robots-Tag: index, follow`, `robots.txt` = `Allow: /`, dashboard healthy.
+- The prod go-live therefore happened inside this plan's verification run rather than
+  as a later separate flip — recorded here as an intentional owner acceleration of the
+  Exit-criteria "site skipped on prod" expectation; every other criterion held as
+  written.
+- This run also closed plan 091's outstanding staging + production legs (see 091's log).
