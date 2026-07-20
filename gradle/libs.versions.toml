@@ -1,4 +1,5 @@
 [versions]
+detekt = "2.0.0-alpha.5"
 kotlin = "2.4.10"
 kotlinx-serialization = "1.11.0"
 ktor = "3.5.1"
@@ -47,3 +48,4 @@ kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 gradle-plugin-publish = { id = "com.gradle.plugin-publish", version.ref = "gradle-plugin-publish" }
 shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
+detekt = {id = "dev.detekt", version.ref = "detekt"}

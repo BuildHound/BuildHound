@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
     application
+    alias(libs.plugins.detekt)
 }
 
 description = "Opt-in read-only MCP server: a stdio query surface over the BuildHound /v1 API (plan 042)"

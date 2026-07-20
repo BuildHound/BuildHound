@@ -19,6 +19,7 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.gradle.plugin.publish)
     alias(libs.plugins.shadow)
+    alias(libs.plugins.detekt)
 }
 
 private object PluginWebsiteVerifier {

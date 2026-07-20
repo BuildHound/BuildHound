@@ -6,18 +6,12 @@ pluginManagement {
 }
 
 plugins {
-    // Auto-provisions the JDK 26 build toolchain (plan 011). Environments that cannot
-    // reach api.foojay.io set buildhound.toolchain=21 in their user gradle.properties.
     id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0"
 }
 
 dependencyResolutionManagement {
     repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
     repositories {
-        mavenCentral()
-        // AGP (com.android.tools.build:gradle-api) is a compileOnly dependency of the plugin's
-        // Android artifact-size collector (plan 031) and is published to Google's Maven, not Central.
-        // Content-filtered so nothing else resolves here.
         google {
             content {
                 includeGroupByRegex("com\\.android.*")
@@ -25,6 +19,7 @@ dependencyResolutionManagement {
                 includeGroupByRegex("androidx\\..*")
             }
         }
+        mavenCentral()
     }
 }
 
