@@ -34,13 +34,17 @@ implemented; 094's credentialed paths stay dormant until the owner actions in it
 CI recovery track (research: `docs/ci-pipeline-research.md`; orchestrator runbook:
 [ci-recovery-roadmap.md](ci-recovery-roadmap.md)) — strictly sequential:
 
-- [088](088-ci-staging-review-bugfixes.md) — staging & review-env bug fixes — **open**.
-- [089](089-review-cleanup-reconciler-authority.md) — review cleanup: reconciler becomes
-  source of truth — **open**, after 088.
-- [090](090-promotion-chain-collapse.md) — collapse promotion chain into one gated
-  workflow — **open**, after 089.
-- [091](091-dokploy-client-shrink.md) — shrink the Dokploy delivery client — **open**,
-  after 090 and the first production deploy.
+- [088](implemented/088-ci-staging-review-bugfixes.md) — staging & review-env bug fixes —
+  **implemented** (Gate H1's host-gc dry-run report is still owed to 089's log).
+- [089](implemented/089-review-cleanup-reconciler-authority.md) — review cleanup:
+  reconciler becomes source of truth — **implemented**.
+- [090](implemented/090-promotion-chain-collapse.md) — collapse promotion chain into one
+  gated workflow — **implemented**.
+- [091](implemented/091-dokploy-client-shrink.md) — shrink the Dokploy delivery client —
+  **implemented**; its full review→staging→production cycle rode plan 097's merge run.
+- [097](implemented/097-site-compose-delivery.md) — site delivery via Dokploy Compose
+  stacks (supersedes 096's site-Application design) — **implemented**; staging + production
+  site live via `compose.deploy`.
 
 A plan contains, briefly:
 

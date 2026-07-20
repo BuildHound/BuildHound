@@ -134,5 +134,28 @@ adopting it buys no shrink and adds a Node supply-chain surface.
 - Version gate passes on a hypothetical 0.29.13 (unit-tested comparator:
   numeric per-segment, fail below minimum, warn-and-proceed above).
 - One full cycle green on the shrunk client: review deploy → converge →
-  staging → prod (approval).
+  staging → prod (approval). ✔ (log below)
 - CLI spike verdict recorded here. ✔ (above)
+
+## Live verification log
+
+**2026-07-18 — full cycle on the shrunk client, closed by plan 097's merge run.**
+
+- **Review leg:** PR #83 (labeled `deploy-review`) deployed its review environment
+  green on the shrunk client — run 29637297216, `buildhound/review-deployed/pr-83`
+  passed. The 15-minute converge cron had additionally been running the shrunk client
+  green continuously since PR #79 merged (prior-session evidence, recorded here).
+- **Staging + production legs:** run 29652884251 (`deploy.yml` push run for main
+  `575a4723`). The originally planned vehicle — rerunning run 29620297919's failed
+  staging leg — was retired: that leg had failed at the site Application credential
+  guard, which plan 097 deleted along with the whole Application path, so the fresh
+  labeled merge run replaced it. Attempt 1 failed benignly at the *site* Compose
+  deploy (operator env gap, no credentials involved, no H4 — details in plan 097's
+  log); attempt 2: `deploy-staging` ✓, `deploy-production` approved by the owner and ✓.
+  Digests: server `d7dd7cb46e8e…`, site `3e0693f322de…`, backup `2b663af8af63…`,
+  db `6c9d7d5c99ca…`.
+- **Post-deploy behavioral verification** (review-env-verifier, unauthenticated,
+  2026-07-18): all 7 checks pass — dashboard `/health` `{"status":"ok"}`, prod site
+  200 + exactly one `X-Robots-Tag: index, follow` + permissive robots.txt + dashboard
+  link intact, staging still noindex/Disallow, valid Let's Encrypt TLS on both hosts,
+  404 on nonexistent paths.
