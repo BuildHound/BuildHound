@@ -201,7 +201,7 @@ jobs:
       # WARNING: do not add merge-multiple/flat-dir options — both artifacts contain a
       # file literally named build-payload.json and would silently collapse to one.
       - name: Download payload artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: buildhound-payload-*
           path: payloads
