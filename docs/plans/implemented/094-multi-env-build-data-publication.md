@@ -162,6 +162,33 @@ found them unset — per that README a rollout blocker for adding credentials).
   bootstrap-token path, then scope-probe it) are what actually close this out; item 3 was
   the check that would have caught the 401 before storing.
 
+**Status re-check (2026-07-20, live-verified).** Blocker unchanged for the two repo-secret
+paths; one path newly proven end-to-end:
+
+- *Prod direct (plugin)* — still rejected. Main push run 29728613569 and same-repo PR runs
+  29653128194 / 29728230704 all log `[buildhound] server rejected the payload (4xx) —
+  dropped, check token/config`; the repo secrets are still the 2026-07-17 values, never
+  minted server-side. (Plugin logs a generic "4xx", not the numeric status — noted as a
+  diagnosability gap.)
+- *Staging replay (buildhound-publish)* — still rejected: explicit `HTTP 401` on both
+  payload artifacts in the same three runs, `done (0 published, 2 dropped/skipped)`.
+  All jobs stay green by design (warn-only degradation), so green checks are **not**
+  evidence telemetry landed.
+- *Review replay* — **works end-to-end**: run 29684428264 (PR #84, env mr84) published
+  both CI payloads with `HTTP 202` (`done (2 published, 0 dropped/skipped)`) and the
+  deploy smoke's synthetic POST (202) + authenticated read-back (200, buildId match)
+  passed. The per-run `BUILDHOUND_REVIEW_TOKEN` design needs no stored secret.
+- *Environment-scoped deploy-verify tokens* (`BUILDHOUND_INGEST_TOKEN` /
+  `BUILDHOUND_READ_TOKEN` in the `staging` and `production` GitHub Environments — a
+  **different slot** from the repo-level dogfood secrets above) — healthy as of deploy run
+  29725672896 (first-attempt 202 ingest + read-back in both environments). Both pairs were
+  rotated 2026-07-20T16:16Z after that run; the new values are unexercised, and any value
+  minted through the plan-098 flow must authenticate once within 6 h of minting or the
+  sweeper hard-deletes it and the next deploy's (blocking) verify step fails.
+
+Owner items 2–3 below remain the open blocker; plan 098's dashboard mint page is now the
+intended minting path for the two repo-level ingest secrets.
+
 ### Owner actions required before enabling
 
 The merged YAML is deliberately safe *before* any of these exist — every publish path
