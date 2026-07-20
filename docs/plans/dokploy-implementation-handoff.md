@@ -61,6 +61,17 @@ Deferred work needs a new next-free plan and separate plan commit:
   need. That plan must cover object state/checksums, backfill, reconciliation/outbox,
   WRITE → READ → EVICT phases, bounded failures, retention, privacy/encryption, and rollback.
 
+  Verified Hetzner Object Storage compatibility facts (researched for the discarded
+  payload-offload draft; preserved here so the future plan does not re-derive them):
+  AWS SDK for Java ≥ 2.30.0 defaults to streaming CRC32 checksum trailers, which
+  Ceph-based providers including Hetzner reject — the S3 client must set
+  `requestChecksumCalculation`/`responseChecksumValidation` to `WHEN_REQUIRED`, pinned by
+  a unit test against SDK upgrades. Operational caps: 750 req/s per bucket, 256
+  connections per IP, 100 buckets per account, 64 kB minimum billable object size (over-bills
+  small gzipped payloads), and no cross-region replication (single-region durability;
+  a second bucket plus copy job is the escape hatch). Credentials are scoped per Cloud
+  project, not per bucket — isolation requires separate projects with separate key pairs.
+
 ## What to retain from each source branch
 
 From Claude: Stack-mode/placement constraints, Dokploy environment-delivery staging probe,
