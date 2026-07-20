@@ -168,8 +168,8 @@ paths; one path newly proven end-to-end:
 - *Prod direct (plugin)* — still rejected. Main push run 29728613569 and same-repo PR runs
   29653128194 / 29728230704 all log `[buildhound] server rejected the payload (4xx) —
   dropped, check token/config`; the repo secrets are still the 2026-07-17 values, never
-  minted server-side. (Plugin logs a generic "4xx", not the numeric status — noted as a
-  diagnosability gap.)
+  minted server-side. (The plugin logged a generic "4xx", not the numeric status — a
+  diagnosability gap closed the same day: rejection warns now carry the actual HTTP code.)
 - *Staging replay (buildhound-publish)* — still rejected: explicit `HTTP 401` on both
   payload artifacts in the same three runs, `done (0 published, 2 dropped/skipped)`.
   All jobs stay green by design (warn-only degradation), so green checks are **not**

@@ -175,7 +175,9 @@ class UploadFunctionalTest {
 
         respondWith = 400
         val rejected = runner(*ciArgs()).build()
-        assertTrue(rejected.output.contains("rejected"), rejected.output)
+        // The numeric status is the diagnosable part (plan 094 §6: a bare "4xx" could not
+        // distinguish a bad token from a bad payload in CI logs).
+        assertTrue(rejected.output.contains("rejected the payload (HTTP 400)"), rejected.output)
         // The 400 also rejected the drained spool file — both are gone, nothing new spooled.
         assertTrue(spoolDir().listFiles().isNullOrEmpty(), "4xx must drop, not spool")
     }
@@ -192,7 +194,7 @@ class UploadFunctionalTest {
 
         val result = runner(*ciArgs()).build()
 
-        assertTrue(result.output.contains("rejected spooled payload"), result.output)
+        assertTrue(result.output.contains("rejected spooled payload aaa-poison.json.gz (HTTP 400)"), result.output)
         assertTrue(spoolDir().listFiles().isNullOrEmpty(), "poison dropped, good drained")
         assertTrue(received.any { it.second.buildId == "good-spooled-build" }, "younger spool file must still drain")
         assertEquals(2, received.size, "good spool + current build")

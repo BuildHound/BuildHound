@@ -39,7 +39,11 @@ internal class PayloadUploader(
         }
     }
 
-    private enum class Outcome { SENT, REJECTED, UNREACHABLE }
+    private sealed interface Outcome {
+        data object Sent : Outcome
+        data class Rejected(val status: Int) : Outcome
+        data object Unreachable : Outcome
+    }
 
     override fun close() {
         runCatching { client.close() }
@@ -57,11 +61,14 @@ internal class PayloadUploader(
 
     fun uploadOrSpool(buildId: String, payloadJson: String) {
         val body = gzip(payloadJson.encodeToByteArray())
-        when (post(body)) {
-            Outcome.SENT -> logger.lifecycle("[buildhound] payload uploaded ({} bytes gzip)", body.size)
-            Outcome.UNREACHABLE -> spool(buildId, body)
-            Outcome.REJECTED ->
-                logger.warn("[buildhound] server rejected the payload (4xx) — dropped, check token/config")
+        when (val outcome = post(body)) {
+            Outcome.Sent -> logger.lifecycle("[buildhound] payload uploaded ({} bytes gzip)", body.size)
+            Outcome.Unreachable -> spool(buildId, body)
+            is Outcome.Rejected ->
+                logger.warn(
+                    "[buildhound] server rejected the payload (HTTP {}) — dropped, check token/config",
+                    outcome.status,
+                )
         }
     }
 
@@ -82,16 +89,20 @@ internal class PayloadUploader(
                 continue
             }
             val body = runCatching { file.readBytes() }.getOrNull() ?: continue
-            when (post(body)) {
-                Outcome.SENT -> {
+            when (val outcome = post(body)) {
+                Outcome.Sent -> {
                     runCatching { file.delete() }
                     sent++
                 }
-                Outcome.REJECTED -> {
+                is Outcome.Rejected -> {
                     runCatching { file.delete() }
-                    logger.warn("[buildhound] server rejected spooled payload {} — dropped", file.name)
+                    logger.warn(
+                        "[buildhound] server rejected spooled payload {} (HTTP {}) — dropped",
+                        file.name,
+                        outcome.status,
+                    )
                 }
-                Outcome.UNREACHABLE -> return // keep the rest for next time
+                Outcome.Unreachable -> return // keep the rest for next time
             }
         }
         if (sent > 0) logger.lifecycle("[buildhound] drained {} spooled payload(s)", sent)
@@ -106,18 +117,18 @@ internal class PayloadUploader(
             .POST(HttpRequest.BodyPublishers.ofByteArray(gzipBody))
             .build()
         when (val code = client.send(request, HttpResponse.BodyHandlers.discarding()).statusCode()) {
-            in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX -> Outcome.SENT
-            HTTP_REQUEST_TIMEOUT, HTTP_TOO_MANY_REQUESTS -> Outcome.UNREACHABLE
-            in HTTP_CLIENT_ERROR_MIN..HTTP_CLIENT_ERROR_MAX -> Outcome.REJECTED
+            in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX -> Outcome.Sent
+            HTTP_REQUEST_TIMEOUT, HTTP_TOO_MANY_REQUESTS -> Outcome.Unreachable
+            in HTTP_CLIENT_ERROR_MIN..HTTP_CLIENT_ERROR_MAX -> Outcome.Rejected(code)
             else -> {
                 logger.info("[buildhound] upload attempt got {}", code)
-                Outcome.UNREACHABLE
+                Outcome.Unreachable
             }
         }
     }.onFailure {
         // Class name only: connection failures can embed hosts/paths, never a token though.
         logger.info("[buildhound] upload attempt failed: {}", it::class.java.simpleName)
-    }.getOrDefault(Outcome.UNREACHABLE)
+    }.getOrDefault(Outcome.Unreachable)
 
     private fun spool(buildId: String, gzipBody: ByteArray) {
         runCatching {
