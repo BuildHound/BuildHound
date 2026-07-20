@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
     `java-gradle-plugin`
+    alias(libs.plugins.detekt)
 }
 
 description = "Opt-in test-sharding addon: server-balanced LPT shard plans over Test tasks (plan 040)"

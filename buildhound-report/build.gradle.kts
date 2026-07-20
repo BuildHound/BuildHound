@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.detekt)
 }
 
 description = "Standalone HTML build-report artifact: template + renderer, embedded into the plugin at build time"

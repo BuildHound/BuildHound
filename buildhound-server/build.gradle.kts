@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.serialization)
     application
+    alias(libs.plugins.detekt)
 }
 
 description = "Multi-tenant ingestion service and dashboard backend (Ktor)"
