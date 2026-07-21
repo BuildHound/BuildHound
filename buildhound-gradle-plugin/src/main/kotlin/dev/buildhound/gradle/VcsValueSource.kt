@@ -18,19 +18,19 @@ data class CollectedVcs(
 
 /**
  * Runs `git` in the root project directory at execution time (same CC rationale as
- * [EnvironmentValueSource]: obtained only through FlowAction parameters, re-executes on
- * CC reuse so sha/dirty stay fresh). Every probe degrades to null — no git binary, not
- * a repository, empty repository, *hung git* — and the build is never failed. Each
- * subprocess gets a bounded wait ([GitExec], plan 015): on timeout the process is
- * forcibly killed, the remaining probes are skipped, and a single warn line is logged.
+ * [EnvironmentValueSource]: obtained only through FlowAction parameters, re-executes on CC reuse so
+ * sha/dirty stay fresh). Every probe degrades to null — no git binary, not a repository, empty
+ * repository, *hung git* — and the build is never failed. Each subprocess gets a bounded wait
+ * ([GitExec], plan 015): on timeout the process is forcibly killed, the remaining probes are
+ * skipped, and a single warn line is logged.
  *
- * By default the probes discover the *enclosing* repository from any subdirectory (plan 050),
- * so a Gradle root nested inside its repo (included/composite build, monorepo subroot) resolves
- * the repository it lives in — matching git's own behavior. `buildhound.vcs.searchParents=false`
+ * By default the probes discover the *enclosing* repository from any subdirectory (plan 050), so a
+ * Gradle root nested inside its repo (included/composite build, monorepo subroot) resolves the
+ * repository it lives in — matching git's own behavior. `buildhound.vcs.searchParents=false`
  * confines discovery to the root project directory (fail-closed, pre-050).
  *
- * Only branch name, commit sha, and the *emptiness* of `git status --porcelain` are
- * kept; status output itself (paths) is discarded (spec §3.7: no paths in payloads).
+ * Only branch name, commit sha, and the *emptiness* of `git status --porcelain` are kept; status
+ * output itself (paths) is discarded (spec §3.7: no paths in payloads).
  */
 abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Parameters> {
 
@@ -42,8 +42,8 @@ abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Paramet
         /** Per-probe bound, wired from `buildhound.vcs.timeout.ms` (test seam + escape hatch). */
         val timeoutMillis: Property<Long>
         /**
-         * Discover the enclosing repository from a subdirectory (plan 050). Default true; wired from
-         * `buildhound.vcs.searchParents`. False confines discovery to [rootDir] (fail-closed).
+         * Discover the enclosing repository from a subdirectory (plan 050). Default true; wired
+         * from `buildhound.vcs.searchParents`. False confines discovery to [rootDir] (fail-closed).
          */
         val searchParents: Property<Boolean>
     }
@@ -51,24 +51,27 @@ abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Paramet
     override fun obtain(): CollectedVcs {
         if (!parameters.enabled.getOrElse(true)) return CollectedVcs()
         val workDir = File(parameters.rootDir.orNull ?: return CollectedVcs())
-        val probe = GitProbe(
-            workDir,
-            parameters.timeoutMillis.getOrElse(GitExec.DEFAULT_TIMEOUT_MS),
-            parameters.searchParents.getOrElse(true),
-        )
+        val probe =
+            GitProbe(
+                workDir,
+                parameters.timeoutMillis.getOrElse(GitExec.DEFAULT_TIMEOUT_MS),
+                parameters.searchParents.getOrElse(true),
+            )
         return CollectedVcs(
             branch = probe.run("rev-parse", "--abbrev-ref", "HEAD")?.let(VcsParsing::parseBranch),
             sha = probe.run("rev-parse", "HEAD")?.let(VcsParsing::parseSha),
             dirty = probe.run("status", "--porcelain")?.let(VcsParsing::parseDirty),
             // Redacted before it ever leaves this ValueSource — a credentialed remote never lands.
-            remoteUrl = probe.run("config", "--get", "remote.origin.url")
-                ?.let { dev.buildhound.commons.ci.SourceLinks.redactRemoteUrl(it) },
+            remoteUrl =
+                probe.run("config", "--get", "remote.origin.url")?.let {
+                    dev.buildhound.commons.ci.SourceLinks.redactRemoteUrl(it)
+                },
         )
     }
 
     /**
-     * Runs probes until the first timeout: a git that hung once will hang again, so one
-     * timeout budget bounds the whole collection instead of 3×.
+     * Runs probes until the first timeout: a git that hung once will hang again, so one timeout
+     * budget bounds the whole collection instead of 3×.
      */
     private class GitProbe(
         private val workDir: File,
@@ -79,7 +82,15 @@ abstract class VcsValueSource : ValueSource<CollectedVcs, VcsValueSource.Paramet
 
         fun run(vararg args: String): String? {
             if (timedOut) return null
-            return when (val result = GitExec.run(workDir, timeoutMillis, args.toList(), searchParents = searchParents)) {
+            return when (
+                val result =
+                    GitExec.run(
+                        workDir,
+                        timeoutMillis,
+                        args.toList(),
+                        searchParents = searchParents,
+                    )
+            ) {
                 is BoundedExec.Result.Success -> result.stdout
                 is BoundedExec.Result.NonZeroExit -> null
                 is BoundedExec.Result.TimedOut -> {

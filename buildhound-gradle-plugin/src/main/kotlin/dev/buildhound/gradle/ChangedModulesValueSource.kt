@@ -98,7 +98,10 @@ abstract class ChangedModulesValueSource : ValueSource<CollectedChangedModules, 
         /** Per-probe bound, wired from `buildhound.vcs.timeout.ms` (shared with [VcsValueSource]). */
         val timeoutMillis: Property<Long>
 
-        /** Discover the enclosing repo from a nested Gradle root (plan 050); default true, `false` confines to [rootDir]. */
+        /**
+         * Discover the enclosing repo from a nested Gradle root (plan 050); default true, `false`
+         * confines to [rootDir].
+         */
         val searchParents: Property<Boolean>
 
         /** Absolute path of the previous-build HEAD sha file (`.gradle/buildhound/last-built-sha`). */
@@ -124,7 +127,11 @@ abstract class ChangedModulesValueSource : ValueSource<CollectedChangedModules, 
         val (base, diff) = resolveDiff(workDir, timeoutMillis, searchParents) ?: return null
         val changedFiles = diff.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
         val mapped = ChangedModuleMapper.map(moduleDirIndex, changedFiles)
-        return CollectedChangedModules(base = base, modules = mapped.modules, unattributedChanges = mapped.unattributedChanges)
+        return CollectedChangedModules(
+            base = base,
+            modules = mapped.modules,
+            unattributedChanges = mapped.unattributedChanges,
+        )
     }
 
     /**
@@ -133,6 +140,7 @@ abstract class ChangedModulesValueSource : ValueSource<CollectedChangedModules, 
      * returns an empty diff string, so the block ships with `modules = []` (honest "base resolved, no
      * changes"), never null.
      */
+    @Suppress("ReturnCount") // Each exit represents a distinct unavailable VCS input.
     private fun resolveDiff(workDir: File, timeoutMillis: Long, searchParents: Boolean): Pair<ChangeDiffBase, String>? {
         val targetBranch = parameters.targetBranch.orNull?.trim()?.takeIf { it.isNotEmpty() }
         if (targetBranch != null) {

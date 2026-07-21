@@ -46,7 +46,12 @@ internal object KotlinReportParser {
                 taskPath = path.take(MAX_PATH_CHARS),
                 durationMs = record.long("totalTimeMs"),
                 incremental = attributes?.isEmpty(),
-                nonIncrementalReasons = attributes?.keys?.take(MAX_REASONS)?.map { it.take(MAX_REASON_CHARS) }.orEmpty(),
+                nonIncrementalReasons =
+                    attributes
+                        ?.keys
+                        ?.take(MAX_REASONS)
+                        ?.map { it.take(MAX_REASON_CHARS) }
+                        .orEmpty(),
                 compilerTimesMs = phaseTimes(metrics),
                 linesOfCode = linesOfCode(metrics),
             )
@@ -55,6 +60,7 @@ internal object KotlinReportParser {
     }.getOrNull()
 
     /** buildMetrics.buildTimes.buildTimesNs = [[{name,…}, nanos], …] → { name: ms }. */
+    @Suppress("LoopWithTooManyJumpStatements") // Malformed metric tuples are skipped independently.
     private fun phaseTimes(metrics: JsonObject?): Map<String, Long> {
         val pairs = (metrics?.get("buildTimes") as? JsonObject)?.get("buildTimesNs") as? JsonArray ?: return emptyMap()
         val out = LinkedHashMap<String, Long>()
@@ -63,14 +69,16 @@ internal object KotlinReportParser {
             val entry = pair as? JsonArray ?: continue
             val name = (entry.getOrNull(0) as? JsonObject)?.str("name") ?: continue
             val nanos = (entry.getOrNull(1) as? JsonPrimitive)?.longOrNull ?: continue
-            out[name.take(MAX_KEY_CHARS)] = nanos / 1_000_000
+            out[name.take(MAX_KEY_CHARS)] = nanos / NANOS_PER_MILLISECOND
         }
         return out
     }
 
     /** buildMetrics.buildPerformanceMetrics.myBuildMetrics = [[{name,…}, value], …]; SOURCE_LINES_NUMBER. */
     private fun linesOfCode(metrics: JsonObject?): Long? {
-        val pairs = (metrics?.get("buildPerformanceMetrics") as? JsonObject)?.get("myBuildMetrics") as? JsonArray ?: return null
+        val pairs =
+            (metrics?.get("buildPerformanceMetrics") as? JsonObject)?.get("myBuildMetrics")
+                as? JsonArray ?: return null
         for (pair in pairs) {
             val entry = pair as? JsonArray ?: continue
             if ((entry.getOrNull(0) as? JsonObject)?.str("name") == "SOURCE_LINES_NUMBER") {
@@ -84,3 +92,5 @@ internal object KotlinReportParser {
     private fun JsonObject.bool(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull
     private fun JsonObject.long(key: String): Long? = (this[key] as? JsonPrimitive)?.longOrNull
 }
+
+private const val NANOS_PER_MILLISECOND = 1_000_000L

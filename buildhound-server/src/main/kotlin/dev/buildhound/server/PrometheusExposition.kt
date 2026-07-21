@@ -25,10 +25,20 @@ object PrometheusExposition {
         val sb = StringBuilder()
 
         snapshot.p50DurationMs?.let {
-            sb.gauge("buildhound_build_duration_p50_seconds", "Build duration, p50 over the scrape window, in seconds.", label, msToSeconds(it))
+            sb.gauge(
+                "buildhound_build_duration_p50_seconds",
+                "Build duration, p50 over the scrape window, in seconds.",
+                label,
+                msToSeconds(it),
+            )
         }
         snapshot.p95DurationMs?.let {
-            sb.gauge("buildhound_build_duration_p95_seconds", "Build duration, p95 over the scrape window, in seconds.", label, msToSeconds(it))
+            sb.gauge(
+                "buildhound_build_duration_p95_seconds",
+                "Build duration, p95 over the scrape window, in seconds.",
+                label,
+                msToSeconds(it),
+            )
         }
         snapshot.cacheHitRate?.let {
             sb.gauge("buildhound_cache_hit_rate", "Cacheable-task hit rate over the scrape window (0..1).", label, it)
@@ -45,14 +55,31 @@ object PrometheusExposition {
             }
         }
         snapshot.flakyTestCount?.let {
-            sb.gauge("buildhound_flaky_tests", "Distinct flaky test units detected in the scrape window.", label, it.toDouble())
+            sb.gauge(
+                "buildhound_flaky_tests",
+                "Distinct flaky test units detected in the scrape window.",
+                label,
+                it.toDouble(),
+            )
         }
         snapshot.avoidedMs?.let {
-            sb.gauge("buildhound_avoided_seconds", "Cache/up-to-date time avoided over the scrape window, in seconds.", label, msToSeconds(it))
+            sb.gauge(
+                "buildhound_avoided_seconds",
+                "Cache/up-to-date time avoided over the scrape window, in seconds.",
+                label,
+                msToSeconds(it),
+            )
         }
-        // Always present (plan 070 exit criteria): the window is request config, not a KPI, so it is
-        // never omitted — and it doubles as a non-empty anchor line for an otherwise all-omitted project.
-        sb.gauge("buildhound_scrape_window_days", "The window (days) these KPIs were computed over.", label, snapshot.windowDays.toDouble())
+        // Always present (plan 070 exit criteria): the window is request config, not a KPI, so it
+        // is
+        // never omitted — and it doubles as a non-empty anchor line for an otherwise all-omitted
+        // project.
+        sb.gauge(
+            "buildhound_scrape_window_days",
+            "The window (days) these KPIs were computed over.",
+            label,
+            snapshot.windowDays.toDouble(),
+        )
 
         return sb.toString()
     }
@@ -69,7 +96,7 @@ object PrometheusExposition {
         body()
     }
 
-    private fun msToSeconds(ms: Long): Double = ms / 1000.0
+    private fun msToSeconds(ms: Long): Double = ms.toDouble() / MILLIS_PER_SECOND
 
     /**
      * Prometheus label-value escaping (exposition format spec): backslash and double-quote are
@@ -81,7 +108,7 @@ object PrometheusExposition {
 
     /** Whole numbers render without a trailing `.0`; fractional values use a fixed, locale-safe scale. */
     private fun formatDouble(value: Double): String {
-        val rounded = Math.round(value * 1_000_000.0) / 1_000_000.0
+        val rounded = Math.round(value * SIX_DECIMAL_FACTOR) / SIX_DECIMAL_FACTOR
         if (rounded == Math.floor(rounded) && !rounded.isInfinite()) return rounded.toLong().toString()
         return String.format(Locale.ROOT, "%.6f", rounded).trimEnd('0').trimEnd('.')
     }

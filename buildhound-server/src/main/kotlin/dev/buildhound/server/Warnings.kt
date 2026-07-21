@@ -105,8 +105,12 @@ object WarningCalculator {
         Regex("JavaWithJavac$", RegexOption.IGNORE_CASE),
     )
 
-    /** Not golden-fixture-confirmed (no bundled AP report to check against, plan Risks) — a best-effort catalog, matched as substrings for version tolerance. */
-    private val AP_TYPE_SUBSTRINGS = listOf("org.gradle.api.tasks.compile.JavaCompile", "KaptTask", "KaptGenerateStubs")
+    /**
+     * Not golden-fixture-confirmed (no bundled AP report to check against, plan Risks) — a
+     * best-effort catalog, matched as substrings for version tolerance.
+     */
+    private val AP_TYPE_SUBSTRINGS =
+        listOf("org.gradle.api.tasks.compile.JavaCompile", "KaptTask", "KaptGenerateStubs")
 
     private val AGP_NAME_PATTERNS = listOf(
         Regex("^process.*Manifest$", RegexOption.IGNORE_CASE),
@@ -148,9 +152,16 @@ object WarningCalculator {
     private fun cleanBuildIds(rows: List<TaskRow>): Set<String> =
         rows.groupBy { it.buildId }
             .filterValues { buildRows ->
-                val cacheRelevant = buildRows.filter { it.cacheable == true || it.outcome == "FROM_CACHE" }
-                val considered = cacheRelevant.filter { it.outcome == "EXECUTED" || it.outcome == "FROM_CACHE" || it.outcome == "UP_TO_DATE" }
-                considered.isNotEmpty() && considered.none { it.outcome == "UP_TO_DATE" || it.outcome == "FROM_CACHE" }
+                val cacheRelevant = buildRows.filter {
+                    it.cacheable == true || it.outcome == "FROM_CACHE"
+                }
+                val considered = cacheRelevant.filter {
+                    it.outcome == "EXECUTED" ||
+                        it.outcome == "FROM_CACHE" ||
+                        it.outcome == "UP_TO_DATE"
+                }
+                considered.isNotEmpty() &&
+                    considered.none { it.outcome == "UP_TO_DATE" || it.outcome == "FROM_CACHE" }
             }
             .keys
 
@@ -178,7 +189,9 @@ object WarningCalculator {
         byBuild.values.forEach { buildRows ->
             val executed = buildRows.filter { it.outcome == "EXECUTED" }
             val matchedRows = executed.filter { row ->
-                row.executionReasons.any { reason -> ALWAYS_RUN_PATTERNS.any { pattern -> reason.lowercase().contains(pattern) } }
+                row.executionReasons.any { reason ->
+                    ALWAYS_RUN_PATTERNS.any { pattern -> reason.lowercase().contains(pattern) }
+                }
             }
             if (matchedRows.isNotEmpty()) {
                 affected++
@@ -239,7 +252,10 @@ object WarningCalculator {
         val affected = affectedBuilds.size
         val share = affected.toDouble() / observed
         if (share < NON_INCREMENTAL_SHARE_THRESHOLD) return null
-        val totalMs = affectedBuilds.values.sumOf { executed -> executed.filter { !it.incremental }.sumOf { it.durationMs } }
+        val totalMs =
+            affectedBuilds.values.sumOf { executed ->
+                executed.filter { !it.incremental }.sumOf { it.durationMs }
+            }
         return WarningRow(
             category = WarningCategory.NON_INCREMENTAL_AP.name,
             key = key,
@@ -280,7 +296,10 @@ object WarningCalculator {
         val affected = neverUpToDate.size
         val share = affected.toDouble() / observed
         if (share < DYNAMIC_DEBUG_SHARE_THRESHOLD) return null
-        val totalMs = neverUpToDate.values.sumOf { buildRows -> buildRows.filter { it.outcome == "EXECUTED" }.sumOf { it.durationMs } }
+        val totalMs =
+            neverUpToDate.values.sumOf { buildRows ->
+                buildRows.filter { it.outcome == "EXECUTED" }.sumOf { it.durationMs }
+            }
         return WarningRow(
             category = WarningCategory.DYNAMIC_DEBUG_VALUES.name,
             key = key,
@@ -301,5 +320,5 @@ object WarningCalculator {
 
     private fun soleModule(rows: List<TaskRow>): String? = rows.map { it.module }.distinct().singleOrNull()
 
-    private fun roundTo6(value: Double): Double = Math.round(value * 1_000_000.0) / 1_000_000.0
+    private fun roundTo6(value: Double): Double = Math.round(value * SIX_DECIMAL_FACTOR) / SIX_DECIMAL_FACTOR
 }

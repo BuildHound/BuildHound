@@ -29,6 +29,7 @@ internal object BoundedExec {
         data class Failed(val exceptionClass: String) : Result
     }
 
+    @Suppress("ReturnCount") // Process lifecycle outcomes are clearer as explicit early exits.
     fun run(
         command: List<String>,
         timeoutMillis: Long,
@@ -42,8 +43,8 @@ internal object BoundedExec {
             workDir?.let { builder.directory(it) }
             env.forEach { (key, value) -> builder.environment()[key] = value }
             builder.start()
-        } catch (e: Exception) {
-            return Result.Failed(e::class.java.simpleName)
+        } catch (expected: Exception) {
+            return Result.Failed(expected::class.java.simpleName)
         }
         try {
             // A prompting child reads EOF instead of waiting on stdin forever.
@@ -69,8 +70,8 @@ internal object BoundedExec {
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             return Result.Failed(e::class.java.simpleName)
-        } catch (e: Exception) {
-            return Result.Failed(e::class.java.simpleName)
+        } catch (expected: Exception) {
+            return Result.Failed(expected::class.java.simpleName)
         } finally {
             // No-op after a normal exit; SIGKILL for the hung case.
             process.destroyForcibly()

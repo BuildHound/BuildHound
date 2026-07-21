@@ -28,6 +28,7 @@ class GitHubActionsConnector(
     override val id: String = "github-actions"
     override val capabilities: Set<Capability> = setOf(Capability.TIMELINE_PULL, Capability.DEEP_LINKS)
 
+    @Suppress("CyclomaticComplexMethod") // Provider response validation is intentionally fail-closed.
     override suspend fun fetchRun(ref: CiRunRef, config: ConnectorConfig): CiRun? {
         val apiBase = config.baseUrl?.trimEnd('/') ?: return null
         val repo = config.project ?: ref.project ?: return null // "owner/repo"
@@ -47,7 +48,9 @@ class GitHubActionsConnector(
         val attempt = ref.attempt?.takeIf { it > 1 }
         val runBase = "$apiBase/repos/$repo/actions/runs/${ref.runId}"
         val runUrl = if (attempt != null) "$runBase/attempts/$attempt" else runBase
-        val jobsUrl = if (attempt != null) "$runBase/attempts/$attempt/jobs?per_page=100" else "$runBase/jobs?per_page=100"
+        val jobsUrl =
+            if (attempt != null) "$runBase/attempts/$attempt/jobs?per_page=100"
+            else "$runBase/jobs?per_page=100"
 
         val runJson = getJson(runUrl, token) ?: return null
         val jobsJson = getJson(jobsUrl, token)
@@ -93,7 +96,7 @@ class GitHubActionsConnector(
             header("Accept", "application/vnd.github+json")
             header("X-GitHub-Api-Version", apiVersion)
         }
-        if (response.status.value !in 200..299) {
+        if (response.status.value !in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX) {
             logger.warn("github connector: {} returned {}", url.substringBefore('?'), response.status.value)
             return null
         }
@@ -178,9 +181,25 @@ class GitHubActionsConnector(
             val host = uri.host ?: return null
             val segments = uri.path.split('/').filter { it.isNotEmpty() }
             // [owner, repo, "actions", "runs", runId, ("attempts", n)?]
-            if (segments.size < 5 || segments[2] != "actions" || segments[3] != "runs") return null
-            val attempt = if (segments.size >= 7 && segments[5] == "attempts") segments[6].toIntOrNull() else null
+            if (segments.size < MIN_RUN_PATH_SEGMENTS ||
+                segments[2] != "actions" ||
+                segments[RUNS_SEGMENT] != "runs"
+            ) {
+                return null
+            }
+            val attempt =
+                if (segments.size >= ATTEMPT_PATH_SEGMENTS && segments[ATTEMPTS_SEGMENT] == "attempts") {
+                    segments[ATTEMPT_NUMBER_SEGMENT].toIntOrNull()
+                } else {
+                    null
+                }
             return Parsed(host = host, repo = "${segments[0]}/${segments[1]}", attempt = attempt)
         }
+
+        private const val MIN_RUN_PATH_SEGMENTS = 5
+        private const val RUNS_SEGMENT = 3
+        private const val ATTEMPT_PATH_SEGMENTS = 7
+        private const val ATTEMPTS_SEGMENT = 5
+        private const val ATTEMPT_NUMBER_SEGMENT = 6
     }
 }

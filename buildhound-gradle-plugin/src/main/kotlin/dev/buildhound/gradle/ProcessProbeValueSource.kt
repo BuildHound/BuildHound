@@ -28,10 +28,10 @@ data class CollectedProcess(
 ) : Serializable
 
 /**
- * End-of-build JVM process probe (plan 029, spec §3.6). Runs `jps`/`jstat`/`jinfo`/`ps` at execution
- * time (same CC rationale as [VcsValueSource]/[EnvironmentValueSource]: obtained only through
- * FlowAction parameters, re-executes on CC reuse). Touches no `Project`/`Gradle` type, so it is
- * inherently isolated-projects-safe.
+ * End-of-build JVM process probe (plan 029, spec §3.6). Runs `jps`/`jstat`/`jinfo`/`ps` at
+ * execution time (same CC rationale as [VcsValueSource]/[EnvironmentValueSource]: obtained only
+ * through FlowAction parameters, re-executes on CC reuse). Touches no `Project`/`Gradle` type, so
+ * it is inherently isolated-projects-safe.
  *
  * Never fails and never hangs: each JDK-tool exec is bounded ([ProcessMetrics]); one failed probe
  * drops one field (not the process), and the whole obtain is wrapped so any exception — no `jps` on
@@ -42,19 +42,25 @@ data class CollectedProcess(
  * ephemeral host-local integer used only as a within-one-`hostnameHash` correlation key. Failures
  * log the exception **class** only.
  */
-abstract class ProcessProbeValueSource : ValueSource<List<CollectedProcess>, ProcessProbeValueSource.Parameters> {
+abstract class ProcessProbeValueSource :
+    ValueSource<List<CollectedProcess>, ProcessProbeValueSource.Parameters> {
 
     interface Parameters : ValueSourceParameters {
-        /** Mirrors `buildhound { enabled }` AND `processProbe { enabled }`; false → nothing runs. */
+        /**
+         * Mirrors `buildhound { enabled }` AND `processProbe { enabled }`; false → nothing runs.
+         */
         val enabled: Property<Boolean>
 
-        /** Per-exec bound, wired from `buildhound.processprobe.timeout.ms` (test seam + escape hatch). */
+        /**
+         * Per-exec bound, wired from `buildhound.processprobe.timeout.ms` (test seam + escape
+         * hatch).
+         */
         val timeoutMillis: Property<Long>
 
         /**
          * Internal test seam only: an absolute path to a fake `jps` (TestKit can't PATH-shadow the
-         * daemon's native `jps`, so the timeout failure-injection test overrides it here). Defaults to
-         * `jps` on PATH in production.
+         * daemon's native `jps`, so the timeout failure-injection test overrides it here). Defaults
+         * to `jps` on PATH in production.
          */
         val jpsExecutable: Property<String>
     }
@@ -67,16 +73,21 @@ abstract class ProcessProbeValueSource : ValueSource<List<CollectedProcess>, Pro
             ProcessProbeCollector.collect(
                 metrics,
                 onTimeout = { tool ->
-                    logger.warn("[buildhound] {} timed out after {} ms; process probe truncated (build unaffected)", tool, timeout)
+                    logger.warn(
+                        "[buildhound] {} timed out after {} ms; process probe truncated (build unaffected)",
+                        tool,
+                        timeout,
+                    )
                 },
                 onFailure = { exceptionClass ->
                     logger.info("[buildhound] process probe tool unavailable: {}", exceptionClass)
                 },
             )
-        }.getOrElse {
-            logger.info("[buildhound] process probe unavailable: {}", it::class.java.simpleName)
-            emptyList()
         }
+            .getOrElse {
+                logger.info("[buildhound] process probe unavailable: {}", it::class.java.simpleName)
+                emptyList()
+            }
     }
 
     private companion object {

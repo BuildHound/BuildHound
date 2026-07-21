@@ -1,3 +1,8 @@
+@file:Suppress(
+    "LargeClass", // One transaction-aware JDBC implementation mirrors the cohesive BuildStore API.
+    "MagicNumber", // JDBC parameter positions mirror adjacent SQL column order.
+)
+
 package dev.buildhound.server
 
 import com.zaxxer.hikari.HikariConfig
@@ -20,28 +25,28 @@ import org.slf4j.LoggerFactory
 
 /** Hikari pool + Flyway migration on boot (architecture §5). */
 fun createDataSource(jdbcUrl: String, user: String, password: String): DataSource {
-    val config = HikariConfig().apply {
-        this.jdbcUrl = jdbcUrl
-        username = user
-        this.password = password
-        maximumPoolSize = 10
-        poolName = "buildhound"
-    }
+    val config =
+        HikariConfig().apply {
+            this.jdbcUrl = jdbcUrl
+            username = user
+            this.password = password
+            maximumPoolSize = 10
+            poolName = "buildhound"
+        }
     return HikariDataSource(config)
 }
 
 fun migrate(dataSource: DataSource) {
-    Flyway.configure()
-        .dataSource(dataSource)
-        .locations("classpath:db/migration")
-        .load()
-        .migrate()
+    Flyway.configure().dataSource(dataSource).locations("classpath:db/migration").load().migrate()
 }
 
 /** Retention purge batch size (plan 042): bounds per-statement lock time on a large delete. */
 private const val PURGE_BATCH: Int = 5000
 
-/** Shared with [startTokenSweeper]/[startRetentionSweeper]'s naming convention: one logger per concern. */
+/**
+ * Shared with [startTokenSweeper]/[startRetentionSweeper]'s naming convention: one logger per
+ * concern.
+ */
 private val authLogger = LoggerFactory.getLogger("dev.buildhound.server.Auth")
 
 class PostgresBuildStore(
@@ -53,32 +58,38 @@ class PostgresBuildStore(
 ) : BuildStore {
 
     override fun save(projectId: String, rawPayload: BuildPayload): Boolean {
-        // Clamp every index-feeding string before anything is written (plan 078): the clamped payload
+        // Clamp every index-feeding string before anything is written (plan 078): the clamped
+        // payload
         // is what the hot columns AND the jsonb store, so they can never disagree.
         val payload = boundForStorage(rawPayload)
         return dataSource.connection.use { connection ->
-            // The build row and its normalized task rows go in as one all-or-nothing unit (plan 026),
+            // The build row and its normalized task rows go in as one all-or-nothing unit (plan
+            // 026),
             // so a partial failure never leaves task rows without their build (idempotency at the
             // build level, no PK on task rows). autoCommit is restored in finally.
             connection.autoCommit = false
             try {
                 val inserted = insertBuild(connection, projectId, payload)
-                // Task + artifact rows only when the build was newly inserted — a duplicate adds none.
-                if (inserted && payload.tasks.isNotEmpty()) insertTaskRows(connection, projectId, payload)
+                // Task + artifact rows only when the build was newly inserted — a duplicate adds
+                // none.
+                if (inserted && payload.tasks.isNotEmpty())
+                    insertTaskRows(connection, projectId, payload)
                 if (inserted && payload.artifacts?.android?.isNotEmpty() == true) {
                     insertArtifactRows(connection, projectId, payload)
                 }
-                // Per-class test outcomes for flaky detection (plan 036); projected in the same txn.
-                if (inserted && payload.tests.isNotEmpty()) insertTestClassOutcomes(connection, projectId, payload)
+                // Per-class test outcomes for flaky detection (plan 036); projected in the same
+                // txn.
+                if (inserted && payload.tests.isNotEmpty())
+                    insertTestClassOutcomes(connection, projectId, payload)
                 // Changed-module rows for the blast-radius rollup (plan 063); same new-build gate.
                 if (inserted && payload.changedModules?.modules?.isNotEmpty() == true) {
                     insertChangedModuleRows(connection, projectId, payload)
                 }
                 connection.commit()
                 inserted
-            } catch (e: Throwable) {
+            } catch (expected: Throwable) {
                 runCatching { connection.rollback() }
-                throw e
+                throw expected
             } finally {
                 runCatching { connection.autoCommit = true }
             }
@@ -94,14 +105,21 @@ class PostgresBuildStore(
             }
         }
 
-    override fun purgeOlderThan(projectId: String, buildCutoffMs: Long, rawCutoffMs: Long): RetentionPurge {
+    override fun purgeOlderThan(
+        projectId: String,
+        buildCutoffMs: Long,
+        rawCutoffMs: Long,
+    ): RetentionPurge {
         val id = UUID.fromString(projectId)
-        // Raw per-task rows first (they reference builds by id, not FK, but purging them first keeps a
-        // crash from ever leaving a build with orphaned raw rows). Each batch commits on its own so a
+        // Raw per-task rows first (they reference builds by id, not FK, but purging them first
+        // keeps a
+        // crash from ever leaving a build with orphaned raw rows). Each batch commits on its own so
+        // a
         // large purge never holds a long lock (autoCommit is on by default).
         dataSource.connection.use { connection ->
             val rawRows = batchedDeleteByStartedAt(connection, "task_executions", id, rawCutoffMs)
-            // Changed-module rows are raw per-build detail on the same raw window as task_executions
+            // Changed-module rows are raw per-build detail on the same raw window as
+            // task_executions
             // (plan 063); purged here so the table can't grow unbounded. Not folded into `rawRows`,
             // which is the task-row count the plan-042 retention contract reports.
             batchedDeleteByStartedAt(connection, "build_changed_modules", id, rawCutoffMs)
@@ -110,186 +128,286 @@ class PostgresBuildStore(
         }
     }
 
-    /** Deletes `table` rows for [id] with `started_at` before the cutoff, [PURGE_BATCH] at a time. */
-    private fun batchedDeleteByStartedAt(connection: java.sql.Connection, table: String, id: UUID, cutoffMs: Long): Long {
+    /**
+     * Deletes `table` rows for [id] with `started_at` before the cutoff, [PURGE_BATCH] at a time.
+     */
+    private fun batchedDeleteByStartedAt(
+        connection: java.sql.Connection,
+        table: String,
+        id: UUID,
+        cutoffMs: Long,
+    ): Long {
         val cutoff = OffsetDateTime.ofInstant(Instant.ofEpochMilli(cutoffMs), ZoneOffset.UTC)
-        // `table` is a compile-time literal ("builds"/"task_executions"/"build_changed_modules"), never
+        // `table` is a compile-time literal ("builds"/"task_executions"/"build_changed_modules"),
+        // never
         // user input — no injection.
-        val sql = "DELETE FROM $table WHERE ctid IN " +
-            "(SELECT ctid FROM $table WHERE project_id = ? AND started_at < ? LIMIT $PURGE_BATCH)"
+        val sql =
+            "DELETE FROM $table WHERE ctid IN " +
+                "(SELECT ctid FROM $table WHERE project_id = ? AND started_at < ? LIMIT $PURGE_BATCH)"
         var total = 0L
         while (true) {
-            val deleted = connection.prepareStatement(sql).use { statement ->
-                statement.setObject(1, id)
-                statement.setObject(2, cutoff)
-                statement.executeUpdate()
-            }
+            val deleted =
+                connection.prepareStatement(sql).use { statement ->
+                    statement.setObject(1, id)
+                    statement.setObject(2, cutoff)
+                    statement.executeUpdate()
+                }
             total += deleted
             if (deleted < PURGE_BATCH) break
         }
         return total
     }
 
-    private fun insertBuild(connection: java.sql.Connection, projectId: String, payload: BuildPayload): Boolean =
-        connection.prepareStatement(
-            """
-            INSERT INTO builds (project_id, build_id, started_at, finished_at, outcome,
-                                mode, branch, duration_ms, hit_rate, ci_provider, ci_run_id,
-                                pipeline_name, requested_tasks_sig, cc_state, project_key, payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (project_id, build_id) DO NOTHING
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setObject(1, UUID.fromString(projectId))
-            statement.setString(2, payload.buildId)
-            statement.setObject(3, OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC))
-            statement.setObject(4, OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.finishedAt), ZoneOffset.UTC))
-            statement.setString(5, payload.outcome.name)
-            statement.setString(6, payload.mode.name)
-            statement.setString(7, payload.vcs?.branch)
-            statement.setLong(8, payload.finishedAt - payload.startedAt)
-            payload.derived?.cacheableHitRate
-                ?.let { statement.setDouble(9, it) }
-                ?: statement.setNull(9, java.sql.Types.DOUBLE)
-            // Extracted hot columns for baseline keying + metric correlation (plan 025).
-            statement.setString(10, payload.ci?.provider)
-            statement.setString(11, payload.ci?.runId)
-            statement.setString(12, payload.ci?.pipelineName)
-            statement.setString(13, RegressionEngine.requestedTasksSignature(payload.requestedTasks))
-            // Extracted CC state for the /trends per-day counters (plan 064); null on a pre-064 /
-            // environment-less payload — historical rows already read null via the V14 additive column.
-            statement.setString(14, payload.environment?.configurationCache?.name)
-            // Payload projectKey → hot column (plan 077); also covers the interrupted-build path (save()).
-            statement.setString(15, payload.projectKey)
-            statement.setObject(
-                16,
-                PGobject().apply {
-                    type = "jsonb"
-                    value = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
-                },
+    private fun insertBuild(
+        connection: java.sql.Connection,
+        projectId: String,
+        payload: BuildPayload,
+    ): Boolean =
+        connection
+            .prepareStatement(
+                """
+                INSERT INTO builds (project_id, build_id, started_at, finished_at, outcome,
+                                    mode, branch, duration_ms, hit_rate, ci_provider, ci_run_id,
+                                    pipeline_name, requested_tasks_sig, cc_state, project_key, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (project_id, build_id) DO NOTHING
+                """
+                    .trimIndent()
             )
-            statement.executeUpdate() == 1
-        }
-
-    /** Batch-insert the normalized task rows (plan 026), denormalizing user_id + started_at. */
-    private fun insertTaskRows(connection: java.sql.Connection, projectId: String, payload: BuildPayload) {
-        connection.prepareStatement(
-            """
-            INSERT INTO task_executions
-                (project_id, build_id, started_at, user_id, path, module, name, type, outcome, cacheable,
-                 duration_ms, execution_reasons)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """.trimIndent(),
-        ).use { statement ->
-            val startedAt = OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC)
-            val userId = payload.environment?.userId
-            for (task in payload.tasks) {
+            .use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setString(2, payload.buildId)
-                statement.setObject(3, startedAt)
-                statement.setString(4, userId)
-                statement.setString(5, task.path)
-                statement.setString(6, task.module)
-                statement.setString(7, DerivedMetricsCalculator.taskName(task))
-                statement.setString(8, task.type)
-                statement.setString(9, task.outcome.name)
-                task.cacheable?.let { statement.setBoolean(10, it) } ?: statement.setNull(10, java.sql.Types.BOOLEAN)
-                statement.setLong(11, task.durationMs)
-                // Rerun-cause taxonomy source (plan 061): a plain text[], written on ingest. A fresh
-                // insert always writes an array (possibly empty) — never NULL; NULL only occurs on rows
-                // from before this migration, which taskRowsBetween degrades to UNCLASSIFIED at read time.
-                statement.setArray(12, connection.createArrayOf("text", task.executionReasons.toTypedArray()))
-                statement.addBatch()
+                statement.setObject(
+                    3,
+                    OffsetDateTime.ofInstant(
+                        Instant.ofEpochMilli(payload.startedAt),
+                        ZoneOffset.UTC,
+                    ),
+                )
+                statement.setObject(
+                    4,
+                    OffsetDateTime.ofInstant(
+                        Instant.ofEpochMilli(payload.finishedAt),
+                        ZoneOffset.UTC,
+                    ),
+                )
+                statement.setString(5, payload.outcome.name)
+                statement.setString(6, payload.mode.name)
+                statement.setString(7, payload.vcs?.branch)
+                statement.setLong(8, payload.finishedAt - payload.startedAt)
+                payload.derived?.cacheableHitRate?.let { statement.setDouble(9, it) }
+                    ?: statement.setNull(9, java.sql.Types.DOUBLE)
+                // Extracted hot columns for baseline keying + metric correlation (plan 025).
+                statement.setString(10, payload.ci?.provider)
+                statement.setString(11, payload.ci?.runId)
+                statement.setString(12, payload.ci?.pipelineName)
+                statement.setString(
+                    13,
+                    RegressionEngine.requestedTasksSignature(payload.requestedTasks),
+                )
+                // Extracted CC state for the /trends per-day counters (plan 064); null on a pre-064
+                // /
+                // environment-less payload — historical rows already read null via the V14 additive
+                // column.
+                statement.setString(14, payload.environment?.configurationCache?.name)
+                // Payload projectKey → hot column (plan 077); also covers the interrupted-build
+                // path (save()).
+                statement.setString(15, payload.projectKey)
+                statement.setObject(
+                    16,
+                    PGobject().apply {
+                        type = "jsonb"
+                        value =
+                            BuildHoundJson.payload.encodeToString(
+                                BuildPayload.serializer(),
+                                payload,
+                            )
+                    },
+                )
+                statement.executeUpdate() == 1
             }
-            statement.executeBatch()
-        }
+
+    /** Batch-insert the normalized task rows (plan 026), denormalizing user_id + started_at. */
+    private fun insertTaskRows(
+        connection: java.sql.Connection,
+        projectId: String,
+        payload: BuildPayload,
+    ) {
+        connection
+            .prepareStatement(
+                """
+                INSERT INTO task_executions
+                    (project_id, build_id, started_at, user_id, path, module, name, type, outcome, cacheable,
+                     duration_ms, execution_reasons)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                    .trimIndent()
+            )
+            .use { statement ->
+                val startedAt =
+                    OffsetDateTime.ofInstant(
+                        Instant.ofEpochMilli(payload.startedAt),
+                        ZoneOffset.UTC,
+                    )
+                val userId = payload.environment?.userId
+                for (task in payload.tasks) {
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, payload.buildId)
+                    statement.setObject(3, startedAt)
+                    statement.setString(4, userId)
+                    statement.setString(5, task.path)
+                    statement.setString(6, task.module)
+                    statement.setString(7, DerivedMetricsCalculator.taskName(task))
+                    statement.setString(8, task.type)
+                    statement.setString(9, task.outcome.name)
+                    task.cacheable?.let { statement.setBoolean(10, it) }
+                        ?: statement.setNull(10, java.sql.Types.BOOLEAN)
+                    statement.setLong(11, task.durationMs)
+                    // Rerun-cause taxonomy source (plan 061): a plain text[], written on ingest. A
+                    // fresh
+                    // insert always writes an array (possibly empty) — never NULL; NULL only occurs
+                    // on rows
+                    // from before this migration, which taskRowsBetween degrades to UNCLASSIFIED at
+                    // read time.
+                    statement.setArray(
+                        12,
+                        connection.createArrayOf("text", task.executionReasons.toTypedArray()),
+                    )
+                    statement.addBatch()
+                }
+                statement.executeBatch()
+            }
     }
 
     /** Batch-insert the Android artifact-size rows (plan 031), denormalizing started_at. */
-    private fun insertArtifactRows(connection: java.sql.Connection, projectId: String, payload: BuildPayload) {
-        connection.prepareStatement(
-            """
-            INSERT INTO apk_sizes (project_id, build_id, started_at, module, variant, type, size_bytes)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """.trimIndent(),
-        ).use { statement ->
-            val startedAt = OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC)
-            for (artifact in payload.artifacts?.android.orEmpty()) {
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, payload.buildId)
-                statement.setObject(3, startedAt)
-                statement.setString(4, artifact.module)
-                statement.setString(5, artifact.variant)
-                statement.setString(6, artifact.type.name)
-                statement.setLong(7, artifact.sizeBytes)
-                statement.addBatch()
+    private fun insertArtifactRows(
+        connection: java.sql.Connection,
+        projectId: String,
+        payload: BuildPayload,
+    ) {
+        connection
+            .prepareStatement(
+                """
+                INSERT INTO apk_sizes (project_id, build_id, started_at, module, variant, type, size_bytes)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """
+                    .trimIndent()
+            )
+            .use { statement ->
+                val startedAt =
+                    OffsetDateTime.ofInstant(
+                        Instant.ofEpochMilli(payload.startedAt),
+                        ZoneOffset.UTC,
+                    )
+                for (artifact in payload.artifacts?.android.orEmpty()) {
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, payload.buildId)
+                    statement.setObject(3, startedAt)
+                    statement.setString(4, artifact.module)
+                    statement.setString(5, artifact.variant)
+                    statement.setString(6, artifact.type.name)
+                    statement.setLong(7, artifact.sizeBytes)
+                    statement.addBatch()
+                }
+                statement.executeBatch()
             }
-            statement.executeBatch()
-        }
     }
 
-    /** Batch-insert per-class test outcomes (plan 036); module stored NOT NULL '' for null (PK safety). */
-    private fun insertTestClassOutcomes(connection: java.sql.Connection, projectId: String, payload: BuildPayload) {
-        connection.prepareStatement(
-            """
-            INSERT INTO test_class_outcomes
-                (project_id, build_id, started_at, sha, module, class_fqcn, passed, failed, retry_flaky_cases)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (project_id, build_id, module, class_fqcn) DO NOTHING
-            """.trimIndent(),
-        ).use { statement ->
-            val startedAt = OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC)
-            for (row in classOutcomesOf(payload)) {
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, row.buildId)
-                statement.setObject(3, startedAt)
-                statement.setString(4, row.sha)
-                statement.setString(5, row.module ?: "")
-                statement.setString(6, row.classFqcn)
-                statement.setInt(7, row.passed)
-                statement.setInt(8, row.failed)
-                statement.setInt(9, row.retryFlakyCases)
-                statement.addBatch()
+    /**
+     * Batch-insert per-class test outcomes (plan 036); module stored NOT NULL '' for null (PK
+     * safety).
+     */
+    private fun insertTestClassOutcomes(
+        connection: java.sql.Connection,
+        projectId: String,
+        payload: BuildPayload,
+    ) {
+        connection
+            .prepareStatement(
+                """
+                INSERT INTO test_class_outcomes
+                    (project_id, build_id, started_at, sha, module, class_fqcn, passed, failed, retry_flaky_cases)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (project_id, build_id, module, class_fqcn) DO NOTHING
+                """
+                    .trimIndent()
+            )
+            .use { statement ->
+                val startedAt =
+                    OffsetDateTime.ofInstant(
+                        Instant.ofEpochMilli(payload.startedAt),
+                        ZoneOffset.UTC,
+                    )
+                for (row in classOutcomesOf(payload)) {
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, row.buildId)
+                    statement.setObject(3, startedAt)
+                    statement.setString(4, row.sha)
+                    statement.setString(5, row.module ?: "")
+                    statement.setString(6, row.classFqcn)
+                    statement.setInt(7, row.passed)
+                    statement.setInt(8, row.failed)
+                    statement.setInt(9, row.retryFlakyCases)
+                    statement.addBatch()
+                }
+                statement.executeBatch()
             }
-            statement.executeBatch()
-        }
     }
 
-    /** Batch-insert the changed-module rows (plan 063), one per distinct module, denormalizing started_at. */
-    private fun insertChangedModuleRows(connection: java.sql.Connection, projectId: String, payload: BuildPayload) {
+    /**
+     * Batch-insert the changed-module rows (plan 063), one per distinct module, denormalizing
+     * started_at.
+     */
+    private fun insertChangedModuleRows(
+        connection: java.sql.Connection,
+        projectId: String,
+        payload: BuildPayload,
+    ) {
         val modules = payload.changedModules?.modules ?: return
-        connection.prepareStatement(
-            """
-            INSERT INTO build_changed_modules (project_id, build_id, started_at, module)
-            VALUES (?, ?, ?, ?)
-            """.trimIndent(),
-        ).use { statement ->
-            val startedAt = OffsetDateTime.ofInstant(Instant.ofEpochMilli(payload.startedAt), ZoneOffset.UTC)
-            for (module in modules) {
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, payload.buildId)
-                statement.setObject(3, startedAt)
-                statement.setString(4, module)
-                statement.addBatch()
+        connection
+            .prepareStatement(
+                """
+                INSERT INTO build_changed_modules (project_id, build_id, started_at, module)
+                VALUES (?, ?, ?, ?)
+                """
+                    .trimIndent()
+            )
+            .use { statement ->
+                val startedAt =
+                    OffsetDateTime.ofInstant(
+                        Instant.ofEpochMilli(payload.startedAt),
+                        ZoneOffset.UTC,
+                    )
+                for (module in modules) {
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, payload.buildId)
+                    statement.setObject(3, startedAt)
+                    statement.setString(4, module)
+                    statement.addBatch()
+                }
+                statement.executeBatch()
             }
-            statement.executeBatch()
-        }
     }
 
     override fun resolveBuildId(projectId: String, provider: String?, runId: String?): String? =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                SELECT build_id FROM builds
-                WHERE project_id = ? AND ci_provider IS NOT DISTINCT FROM ? AND ci_run_id IS NOT DISTINCT FROM ?
-                ORDER BY started_at DESC LIMIT 1
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, provider)
-                statement.setString(3, runId)
-                statement.executeQuery().use { rows -> if (rows.next()) rows.getString(1) else null }
-            }
+            connection
+                .prepareStatement(
+                    """
+                    SELECT build_id FROM builds
+                    WHERE project_id = ? AND ci_provider IS NOT DISTINCT FROM ? AND ci_run_id IS NOT DISTINCT FROM ?
+                    ORDER BY started_at DESC LIMIT 1
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, provider)
+                    statement.setString(3, runId)
+                    statement.executeQuery().use { rows ->
+                        if (rows.next()) rows.getString(1) else null
+                    }
+                }
         }
 
     override fun baselineWindow(
@@ -300,80 +418,113 @@ class PostgresBuildStore(
         n: Int,
     ): List<BaselinePoint> =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                SELECT duration_ms, hit_rate FROM builds
-                WHERE project_id = ? AND outcome = 'SUCCESS' AND branch = ?
-                  AND mode = ? AND pipeline_name IS NOT DISTINCT FROM ? AND requested_tasks_sig = ?
-                  AND build_id <> ?
-                  AND (payload->'environment'->'invocation'->>'rerunTasks') IS DISTINCT FROM 'true'
-                  AND (payload->'environment'->'invocation'->>'refreshDependencies') IS DISTINCT FROM 'true'
-                ORDER BY started_at DESC LIMIT ?
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, defaultBranch)
-                statement.setString(3, query.mode)
-                statement.setString(4, query.pipelineName)
-                statement.setString(5, query.requestedTasksSig)
-                statement.setString(6, excludingBuildId)
-                statement.setInt(7, n)
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            add(
-                                BaselinePoint(
-                                    durationMs = rows.getLong("duration_ms"),
-                                    hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
-                                ),
-                            )
+            connection
+                .prepareStatement(
+                    """
+                    SELECT duration_ms, hit_rate FROM builds
+                    WHERE project_id = ? AND outcome = 'SUCCESS' AND branch = ?
+                      AND mode = ? AND pipeline_name IS NOT DISTINCT FROM ? AND requested_tasks_sig = ?
+                      AND build_id <> ?
+                      AND (payload->'environment'->'invocation'->>'rerunTasks') IS DISTINCT FROM 'true'
+                      AND (payload->'environment'->'invocation'->>'refreshDependencies') IS DISTINCT FROM 'true'
+                    ORDER BY started_at DESC LIMIT ?
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, defaultBranch)
+                    statement.setString(3, query.mode)
+                    statement.setString(4, query.pipelineName)
+                    statement.setString(5, query.requestedTasksSig)
+                    statement.setString(6, excludingBuildId)
+                    statement.setInt(7, n)
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                add(
+                                    BaselinePoint(
+                                        durationMs = rows.getLong("duration_ms"),
+                                        hitRate =
+                                            rows.getDouble("hit_rate").takeUnless {
+                                                rows.wasNull()
+                                            },
+                                    )
+                                )
+                            }
                         }
                     }
                 }
-            }
         }
 
     /**
-     * A corrupt/unexpected `payload` jsonb (a `SerializationException`, never caught by the route-layer
-     * [runQuery]'s `SQLException`-only classifier) degrades to the same `null` as "no such row" rather
-     * than a bare 500 — every caller (`/builds/{id}`, `/verdict`, `/compare`, `/diagnosis`,
-     * `/parallelism`, `/graph`, …) already treats `null` as "unknown build" (404), so this is a pure
-     * safety net, never a behavior change on well-formed data.
+     * A corrupt/unexpected `payload` jsonb (a `SerializationException`, never caught by the
+     * route-layer [runQuery]'s `SQLException`-only classifier) degrades to the same `null` as "no
+     * such row" rather than a bare 500 — every caller (`/builds/{id}`, `/verdict`, `/compare`,
+     * `/diagnosis`, `/parallelism`, `/graph`, …) already treats `null` as "unknown build" (404), so
+     * this is a pure safety net, never a behavior change on well-formed data.
      */
     override fun findById(projectId: String, buildId: String): BuildPayload? =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT payload FROM builds WHERE project_id = ? AND build_id = ?",
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, buildId)
-                statement.executeQuery().use { rows ->
-                    if (!rows.next()) null
-                    else runCatching { BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString(1)) }.getOrNull()
+            connection
+                .prepareStatement(
+                    "SELECT payload FROM builds WHERE project_id = ? AND build_id = ?"
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, buildId)
+                    statement.executeQuery().use { rows ->
+                        if (!rows.next()) null
+                        else
+                            runCatching {
+                                    BuildHoundJson.payload.decodeFromString(
+                                        BuildPayload.serializer(),
+                                        rows.getString(1),
+                                    )
+                                }
+                                .getOrNull()
+                    }
                 }
-            }
         }
 
     override fun count(projectId: String, filter: BuildFilter): Long =
         dataSource.connection.use { connection ->
             val (clauses, params) = filterSql(filter)
-            connection.prepareStatement("SELECT count(*) FROM builds WHERE project_id = ?$clauses").use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                params.forEachIndexed { index, value -> statement.setString(index + 2, value) }
-                statement.executeQuery().use { rows -> rows.next(); rows.getLong(1) }
-            }
+            connection
+                .prepareStatement("SELECT count(*) FROM builds WHERE project_id = ?$clauses")
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    params.forEachIndexed { index, value -> statement.setString(index + 2, value) }
+                    statement.executeQuery().use { rows ->
+                        rows.next()
+                        rows.getLong(1)
+                    }
+                }
         }
 
     /** Fixed column comparisons only; every value is a bound parameter. */
     private fun filterSql(filter: BuildFilter): Pair<String, List<String>> {
         val clauses = StringBuilder()
         val params = mutableListOf<String>()
-        filter.branch?.let { clauses.append(" AND branch = ?"); params.add(it) }
-        filter.mode?.let { clauses.append(" AND mode = ?"); params.add(it) }
-        filter.outcome?.let { clauses.append(" AND outcome = ?"); params.add(it) }
-        // Payload project selector (plan 077): unqualified `project_key` is unambiguous (only `builds`
+        filter.branch?.let {
+            clauses.append(" AND branch = ?")
+            params.add(it)
+        }
+        filter.mode?.let {
+            clauses.append(" AND mode = ?")
+            params.add(it)
+        }
+        filter.outcome?.let {
+            clauses.append(" AND outcome = ?")
+            params.add(it)
+        }
+        // Payload project selector (plan 077): unqualified `project_key` is unambiguous (only
+        // `builds`
         // carries it), so the same clause is valid in the artifacts/trends join too.
-        filter.projectKey?.let { clauses.append(" AND project_key = ?"); params.add(it) }
+        filter.projectKey?.let {
+            clauses.append(" AND project_key = ?")
+            params.add(it)
+        }
         // Fleet-view exclusion (plan 030): NOT IN over bound params, order-matched with the values.
         val excluded = filter.excludeModes.toList()
         if (excluded.isNotEmpty()) {
@@ -386,55 +537,82 @@ class PostgresBuildStore(
         // GIN-indexed via V11 (`payload -> 'tags'`).
         filter.tags.forEach { (key, value) ->
             clauses.append(" AND payload -> 'tags' @> ?::jsonb")
-            params.add(BuildHoundJson.payload.encodeToString(MapSerializer(String.serializer(), String.serializer()), mapOf(key to value)))
+            params.add(
+                BuildHoundJson.payload.encodeToString(
+                    MapSerializer(String.serializer(), String.serializer()),
+                    mapOf(key to value),
+                )
+            )
         }
         return clauses.toString() to params
     }
 
-    override fun list(projectId: String, filter: BuildFilter, limit: Int, offset: Int): List<BuildSummary> =
+    override fun list(
+        projectId: String,
+        filter: BuildFilter,
+        limit: Int,
+        offset: Int,
+    ): List<BuildSummary> =
         dataSource.connection.use { connection ->
             val (clauses, params) = filterSql(filter)
-            connection.prepareStatement(
-                """
+            connection
+                .prepareStatement(
+                    """
                 SELECT build_id, started_at, duration_ms, outcome, mode, branch, hit_rate, project_key
                 FROM builds WHERE project_id = ?$clauses
                 ORDER BY started_at DESC, build_id DESC LIMIT ? OFFSET ?
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                params.forEachIndexed { index, value -> statement.setString(index + 2, value) }
-                statement.setInt(params.size + 2, limit)
-                statement.setInt(params.size + 3, offset)
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            add(
-                                BuildSummary(
-                                    buildId = rows.getString("build_id"),
-                                    startedAt = rows.getObject("started_at", OffsetDateTime::class.java)
-                                        .toInstant().toEpochMilli(),
-                                    durationMs = rows.getLong("duration_ms"),
-                                    outcome = rows.getString("outcome"),
-                                    mode = rows.getString("mode"),
-                                    branch = rows.getString("branch"),
-                                    hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
-                                    projectKey = rows.getString("project_key"),
-                                ),
-                            )
+                """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    params.forEachIndexed { index, value -> statement.setString(index + 2, value) }
+                    statement.setInt(params.size + 2, limit)
+                    statement.setInt(params.size + 3, offset)
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                add(
+                                    BuildSummary(
+                                        buildId = rows.getString("build_id"),
+                                        startedAt =
+                                            rows
+                                                .getObject("started_at", OffsetDateTime::class.java)
+                                                .toInstant()
+                                                .toEpochMilli(),
+                                        durationMs = rows.getLong("duration_ms"),
+                                        outcome = rows.getString("outcome"),
+                                        mode = rows.getString("mode"),
+                                        branch = rows.getString("branch"),
+                                        hitRate =
+                                            rows.getDouble("hit_rate").takeUnless {
+                                                rows.wasNull()
+                                            },
+                                        projectKey = rows.getString("project_key"),
+                                    )
+                                )
+                            }
                         }
                     }
                 }
-            }
         }
 
-    override fun trends(projectId: String, filter: BuildFilter, days: Int, nowMs: Long): List<TrendPoint> =
+    override fun trends(
+        projectId: String,
+        filter: BuildFilter,
+        days: Int,
+        nowMs: Long,
+    ): List<TrendPoint> =
         dataSource.connection.use { connection ->
             val (clauses, params) = filterSql(filter)
-            connection.prepareStatement(
-                // Interrupted builds (plan 033) are counted separately and excluded from the
-                // duration/hit-rate aggregates (their duration is synthetic) — mirrors the in-memory
-                // store's filter so the two agree. coalesce keeps an interrupted-only day at 0, not null.
-                """
+            connection
+                .prepareStatement(
+                    // Interrupted builds (plan 033) are counted separately and excluded from the
+                    // duration/hit-rate aggregates (their duration is synthetic) — mirrors the
+                    // in-memory
+                    // store's filter so the two agree. coalesce keeps an interrupted-only day at 0,
+                    // not null.
+                    """
                 SELECT (started_at AT TIME ZONE 'UTC')::date AS day,
                        count(*) AS builds,
                        count(*) FILTER (WHERE outcome = 'FAILED') AS failures,
@@ -451,92 +629,126 @@ class PostgresBuildStore(
                 FROM builds
                 WHERE project_id = ? AND started_at >= ?$clauses
                 GROUP BY day ORDER BY day
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(
-                    2,
-                    OffsetDateTime.ofInstant(Instant.ofEpochMilli(nowMs - days.toLong() * 86_400_000), ZoneOffset.UTC),
+                """
+                        .trimIndent()
                 )
-                params.forEachIndexed { index, value -> statement.setString(index + 3, value) }
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            val ccObserved = rows.getInt("cc_observed")
-                            add(
-                                TrendPoint(
-                                    day = rows.getDate("day").toLocalDate().toString(),
-                                    builds = rows.getInt("builds"),
-                                    failures = rows.getInt("failures"),
-                                    avgDurationMs = rows.getLong("avg_duration"),
-                                    maxDurationMs = rows.getLong("max_duration"),
-                                    avgHitRate = rows.getDouble("avg_hit_rate").takeUnless { rows.wasNull() },
-                                    interrupted = rows.getInt("interrupted"),
-                                    ccMissStored = if (ccObserved == 0) null else rows.getInt("cc_miss_stored"),
-                                    ccHit = if (ccObserved == 0) null else rows.getInt("cc_hit"),
-                                    ccRequested = if (ccObserved == 0) null else rows.getInt("cc_requested"),
-                                ),
-                            )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setObject(
+                        2,
+                        OffsetDateTime.ofInstant(
+                            Instant.ofEpochMilli(nowMs - days.toLong() * 86_400_000),
+                            ZoneOffset.UTC,
+                        ),
+                    )
+                    params.forEachIndexed { index, value -> statement.setString(index + 3, value) }
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                val ccObserved = rows.getInt("cc_observed")
+                                add(
+                                    TrendPoint(
+                                        day = rows.getDate("day").toLocalDate().toString(),
+                                        builds = rows.getInt("builds"),
+                                        failures = rows.getInt("failures"),
+                                        avgDurationMs = rows.getLong("avg_duration"),
+                                        maxDurationMs = rows.getLong("max_duration"),
+                                        avgHitRate =
+                                            rows.getDouble("avg_hit_rate").takeUnless {
+                                                rows.wasNull()
+                                            },
+                                        interrupted = rows.getInt("interrupted"),
+                                        ccMissStored =
+                                            if (ccObserved == 0) null
+                                            else rows.getInt("cc_miss_stored"),
+                                        ccHit =
+                                            if (ccObserved == 0) null else rows.getInt("cc_hit"),
+                                        ccRequested =
+                                            if (ccObserved == 0) null
+                                            else rows.getInt("cc_requested"),
+                                    )
+                                )
+                            }
                         }
                     }
                 }
-            }
         }
 
     private fun cutoff(days: Int, nowMs: Long): OffsetDateTime =
-        OffsetDateTime.ofInstant(Instant.ofEpochMilli(nowMs - days.toLong() * 86_400_000), ZoneOffset.UTC)
+        OffsetDateTime.ofInstant(
+            Instant.ofEpochMilli(nowMs - days.toLong() * 86_400_000),
+            ZoneOffset.UTC,
+        )
 
     private fun atMs(ms: Long): OffsetDateTime =
         OffsetDateTime.ofInstant(Instant.ofEpochMilli(ms), ZoneOffset.UTC)
 
     /**
-     * ` AND [alias.]project_key = ?` when a projectKey filter is set (plan 077), else empty — so the
-     * unfiltered SQL stays byte-identical. `alias`/column are fixed literals, the value is always bound.
+     * ` AND alias.project_key = ?` when a projectKey filter is set (plan 077), else empty — so the
+     * unfiltered SQL stays byte-identical. `alias`/column are fixed literals, the value is always
+     * bound.
      */
     private fun projectKeyClause(projectKey: String?, alias: String? = null): String =
         if (projectKey == null) "" else " AND ${alias?.let { "$it." } ?: ""}project_key = ?"
 
     override fun projectKeys(projectId: String): List<ProjectKeyRow> =
         dataSource.connection.use { connection ->
-            // Distinct non-null projectKeys, newest-activity first (plan 077): a grouped scan of the
-            // builds_project_projectkey_started_idx hot index. projectKey tiebreak mirrors the in-memory
+            // Distinct non-null projectKeys, newest-activity first (plan 077): a grouped scan of
+            // the
+            // builds_project_projectkey_started_idx hot index. projectKey tiebreak mirrors the
+            // in-memory
             // store. LIMIT bounds hostile key cardinality (MAX_PROJECT_KEYS, a compile-time const —
             // never user input); ORDER means truncation drops the longest-idle keys.
-            connection.prepareStatement(
-                """
+            connection
+                .prepareStatement(
+                    """
                 SELECT project_key, count(*) AS builds, max(started_at) AS last_build
                 FROM builds
                 WHERE project_id = ? AND project_key IS NOT NULL
                 GROUP BY project_key
                 ORDER BY last_build DESC, project_key
                 LIMIT $MAX_PROJECT_KEYS
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            add(
-                                ProjectKeyRow(
-                                    projectKey = rows.getString("project_key"),
-                                    builds = rows.getInt("builds"),
-                                    lastBuildAt = rows.getObject("last_build", OffsetDateTime::class.java).toInstant().toEpochMilli(),
-                                ),
-                            )
+                """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                add(
+                                    ProjectKeyRow(
+                                        projectKey = rows.getString("project_key"),
+                                        builds = rows.getInt("builds"),
+                                        lastBuildAt =
+                                            rows
+                                                .getObject("last_build", OffsetDateTime::class.java)
+                                                .toInstant()
+                                                .toEpochMilli(),
+                                    )
+                                )
+                            }
                         }
                     }
                 }
-            }
         }
 
-    override fun projectCost(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<ProjectCostRow> =
+    override fun projectCost(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): List<ProjectCostRow> =
         dataSource.connection.use { connection ->
-            // projectCost already joins builds for the wall time, so a projectKey filter is just an extra
+            // projectCost already joins builds for the wall time, so a projectKey filter is just an
+            // extra
             // predicate on `b` — the unfiltered SQL stays byte-identical (plan 077).
-            connection.prepareStatement(
-                // Integer division (sum/count) matches RollupCalculator's truncating averageOrZero;
-                // trunc() matches its .toInt() on the executed percentage (the eBay quirk).
-                """
+            connection
+                .prepareStatement(
+                    // Integer division (sum/count) matches RollupCalculator's truncating
+                    // averageOrZero;
+                    // trunc() matches its .toInt() on the executed percentage (the eBay quirk).
+                    """
                 WITH win AS (
                     SELECT te.build_id, te.module, te.outcome, te.duration_ms, te.user_id, b.duration_ms AS wall
                     FROM task_executions te
@@ -567,60 +779,75 @@ class PostgresBuildStore(
                 GROUP BY m.module, t.impacted_users, t.serial_ms, tot.n
                 ORDER BY cost_scalar DESC, coalesce(m.module, '') ASC
                 LIMIT ${RollupCalculator.TOP_N}
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                projectKey?.let { statement.setString(3, it) }
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            add(
-                                ProjectCostRow(
-                                    module = rows.getString("module"),
-                                    builds = rows.getInt("builds"),
-                                    executedBuilds = rows.getInt("executed_builds"),
-                                    buildImpactedUsers = rows.getInt("impacted_users"),
-                                    serialTaskMs = rows.getLong("serial_ms"),
-                                    buildAvgDurationMs = rows.getLong("build_avg"),
-                                    buildPercentage = rows.getDouble("build_pct"),
-                                    buildCostScalar = rows.getLong("cost_scalar"),
-                                ),
-                            )
+                """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setObject(2, cutoff(days, nowMs))
+                    projectKey?.let { statement.setString(3, it) }
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                add(
+                                    ProjectCostRow(
+                                        module = rows.getString("module"),
+                                        builds = rows.getInt("builds"),
+                                        executedBuilds = rows.getInt("executed_builds"),
+                                        buildImpactedUsers = rows.getInt("impacted_users"),
+                                        serialTaskMs = rows.getLong("serial_ms"),
+                                        buildAvgDurationMs = rows.getLong("build_avg"),
+                                        buildPercentage = rows.getDouble("build_pct"),
+                                        buildCostScalar = rows.getLong("cost_scalar"),
+                                    )
+                                )
+                            }
                         }
                     }
                 }
-            }
         }
 
-    override fun taskDuration(projectId: String, days: Int, nowMs: Long, projectKey: String?): TaskDurationRollup =
+    override fun taskDuration(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): TaskDurationRollup =
         dataSource.connection.use { connection ->
-            // task_executions carries no project_key, so a projectKey filter (plan 077) adds a join to
-            // builds (unique on (project_id, build_id) → no row fan-out) with columns qualified. The
-            // unfiltered branch is byte-identical to today; only the filtered branch takes the join.
+            // task_executions carries no project_key, so a projectKey filter (plan 077) adds a join
+            // to
+            // builds (unique on (project_id, build_id) → no row fan-out) with columns qualified.
+            // The
+            // unfiltered branch is byte-identical to today; only the filtered branch takes the
+            // join.
             fun rank(byType: Boolean): List<TaskDurationRow> {
-                // SQL-injection safety: `column`/`typeFilter` are chosen ONLY by this Boolean and are
-                // fixed literals — never request/payload input. Keep it that way (no String column arg).
+                // SQL-injection safety: `column`/`typeFilter` are chosen ONLY by this Boolean and
+                // are
+                // fixed literals — never request/payload input. Keep it that way (no String column
+                // arg).
                 val column = if (byType) "type" else "name"
-                val sql = if (projectKey == null) {
-                    val typeFilter = if (byType) "AND type IS NOT NULL " else ""
-                    """
+                val sql =
+                    if (projectKey == null) {
+                        val typeFilter = if (byType) "AND type IS NOT NULL " else ""
+                        """
                     SELECT $column AS k, count(*) AS cnt, sum(duration_ms) AS total,
                            sum(duration_ms) / count(*) AS avg, min(duration_ms) AS mn, max(duration_ms) AS mx
                     FROM task_executions WHERE project_id = ? AND started_at >= ? $typeFilter
                     GROUP BY $column ORDER BY total DESC, k ASC LIMIT ${RollupCalculator.TOP_N}
-                    """.trimIndent()
-                } else {
-                    val typeFilter = if (byType) "AND te.type IS NOT NULL " else ""
                     """
+                            .trimIndent()
+                    } else {
+                        val typeFilter = if (byType) "AND te.type IS NOT NULL " else ""
+                        """
                     SELECT te.$column AS k, count(*) AS cnt, sum(te.duration_ms) AS total,
                            sum(te.duration_ms) / count(*) AS avg, min(te.duration_ms) AS mn, max(te.duration_ms) AS mx
                     FROM task_executions te
                     JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
                     WHERE te.project_id = ? AND te.started_at >= ? AND b.project_key = ? $typeFilter
                     GROUP BY te.$column ORDER BY total DESC, k ASC LIMIT ${RollupCalculator.TOP_N}
-                    """.trimIndent()
-                }
+                    """
+                            .trimIndent()
+                    }
                 return connection.prepareStatement(sql).use { statement ->
                     statement.setObject(1, UUID.fromString(projectId))
                     statement.setObject(2, cutoff(days, nowMs))
@@ -630,40 +857,61 @@ class PostgresBuildStore(
                             while (rows.next()) {
                                 add(
                                     TaskDurationRow(
-                                        key = rows.getString("k"), count = rows.getInt("cnt"),
-                                        totalMs = rows.getLong("total"), avgMs = rows.getLong("avg"),
-                                        minMs = rows.getLong("mn"), maxMs = rows.getLong("mx"),
-                                    ),
+                                        key = rows.getString("k"),
+                                        count = rows.getInt("cnt"),
+                                        totalMs = rows.getLong("total"),
+                                        avgMs = rows.getLong("avg"),
+                                        minMs = rows.getLong("mn"),
+                                        maxMs = rows.getLong("mx"),
+                                    )
                                 )
                             }
                         }
                     }
                 }
             }
-            val availableSql = if (projectKey == null) {
-                "SELECT EXISTS(SELECT 1 FROM task_executions WHERE project_id = ? AND started_at >= ? AND type IS NOT NULL)"
-            } else {
-                "SELECT EXISTS(SELECT 1 FROM task_executions te " +
-                    "JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id " +
-                    "WHERE te.project_id = ? AND te.started_at >= ? AND b.project_key = ? AND te.type IS NOT NULL)"
-            }
-            val available = connection.prepareStatement(availableSql).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                projectKey?.let { statement.setString(3, it) }
-                statement.executeQuery().use { rows -> rows.next(); rows.getBoolean(1) }
-            }
-            TaskDurationRollup(byName = rank(byType = false), byType = rank(byType = true), byTypeAvailable = available)
+            val availableSql =
+                if (projectKey == null) {
+                    "SELECT EXISTS(SELECT 1 FROM task_executions WHERE project_id = ? AND started_at >= ? AND type IS NOT NULL)"
+                } else {
+                    "SELECT EXISTS(SELECT 1 FROM task_executions te " +
+                        "JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id " +
+                        "WHERE te.project_id = ? AND te.started_at >= ? AND b.project_key = ? AND te.type IS NOT NULL)"
+                }
+            val available =
+                connection.prepareStatement(availableSql).use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setObject(2, cutoff(days, nowMs))
+                    projectKey?.let { statement.setString(3, it) }
+                    statement.executeQuery().use { rows ->
+                        rows.next()
+                        rows.getBoolean(1)
+                    }
+                }
+            TaskDurationRollup(
+                byName = rank(byType = false),
+                byType = rank(byType = true),
+                byTypeAvailable = available,
+            )
         }
 
-    override fun negativeAvoidance(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<NegativeAvoidanceRow> =
+    override fun negativeAvoidance(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): List<NegativeAvoidanceRow> =
         dataSource.connection.use { connection ->
-            // Only the `win` CTE reads task_executions, so a projectKey filter (plan 077) joins builds and
-            // qualifies inside that CTE; the med/excess/final stages are unchanged. Two verbatim branches so
-            // the unfiltered SQL is byte-identical to today. percentile_cont(0.5) == RollupCalculator's
+            // Only the `win` CTE reads task_executions, so a projectKey filter (plan 077) joins
+            // builds and
+            // qualifies inside that CTE; the med/excess/final stages are unchanged. Two verbatim
+            // branches so
+            // the unfiltered SQL is byte-identical to today. percentile_cont(0.5) ==
+            // RollupCalculator's
             // medianDouble; trunc() matches its .toLong().
-            val sql = if (projectKey == null) {
-                """
+            val sql =
+                if (projectKey == null) {
+                    """
                 WITH win AS (
                     SELECT coalesce(type, name) AS grp, outcome, duration_ms
                     FROM task_executions WHERE project_id = ? AND started_at >= ?
@@ -680,9 +928,10 @@ class PostgresBuildStore(
                 SELECT grp AS k, count(*) AS cnt, trunc(sum(ex))::bigint AS total_excess, trunc(max(ex))::bigint AS worst
                 FROM excess GROUP BY grp
                 ORDER BY total_excess DESC, k ASC LIMIT ${RollupCalculator.TOP_N}
-                """.trimIndent()
-            } else {
                 """
+                        .trimIndent()
+                } else {
+                    """
                 WITH win AS (
                     SELECT coalesce(te.type, te.name) AS grp, te.outcome, te.duration_ms
                     FROM task_executions te
@@ -701,8 +950,9 @@ class PostgresBuildStore(
                 SELECT grp AS k, count(*) AS cnt, trunc(sum(ex))::bigint AS total_excess, trunc(max(ex))::bigint AS worst
                 FROM excess GROUP BY grp
                 ORDER BY total_excess DESC, k ASC LIMIT ${RollupCalculator.TOP_N}
-                """.trimIndent()
-            }
+                """
+                        .trimIndent()
+                }
             connection.prepareStatement(sql).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
@@ -712,9 +962,11 @@ class PostgresBuildStore(
                         while (rows.next()) {
                             add(
                                 NegativeAvoidanceRow(
-                                    key = rows.getString("k"), count = rows.getInt("cnt"),
-                                    totalExcessMs = rows.getLong("total_excess"), worstExcessMs = rows.getLong("worst"),
-                                ),
+                                    key = rows.getString("k"),
+                                    count = rows.getInt("cnt"),
+                                    totalExcessMs = rows.getLong("total_excess"),
+                                    worstExcessMs = rows.getLong("worst"),
+                                )
                             )
                         }
                     }
@@ -723,33 +975,51 @@ class PostgresBuildStore(
         }
 
     /**
-     * Owning-plugin cost rollup (plan 058, research F8 Layer 1): reuses [taskRowsInDaysWindow] — the
-     * same days-window, benchmark-included population [taskDuration]/[projectCost]/[negativeAvoidance]
-     * read directly above (their SQL just aggregates it differently) — and defers to
-     * [RollupCalculator.pluginCost] the way [rerunCauses] defers to its own calculator, since the
-     * FQCN-prefix → plugin mapping has no SQL equivalent.
+     * Owning-plugin cost rollup (plan 058, research F8 Layer 1): reuses [taskRowsInDaysWindow] —
+     * the same days-window, benchmark-included population
+     * [taskDuration]/[projectCost]/[negativeAvoidance] read directly above (their SQL just
+     * aggregates it differently) — and defers to [RollupCalculator.pluginCost] the way
+     * [rerunCauses] defers to its own calculator, since the FQCN-prefix → plugin mapping has no SQL
+     * equivalent.
      */
-    override fun pluginCost(projectId: String, days: Int, nowMs: Long, projectKey: String?): PluginCostRollup =
+    override fun pluginCost(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): PluginCostRollup =
         dataSource.connection.use { connection ->
-            RollupCalculator.pluginCost(taskRowsInDaysWindow(connection, projectId, days, nowMs, projectKey))
+            RollupCalculator.pluginCost(
+                taskRowsInDaysWindow(connection, projectId, days, nowMs, projectKey)
+            )
         }
 
     /**
-     * Costliest-modules-to-change rollup (plan 063, research F13): reuses [taskRowsInDaysWindow] (the
-     * same days-window, benchmark-included population projectCost/pluginCost read) for the per-module
-     * executed durations, joins it to the windowed `build_changed_modules` set, and defers to
-     * [RollupCalculator.changeBlastRadius] the way [pluginCost] does — the median/downstream fold has no
-     * clean SQL equivalent (percentile + a NULL-safe `module != M`), so it folds in Kotlin on both sides
-     * (parity by construction, plan-026 discipline). One build_changed_modules row per (build, module).
+     * Costliest-modules-to-change rollup (plan 063, research F13): reuses [taskRowsInDaysWindow]
+     * (the same days-window, benchmark-included population projectCost/pluginCost read) for the
+     * per-module executed durations, joins it to the windowed `build_changed_modules` set, and
+     * defers to [RollupCalculator.changeBlastRadius] the way [pluginCost] does — the
+     * median/downstream fold has no clean SQL equivalent (percentile + a NULL-safe `module != M`),
+     * so it folds in Kotlin on both sides (parity by construction, plan-026 discipline). One
+     * build_changed_modules row per (build, module).
      */
-    override fun changeBlastRadius(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<ChangeBlastRadiusRow> =
+    override fun changeBlastRadius(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): List<ChangeBlastRadiusRow> =
         dataSource.connection.use { connection ->
-            // Both reads take the projectKey filter (plan 079): a changed-modules row from a sibling repo
+            // Both reads take the projectKey filter (plan 079): a changed-modules row from a
+            // sibling repo
             // must neither seed a ChangeBlastBuild nor contribute executed durations.
-            val changedByBuild = changedModulesInDaysWindow(connection, projectId, days, nowMs, projectKey)
+            val changedByBuild =
+                changedModulesInDaysWindow(connection, projectId, days, nowMs, projectKey)
             if (changedByBuild.isEmpty()) return@use emptyList()
-            // Executed task durations per (build, module) over the same window — only the builds that
-            // carried a changedModules block need their executed totals, but the shared windowed fetch is
+            // Executed task durations per (build, module) over the same window — only the builds
+            // that
+            // carried a changedModules block need their executed totals, but the shared windowed
+            // fetch is
             // cheap and keeps the parity population identical to projectCost/pluginCost.
             val executedByBuild = LinkedHashMap<String, MutableMap<String, Long>>()
             for (row in taskRowsInDaysWindow(connection, projectId, days, nowMs, projectKey)) {
@@ -776,20 +1046,24 @@ class PostgresBuildStore(
         nowMs: Long,
         projectKey: String?,
     ): Map<String, List<String>> {
-        // build_changed_modules carries no project_key, so a projectKey filter (plan 079) joins builds
+        // build_changed_modules carries no project_key, so a projectKey filter (plan 079) joins
+        // builds
         // (unique on (project_id, build_id) → no fan-out); the unfiltered SQL stays byte-identical.
-        val sql = if (projectKey == null) {
-            """
-            SELECT build_id, module FROM build_changed_modules
-            WHERE project_id = ? AND started_at >= ?
-            """.trimIndent()
-        } else {
-            """
-            SELECT cm.build_id, cm.module FROM build_changed_modules cm
-            JOIN builds b ON b.project_id = cm.project_id AND b.build_id = cm.build_id
-            WHERE cm.project_id = ? AND cm.started_at >= ? AND b.project_key = ?
-            """.trimIndent()
-        }
+        val sql =
+            if (projectKey == null) {
+                """
+                SELECT build_id, module FROM build_changed_modules
+                WHERE project_id = ? AND started_at >= ?
+                """
+                    .trimIndent()
+            } else {
+                """
+                SELECT cm.build_id, cm.module FROM build_changed_modules cm
+                JOIN builds b ON b.project_id = cm.project_id AND b.build_id = cm.build_id
+                WHERE cm.project_id = ? AND cm.started_at >= ? AND b.project_key = ?
+                """
+                    .trimIndent()
+            }
         return connection.prepareStatement(sql).use { statement ->
             statement.setObject(1, UUID.fromString(projectId))
             statement.setObject(2, cutoff(days, nowMs))
@@ -797,7 +1071,9 @@ class PostgresBuildStore(
             statement.executeQuery().use { rows ->
                 val byBuild = LinkedHashMap<String, MutableList<String>>()
                 while (rows.next()) {
-                    byBuild.getOrPut(rows.getString("build_id")) { mutableListOf() }.add(rows.getString("module"))
+                    byBuild
+                        .getOrPut(rows.getString("build_id")) { mutableListOf() }
+                        .add(rows.getString("module"))
                 }
                 byBuild
             }
@@ -806,11 +1082,11 @@ class PostgresBuildStore(
 
     /**
      * Flat task rows for the **days-window, benchmark-included** convention [taskDuration]/
-     * [projectCost]/[negativeAvoidance] use (`started_at >= cutoff`, no upper bound, no `builds` join
-     * or mode exclusion) — [pluginCost]'s shape (plan 058), as opposed to [taskRowsBetween]'s
+     * [projectCost]/[negativeAvoidance] use (`started_at >= cutoff`, no upper bound, no `builds`
+     * join or mode exclusion) — [pluginCost]'s shape (plan 058), as opposed to [taskRowsBetween]'s
      * period-window, benchmark-**excluded** convention ([bottlenecks]/[rerunCauses]). `buildWallMs`
-     * isn't fetched (no `builds` join here, and [RollupCalculator.pluginCost] never reads it) — set to
-     * 0, a harmless placeholder no consumer reads.
+     * isn't fetched (no `builds` join here, and [RollupCalculator.pluginCost] never reads it) — set
+     * to 0, a harmless placeholder no consumer reads.
      */
     private fun taskRowsInDaysWindow(
         connection: java.sql.Connection,
@@ -819,22 +1095,27 @@ class PostgresBuildStore(
         nowMs: Long,
         projectKey: String?,
     ): List<TaskRow> {
-        // task_executions carries no project_key, so a projectKey filter (plan 079) joins builds with
-        // columns qualified (taskDuration's two-branch pattern); the unfiltered SQL stays byte-identical.
-        val sql = if (projectKey == null) {
-            """
-            SELECT build_id, user_id, module, name, type, outcome, duration_ms, cacheable, execution_reasons
-            FROM task_executions WHERE project_id = ? AND started_at >= ?
-            """.trimIndent()
-        } else {
-            """
-            SELECT te.build_id, te.user_id, te.module, te.name, te.type, te.outcome, te.duration_ms,
-                   te.cacheable, te.execution_reasons
-            FROM task_executions te
-            JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
-            WHERE te.project_id = ? AND te.started_at >= ? AND b.project_key = ?
-            """.trimIndent()
-        }
+        // task_executions carries no project_key, so a projectKey filter (plan 079) joins builds
+        // with
+        // columns qualified (taskDuration's two-branch pattern); the unfiltered SQL stays
+        // byte-identical.
+        val sql =
+            if (projectKey == null) {
+                """
+                SELECT build_id, user_id, module, name, type, outcome, duration_ms, cacheable, execution_reasons
+                FROM task_executions WHERE project_id = ? AND started_at >= ?
+                """
+                    .trimIndent()
+            } else {
+                """
+                SELECT te.build_id, te.user_id, te.module, te.name, te.type, te.outcome, te.duration_ms,
+                       te.cacheable, te.execution_reasons
+                FROM task_executions te
+                JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
+                WHERE te.project_id = ? AND te.started_at >= ? AND b.project_key = ?
+                """
+                    .trimIndent()
+            }
         return connection.prepareStatement(sql).use { statement ->
             statement.setObject(1, UUID.fromString(projectId))
             statement.setObject(2, cutoff(days, nowMs))
@@ -852,9 +1133,10 @@ class PostgresBuildStore(
                                 outcome = rows.getString("outcome"),
                                 durationMs = rows.getLong("duration_ms"),
                                 buildWallMs = 0L,
-                                cacheable = rows.getBoolean("cacheable").takeUnless { rows.wasNull() },
+                                cacheable =
+                                    rows.getBoolean("cacheable").takeUnless { rows.wasNull() },
                                 executionReasons = executionReasonsOf(rows),
-                            ),
+                            )
                         )
                     }
                 }
@@ -878,16 +1160,32 @@ class PostgresBuildStore(
             // shared calculator so in-memory and Postgres agree byte-for-byte.
             val clauses = StringBuilder()
             val strParams = mutableListOf<String>()
-            scenario?.let { clauses.append(" AND payload->'benchmark'->>'scenario' = ?"); strParams.add(it) }
-            isolationMode?.let { clauses.append(" AND payload->'benchmark'->>'isolationMode' = ?"); strParams.add(it) }
-            branch?.let { clauses.append(" AND branch = ?"); strParams.add(it) }
+            scenario?.let {
+                clauses.append(" AND payload->'benchmark'->>'scenario' = ?")
+                strParams.add(it)
+            }
+            isolationMode?.let {
+                clauses.append(" AND payload->'benchmark'->>'isolationMode' = ?")
+                strParams.add(it)
+            }
+            branch?.let {
+                clauses.append(" AND branch = ?")
+                strParams.add(it)
+            }
             // workersMax slicing (plan 065): text-equality on the jsonb scalar (a canonical int
             // serializes identically), bound as a param like its three siblings — no cast, so a
             // malformed stored value can never error the query; it just doesn't match.
-            workersMax?.let { clauses.append(" AND payload->'environment'->>'workersMax' = ?"); strParams.add(it.toString()) }
-            projectKey?.let { clauses.append(" AND project_key = ?"); strParams.add(it) }
-            connection.prepareStatement(
-                """
+            workersMax?.let {
+                clauses.append(" AND payload->'environment'->>'workersMax' = ?")
+                strParams.add(it.toString())
+            }
+            projectKey?.let {
+                clauses.append(" AND project_key = ?")
+                strParams.add(it)
+            }
+            connection
+                .prepareStatement(
+                    """
                 SELECT build_id, started_at, duration_ms, hit_rate,
                        payload->'benchmark'->>'scenario' AS scenario,
                        payload->'benchmark'->>'isolationMode' AS isolation,
@@ -896,35 +1194,61 @@ class PostgresBuildStore(
                 WHERE project_id = ? AND mode = 'BENCHMARK' AND started_at >= ?
                   AND payload->'benchmark'->>'scenario' IS NOT NULL$clauses
                 ORDER BY scenario, isolation NULLS FIRST, started_at
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                strParams.forEachIndexed { index, value -> statement.setString(index + 3, value) }
-                statement.executeQuery().use { rows ->
-                    val grouped = LinkedHashMap<Pair<String, String?>, MutableList<BenchmarkPoint>>()
-                    while (rows.next()) {
-                        val point = BenchmarkPoint(
-                            startedAt = rows.getObject("started_at", OffsetDateTime::class.java).toInstant().toEpochMilli(),
-                            buildId = rows.getString("build_id"),
-                            iteration = rows.getString("iteration")?.toIntOrNull(),
-                            durationMs = rows.getLong("duration_ms"),
-                            hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
-                        )
-                        grouped.getOrPut(rows.getString("scenario") to rows.getString("isolation")) { mutableListOf() }.add(point)
+                """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setObject(2, cutoff(days, nowMs))
+                    strParams.forEachIndexed { index, value ->
+                        statement.setString(index + 3, value)
                     }
-                    grouped.map { (key, points) -> BenchmarkSeries(key.first, key.second, points, summarize(points)) }
+                    statement.executeQuery().use { rows ->
+                        val grouped =
+                            LinkedHashMap<Pair<String, String?>, MutableList<BenchmarkPoint>>()
+                        while (rows.next()) {
+                            val point =
+                                BenchmarkPoint(
+                                    startedAt =
+                                        rows
+                                            .getObject("started_at", OffsetDateTime::class.java)
+                                            .toInstant()
+                                            .toEpochMilli(),
+                                    buildId = rows.getString("build_id"),
+                                    iteration = rows.getString("iteration")?.toIntOrNull(),
+                                    durationMs = rows.getLong("duration_ms"),
+                                    hitRate =
+                                        rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
+                                )
+                            grouped
+                                .getOrPut(
+                                    rows.getString("scenario") to rows.getString("isolation")
+                                ) {
+                                    mutableListOf()
+                                }
+                                .add(point)
+                        }
+                        grouped.map { (key, points) ->
+                            BenchmarkSeries(key.first, key.second, points, summarize(points))
+                        }
+                    }
                 }
-            }
         }
 
-    override fun artifactTrends(projectId: String, filter: BuildFilter, days: Int, nowMs: Long): List<ArtifactTrendPoint> =
+    override fun artifactTrends(
+        projectId: String,
+        filter: BuildFilter,
+        days: Int,
+        nowMs: Long,
+    ): List<ArtifactTrendPoint> =
         dataSource.connection.use { connection ->
-            // Join to builds so the same branch/mode/exclusion filter as /trends applies; every value
+            // Join to builds so the same branch/mode/exclusion filter as /trends applies; every
+            // value
             // is a bound param. `branch`/`mode`/`outcome` are unambiguous (only `builds` has them).
             val (clauses, params) = filterSql(filter)
-            connection.prepareStatement(
-                """
+            connection
+                .prepareStatement(
+                    """
                 SELECT (a.started_at AT TIME ZONE 'UTC')::date AS day, a.module, a.variant, a.type,
                        avg(a.size_bytes)::bigint AS avg_size, max(a.size_bytes) AS max_size,
                        count(DISTINCT a.build_id) AS builds
@@ -933,35 +1257,44 @@ class PostgresBuildStore(
                 WHERE a.project_id = ? AND a.started_at >= ?$clauses
                 GROUP BY day, a.module, a.variant, a.type
                 ORDER BY day, a.variant, a.type, a.module NULLS FIRST
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                params.forEachIndexed { index, value -> statement.setString(index + 3, value) }
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            add(
-                                ArtifactTrendPoint(
-                                    day = rows.getDate("day").toLocalDate().toString(),
-                                    module = rows.getString("module"),
-                                    variant = rows.getString("variant"),
-                                    type = rows.getString("type"),
-                                    avgSizeBytes = rows.getLong("avg_size"),
-                                    maxSizeBytes = rows.getLong("max_size"),
-                                    builds = rows.getInt("builds"),
-                                ),
-                            )
+                """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setObject(2, cutoff(days, nowMs))
+                    params.forEachIndexed { index, value -> statement.setString(index + 3, value) }
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                add(
+                                    ArtifactTrendPoint(
+                                        day = rows.getDate("day").toLocalDate().toString(),
+                                        module = rows.getString("module"),
+                                        variant = rows.getString("variant"),
+                                        type = rows.getString("type"),
+                                        avgSizeBytes = rows.getLong("avg_size"),
+                                        maxSizeBytes = rows.getLong("max_size"),
+                                        builds = rows.getInt("builds"),
+                                    )
+                                )
+                            }
                         }
                     }
                 }
-            }
         }
 
-    override fun bottlenecks(projectId: String, period: Int, nowMs: Long, projectKey: String?): BottlenecksRollup =
+    override fun bottlenecks(
+        projectId: String,
+        period: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): BottlenecksRollup =
         dataSource.connection.use { connection ->
-            // Both windows are fetched as raw rows and handed to the shared BottleneckCalculator, so
-            // Postgres and in-memory agree byte-for-byte (the plan-026 parity discipline). Half-open
+            // Both windows are fetched as raw rows and handed to the shared BottleneckCalculator,
+            // so
+            // Postgres and in-memory agree byte-for-byte (the plan-026 parity discipline).
+            // Half-open
             // [from, to) windows match the in-memory `startedAt in from until to` filter exactly.
             val windowMs = period.toLong() * 86_400_000
             val now = atMs(nowMs)
@@ -969,9 +1302,11 @@ class PostgresBuildStore(
             val priorFrom = atMs(nowMs - 2 * windowMs)
             BottleneckCalculator.compute(
                 currentTasks = taskRowsBetween(connection, projectId, currentFrom, now, projectKey),
-                priorTasks = taskRowsBetween(connection, projectId, priorFrom, currentFrom, projectKey),
+                priorTasks =
+                    taskRowsBetween(connection, projectId, priorFrom, currentFrom, projectKey),
                 currentBuilds = kpiRowsBetween(connection, projectId, currentFrom, now, projectKey),
-                priorBuilds = kpiRowsBetween(connection, projectId, priorFrom, currentFrom, projectKey),
+                priorBuilds =
+                    kpiRowsBetween(connection, projectId, priorFrom, currentFrom, projectKey),
                 period = period,
             )
         }
@@ -984,50 +1319,58 @@ class PostgresBuildStore(
         to: OffsetDateTime,
         projectKey: String? = null,
     ): List<TaskRow> =
-        // Already joins builds for wall time, so a projectKey filter (plan 077) is just an extra `b`
+        // Already joins builds for wall time, so a projectKey filter (plan 077) is just an extra
+        // `b`
         // predicate; unfiltered SQL stays byte-identical.
-        connection.prepareStatement(
-            """
+        connection
+            .prepareStatement(
+                """
             SELECT te.build_id, te.user_id, te.module, te.name, te.type, te.outcome,
                    te.duration_ms, te.cacheable, te.execution_reasons, b.duration_ms AS wall
             FROM task_executions te
             JOIN builds b ON b.project_id = te.project_id AND b.build_id = te.build_id
             WHERE te.project_id = ? AND te.started_at >= ? AND te.started_at < ? AND b.mode <> 'BENCHMARK'${projectKeyClause(projectKey, "b")}
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setObject(1, UUID.fromString(projectId))
-            statement.setObject(2, from)
-            statement.setObject(3, to)
-            projectKey?.let { statement.setString(4, it) }
-            statement.executeQuery().use { rows ->
-                buildList {
-                    while (rows.next()) {
-                        add(
-                            TaskRow(
-                                buildId = rows.getString("build_id"),
-                                userId = rows.getString("user_id"),
-                                module = rows.getString("module"),
-                                name = rows.getString("name"),
-                                type = rows.getString("type"),
-                                outcome = rows.getString("outcome"),
-                                durationMs = rows.getLong("duration_ms"),
-                                buildWallMs = rows.getLong("wall"),
-                                cacheable = rows.getBoolean("cacheable").takeUnless { rows.wasNull() },
-                                // A pre-V12 row reads NULL here (never written) → empty list → the
-                                // classifier's UNCLASSIFIED degradation, never a null-pointer crash.
-                                executionReasons = executionReasonsOf(rows),
-                            ),
-                        )
+            """
+                    .trimIndent()
+            )
+            .use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, from)
+                statement.setObject(3, to)
+                projectKey?.let { statement.setString(4, it) }
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                TaskRow(
+                                    buildId = rows.getString("build_id"),
+                                    userId = rows.getString("user_id"),
+                                    module = rows.getString("module"),
+                                    name = rows.getString("name"),
+                                    type = rows.getString("type"),
+                                    outcome = rows.getString("outcome"),
+                                    durationMs = rows.getLong("duration_ms"),
+                                    buildWallMs = rows.getLong("wall"),
+                                    cacheable =
+                                        rows.getBoolean("cacheable").takeUnless { rows.wasNull() },
+                                    // A pre-V12 row reads NULL here (never written) → empty list →
+                                    // the
+                                    // classifier's UNCLASSIFIED degradation, never a null-pointer
+                                    // crash.
+                                    executionReasons = executionReasonsOf(rows),
+                                )
+                            )
+                        }
                     }
                 }
             }
-        }
 
     /**
-     * `execution_reasons` text[] read back as a `List<String>`; NULL (pre-V12 row) → empty (plan 061).
-     * `filterIsInstance` (not a direct `Array<String>` cast) because the JDBC driver's `Array.getArray()`
-     * is only guaranteed to return `Array<*>` at the JVM level — casting straight to `Array<String?>`
-     * risks a `ClassCastException` if the driver hands back a plain `Object[]`.
+     * `execution_reasons` text[] read back as a `List<String>`; NULL (pre-V12 row) → empty (plan
+     * 061). `filterIsInstance` (not a direct `Array<String>` cast) because the JDBC driver's
+     * `Array.getArray()` is only guaranteed to return `Array<*>` at the JVM level — casting
+     * straight to `Array<String?>` risks a `ClassCastException` if the driver hands back a plain
+     * `Object[]`.
      */
     private fun executionReasonsOf(rows: java.sql.ResultSet): List<String> {
         val sqlArray = rows.getArray("execution_reasons") ?: return emptyList()
@@ -1042,38 +1385,51 @@ class PostgresBuildStore(
         to: OffsetDateTime,
         projectKey: String? = null,
     ): List<BuildKpiRow> =
-        connection.prepareStatement(
-            """
+        connection
+            .prepareStatement(
+                """
             SELECT outcome, duration_ms, hit_rate FROM builds
             WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setObject(1, UUID.fromString(projectId))
-            statement.setObject(2, from)
-            statement.setObject(3, to)
-            projectKey?.let { statement.setString(4, it) }
-            statement.executeQuery().use { rows ->
-                buildList {
-                    while (rows.next()) {
-                        add(
-                            BuildKpiRow(
-                                outcome = rows.getString("outcome"),
-                                durationMs = rows.getLong("duration_ms"),
-                                hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
-                            ),
-                        )
+            """
+                    .trimIndent()
+            )
+            .use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, from)
+                statement.setObject(3, to)
+                projectKey?.let { statement.setString(4, it) }
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                BuildKpiRow(
+                                    outcome = rows.getString("outcome"),
+                                    durationMs = rows.getLong("duration_ms"),
+                                    hitRate =
+                                        rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
+                                )
+                            )
+                        }
                     }
                 }
             }
-        }
 
-    override fun toolchainAdoption(projectId: String, days: Int, nowMs: Long, projectKey: String?): ToolchainRollup =
+    override fun toolchainAdoption(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): ToolchainRollup =
         dataSource.connection.use { connection ->
-            // Every dimension read from the jsonb payload in one pass; distribution/behind math is the
-            // shared ToolchainCalculator so both stores agree. userId is already the pseudonymized u_…
-            // HMAC (spec §3.7) — distinctUsers is count(distinct) over hashes, never de-pseudonymized.
-            connection.prepareStatement(
-                """
+            // Every dimension read from the jsonb payload in one pass; distribution/behind math is
+            // the
+            // shared ToolchainCalculator so both stores agree. userId is already the pseudonymized
+            // u_…
+            // HMAC (spec §3.7) — distinctUsers is count(distinct) over hashes, never
+            // de-pseudonymized.
+            connection
+                .prepareStatement(
+                    """
                 SELECT payload->'environment'->>'userId' AS user_id,
                        (extract(epoch from started_at) * 1000)::bigint AS started_ms,
                        duration_ms,
@@ -1085,74 +1441,107 @@ class PostgresBuildStore(
                        payload->'toolchain'->>'springBoot' AS spring_boot
                 FROM builds
                 WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                statement.setObject(3, atMs(nowMs))
-                projectKey?.let { statement.setString(4, it) }
-                statement.executeQuery().use { rows ->
-                    val gradle = mutableListOf<ToolchainSample>()
-                    val jdk = mutableListOf<ToolchainSample>()
-                    val agp = mutableListOf<ToolchainSample>()
-                    val kgp = mutableListOf<ToolchainSample>()
-                    val ksp = mutableListOf<ToolchainSample>()
-                    val springBoot = mutableListOf<ToolchainSample>()
-                    while (rows.next()) {
-                        val userId = rows.getString("user_id")
-                        val startedMs = rows.getLong("started_ms")
-                        gradle.add(ToolchainSample(rows.getString("gradle"), userId, startedMs))
-                        // duration_ms is the finishedAt-startedAt hot column written at insert, so
-                        // it equals the in-memory store's computed wall-clock by construction
-                        // (plan-065 daemon-JDK comparison; jdk samples only, like the in-memory pass).
-                        jdk.add(ToolchainSample(rows.getString("jdk"), userId, startedMs, durationMs = rows.getLong("duration_ms")))
-                        agp.add(ToolchainSample(rows.getString("agp"), userId, startedMs))
-                        kgp.add(ToolchainSample(rows.getString("kgp"), userId, startedMs))
-                        ksp.add(ToolchainSample(rows.getString("ksp"), userId, startedMs))
-                        // Spring Boot adoption (plan 072, research F22): no duration, per full version —
-                        // the same jsonb-field read as agp/kgp/ksp, no migration (rides builds.payload).
-                        springBoot.add(ToolchainSample(rows.getString("spring_boot"), userId, startedMs))
+                """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setObject(2, cutoff(days, nowMs))
+                    statement.setObject(3, atMs(nowMs))
+                    projectKey?.let { statement.setString(4, it) }
+                    statement.executeQuery().use { rows ->
+                        val gradle = mutableListOf<ToolchainSample>()
+                        val jdk = mutableListOf<ToolchainSample>()
+                        val agp = mutableListOf<ToolchainSample>()
+                        val kgp = mutableListOf<ToolchainSample>()
+                        val ksp = mutableListOf<ToolchainSample>()
+                        val springBoot = mutableListOf<ToolchainSample>()
+                        while (rows.next()) {
+                            val userId = rows.getString("user_id")
+                            val startedMs = rows.getLong("started_ms")
+                            gradle.add(ToolchainSample(rows.getString("gradle"), userId, startedMs))
+                            // duration_ms is the finishedAt-startedAt hot column written at insert,
+                            // so
+                            // it equals the in-memory store's computed wall-clock by construction
+                            // (plan-065 daemon-JDK comparison; jdk samples only, like the in-memory
+                            // pass).
+                            jdk.add(
+                                ToolchainSample(
+                                    rows.getString("jdk"),
+                                    userId,
+                                    startedMs,
+                                    durationMs = rows.getLong("duration_ms"),
+                                )
+                            )
+                            agp.add(ToolchainSample(rows.getString("agp"), userId, startedMs))
+                            kgp.add(ToolchainSample(rows.getString("kgp"), userId, startedMs))
+                            ksp.add(ToolchainSample(rows.getString("ksp"), userId, startedMs))
+                            // Spring Boot adoption (plan 072, research F22): no duration, per full
+                            // version —
+                            // the same jsonb-field read as agp/kgp/ksp, no migration (rides
+                            // builds.payload).
+                            springBoot.add(
+                                ToolchainSample(rows.getString("spring_boot"), userId, startedMs)
+                            )
+                        }
+                        ToolchainRollup(
+                            gradle = ToolchainCalculator.dimension(gradle),
+                            jdk = ToolchainCalculator.dimension(jdk, ToolchainCalculator::jdkMajor),
+                            agp = ToolchainCalculator.dimension(agp),
+                            kgp = ToolchainCalculator.dimension(kgp),
+                            ksp = ToolchainCalculator.dimension(ksp),
+                            springBoot = ToolchainCalculator.dimension(springBoot),
+                        )
                     }
-                    ToolchainRollup(
-                        gradle = ToolchainCalculator.dimension(gradle),
-                        jdk = ToolchainCalculator.dimension(jdk, ToolchainCalculator::jdkMajor),
-                        agp = ToolchainCalculator.dimension(agp),
-                        kgp = ToolchainCalculator.dimension(kgp),
-                        ksp = ToolchainCalculator.dimension(ksp),
-                        springBoot = ToolchainCalculator.dimension(springBoot),
-                    )
                 }
-            }
         }
 
     /**
      * Rerun-cause taxonomy (plan 061, research F11): reuses [taskRowsBetween] — the same half-open
-     * [cutoff, now) window + `mode <> 'BENCHMARK'` exclusion `bottlenecks` already applies — so both
-     * stores fold an identical row population through [RerunCauseRollupCalculator] (parity discipline).
+     * [cutoff, now) window + `mode <> 'BENCHMARK'` exclusion `bottlenecks` already applies — so both stores fold an identical row population through [RerunCauseRollupCalculator]
+     * (parity discipline).
      */
-    override fun rerunCauses(projectId: String, days: Int, nowMs: Long, projectKey: String?): RerunCauseRollup =
+    override fun rerunCauses(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): RerunCauseRollup =
         dataSource.connection.use { connection ->
-            RerunCauseRollupCalculator.compute(taskRowsBetween(connection, projectId, cutoff(days, nowMs), atMs(nowMs), projectKey))
+            RerunCauseRollupCalculator.compute(
+                taskRowsBetween(connection, projectId, cutoff(days, nowMs), atMs(nowMs), projectKey)
+            )
         }
 
     /**
      * Delivery-health proxies (plan 059, research F9): one indexed hot-column scan over `builds`
      * (`builds_project_started_idx` covers the window — no migration, per the plan's default) plus
-     * three jsonb extracts (`vcs.sha`, `projectKey`, `ci.attributes.runAttempt`) the hot columns don't
-     * carry. Same half-open window + `mode <> 'BENCHMARK'` fleet-view convention as [bottlenecks];
-     * rows are handed to the shared [DeliveryHealthCalculator] (which sorts internally), so both
-     * stores agree byte-for-byte (the plan-026/032 parity discipline). `requested_tasks_sig` is
-     * written on every insert (plan 025) and V3-backfilled, so the `?: ""` fallback is unreachable in
-     * practice — belt-and-braces against a hand-edited row, never a crash. `runAttempt` goes through
-     * [DeliveryHealthCalculator.parseRunAttempt] (`toIntOrNull`) — a garbage attribute never throws.
+     * three jsonb extracts (`vcs.sha`, `projectKey`, `ci.attributes.runAttempt`) the hot columns
+     * don't carry. Same half-open window + `mode <> 'BENCHMARK'` fleet-view convention as
+     * [bottlenecks]; rows are handed to the shared [DeliveryHealthCalculator] (which sorts
+     * internally), so both stores agree byte-for-byte (the plan-026/032 parity discipline).
+     * `requested_tasks_sig` is written on every insert (plan 025) and V3-backfilled, so the `?: ""`
+     * fallback is unreachable in practice — belt-and-braces against a hand-edited row, never a
+     * crash. `runAttempt` goes through [DeliveryHealthCalculator.parseRunAttempt] (`toIntOrNull`) —
+     * a garbage attribute never throws.
      */
-    override fun deliveryHealth(projectId: String, days: Int, nowMs: Long, projectKey: String?): DeliveryHealthRollup =
+    override fun deliveryHealth(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): DeliveryHealthRollup =
         dataSource.connection.use { connection ->
-            // The projectKey FILTER uses the indexed hot column (plan 079); the SELECT keeps reading the
-            // jsonb extract for the row field (pre-V15 rows have the payload key but a NULL column only
-            // when ingested before the backfill ran — the backfill makes them agree, so filter ≡ field).
-            val rows = connection.prepareStatement(
-                """
+            // The projectKey FILTER uses the indexed hot column (plan 079); the SELECT keeps
+            // reading the
+            // jsonb extract for the row field (pre-V15 rows have the payload key but a NULL column
+            // only
+            // when ingested before the backfill ran — the backfill makes them agree, so filter ≡
+            // field).
+            val rows =
+                connection
+                    .prepareStatement(
+                        """
                 SELECT build_id, branch, pipeline_name, ci_provider, outcome,
                        (extract(epoch from started_at) * 1000)::bigint AS started_ms,
                        (extract(epoch from finished_at) * 1000)::bigint AS finished_ms,
@@ -1162,34 +1551,40 @@ class PostgresBuildStore(
                        payload -> 'ci' -> 'attributes' ->> 'runAttempt' AS run_attempt
                 FROM builds
                 WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                statement.setObject(3, atMs(nowMs))
-                projectKey?.let { statement.setString(4, it) }
-                statement.executeQuery().use { resultSet ->
-                    buildList {
-                        while (resultSet.next()) {
-                            add(
-                                DeliveryBuildRow(
-                                    buildId = resultSet.getString("build_id"),
-                                    branch = resultSet.getString("branch"),
-                                    pipelineName = resultSet.getString("pipeline_name"),
-                                    provider = resultSet.getString("ci_provider"),
-                                    outcome = resultSet.getString("outcome"),
-                                    startedAtMs = resultSet.getLong("started_ms"),
-                                    finishedAtMs = resultSet.getLong("finished_ms"),
-                                    sha = resultSet.getString("sha"),
-                                    projectKey = resultSet.getString("project_key"),
-                                    requestedTasksSig = resultSet.getString("requested_tasks_sig") ?: "",
-                                    runAttempt = DeliveryHealthCalculator.parseRunAttempt(resultSet.getString("run_attempt")),
-                                ),
-                            )
+                """
+                            .trimIndent()
+                    )
+                    .use { statement ->
+                        statement.setObject(1, UUID.fromString(projectId))
+                        statement.setObject(2, cutoff(days, nowMs))
+                        statement.setObject(3, atMs(nowMs))
+                        projectKey?.let { statement.setString(4, it) }
+                        statement.executeQuery().use { resultSet ->
+                            buildList {
+                                while (resultSet.next()) {
+                                    add(
+                                        DeliveryBuildRow(
+                                            buildId = resultSet.getString("build_id"),
+                                            branch = resultSet.getString("branch"),
+                                            pipelineName = resultSet.getString("pipeline_name"),
+                                            provider = resultSet.getString("ci_provider"),
+                                            outcome = resultSet.getString("outcome"),
+                                            startedAtMs = resultSet.getLong("started_ms"),
+                                            finishedAtMs = resultSet.getLong("finished_ms"),
+                                            sha = resultSet.getString("sha"),
+                                            projectKey = resultSet.getString("project_key"),
+                                            requestedTasksSig =
+                                                resultSet.getString("requested_tasks_sig") ?: "",
+                                            runAttempt =
+                                                DeliveryHealthCalculator.parseRunAttempt(
+                                                    resultSet.getString("run_attempt")
+                                                ),
+                                        )
+                                    )
+                                }
+                            }
                         }
                     }
-                }
-            }
             DeliveryHealthCalculator.compute(rows, days)
         }
 
@@ -1199,21 +1594,36 @@ class PostgresBuildStore(
      * `incremental` column, and even its `execution_reasons` column is NULL for any build ingested
      * before V12, while the jsonb payload has carried both fields since schema v1 (no historical
      * blind spot). Own dedicated scan so `/rollups/bottlenecks`/`/rollups/rerun-causes` stay on the
-     * indexed table — the plan's accepted cost tradeoff (a heavier windowed scan for this one route).
+     * indexed table — the plan's accepted cost tradeoff (a heavier windowed scan for this one
+     * route).
      */
-    override fun warnings(projectId: String, period: Int, nowMs: Long, projectKey: String?): WarningsRollup =
+    override fun warnings(
+        projectId: String,
+        period: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): WarningsRollup =
         dataSource.connection.use { connection ->
-            WarningCalculator.compute(taskRowsFromPayloadJsonb(connection, projectId, cutoff(period, nowMs), atMs(nowMs), projectKey), period)
+            WarningCalculator.compute(
+                taskRowsFromPayloadJsonb(
+                    connection,
+                    projectId,
+                    cutoff(period, nowMs),
+                    atMs(nowMs),
+                    projectKey,
+                ),
+                period,
+            )
         }
 
     /**
      * Flat [TaskRow]s read straight from `builds.payload->'tasks'` (plan 060) — every field
-     * [WarningCalculator] needs (`incremental`, `executionReasons`, `cacheable`, `outcome`) survives
-     * for the whole retained window, not just builds ingested after some column existed. Bound params
-     * only; every jsonb path (`payload -> 'tasks'`, `t ->> 'module'`, …) is a compile-time literal —
-     * no free text, no interpolation (architecture §6). `userId`/`buildWallMs` are left at their
-     * defaults (null/0) — [WarningCalculator] never reads either, mirroring [taskRowsInDaysWindow]'s
-     * own placeholder convention.
+     * [WarningCalculator] needs (`incremental`, `executionReasons`, `cacheable`, `outcome`)
+     * survives for the whole retained window, not just builds ingested after some column existed.
+     * Bound params only; every jsonb path (`payload -> 'tasks'`, `t ->> 'module'`, …) is a
+     * compile-time literal — no free text, no interpolation (architecture §6).
+     * `userId`/`buildWallMs` are left at their defaults (null/0) — [WarningCalculator] never reads
+     * either, mirroring [taskRowsInDaysWindow]'s own placeholder convention.
      */
     private fun taskRowsFromPayloadJsonb(
         connection: java.sql.Connection,
@@ -1222,10 +1632,12 @@ class PostgresBuildStore(
         to: OffsetDateTime,
         projectKey: String?,
     ): List<TaskRow> =
-        // builds is already the FROM table of this lateral scan, so a projectKey filter (plan 079) is
+        // builds is already the FROM table of this lateral scan, so a projectKey filter (plan 079)
+        // is
         // a direct hot-column predicate; the unfiltered SQL stays byte-identical.
-        connection.prepareStatement(
-            """
+        connection
+            .prepareStatement(
+                """
             SELECT b.build_id AS build_id,
                    t ->> 'module' AS module,
                    t ->> 'path' AS path,
@@ -1237,127 +1649,173 @@ class PostgresBuildStore(
                    ARRAY(SELECT jsonb_array_elements_text(COALESCE(t -> 'executionReasons', '[]'::jsonb))) AS execution_reasons
             FROM builds b, jsonb_array_elements(COALESCE(b.payload -> 'tasks', '[]'::jsonb)) AS t
             WHERE b.project_id = ? AND b.mode <> 'BENCHMARK' AND b.started_at >= ? AND b.started_at < ?${projectKeyClause(projectKey, "b")}
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setObject(1, UUID.fromString(projectId))
-            statement.setObject(2, from)
-            statement.setObject(3, to)
-            projectKey?.let { statement.setString(4, it) }
-            statement.executeQuery().use { rows ->
-                buildList {
-                    while (rows.next()) {
-                        add(
-                            TaskRow(
-                                buildId = rows.getString("build_id"),
-                                userId = null,
-                                module = rows.getString("module"),
-                                name = (rows.getString("path") ?: "").substringAfterLast(':'),
-                                type = rows.getString("type"),
-                                outcome = rows.getString("outcome"),
-                                durationMs = rows.getLong("duration_ms"),
-                                buildWallMs = 0L,
-                                cacheable = rows.getBoolean("cacheable").takeUnless { rows.wasNull() },
-                                executionReasons = executionReasonsOf(rows),
-                                incremental = rows.getBoolean("incremental"),
-                            ),
-                        )
+            """
+                    .trimIndent()
+            )
+            .use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, from)
+                statement.setObject(3, to)
+                projectKey?.let { statement.setString(4, it) }
+                statement.executeQuery().use { rows ->
+                    buildList {
+                        while (rows.next()) {
+                            add(
+                                TaskRow(
+                                    buildId = rows.getString("build_id"),
+                                    userId = null,
+                                    module = rows.getString("module"),
+                                    name = (rows.getString("path") ?: "").substringAfterLast(':'),
+                                    type = rows.getString("type"),
+                                    outcome = rows.getString("outcome"),
+                                    durationMs = rows.getLong("duration_ms"),
+                                    buildWallMs = 0L,
+                                    cacheable =
+                                        rows.getBoolean("cacheable").takeUnless { rows.wasNull() },
+                                    executionReasons = executionReasonsOf(rows),
+                                    incremental = rows.getBoolean("incremental"),
+                                )
+                            )
+                        }
                     }
                 }
             }
-        }
 
     /**
-     * Cache-miss diagnostics (plan 068, research F18): `origin`/`fingerprints` live only in the payload
-     * jsonb, never in `task_executions` (plan 026's normalized table predates plan 038/022's fields on
-     * it), so this reads the whole `payload` column — gated to builds carrying either block, most-recent
-     * first, capped at [RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS] with a `(started_at, build_id)`
-     * tie-break identical to the in-memory store's sort — and hands each decoded [BuildPayload] to the
-     * exact same [relocatabilityRowsOf]/[fingerprintStreamRowOf] flattening functions in-memory uses, so
-     * both stores agree byte-for-byte by construction (the plan-026/032/036 parity discipline) without
-     * hand-writing jsonb-path SQL for the nested `internalAdapters.tasks[]` array. Every bound value is a
-     * parameter, never interpolated (architecture §6) — task paths and fingerprint keys are user-
-     * controlled build data. A row whose `payload` fails to decode (`SerializationException` — never
-     * caught by the route-layer [runQuery]'s `SQLException`-only classifier) is skipped rather than
-     * failing the whole rollup: one corrupt row must never turn a fleet-wide read into a 500.
+     * Cache-miss diagnostics (plan 068, research F18): `origin`/`fingerprints` live only in the
+     * payload jsonb, never in `task_executions` (plan 026's normalized table predates plan
+     * 038/022's fields on it), so this reads the whole `payload` column — gated to builds carrying
+     * either block, most-recent first, capped at [RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS] with
+     * a `(started_at, build_id)` tie-break identical to the in-memory store's sort — and hands each
+     * decoded [BuildPayload] to the exact same [relocatabilityRowsOf]/[fingerprintStreamRowOf]
+     * flattening functions in-memory uses, so both stores agree byte-for-byte by construction (the
+     * plan-026/032/036 parity discipline) without hand-writing jsonb-path SQL for the nested
+     * `internalAdapters.tasks[]` array. Every bound value is a parameter, never interpolated
+     * (architecture §6) — task paths and fingerprint keys are user- controlled build data. A row
+     * whose `payload` fails to decode (`SerializationException` — never caught by the route-layer
+     * [runQuery]'s `SQLException`-only classifier) is skipped rather than failing the whole rollup:
+     * one corrupt row must never turn a fleet-wide read into a 500.
      */
-    override fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long, projectKey: String?): CacheMissDiagnostics =
+    override fun cacheMissDiagnostics(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): CacheMissDiagnostics =
         dataSource.connection.use { connection ->
-            // projectKey filters in the WHERE, before ORDER BY/LIMIT (plan 079) — a busy sibling repo
+            // projectKey filters in the WHERE, before ORDER BY/LIMIT (plan 079) — a busy sibling
+            // repo
             // must never starve the selected repo's capped window. The conditional param shifts the
             // positional LIMIT index (the flaky() limitIndex pattern).
-            val windowed = connection.prepareStatement(
-                """
+            val windowed =
+                connection
+                    .prepareStatement(
+                        """
                 SELECT payload FROM builds
                 WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                   AND (payload -> 'extensions' -> 'internalAdapters' IS NOT NULL OR payload -> 'fingerprints' IS NOT NULL)
                 ORDER BY started_at DESC, build_id DESC
                 LIMIT ?
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                statement.setObject(3, atMs(nowMs))
-                val limitIndex = if (projectKey == null) 4 else { statement.setString(4, projectKey); 5 }
-                statement.setInt(limitIndex, diagnosticRowCap)
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            runCatching { BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")) }
-                                .getOrNull()
-                                ?.let(::add)
+                """
+                            .trimIndent()
+                    )
+                    .use { statement ->
+                        statement.setObject(1, UUID.fromString(projectId))
+                        statement.setObject(2, cutoff(days, nowMs))
+                        statement.setObject(3, atMs(nowMs))
+                        val limitIndex =
+                            if (projectKey == null) 4
+                            else {
+                                statement.setString(4, projectKey)
+                                5
+                            }
+                        statement.setInt(limitIndex, diagnosticRowCap)
+                        statement.executeQuery().use { rows ->
+                            buildList {
+                                while (rows.next()) {
+                                    runCatching {
+                                            BuildHoundJson.payload.decodeFromString(
+                                                BuildPayload.serializer(),
+                                                rows.getString("payload"),
+                                            )
+                                        }
+                                        .getOrNull()
+                                        ?.let(::add)
+                                }
+                            }
                         }
                     }
-                }
-            }
             val relocatabilityRows = windowed.flatMap { relocatabilityRowsOf(it) }
             val streamRows = windowed.mapNotNull { fingerprintStreamRowOf(it) }
             CacheMissDiagnostics(
-                remoteCacheObserved = RelocatabilityDetector.remoteCacheObserved(relocatabilityRows),
+                remoteCacheObserved =
+                    RelocatabilityDetector.remoteCacheObserved(relocatabilityRows),
                 nonRelocatable = RelocatabilityDetector.detect(relocatabilityRows),
                 volatileInputs = FingerprintVolatilityDetector.detect(streamRows),
             )
         }
 
     /**
-     * Fleet remote-cache ROI (plan 067, research F17): `origin` lives only in the payload jsonb (plan
-     * 026's `task_executions` predates plan 038), and the `environment.buildCache` snapshot likewise, so
-     * this reads the whole `payload` column — gated to builds carrying either the opaque `internalAdapters`
-     * extension or the `buildCache` snapshot, most-recent first, capped at [MAX_CACHE_ROI_ROWS] with a
-     * `(started_at, build_id)` tie-break identical to the in-memory store's sort — and hands each decoded
-     * [BuildPayload] to the same [cacheRoiRowsOf]/[cacheConfigRowOf] flatteners, so both stores agree
-     * byte-for-byte by construction (the plan-026/032/068 parity discipline). Every bound value is a
-     * parameter, never interpolated (architecture §6). A row whose `payload` fails to decode is skipped
-     * (never fatal), exactly like [cacheMissDiagnostics].
+     * Fleet remote-cache ROI (plan 067, research F17): `origin` lives only in the payload jsonb
+     * (plan 026's `task_executions` predates plan 038), and the `environment.buildCache` snapshot
+     * likewise, so this reads the whole `payload` column — gated to builds carrying either the
+     * opaque `internalAdapters` extension or the `buildCache` snapshot, most-recent first, capped
+     * at [MAX_CACHE_ROI_ROWS] with a `(started_at, build_id)` tie-break identical to the in-memory
+     * store's sort — and hands each decoded [BuildPayload] to the same
+     * [cacheRoiRowsOf]/[cacheConfigRowOf] flatteners, so both stores agree byte-for-byte by
+     * construction (the plan-026/032/068 parity discipline). Every bound value is a parameter,
+     * never interpolated (architecture §6). A row whose `payload` fails to decode is skipped (never
+     * fatal), exactly like [cacheMissDiagnostics].
      */
-    override fun cacheRoi(projectId: String, days: Int, nowMs: Long, projectKey: String?): CacheRoiRollup =
+    override fun cacheRoi(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): CacheRoiRollup =
         dataSource.connection.use { connection ->
-            // projectKey filters pre-LIMIT (plan 079, the cacheMissDiagnostics rationale); limitIndex
+            // projectKey filters pre-LIMIT (plan 079, the cacheMissDiagnostics rationale);
+            // limitIndex
             // pattern for the shifted positional bind.
-            val windowed = connection.prepareStatement(
-                """
+            val windowed =
+                connection
+                    .prepareStatement(
+                        """
                 SELECT payload FROM builds
                 WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                   AND (payload -> 'extensions' -> 'internalAdapters' IS NOT NULL
                        OR payload -> 'environment' -> 'buildCache' IS NOT NULL)
                 ORDER BY started_at DESC, build_id DESC
                 LIMIT ?
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                statement.setObject(3, atMs(nowMs))
-                val limitIndex = if (projectKey == null) 4 else { statement.setString(4, projectKey); 5 }
-                statement.setInt(limitIndex, cacheRoiRowCap)
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            runCatching { BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")) }
-                                .getOrNull()
-                                ?.let(::add)
+                """
+                            .trimIndent()
+                    )
+                    .use { statement ->
+                        statement.setObject(1, UUID.fromString(projectId))
+                        statement.setObject(2, cutoff(days, nowMs))
+                        statement.setObject(3, atMs(nowMs))
+                        val limitIndex =
+                            if (projectKey == null) 4
+                            else {
+                                statement.setString(4, projectKey)
+                                5
+                            }
+                        statement.setInt(limitIndex, cacheRoiRowCap)
+                        statement.executeQuery().use { rows ->
+                            buildList {
+                                while (rows.next()) {
+                                    runCatching {
+                                            BuildHoundJson.payload.decodeFromString(
+                                                BuildPayload.serializer(),
+                                                rows.getString("payload"),
+                                            )
+                                        }
+                                        .getOrNull()
+                                        ?.let(::add)
+                                }
+                            }
                         }
                     }
-                }
-            }
             CacheRoiCalculator.compute(
                 originRows = windowed.flatMap { cacheRoiRowsOf(it) },
                 configRows = windowed.mapNotNull { cacheConfigRowOf(it) },
@@ -1365,117 +1823,174 @@ class PostgresBuildStore(
         }
 
     /**
-     * CC economics + reuse diagnostics (plan 064, research F14): the CC state, `derived.configurationMs`/
-     * `ccLoadMs`/`ccEntrySizeBytes`, salt-stream identity, and `fingerprints.build` all live in the
-     * `payload` jsonb (only the `cc_state` extract is columnar, for the /trends counters), so this reads
-     * the whole `payload` — benchmark excluded, NOT gated to a carried block (the reuse classification
-     * needs every windowed build's CC posture), most-recent-first, capped at [MAX_CC_ECONOMICS_ROWS] with
-     * a `(started_at, build_id)` tie-break identical to the in-memory store's sort — and hands each decoded
-     * [BuildPayload] to the same [ccBuildRowOf] flattener + pure [CcEconomicsCalculator], so both stores
-     * agree byte-for-byte (the plan-026/032/067/068 parity discipline). Every bound value is a parameter,
-     * never interpolated (architecture §6). A row whose `payload` fails to decode is skipped, never fatal.
+     * CC economics + reuse diagnostics (plan 064, research F14): the CC state,
+     * `derived.configurationMs`/ `ccLoadMs`/`ccEntrySizeBytes`, salt-stream identity, and
+     * `fingerprints.build` all live in the `payload` jsonb (only the `cc_state` extract is
+     * columnar, for the /trends counters), so this reads the whole `payload` — benchmark excluded,
+     * NOT gated to a carried block (the reuse classification needs every windowed build's CC
+     * posture), most-recent-first, capped at [MAX_CC_ECONOMICS_ROWS] with a `(started_at,
+     * build_id)` tie-break identical to the in-memory store's sort — and hands each decoded
+     * [BuildPayload] to the same [ccBuildRowOf] flattener + pure [CcEconomicsCalculator], so both
+     * stores agree byte-for-byte (the plan-026/032/067/068 parity discipline). Every bound value is
+     * a parameter, never interpolated (architecture §6). A row whose `payload` fails to decode is
+     * skipped, never fatal.
      */
-    override fun ccEconomics(projectId: String, days: Int, nowMs: Long, projectKey: String?): CcEconomicsReport =
+    override fun ccEconomics(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): CcEconomicsReport =
         dataSource.connection.use { connection ->
             // projectKey filters pre-LIMIT (plan 079); limitIndex pattern for the shifted bind.
-            val windowed = connection.prepareStatement(
-                """
+            val windowed =
+                connection
+                    .prepareStatement(
+                        """
                 SELECT payload FROM builds
                 WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                 ORDER BY started_at DESC, build_id DESC
                 LIMIT ?
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                statement.setObject(3, atMs(nowMs))
-                val limitIndex = if (projectKey == null) 4 else { statement.setString(4, projectKey); 5 }
-                statement.setInt(limitIndex, ccEconomicsRowCap)
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            runCatching { BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")) }
-                                .getOrNull()
-                                ?.let(::add)
+                """
+                            .trimIndent()
+                    )
+                    .use { statement ->
+                        statement.setObject(1, UUID.fromString(projectId))
+                        statement.setObject(2, cutoff(days, nowMs))
+                        statement.setObject(3, atMs(nowMs))
+                        val limitIndex =
+                            if (projectKey == null) 4
+                            else {
+                                statement.setString(4, projectKey)
+                                5
+                            }
+                        statement.setInt(limitIndex, ccEconomicsRowCap)
+                        statement.executeQuery().use { rows ->
+                            buildList {
+                                while (rows.next()) {
+                                    runCatching {
+                                            BuildHoundJson.payload.decodeFromString(
+                                                BuildPayload.serializer(),
+                                                rows.getString("payload"),
+                                            )
+                                        }
+                                        .getOrNull()
+                                        ?.let(::add)
+                                }
+                            }
                         }
                     }
-                }
-            }
             CcEconomicsCalculator.compute(windowed.map { ccBuildRowOf(it) })
         }
 
     /**
      * Whole-payload window for the recommendations engine (plan 054, research F4): the engine needs
-     * `processes[]`, `environment.configurationCache`, a per-build `jdk∧ksp` join, `excludedTaskNames`,
-     * and `extensions` that no normalized rollup column carries, so this reads the whole `payload` jsonb
-     * — benchmark excluded (fleet-view convention), most-recent-first, capped at [cap] with a
-     * `(started_at, build_id)` tie-break identical to the in-memory store's sort, so both stores return
-     * the identical bounded set and the pure engine agrees byte-for-byte (the plan-026/032/067 parity
-     * discipline). Every bound value is a parameter, never interpolated (architecture §6). A row whose
-     * `payload` fails to decode is skipped (never fatal), exactly like [cacheRoi]/[ccEconomics].
+     * `processes[]`, `environment.configurationCache`, a per-build `jdk∧ksp` join,
+     * `excludedTaskNames`, and `extensions` that no normalized rollup column carries, so this reads
+     * the whole `payload` jsonb — benchmark excluded (fleet-view convention), most-recent-first,
+     * capped at [cap] with a `(started_at, build_id)` tie-break identical to the in-memory store's
+     * sort, so both stores return the identical bounded set and the pure engine agrees
+     * byte-for-byte (the plan-026/032/067 parity discipline). Every bound value is a parameter,
+     * never interpolated (architecture §6). A row whose `payload` fails to decode is skipped (never
+     * fatal), exactly like [cacheRoi]/[ccEconomics].
      */
-    override fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long, projectKey: String?): List<BuildPayload> =
+    override fun windowPayloads(
+        projectId: String,
+        days: Int,
+        cap: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): List<BuildPayload> =
         dataSource.connection.use { connection ->
             // projectKey filters pre-LIMIT (plan 079); limitIndex pattern for the shifted bind.
-            connection.prepareStatement(
-                """
+            connection
+                .prepareStatement(
+                    """
                 SELECT payload FROM builds
                 WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                 ORDER BY started_at DESC, build_id DESC
                 LIMIT ?
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                statement.setObject(3, atMs(nowMs))
-                val limitIndex = if (projectKey == null) 4 else { statement.setString(4, projectKey); 5 }
-                statement.setInt(limitIndex, cap)
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            runCatching { BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")) }
-                                .getOrNull()
-                                ?.let(::add)
+                """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setObject(2, cutoff(days, nowMs))
+                    statement.setObject(3, atMs(nowMs))
+                    val limitIndex =
+                        if (projectKey == null) 4
+                        else {
+                            statement.setString(4, projectKey)
+                            5
+                        }
+                    statement.setInt(limitIndex, cap)
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                runCatching {
+                                        BuildHoundJson.payload.decodeFromString(
+                                            BuildPayload.serializer(),
+                                            rows.getString("payload"),
+                                        )
+                                    }
+                                    .getOrNull()
+                                    ?.let(::add)
+                            }
                         }
                     }
                 }
-            }
         }
 
-    override fun flaky(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<FlakyRecord> =
+    override fun flaky(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): List<FlakyRecord> =
         dataSource.connection.use { connection ->
-            // Read the narrow per-class outcome table (indexed on (project, sha, module, class)) and
-            // hand it to the shared FlakyDetector — same rows the in-memory store flattens, so parity.
-            // A projectKey filter (plan 077) joins builds (test_class_outcomes carries no project_key)
+            // Read the narrow per-class outcome table (indexed on (project, sha, module, class))
+            // and
+            // hand it to the shared FlakyDetector — same rows the in-memory store flattens, so
+            // parity.
+            // A projectKey filter (plan 077) joins builds (test_class_outcomes carries no
+            // project_key)
             // with columns qualified; the unfiltered branch is byte-identical to today.
             // ORDER BY … LIMIT bounds the rows read into the JVM (FlakyDetector.MAX_OUTCOME_ROWS,
             // plan §6 "cap rows"): most-recent first, so truncation only ever drops the oldest of a
             // pathological history. Detection is order-invariant, so below the cap the in-memory
             // store (identical sort + take) sees the same set — parity holds.
-            val sql = if (projectKey == null) {
-                """
-                SELECT build_id, (extract(epoch from started_at) * 1000)::bigint AS started_ms,
-                       sha, module, class_fqcn, passed, failed, retry_flaky_cases
-                FROM test_class_outcomes
-                WHERE project_id = ? AND started_at >= ?
-                ORDER BY started_at DESC, build_id, module, class_fqcn
-                LIMIT ?
-                """.trimIndent()
-            } else {
-                """
-                SELECT tco.build_id, (extract(epoch from tco.started_at) * 1000)::bigint AS started_ms,
-                       tco.sha, tco.module, tco.class_fqcn, tco.passed, tco.failed, tco.retry_flaky_cases
-                FROM test_class_outcomes tco
-                JOIN builds b ON b.project_id = tco.project_id AND b.build_id = tco.build_id
-                WHERE tco.project_id = ? AND tco.started_at >= ? AND b.project_key = ?
-                ORDER BY tco.started_at DESC, tco.build_id, tco.module, tco.class_fqcn
-                LIMIT ?
-                """.trimIndent()
-            }
+            val sql =
+                if (projectKey == null) {
+                    """
+                    SELECT build_id, (extract(epoch from started_at) * 1000)::bigint AS started_ms,
+                           sha, module, class_fqcn, passed, failed, retry_flaky_cases
+                    FROM test_class_outcomes
+                    WHERE project_id = ? AND started_at >= ?
+                    ORDER BY started_at DESC, build_id, module, class_fqcn
+                    LIMIT ?
+                    """
+                        .trimIndent()
+                } else {
+                    """
+                    SELECT tco.build_id, (extract(epoch from tco.started_at) * 1000)::bigint AS started_ms,
+                           tco.sha, tco.module, tco.class_fqcn, tco.passed, tco.failed, tco.retry_flaky_cases
+                    FROM test_class_outcomes tco
+                    JOIN builds b ON b.project_id = tco.project_id AND b.build_id = tco.build_id
+                    WHERE tco.project_id = ? AND tco.started_at >= ? AND b.project_key = ?
+                    ORDER BY tco.started_at DESC, tco.build_id, tco.module, tco.class_fqcn
+                    LIMIT ?
+                    """
+                        .trimIndent()
+                }
             connection.prepareStatement(sql).use { statement ->
                 statement.setObject(1, UUID.fromString(projectId))
                 statement.setObject(2, cutoff(days, nowMs))
-                val limitIndex = if (projectKey == null) 3 else { statement.setString(3, projectKey); 4 }
+                val limitIndex =
+                    if (projectKey == null) 3
+                    else {
+                        statement.setString(3, projectKey)
+                        4
+                    }
                 statement.setInt(limitIndex, FlakyDetector.MAX_OUTCOME_ROWS)
                 statement.executeQuery().use { rows ->
                     val outcomes = buildList {
@@ -1485,12 +2000,15 @@ class PostgresBuildStore(
                                     buildId = rows.getString("build_id"),
                                     startedAtMs = rows.getLong("started_ms"),
                                     sha = rows.getString("sha"),
-                                    module = rows.getString("module").ifEmpty { null }, // '' → null (PK convention)
+                                    module =
+                                        rows.getString("module").ifEmpty {
+                                            null
+                                        }, // '' → null (PK convention)
                                     classFqcn = rows.getString("class_fqcn"),
                                     passed = rows.getInt("passed"),
                                     failed = rows.getInt("failed"),
                                     retryFlakyCases = rows.getInt("retry_flaky_cases"),
-                                ),
+                                )
                             )
                         }
                     }
@@ -1501,14 +2019,19 @@ class PostgresBuildStore(
 
     override fun metricsSnapshot(projectId: String, days: Int, nowMs: Long): MetricsSnapshot {
         // Same windowed BuildKpiRows bottlenecks already fetches (benchmark excluded, half-open
-        // [from, now) — the plan-026/032 parity discipline), plus the windowed derived.avoidedMs values
-        // read from the jsonb payload (no hot column for it, same jsonb-field pattern toolchainAdoption
-        // uses). The flaky count reuses the flaky() detector's own output rather than re-deriving it.
+        // [from, now) — the plan-026/032 parity discipline), plus the windowed derived.avoidedMs
+        // values
+        // read from the jsonb payload (no hot column for it, same jsonb-field pattern
+        // toolchainAdoption
+        // uses). The flaky count reuses the flaky() detector's own output rather than re-deriving
+        // it.
         val from = cutoff(days, nowMs)
         val to = atMs(nowMs)
-        val (kpiRows, avoidedValues) = dataSource.connection.use { connection ->
-            kpiRowsBetween(connection, projectId, from, to) to avoidedMsBetween(connection, projectId, from, to)
-        }
+        val (kpiRows, avoidedValues) =
+            dataSource.connection.use { connection ->
+                kpiRowsBetween(connection, projectId, from, to) to
+                    avoidedMsBetween(connection, projectId, from, to)
+            }
         return MetricsSnapshotCalculator.compute(
             windowDays = days,
             builds = kpiRows,
@@ -1517,118 +2040,173 @@ class PostgresBuildStore(
         )
     }
 
-    /** Windowed, non-null `derived.avoidedMs` values (plan 070); absent unless plan-038 origin timings ran. */
-    private fun avoidedMsBetween(connection: java.sql.Connection, projectId: String, from: OffsetDateTime, to: OffsetDateTime): List<Long> =
-        connection.prepareStatement(
-            """
-            SELECT (payload->'derived'->>'avoidedMs')::bigint AS avoided_ms
-            FROM builds
-            WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
-              AND payload->'derived'->>'avoidedMs' IS NOT NULL
-            """.trimIndent(),
-        ).use { statement ->
-            statement.setObject(1, UUID.fromString(projectId))
-            statement.setObject(2, from)
-            statement.setObject(3, to)
-            statement.executeQuery().use { rows ->
-                buildList { while (rows.next()) add(rows.getLong("avoided_ms")) }
+    /**
+     * Windowed, non-null `derived.avoidedMs` values (plan 070); absent unless plan-038 origin
+     * timings ran.
+     */
+    private fun avoidedMsBetween(
+        connection: java.sql.Connection,
+        projectId: String,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ): List<Long> =
+        connection
+            .prepareStatement(
+                """
+                SELECT (payload->'derived'->>'avoidedMs')::bigint AS avoided_ms
+                FROM builds
+                WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?
+                  AND payload->'derived'->>'avoidedMs' IS NOT NULL
+                """
+                    .trimIndent()
+            )
+            .use { statement ->
+                statement.setObject(1, UUID.fromString(projectId))
+                statement.setObject(2, from)
+                statement.setObject(3, to)
+                statement.executeQuery().use { rows ->
+                    buildList { while (rows.next()) add(rows.getLong("avoided_ms")) }
+                }
             }
-        }
 
     override fun classTimings(projectId: String, days: Int, nowMs: Long): Map<String, List<Long>> =
         dataSource.connection.use { connection ->
-            // Per-class CI durations from the payload jsonb over the window (plan 040); on-demand only
+            // Per-class CI durations from the payload jsonb over the window (plan 040); on-demand
+            // only
             // (the /plan endpoint isn't hot), so a windowed scan is fine — same shape the in-memory
             // store flattens, both grouped by TestUnitKey and handed to LptBalancer.
-            connection.prepareStatement(
-                "SELECT payload FROM builds WHERE project_id = ? AND started_at >= ? AND mode = 'CI'",
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            add(BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), rows.getString("payload")))
+            connection
+                .prepareStatement(
+                    "SELECT payload FROM builds WHERE project_id = ? AND started_at >= ? AND mode = 'CI'"
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setObject(2, cutoff(days, nowMs))
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                add(
+                                    BuildHoundJson.payload.decodeFromString(
+                                        BuildPayload.serializer(),
+                                        rows.getString("payload"),
+                                    )
+                                )
+                            }
                         }
                     }
                 }
-            }.flatMap { classTimingsOf(it) }.groupBy({ it.first }, { it.second })
+                .flatMap { classTimingsOf(it) }
+                .groupBy({ it.first }, { it.second })
         }
 
-    override fun tagCohortTrends(projectId: String, tagKey: String, filter: BuildFilter, days: Int, nowMs: Long): List<TagCohortRaw> =
+    override fun tagCohortTrends(
+        projectId: String,
+        tagKey: String,
+        filter: BuildFilter,
+        days: Int,
+        nowMs: Long,
+    ): List<TagCohortRaw> =
         dataSource.connection.use { connection ->
-            // Raw per-build rows (cohort value, day, outcome, duration, hit rate) — no aggregation in
-            // SQL. Both stores hand these to the same TagCohortCalculator.groupByCohort, so the daily
+            // Raw per-build rows (cohort value, day, outcome, duration, hit rate) — no aggregation
+            // in
+            // SQL. Both stores hand these to the same TagCohortCalculator.groupByCohort, so the
+            // daily
             // bucketing + median/MAD math run identically over the same rows either store produces
-            // (the plan-026/032 "raw rows -> one pure calculator" discipline). Builds missing the tag
-            // key entirely are excluded via the GIN-indexable key-existence operator (`payload -> 'tags'
-            // ? tagKey`, escaped as `??` for the JDBC driver, which otherwise parses a bare `?` as a bind
-            // placeholder) — no synthetic "null" cohort. The earlier `payload->'tags'->>? IS NOT NULL`
-            // form used the `->>` value-extraction operator in the predicate, which the V11 GIN index
-            // (jsonb_ops) cannot accelerate; only `@>`/`?`/`?&`/`?|` are indexable, so that form forced a
-            // full scan on every default (untagged-filter) `/v1/trends/cohorts` call. The `->>?` in the
+            // (the plan-026/032 "raw rows -> one pure calculator" discipline). Builds missing the
+            // tag
+            // key entirely are excluded via the GIN-indexable key-existence operator (`payload ->
+            // 'tags'
+            // ? tagKey`, escaped as `??` for the JDBC driver, which otherwise parses a bare `?` as
+            // a bind
+            // placeholder) — no synthetic "null" cohort. The earlier `payload->'tags'->>? IS NOT
+            // NULL`
+            // form used the `->>` value-extraction operator in the predicate, which the V11 GIN
+            // index
+            // (jsonb_ops) cannot accelerate; only `@>`/`?`/`?&`/`?|` are indexable, so that form
+            // forced a
+            // full scan on every default (untagged-filter) `/v1/trends/cohorts` call. The `->>?` in
+            // the
             // SELECT list below is projection only, not a filter, so it stays as-is.
             val (clauses, params) = filterSql(filter)
-            connection.prepareStatement(
-                """
+            connection
+                .prepareStatement(
+                    """
                 SELECT payload->'tags'->>? AS cohort_value,
                        (started_at AT TIME ZONE 'UTC')::date AS day,
                        outcome, duration_ms, hit_rate
                 FROM builds
                 WHERE project_id = ? AND started_at >= ? AND payload -> 'tags' ?? ?$clauses
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setString(1, tagKey)
-                statement.setObject(2, UUID.fromString(projectId))
-                statement.setObject(3, cutoff(days, nowMs))
-                statement.setString(4, tagKey)
-                params.forEachIndexed { index, value -> statement.setString(index + 5, value) }
-                statement.executeQuery().use { rows ->
-                    val out = buildList {
-                        while (rows.next()) {
-                            add(
-                                TagCohortBuildRow(
-                                    value = rows.getString("cohort_value"),
-                                    day = rows.getDate("day").toLocalDate().toString(),
-                                    outcome = rows.getString("outcome"),
-                                    durationMs = rows.getLong("duration_ms"),
-                                    hitRate = rows.getDouble("hit_rate").takeUnless { rows.wasNull() },
-                                ),
-                            )
+                """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setString(1, tagKey)
+                    statement.setObject(2, UUID.fromString(projectId))
+                    statement.setObject(3, cutoff(days, nowMs))
+                    statement.setString(4, tagKey)
+                    params.forEachIndexed { index, value -> statement.setString(index + 5, value) }
+                    statement.executeQuery().use { rows ->
+                        val out = buildList {
+                            while (rows.next()) {
+                                add(
+                                    TagCohortBuildRow(
+                                        value = rows.getString("cohort_value"),
+                                        day = rows.getDate("day").toLocalDate().toString(),
+                                        outcome = rows.getString("outcome"),
+                                        durationMs = rows.getLong("duration_ms"),
+                                        hitRate =
+                                            rows.getDouble("hit_rate").takeUnless {
+                                                rows.wasNull()
+                                            },
+                                    )
+                                )
+                            }
                         }
+                        TagCohortCalculator.groupByCohort(out)
                     }
-                    TagCohortCalculator.groupByCohort(out)
                 }
-            }
         }
 
-    override fun tagKeys(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<TagKeySummary> =
+    override fun tagKeys(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): List<TagKeySummary> =
         dataSource.connection.use { connection ->
             // Only the `tags` sub-object (not the whole jsonb payload) over the fleet-view window
             // (benchmark excluded, same convention as toolchainAdoption/bottlenecks); decoded and
             // ranked by the shared TagCohortCalculator so both stores agree. projectKey is a direct
             // hot-column predicate (plan 079).
-            connection.prepareStatement(
-                """
+            connection
+                .prepareStatement(
+                    """
                 SELECT payload->'tags' AS tags FROM builds
                 WHERE project_id = ? AND mode <> 'BENCHMARK' AND started_at >= ? AND started_at < ?${projectKeyClause(projectKey)}
                   AND payload->'tags' IS NOT NULL AND payload->'tags' <> '{}'::jsonb
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setObject(2, cutoff(days, nowMs))
-                statement.setObject(3, atMs(nowMs))
-                projectKey?.let { statement.setString(4, it) }
-                statement.executeQuery().use { rows ->
-                    val tagMaps = buildList {
-                        while (rows.next()) {
-                            val json = rows.getString("tags") ?: continue
-                            add(BuildHoundJson.payload.decodeFromString(MapSerializer(String.serializer(), String.serializer()), json))
+                """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setObject(2, cutoff(days, nowMs))
+                    statement.setObject(3, atMs(nowMs))
+                    projectKey?.let { statement.setString(4, it) }
+                    statement.executeQuery().use { rows ->
+                        val tagMaps = buildList {
+                            while (rows.next()) {
+                                val json = rows.getString("tags") ?: continue
+                                add(
+                                    BuildHoundJson.payload.decodeFromString(
+                                        MapSerializer(String.serializer(), String.serializer()),
+                                        json,
+                                    )
+                                )
+                            }
                         }
+                        TagCohortCalculator.tagKeySummaries(tagMaps)
                     }
-                    TagCohortCalculator.tagKeySummaries(tagMaps)
                 }
-            }
         }
 }
 
@@ -1638,55 +2216,73 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
      * The predicate's third disjunct (plan 098) is the auth-path defense-in-depth: an unactivated
      * token past its deadline is rejected here even if the sweep hasn't run yet. On a match with
      * `activated_at IS NULL`, the first-use activation UPDATE runs on the same connection, keyed by
-     * `token_hash` (unique, like `id`) so [TokenPrincipal]/this query's column list stay unchanged —
-     * idempotent under concurrent first use (`WHERE … AND activated_at IS NULL`).
+     * `token_hash` (unique, like `id`) so [TokenPrincipal]/this query's column list stay unchanged
+     * — idempotent under concurrent first use (`WHERE … AND activated_at IS NULL`).
      *
      * Accepted race with [startTokenSweeper] (review finding): the SELECT above and the activation
-     * UPDATE below are two statements, not one transaction. A sweep `DELETE` that lands in between them
-     * — on a token that is, at that instant, exactly at its unused deadline — lets this one request
-     * still succeed (it already read a valid principal) even though the row is now gone; the UPDATE
-     * below then simply affects zero rows. Indistinguishable from the token expiring immediately after
-     * the request completed, so it is accepted as-is.
+     * UPDATE below are two statements, not one transaction. A sweep `DELETE` that lands in between
+     * them — on a token that is, at that instant, exactly at its unused deadline — lets this one
+     * request still succeed (it already read a valid principal) even though the row is now gone;
+     * the UPDATE below then simply affects zero rows. Indistinguishable from the token expiring
+     * immediately after the request completed, so it is accepted as-is.
      */
     override fun resolve(tokenHash: String): TokenPrincipal? =
         dataSource.connection.use { connection ->
-            val resolved = connection.prepareStatement(
-                """
-                SELECT p.id, p.project_key, t.scope, t.activated_at FROM api_tokens t
-                JOIN projects p ON p.id = t.project_id
-                WHERE t.token_hash = ? AND t.revoked_at IS NULL
-                  AND (t.activated_at IS NOT NULL OR t.expires_unused_at IS NULL OR t.expires_unused_at > now())
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setString(1, tokenHash)
-                statement.executeQuery().use { rows ->
-                    if (!rows.next()) {
-                        null
-                    } else {
-                        val principal = TokenPrincipal(
-                            project = ProjectRef(id = rows.getString(1), key = rows.getString(2)),
-                            scope = rows.getString(3),
-                        )
-                        val needsActivation = rows.getObject(4, OffsetDateTime::class.java) == null
-                        principal to needsActivation
+            val resolved =
+                connection
+                    .prepareStatement(
+                        """
+                        SELECT p.id, p.project_key, t.scope, t.activated_at FROM api_tokens t
+                        JOIN projects p ON p.id = t.project_id
+                        WHERE t.token_hash = ? AND t.revoked_at IS NULL
+                          AND (t.activated_at IS NOT NULL OR t.expires_unused_at IS NULL OR t.expires_unused_at > now())
+                        """
+                            .trimIndent()
+                    )
+                    .use { statement ->
+                        statement.setString(1, tokenHash)
+                        statement.executeQuery().use { rows ->
+                            if (!rows.next()) {
+                                null
+                            } else {
+                                val principal =
+                                    TokenPrincipal(
+                                        project =
+                                            ProjectRef(
+                                                id = rows.getString(1),
+                                                key = rows.getString(2),
+                                            ),
+                                        scope = rows.getString(3),
+                                    )
+                                val needsActivation =
+                                    rows.getObject(4, OffsetDateTime::class.java) == null
+                                principal to needsActivation
+                            }
+                        }
                     }
-                }
-            }
             if (resolved != null && resolved.second) {
-                // Bookkeeping only — never let a failure here fail an otherwise-authenticated request
+                // Bookkeeping only — never let a failure here fail an otherwise-authenticated
+                // request
                 // (a bare 500 out of an auth path this deep would be worse than a missed activation
-                // stamp, which just costs that one token a wasted sweep cycle). No token data logged:
+                // stamp, which just costs that one token a wasted sweep cycle). No token data
+                // logged:
                 // the hash/plaintext never appear, only the exception's class name.
                 runCatching {
-                    connection.prepareStatement(
-                        "UPDATE api_tokens SET activated_at = now() WHERE token_hash = ? AND activated_at IS NULL",
-                    ).use { statement ->
-                        statement.setString(1, tokenHash)
-                        statement.executeUpdate()
-                    }
-                }.onFailure {
-                    authLogger.warn("token activation stamp failed: {}", it::class.java.simpleName)
+                    connection
+                        .prepareStatement(
+                            "UPDATE api_tokens SET activated_at = now() WHERE token_hash = ? AND activated_at IS NULL"
+                        )
+                        .use { statement ->
+                            statement.setString(1, tokenHash)
+                            statement.executeUpdate()
+                        }
                 }
+                    .onFailure {
+                        authLogger.warn(
+                            "token activation stamp failed: {}",
+                            it::class.java.simpleName,
+                        )
+                    }
             }
             resolved?.first
         }
@@ -1694,71 +2290,93 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
     /**
      * Mints an `ingest`-scoped (or other) token hash for [projectId] with a [TOKEN_UNUSED_TTL]
      * activation deadline computed by the DB clock (`now() + (? * interval '1 second')`, bound from
-     * [TOKEN_UNUSED_TTL] rather than a hardcoded literal) — the same clock [resolve]'s predicate reads,
-     * so mint and validation can never skew. Returns the stored deadline.
+     * [TOKEN_UNUSED_TTL] rather than a hardcoded literal) — the same clock [resolve]'s predicate
+     * reads, so mint and validation can never skew. Returns the stored deadline.
      */
     override fun mintToken(projectId: String, tokenHash: String, scope: String): Instant =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                INSERT INTO api_tokens (project_id, token_hash, scope, expires_unused_at)
-                VALUES (?, ?, ?, now() + (? * interval '1 second'))
-                RETURNING expires_unused_at
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, tokenHash)
-                statement.setString(3, scope)
-                statement.setLong(4, TOKEN_UNUSED_TTL.toSeconds())
-                statement.executeQuery().use { rows ->
-                    rows.next()
-                    rows.getObject(1, OffsetDateTime::class.java).toInstant()
+            connection
+                .prepareStatement(
+                    """
+                    INSERT INTO api_tokens (project_id, token_hash, scope, expires_unused_at)
+                    VALUES (?, ?, ?, now() + (? * interval '1 second'))
+                    RETURNING expires_unused_at
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, tokenHash)
+                    statement.setString(3, scope)
+                    statement.setLong(4, TOKEN_UNUSED_TTL.toSeconds())
+                    statement.executeQuery().use { rows ->
+                        rows.next()
+                        rows.getObject(1, OffsetDateTime::class.java).toInstant()
+                    }
                 }
-            }
         }
 
-    /** Sweep (plan 098): a never-activated token has authenticated nothing, so hard delete is safe. */
+    /**
+     * Sweep (plan 098): a never-activated token has authenticated nothing, so hard delete is safe.
+     */
     override fun deleteExpiredUnactivatedTokens(): Int =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "DELETE FROM api_tokens WHERE activated_at IS NULL AND expires_unused_at < now()",
-            ).use { statement -> statement.executeUpdate() }
+            connection
+                .prepareStatement(
+                    "DELETE FROM api_tokens WHERE activated_at IS NULL AND expires_unused_at < now()"
+                )
+                .use { statement -> statement.executeUpdate() }
         }
 
-    override fun ensureProjectWithToken(projectKey: String, tokenHash: String, scope: String): ProjectRef =
+    @Suppress("NestedBlockDepth") // JDBC resource scopes guarantee deterministic closure and rollback.
+    override fun ensureProjectWithToken(
+        projectKey: String,
+        tokenHash: String,
+        scope: String,
+    ): ProjectRef =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "INSERT INTO projects (project_key) VALUES (?) ON CONFLICT (project_key) DO NOTHING",
-            ).use { statement ->
-                statement.setString(1, projectKey)
-                statement.executeUpdate()
-            }
-            val project = connection.prepareStatement(
-                "SELECT id, project_key FROM projects WHERE project_key = ?",
-            ).use { statement ->
-                statement.setString(1, projectKey)
-                statement.executeQuery().use { rows ->
-                    rows.next()
-                    ProjectRef(id = rows.getString(1), key = rows.getString(2))
+            connection
+                .prepareStatement(
+                    "INSERT INTO projects (project_key) VALUES (?) ON CONFLICT (project_key) DO NOTHING"
+                )
+                .use { statement ->
+                    statement.setString(1, projectKey)
+                    statement.executeUpdate()
                 }
-            }
-            val inserted = connection.prepareStatement(
-                "INSERT INTO api_tokens (project_id, token_hash, scope) VALUES (?, ?, ?) ON CONFLICT (token_hash) DO NOTHING",
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(project.id))
-                statement.setString(2, tokenHash)
-                statement.setString(3, scope)
-                statement.executeUpdate() == 1
-            }
+            val project =
+                connection
+                    .prepareStatement("SELECT id, project_key FROM projects WHERE project_key = ?")
+                    .use { statement ->
+                        statement.setString(1, projectKey)
+                        statement.executeQuery().use { rows ->
+                            rows.next()
+                            ProjectRef(id = rows.getString(1), key = rows.getString(2))
+                        }
+                    }
+            val inserted =
+                connection
+                    .prepareStatement(
+                        "INSERT INTO api_tokens (project_id, token_hash, scope) VALUES (?, ?, ?) " +
+                            "ON CONFLICT (token_hash) DO NOTHING"
+                    )
+                    .use { statement ->
+                        statement.setObject(1, UUID.fromString(project.id))
+                        statement.setString(2, tokenHash)
+                        statement.setString(3, scope)
+                        statement.executeUpdate() == 1
+                    }
             if (!inserted) {
                 // The hash exists — it must belong to THIS project, or boot must fail:
                 // silently resolving another tenant would be cross-tenant misdirection.
-                val owner = connection.prepareStatement(
-                    "SELECT project_id FROM api_tokens WHERE token_hash = ?",
-                ).use { statement ->
-                    statement.setString(1, tokenHash)
-                    statement.executeQuery().use { rows -> if (rows.next()) rows.getString(1) else null }
-                }
+                val owner =
+                    connection
+                        .prepareStatement("SELECT project_id FROM api_tokens WHERE token_hash = ?")
+                        .use { statement ->
+                            statement.setString(1, tokenHash)
+                            statement.executeQuery().use { rows ->
+                                if (rows.next()) rows.getString(1) else null
+                            }
+                        }
                 check(owner == project.id) {
                     "token is already bound to another project — refusing silent cross-tenant reuse"
                 }
@@ -1767,97 +2385,127 @@ class PostgresTokenStore(private val dataSource: DataSource) : TokenStore {
         }
 }
 
-private fun jsonb(value: String): PGobject = PGobject().apply { type = "jsonb"; this.value = value }
+private fun jsonb(value: String): PGobject =
+    PGobject().apply {
+        type = "jsonb"
+        this.value = value
+    }
 
 class PostgresMetricStore(private val dataSource: DataSource) : MetricStore {
 
     override fun upsert(projectId: String, metric: MetricRecord) {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                INSERT INTO custom_metrics (project_id, build_id, provider, run_id, scope, name, value, text_value, unit)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (project_id, coalesce(build_id, ''), coalesce(provider, ''), coalesce(run_id, ''), scope, name)
-                DO UPDATE SET value = EXCLUDED.value, text_value = EXCLUDED.text_value, unit = EXCLUDED.unit, created_at = now()
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, metric.buildId)
-                statement.setString(3, metric.provider)
-                statement.setString(4, metric.runId)
-                statement.setString(5, metric.scope)
-                statement.setString(6, metric.name)
-                metric.value?.let { statement.setDouble(7, it) } ?: statement.setNull(7, java.sql.Types.DOUBLE)
-                statement.setString(8, metric.text)
-                statement.setString(9, metric.unit)
-                statement.executeUpdate()
-            }
+            connection
+                .prepareStatement(
+                    """
+                    INSERT INTO custom_metrics (project_id, build_id, provider, run_id, scope, name, value, text_value, unit)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (project_id, coalesce(build_id, ''), coalesce(provider, ''), coalesce(run_id, ''), scope, name)
+                    DO UPDATE SET value = EXCLUDED.value, text_value = EXCLUDED.text_value, unit = EXCLUDED.unit, created_at = now()
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, metric.buildId)
+                    statement.setString(3, metric.provider)
+                    statement.setString(4, metric.runId)
+                    statement.setString(5, metric.scope)
+                    statement.setString(6, metric.name)
+                    metric.value?.let { statement.setDouble(7, it) }
+                        ?: statement.setNull(7, java.sql.Types.DOUBLE)
+                    statement.setString(8, metric.text)
+                    statement.setString(9, metric.unit)
+                    statement.executeUpdate()
+                }
         }
     }
 
     override fun forBuild(projectId: String, buildId: String): List<MetricRecord> =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT scope, name, value, text_value, unit, build_id, provider, run_id FROM custom_metrics WHERE project_id = ? AND build_id = ?",
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, buildId)
-                statement.executeQuery().use { rows ->
-                    buildList {
-                        while (rows.next()) {
-                            add(
-                                MetricRecord(
-                                    scope = rows.getString("scope"),
-                                    name = rows.getString("name"),
-                                    value = rows.getDouble("value").takeUnless { rows.wasNull() },
-                                    text = rows.getString("text_value"),
-                                    unit = rows.getString("unit"),
-                                    buildId = rows.getString("build_id"),
-                                    provider = rows.getString("provider"),
-                                    runId = rows.getString("run_id"),
-                                ),
-                            )
+            connection
+                .prepareStatement(
+                    "SELECT scope, name, value, text_value, unit, build_id, provider, run_id " +
+                        "FROM custom_metrics WHERE project_id = ? AND build_id = ?"
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, buildId)
+                    statement.executeQuery().use { rows ->
+                        buildList {
+                            while (rows.next()) {
+                                add(
+                                    MetricRecord(
+                                        scope = rows.getString("scope"),
+                                        name = rows.getString("name"),
+                                        value =
+                                            rows.getDouble("value").takeUnless { rows.wasNull() },
+                                        text = rows.getString("text_value"),
+                                        unit = rows.getString("unit"),
+                                        buildId = rows.getString("build_id"),
+                                        provider = rows.getString("provider"),
+                                        runId = rows.getString("run_id"),
+                                    )
+                                )
+                            }
                         }
                     }
                 }
-            }
         }
 
     override fun correlate(projectId: String, provider: String?, runId: String?, buildId: String) {
         if (provider == null && runId == null) return
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                UPDATE custom_metrics SET build_id = ?
-                WHERE project_id = ? AND build_id IS NULL
-                  AND provider IS NOT DISTINCT FROM ? AND run_id IS NOT DISTINCT FROM ?
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setString(1, buildId)
-                statement.setObject(2, UUID.fromString(projectId))
-                statement.setString(3, provider)
-                statement.setString(4, runId)
-                statement.executeUpdate()
-            }
+            connection
+                .prepareStatement(
+                    """
+                    UPDATE custom_metrics SET build_id = ?
+                    WHERE project_id = ? AND build_id IS NULL
+                      AND provider IS NOT DISTINCT FROM ? AND run_id IS NOT DISTINCT FROM ?
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setString(1, buildId)
+                    statement.setObject(2, UUID.fromString(projectId))
+                    statement.setString(3, provider)
+                    statement.setString(4, runId)
+                    statement.executeUpdate()
+                }
         }
     }
 
-    override fun correlationKeys(projectId: String, buildId: String?, provider: String?, runId: String?): Set<String> {
+    override fun correlationKeys(
+        projectId: String,
+        buildId: String?,
+        provider: String?,
+        runId: String?,
+    ): Set<String> {
         val byRun = provider != null || runId != null
-        val where = if (byRun) "provider IS NOT DISTINCT FROM ? AND run_id IS NOT DISTINCT FROM ?" else "build_id IS NOT DISTINCT FROM ?"
+        val where =
+            if (byRun) "provider IS NOT DISTINCT FROM ? AND run_id IS NOT DISTINCT FROM ?"
+            else "build_id IS NOT DISTINCT FROM ?"
         return dataSource.connection.use { connection ->
-            connection.prepareStatement("SELECT scope, name FROM custom_metrics WHERE project_id = ? AND $where").use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                if (byRun) {
-                    statement.setString(2, provider)
-                    statement.setString(3, runId)
-                } else {
-                    statement.setString(2, buildId)
+            connection
+                .prepareStatement(
+                    "SELECT scope, name FROM custom_metrics WHERE project_id = ? AND $where"
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    if (byRun) {
+                        statement.setString(2, provider)
+                        statement.setString(3, runId)
+                    } else {
+                        statement.setString(2, buildId)
+                    }
+                    statement.executeQuery().use { rows ->
+                        buildSet {
+                            while (rows.next()) add(
+                                "${rows.getString("scope")} ${rows.getString("name")}"
+                            )
+                        }
+                    }
                 }
-                statement.executeQuery().use { rows ->
-                    buildSet { while (rows.next()) add("${rows.getString("scope")} ${rows.getString("name")}") }
-                }
-            }
         }
     }
 }
@@ -1868,61 +2516,89 @@ class PostgresVerdictStore(private val dataSource: DataSource) : VerdictStore {
 
     override fun save(projectId: String, buildId: String, verdict: Verdict) {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                INSERT INTO build_verdicts (project_id, build_id, status, baseline_key, detail, evaluated_at)
-                VALUES (?, ?, ?, ?, ?, now())
-                ON CONFLICT (project_id, build_id)
-                DO UPDATE SET status = EXCLUDED.status, baseline_key = EXCLUDED.baseline_key,
-                              detail = EXCLUDED.detail, evaluated_at = now()
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, buildId)
-                statement.setString(3, verdict.status)
-                statement.setString(4, verdict.baselineKey)
-                statement.setObject(5, jsonb(BuildHoundJson.payload.encodeToString(metricsSerializer, verdict.metrics)))
-                statement.executeUpdate()
-            }
+            connection
+                .prepareStatement(
+                    """
+                    INSERT INTO build_verdicts (project_id, build_id, status, baseline_key, detail, evaluated_at)
+                    VALUES (?, ?, ?, ?, ?, now())
+                    ON CONFLICT (project_id, build_id)
+                    DO UPDATE SET status = EXCLUDED.status, baseline_key = EXCLUDED.baseline_key,
+                                  detail = EXCLUDED.detail, evaluated_at = now()
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, buildId)
+                    statement.setString(3, verdict.status)
+                    statement.setString(4, verdict.baselineKey)
+                    statement.setObject(
+                        5,
+                        jsonb(
+                            BuildHoundJson.payload.encodeToString(
+                                metricsSerializer,
+                                verdict.metrics,
+                            )
+                        ),
+                    )
+                    statement.executeUpdate()
+                }
         }
     }
 
     override fun find(projectId: String, buildId: String): Verdict? =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                SELECT status, baseline_key, detail, (extract(epoch from evaluated_at) * 1000)::bigint AS ms
-                FROM build_verdicts WHERE project_id = ? AND build_id = ?
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, buildId)
-                statement.executeQuery().use { rows ->
-                    if (!rows.next()) null
-                    else Verdict(
-                        status = rows.getString("status"),
-                        metrics = BuildHoundJson.payload.decodeFromString(metricsSerializer, rows.getString("detail")),
-                        baselineKey = rows.getString("baseline_key"),
-                        evaluatedAt = rows.getLong("ms"),
-                    )
+            connection
+                .prepareStatement(
+                    """
+                    SELECT status, baseline_key, detail, (extract(epoch from evaluated_at) * 1000)::bigint AS ms
+                    FROM build_verdicts WHERE project_id = ? AND build_id = ?
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, buildId)
+                    statement.executeQuery().use { rows ->
+                        if (!rows.next()) null
+                        else
+                            Verdict(
+                                status = rows.getString("status"),
+                                metrics =
+                                    BuildHoundJson.payload.decodeFromString(
+                                        metricsSerializer,
+                                        rows.getString("detail"),
+                                    ),
+                                baselineKey = rows.getString("baseline_key"),
+                                evaluatedAt = rows.getLong("ms"),
+                            )
+                    }
                 }
-            }
         }
 
-    override fun latestStatusForKey(projectId: String, baselineKey: String, excludingBuildId: String): String? =
+    override fun latestStatusForKey(
+        projectId: String,
+        baselineKey: String,
+        excludingBuildId: String,
+    ): String? =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                SELECT status FROM build_verdicts
-                WHERE project_id = ? AND baseline_key = ? AND build_id <> ?
-                ORDER BY evaluated_at DESC, build_id DESC LIMIT 1
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, baselineKey)
-                statement.setString(3, excludingBuildId)
-                statement.executeQuery().use { rows -> if (rows.next()) rows.getString(1) else null }
-            }
+            connection
+                .prepareStatement(
+                    """
+                    SELECT status FROM build_verdicts
+                    WHERE project_id = ? AND baseline_key = ? AND build_id <> ?
+                    ORDER BY evaluated_at DESC, build_id DESC LIMIT 1
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, baselineKey)
+                    statement.setString(3, excludingBuildId)
+                    statement.executeQuery().use { rows ->
+                        if (rows.next()) rows.getString(1) else null
+                    }
+                }
         }
 }
 
@@ -1933,62 +2609,96 @@ class PostgresSettingsStore(private val dataSource: DataSource) : SettingsStore 
 
     override fun get(projectId: String): ProjectSettings? =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT baseline_n, default_branch, warn_z, fail_z, budgets, alert_channels FROM project_settings WHERE project_id = ?",
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.executeQuery().use { rows ->
-                    if (!rows.next()) null
-                    else ProjectSettings(
-                        baselineN = rows.getInt("baseline_n"),
-                        defaultBranch = rows.getString("default_branch"),
-                        warnZ = rows.getDouble("warn_z"),
-                        failZ = rows.getDouble("fail_z"),
-                        budgets = BuildHoundJson.payload.decodeFromString(budgetsSerializer, rows.getString("budgets")),
-                        alertChannels = BuildHoundJson.payload.decodeFromString(channelsSerializer, rows.getString("alert_channels")),
-                    )
+            connection
+                .prepareStatement(
+                    "SELECT baseline_n, default_branch, warn_z, fail_z, budgets, alert_channels " +
+                        "FROM project_settings WHERE project_id = ?"
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.executeQuery().use { rows ->
+                        if (!rows.next()) null
+                        else
+                            ProjectSettings(
+                                baselineN = rows.getInt("baseline_n"),
+                                defaultBranch = rows.getString("default_branch"),
+                                warnZ = rows.getDouble("warn_z"),
+                                failZ = rows.getDouble("fail_z"),
+                                budgets =
+                                    BuildHoundJson.payload.decodeFromString(
+                                        budgetsSerializer,
+                                        rows.getString("budgets"),
+                                    ),
+                                alertChannels =
+                                    BuildHoundJson.payload.decodeFromString(
+                                        channelsSerializer,
+                                        rows.getString("alert_channels"),
+                                    ),
+                            )
+                    }
                 }
-            }
         }
 
     override fun put(projectId: String, settings: ProjectSettings) {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                INSERT INTO project_settings (project_id, baseline_n, default_branch, warn_z, fail_z, budgets, alert_channels, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, now())
-                ON CONFLICT (project_id)
-                DO UPDATE SET baseline_n = EXCLUDED.baseline_n, default_branch = EXCLUDED.default_branch,
-                              warn_z = EXCLUDED.warn_z, fail_z = EXCLUDED.fail_z, budgets = EXCLUDED.budgets,
-                              alert_channels = EXCLUDED.alert_channels, updated_at = now()
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setInt(2, settings.baselineN)
-                statement.setString(3, settings.defaultBranch)
-                statement.setDouble(4, settings.warnZ)
-                statement.setDouble(5, settings.failZ)
-                statement.setObject(6, jsonb(BuildHoundJson.payload.encodeToString(budgetsSerializer, settings.budgets)))
-                statement.setObject(7, jsonb(BuildHoundJson.payload.encodeToString(channelsSerializer, settings.alertChannels)))
-                statement.executeUpdate()
-            }
+            connection
+                .prepareStatement(
+                    """
+                    INSERT INTO project_settings (project_id, baseline_n, default_branch, warn_z, fail_z, budgets, alert_channels, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, now())
+                    ON CONFLICT (project_id)
+                    DO UPDATE SET baseline_n = EXCLUDED.baseline_n, default_branch = EXCLUDED.default_branch,
+                                  warn_z = EXCLUDED.warn_z, fail_z = EXCLUDED.fail_z, budgets = EXCLUDED.budgets,
+                                  alert_channels = EXCLUDED.alert_channels, updated_at = now()
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setInt(2, settings.baselineN)
+                    statement.setString(3, settings.defaultBranch)
+                    statement.setDouble(4, settings.warnZ)
+                    statement.setDouble(5, settings.failZ)
+                    statement.setObject(
+                        6,
+                        jsonb(
+                            BuildHoundJson.payload.encodeToString(
+                                budgetsSerializer,
+                                settings.budgets,
+                            )
+                        ),
+                    )
+                    statement.setObject(
+                        7,
+                        jsonb(
+                            BuildHoundJson.payload.encodeToString(
+                                channelsSerializer,
+                                settings.alertChannels,
+                            )
+                        ),
+                    )
+                    statement.executeUpdate()
+                }
         }
     }
 
     override fun retention(projectId: String): RetentionConfig =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT retention_raw_days, retention_build_days FROM project_settings WHERE project_id = ?",
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.executeQuery().use { rows ->
-                    if (!rows.next()) RetentionConfig.DEFAULT
-                    else RetentionConfig(
-                        rawDays = rows.getInt("retention_raw_days"),
-                        buildDays = rows.getInt("retention_build_days"),
-                    )
+            connection
+                .prepareStatement(
+                    "SELECT retention_raw_days, retention_build_days FROM project_settings WHERE project_id = ?"
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.executeQuery().use { rows ->
+                        if (!rows.next()) RetentionConfig.DEFAULT
+                        else
+                            RetentionConfig(
+                                rawDays = rows.getInt("retention_raw_days"),
+                                buildDays = rows.getInt("retention_build_days"),
+                            )
+                    }
                 }
-            }
         }
 
     override fun setRetention(projectId: String, config: RetentionConfig) {
@@ -1996,20 +2706,23 @@ class PostgresSettingsStore(private val dataSource: DataSource) : SettingsStore 
         // defaults on a fresh insert and are left untouched on conflict (setRetention must never
         // clobber a project's regression config, and put() must never clobber retention).
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                INSERT INTO project_settings (project_id, retention_raw_days, retention_build_days, updated_at)
-                VALUES (?, ?, ?, now())
-                ON CONFLICT (project_id)
-                DO UPDATE SET retention_raw_days = EXCLUDED.retention_raw_days,
-                              retention_build_days = EXCLUDED.retention_build_days, updated_at = now()
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setInt(2, config.rawDays)
-                statement.setInt(3, config.buildDays)
-                statement.executeUpdate()
-            }
+            connection
+                .prepareStatement(
+                    """
+                    INSERT INTO project_settings (project_id, retention_raw_days, retention_build_days, updated_at)
+                    VALUES (?, ?, ?, now())
+                    ON CONFLICT (project_id)
+                    DO UPDATE SET retention_raw_days = EXCLUDED.retention_raw_days,
+                                  retention_build_days = EXCLUDED.retention_build_days, updated_at = now()
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setInt(2, config.rawDays)
+                    statement.setInt(3, config.buildDays)
+                    statement.executeUpdate()
+                }
         }
     }
 }
@@ -2021,53 +2734,73 @@ class PostgresAddonStore(private val dataSource: DataSource) : AddonStore {
 
     override fun get(projectId: String, addonId: String, key: String): JsonElement? =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT value FROM addon_data WHERE project_id = ? AND addon_id = ? AND key = ?",
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, addonId)
-                statement.setString(3, key)
-                statement.executeQuery().use { rows ->
-                    if (!rows.next()) null
-                    else BuildHoundJson.payload.decodeFromString(elementSerializer, rows.getString("value"))
+            connection
+                .prepareStatement(
+                    "SELECT value FROM addon_data WHERE project_id = ? AND addon_id = ? AND key = ?"
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, addonId)
+                    statement.setString(3, key)
+                    statement.executeQuery().use { rows ->
+                        if (!rows.next()) null
+                        else
+                            BuildHoundJson.payload.decodeFromString(
+                                elementSerializer,
+                                rows.getString("value"),
+                            )
+                    }
                 }
-            }
         }
 
     override fun put(projectId: String, addonId: String, key: String, value: JsonElement) {
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                """
-                INSERT INTO addon_data (project_id, addon_id, key, value, updated_at)
-                VALUES (?, ?, ?, ?, now())
-                ON CONFLICT (project_id, addon_id, key)
-                DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-                """.trimIndent(),
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, addonId)
-                statement.setString(3, key)
-                statement.setObject(4, jsonb(BuildHoundJson.payload.encodeToString(elementSerializer, value)))
-                statement.executeUpdate()
-            }
+            connection
+                .prepareStatement(
+                    """
+                    INSERT INTO addon_data (project_id, addon_id, key, value, updated_at)
+                    VALUES (?, ?, ?, ?, now())
+                    ON CONFLICT (project_id, addon_id, key)
+                    DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                    """
+                        .trimIndent()
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, addonId)
+                    statement.setString(3, key)
+                    statement.setObject(
+                        4,
+                        jsonb(BuildHoundJson.payload.encodeToString(elementSerializer, value)),
+                    )
+                    statement.executeUpdate()
+                }
         }
     }
 
     override fun all(projectId: String, addonId: String): Map<String, JsonElement> =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT key, value FROM addon_data WHERE project_id = ? AND addon_id = ? ORDER BY key",
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, addonId)
-                statement.executeQuery().use { rows ->
-                    buildMap {
-                        while (rows.next()) {
-                            put(rows.getString("key"), BuildHoundJson.payload.decodeFromString(elementSerializer, rows.getString("value")))
+            connection
+                .prepareStatement(
+                    "SELECT key, value FROM addon_data WHERE project_id = ? AND addon_id = ? ORDER BY key"
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, addonId)
+                    statement.executeQuery().use { rows ->
+                        buildMap {
+                            while (rows.next()) {
+                                put(
+                                    rows.getString("key"),
+                                    BuildHoundJson.payload.decodeFromString(
+                                        elementSerializer,
+                                        rows.getString("value"),
+                                    ),
+                                )
+                            }
                         }
                     }
                 }
-            }
         }
 }
 
@@ -2076,20 +2809,32 @@ class PostgresShardPlanStore(private val dataSource: DataSource) : ShardPlanStor
 
     private val planSerializer = ListSerializer(ListSerializer(String.serializer()))
 
-    override fun planOrCompute(projectId: String, reference: String, total: Int, compute: () -> List<List<String>>): List<List<String>> {
-        readPlan(projectId, reference, total)?.let { return it }
+    override fun planOrCompute(
+        projectId: String,
+        reference: String,
+        total: Int,
+        compute: () -> List<List<String>>,
+    ): List<List<String>> {
+        readPlan(projectId, reference, total)?.let {
+            return it
+        }
         val computed = compute()
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "INSERT INTO shard_plans (project_id, reference, total, plan) VALUES (?, ?, ?, ?) " +
-                    "ON CONFLICT (project_id, reference, total) DO NOTHING",
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, reference)
-                statement.setInt(3, total)
-                statement.setObject(4, jsonb(BuildHoundJson.payload.encodeToString(planSerializer, computed)))
-                statement.executeUpdate()
-            }
+            connection
+                .prepareStatement(
+                    "INSERT INTO shard_plans (project_id, reference, total, plan) VALUES (?, ?, ?, ?) " +
+                        "ON CONFLICT (project_id, reference, total) DO NOTHING"
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, reference)
+                    statement.setInt(3, total)
+                    statement.setObject(
+                        4,
+                        jsonb(BuildHoundJson.payload.encodeToString(planSerializer, computed)),
+                    )
+                    statement.executeUpdate()
+                }
         }
         // Re-read so a caller that lost the ON CONFLICT race returns the winner's (same-key) plan.
         return readPlan(projectId, reference, total) ?: computed
@@ -2097,16 +2842,22 @@ class PostgresShardPlanStore(private val dataSource: DataSource) : ShardPlanStor
 
     private fun readPlan(projectId: String, reference: String, total: Int): List<List<String>>? =
         dataSource.connection.use { connection ->
-            connection.prepareStatement(
-                "SELECT plan FROM shard_plans WHERE project_id = ? AND reference = ? AND total = ?",
-            ).use { statement ->
-                statement.setObject(1, UUID.fromString(projectId))
-                statement.setString(2, reference)
-                statement.setInt(3, total)
-                statement.executeQuery().use { rows ->
-                    if (!rows.next()) null
-                    else BuildHoundJson.payload.decodeFromString(planSerializer, rows.getString("plan"))
+            connection
+                .prepareStatement(
+                    "SELECT plan FROM shard_plans WHERE project_id = ? AND reference = ? AND total = ?"
+                )
+                .use { statement ->
+                    statement.setObject(1, UUID.fromString(projectId))
+                    statement.setString(2, reference)
+                    statement.setInt(3, total)
+                    statement.executeQuery().use { rows ->
+                        if (!rows.next()) null
+                        else
+                            BuildHoundJson.payload.decodeFromString(
+                                planSerializer,
+                                rows.getString("plan"),
+                            )
+                    }
                 }
-            }
         }
 }

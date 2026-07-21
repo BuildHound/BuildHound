@@ -45,8 +45,8 @@ object MetricsSnapshotCalculator {
         val durations = builds.map { it.durationMs }.sorted()
         return MetricsSnapshot(
             windowDays = windowDays,
-            p50DurationMs = if (durations.isEmpty()) null else percentile(durations, 0.50),
-            p95DurationMs = if (durations.isEmpty()) null else percentile(durations, 0.95),
+            p50DurationMs = if (durations.isEmpty()) null else percentile(durations, P50_QUANTILE),
+            p95DurationMs = if (durations.isEmpty()) null else percentile(durations, P95_QUANTILE),
             // sorted() before average() keeps the fold order-independent (same discipline as
             // BottleneckCalculator.avgHitRate) so in-memory and Postgres agree byte-for-byte
             // regardless of the row order each store reads them in.

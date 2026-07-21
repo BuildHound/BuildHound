@@ -96,7 +96,7 @@ internal object WrapperParsing {
                 digest.update(buffer, 0, read)
             }
         }
-        return digest.digest().joinToString("") { byte -> ((byte.toInt() and 0xff) + 0x100).toString(16).substring(1) }
+        return digest.digest().toLowerHex()
     }
 
     /**
@@ -165,8 +165,12 @@ abstract class WrapperValueSource : ValueSource<CollectedWrapper, WrapperValueSo
         val pinned = guarded("wrapper-pinned") { WrapperParsing.isPinned(properties) }
 
         val jarFile = parameters.jarFile.orNull?.let(::File)
-        val jarSha256 = jarFile?.let { file -> guarded("wrapper-jar-sha") { WrapperParsing.sha256Hex(file) } }
-        val jarMtimeMs = jarFile?.let { file -> guarded("wrapper-jar-mtime") { file.takeIf { it.isFile }?.lastModified() } }
+        val jarSha256 = jarFile?.let { file ->
+            guarded("wrapper-jar-sha") { WrapperParsing.sha256Hex(file) }
+        }
+        val jarMtimeMs = jarFile?.let { file ->
+            guarded("wrapper-jar-mtime") { file.takeIf { it.isFile }?.lastModified() }
+        }
 
         val gradleVersion = guarded("gradle-version") { GradleVersion.current().version }
         val distProbe = guarded("guh-dist-probe") {

@@ -1,5 +1,6 @@
 package dev.buildhound.server.connector
 
+import dev.buildhound.server.MILLIS_PER_SECOND
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -85,7 +86,7 @@ class GitLabConnector(
 
     private suspend fun get(url: String, token: String) = runCatching {
         val response = client.get(url) { header("PRIVATE-TOKEN", token) }
-        if (response.status.value !in 200..299) {
+        if (response.status.value !in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX) {
             logger.warn("gitlab connector: {} returned {}", url.substringBefore('?'), response.status.value)
             return@runCatching null
         }
@@ -119,16 +120,21 @@ class GitLabConnector(
                     parentId = stageId,
                 )
             }
-            spans += CiSpan(
-                id = stageId,
-                kind = SpanKind.STAGE,
-                name = stage,
-                startMs = jobSpans.mapNotNull { it.startMs }.minOrNull(),
-                // A stage is only finished once every one of its jobs is; if any is still running
-                // (result==null), report no finish so a consumer can't read a premature stage end.
-                finishMs = if (jobSpans.any { it.result == null }) null else jobSpans.mapNotNull { it.finishMs }.maxOrNull(),
-                result = aggregate(jobSpans.map { it.result }),
-            )
+            spans +=
+                CiSpan(
+                    id = stageId,
+                    kind = SpanKind.STAGE,
+                    name = stage,
+                    startMs = jobSpans.mapNotNull { it.startMs }.minOrNull(),
+                    // A stage is only finished once every one of its jobs is; if any is still
+                    // running
+                    // (result==null), report no finish so a consumer can't read a premature stage
+                    // end.
+                    finishMs =
+                        if (jobSpans.any { it.result == null }) null
+                        else jobSpans.mapNotNull { it.finishMs }.maxOrNull(),
+                    result = aggregate(jobSpans.map { it.result }),
+                )
             spans += jobSpans
         }
         return spans
@@ -161,17 +167,22 @@ class GitLabConnector(
         }
 
         /** A stage's result = the worst of its jobs (failed ≻ canceled ≻ running ≻ succeeded). */
-        fun aggregate(results: List<SpanResult?>): SpanResult? = when {
-            results.any { it == SpanResult.FAILED } -> SpanResult.FAILED
-            results.any { it == SpanResult.CANCELED } -> SpanResult.CANCELED
-            results.any { it == null } -> null // a job still running ⇒ the stage is not concluded
-            results.isNotEmpty() && results.all { it == SpanResult.SUCCEEDED || it == SpanResult.SKIPPED } -> SpanResult.SUCCEEDED
-            else -> SpanResult.UNKNOWN
-        }
+        fun aggregate(results: List<SpanResult?>): SpanResult? =
+            when {
+                results.any { it == SpanResult.FAILED } -> SpanResult.FAILED
+                results.any { it == SpanResult.CANCELED } -> SpanResult.CANCELED
+                results.any { it == null } ->
+                    null // a job still running ⇒ the stage is not concluded
+                results.isNotEmpty() &&
+                    results.all { it == SpanResult.SUCCEEDED || it == SpanResult.SKIPPED } ->
+                    SpanResult.SUCCEEDED
+                else -> SpanResult.UNKNOWN
+            }
 
         /** A numeric-seconds JSON field (GitLab `queued_duration`) → epoch-agnostic millis; null if absent. */
         fun JsonObject.secondsToMs(key: String): Long? =
-            (this[key] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.let { (it * 1000).toLong() }
+            (this[key] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()
+                ?.let { (it * MILLIS_PER_SECOND).toLong() }
 
         data class Parsed(val host: String, val projectPath: String)
 

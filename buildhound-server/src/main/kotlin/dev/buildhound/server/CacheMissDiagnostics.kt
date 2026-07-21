@@ -101,7 +101,8 @@ object RelocatabilityDetector {
 
         return rows.groupBy { it.taskPath }
             .mapNotNull { (path, group) ->
-                if (group.any { it.origin == RelocatabilityOrigin.REMOTE_HIT }) return@mapNotNull null // relocated fine somewhere
+                if (group.any { it.origin == RelocatabilityOrigin.REMOTE_HIT })
+                    return@mapNotNull null // relocated fine somewhere
                 val executed = group.filter { it.origin.isNonHitExecution && it.cacheable != false }
                 // wastedMs sums the same hosted subset crossHostCount counts (evidence-set consistency,
                 // never a row whose host is uncaptured) — see NonRelocatableCandidate's KDoc.
@@ -118,7 +119,10 @@ object RelocatabilityDetector {
                 )
             }
             .sortedWith(
-                compareByDescending<NonRelocatableCandidate> { it.crossHostCount.toLong() * it.wastedMs }.thenBy { it.taskPath },
+                compareByDescending<NonRelocatableCandidate> {
+                        it.crossHostCount.toLong() * it.wastedMs
+                    }
+                    .thenBy { it.taskPath }
             )
     }
 }
@@ -172,9 +176,14 @@ object FingerprintVolatilityDetector {
             .values
             .filter { it.size >= MIN_STREAM }
             .forEach { unordered ->
-                // (startedAt, buildId) tie-break: both stores must agree even when two builds on the
-                // same host share a millisecond timestamp (the plan-026/032 determinism discipline).
-                val stream = unordered.sortedWith(compareBy<FingerprintStreamRow> { it.startedAt }.thenBy { it.buildId })
+                // (startedAt, buildId) tie-break: both stores must agree even when two builds on
+                // the
+                // same host share a millisecond timestamp (the plan-026/032 determinism
+                // discipline).
+                val stream =
+                    unordered.sortedWith(
+                        compareBy<FingerprintStreamRow> { it.startedAt }.thenBy { it.buildId }
+                    )
                 val keys = stream.flatMap { it.fingerprints.keys }.toSet()
                 if (keys.isEmpty()) return@forEach
                 val transitions = stream.size - 1
@@ -183,7 +192,9 @@ object FingerprintVolatilityDetector {
                     for (i in 0 until transitions) {
                         if (stream[i].fingerprints[key] != stream[i + 1].fingerprints[key]) changed++
                     }
-                    perKeyStreamVolatilities.getOrPut(key) { mutableListOf() }.add(roundTo6(changed.toDouble() / transitions))
+                    perKeyStreamVolatilities
+                        .getOrPut(key) { mutableListOf() }
+                        .add(roundTo6(changed.toDouble() / transitions))
                 }
             }
 
@@ -197,7 +208,7 @@ object FingerprintVolatilityDetector {
         }.sortedWith(compareByDescending<VolatileInput> { it.volatility }.thenBy { it.key })
     }
 
-    private fun roundTo6(value: Double): Double = Math.round(value * 1_000_000.0) / 1_000_000.0
+    private fun roundTo6(value: Double): Double = Math.round(value * SIX_DECIMAL_FACTOR) / SIX_DECIMAL_FACTOR
 }
 
 /**

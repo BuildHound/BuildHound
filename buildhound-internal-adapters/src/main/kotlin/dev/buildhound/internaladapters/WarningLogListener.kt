@@ -22,13 +22,14 @@ class WarningLogListener : OutputEventListener {
     private val state = InternalAdaptersState
 
     override fun onOutput(event: OutputEvent) {
-        if (!state.collectLogWarnings()) return
-        runCatching {
-            if (event !is LogEvent) return
-            if (!isWarn(event)) return
-            val message = event.message // platform String!; guard for a runtime null defensively
-            if (message.isNullOrBlank()) return
-            state.accumulator().addLogWarning(message)
+        if (state.collectLogWarnings()) {
+            runCatching {
+                val logEvent = event as? LogEvent
+                val message = logEvent?.takeIf(::isWarn)?.message
+                if (!message.isNullOrBlank()) {
+                    state.accumulator().addLogWarning(message)
+                }
+            }
         }
     }
 

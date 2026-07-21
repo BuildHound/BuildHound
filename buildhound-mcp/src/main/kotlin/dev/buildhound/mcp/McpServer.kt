@@ -38,7 +38,7 @@ class McpServer(
             "tools/call" -> toolCall(id, request["params"] as? JsonObject)
             // A notification (initialized, cancelled, …) has no id and expects no reply.
             "notifications/initialized" -> null
-            else -> if (id == null) null else error(id, -32601, "method not found: $method")
+            else -> if (id == null) null else error(id, METHOD_NOT_FOUND, "method not found: $method")
         }
     }
 
@@ -65,8 +65,8 @@ class McpServer(
         return try {
             val body = fetch(tool.buildPath(args))
             result(id, toolContent(body, isError = false))
-        } catch (e: Exception) {
-            result(id, toolContent("error: ${e.message}", isError = true))
+        } catch (expected: Exception) {
+            result(id, toolContent("error: ${expected.message}", isError = true))
         }
     }
 
@@ -107,5 +107,6 @@ class McpServer(
 
     private companion object {
         const val PROTOCOL_VERSION = "2024-11-05"
+        const val METHOD_NOT_FOUND = -32601
     }
 }

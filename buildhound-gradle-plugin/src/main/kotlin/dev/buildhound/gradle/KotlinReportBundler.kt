@@ -25,7 +25,13 @@ internal object KotlinReportBundler {
     private const val WINDOW_MARGIN_MS = 60_000L
     private const val MAX_TASKS = 200
 
-    fun bundle(jsonDirectory: String?, startedAtMs: Long, rootDir: String? = null, warn: (String) -> Unit = {}): KotlinInfo? {
+    @Suppress("ReturnCount") // Missing or stale reports are independent, expected absence cases.
+    fun bundle(
+        jsonDirectory: String?,
+        startedAtMs: Long,
+        rootDir: String? = null,
+        warn: (String) -> Unit = {},
+    ): KotlinInfo? {
         if (jsonDirectory.isNullOrBlank()) return null
         return runCatching {
             val dir = resolveReportDir(jsonDirectory, rootDir)
@@ -50,7 +56,7 @@ internal object KotlinReportBundler {
             val allTasks = ArrayList<KotlinTaskReport>()
             for (file in candidates.take(MAX_FILES)) {
                 if (file.length() > MAX_FILE_BYTES) {
-                    warn("[buildhound] kotlin report file over ${MAX_FILE_BYTES / (1024 * 1024)} MiB; skipped")
+                    warn("[buildhound] kotlin report file over ${MAX_FILE_BYTES / BYTES_PER_MIB} MiB; skipped")
                     continue
                 }
                 val parsed = KotlinReportParser.parse(file.readText()) ?: continue
@@ -119,7 +125,9 @@ internal object KotlinReportBundler {
         }
     }
 
-    private val COPY_PASTE =
+    private const val COPY_PASTE =
         "    kotlin.build.report.output=JSON\n" +
             "    kotlin.build.report.json.directory=build/kotlin-build-reports"
 }
+
+private const val BYTES_PER_MIB = 1_048_576L

@@ -27,9 +27,13 @@ class TestShardingSettingsPlugin : Plugin<Settings> {
             val index = providers.environmentVariable("BUILDHOUND_SHARD_INDEX").orNull?.toIntOrNull()
             val total = providers.environmentVariable("BUILDHOUND_SHARD_TOTAL").orNull?.toIntOrNull()
             // No / invalid index ⇒ inert: no HTTP, no filter, no service — behaves as if unapplied.
-            if (index == null || total == null || index < 1 || total < 1 || index > total) {
+            if (!isValidShard(index, total)) {
                 if (index != null || total != null) {
-                    logger.warn("[buildhound-test-sharding] invalid BUILDHOUND_SHARD_INDEX/_TOTAL ({}/{}); running all tests", index, total)
+                    logger.warn(
+                        "[buildhound-test-sharding] invalid BUILDHOUND_SHARD_INDEX/_TOTAL ({}/{}); running all tests",
+                        index,
+                        total,
+                    )
                 }
                 return@runCatching
             }
@@ -37,7 +41,9 @@ class TestShardingSettingsPlugin : Plugin<Settings> {
             val reference = providers.environmentVariable("BUILDHOUND_SHARD_REFERENCE").orNull
                 ?: providers.environmentVariable("BUILDHOUND_CI_RUN_ID").orNull
             if (reference.isNullOrBlank()) {
-                logger.warn("[buildhound-test-sharding] no BUILDHOUND_SHARD_REFERENCE / BUILDHOUND_CI_RUN_ID; running all tests")
+                logger.warn(
+                    "[buildhound-test-sharding] no BUILDHOUND_SHARD_REFERENCE / BUILDHOUND_CI_RUN_ID; running all tests"
+                )
                 return@runCatching
             }
 
@@ -61,7 +67,13 @@ class TestShardingSettingsPlugin : Plugin<Settings> {
                         .flatMap { it.testClassesDirs.files.map(File::getPath) }
                         .distinct()
                     ShardingState.setTestDirs(dirs)
-                }.onFailure { logger.info("[buildhound-test-sharding] test-dir walk unavailable (running all): {}", it.message) }
+                }
+                    .onFailure {
+                        logger.info(
+                            "[buildhound-test-sharding] test-dir walk unavailable (running all): {}",
+                            it.message,
+                        )
+                    }
             }
 
             // Wire the per-Test-task filter via a top-level installer so the IsolatedAction captures only
@@ -77,6 +89,12 @@ class TestShardingSettingsPlugin : Plugin<Settings> {
 /** The shared shard-plan service name; registered at settings time, re-derived per project by name. */
 private const val SHARD_SERVICE_NAME: String = "buildhoundTestShardPlan"
 
+private fun isValidShard(index: Int?, total: Int?): Boolean {
+    if (index == null || total == null) return false
+    if (index < 1 || total < 1) return false
+    return index <= total
+}
+
 /**
  * Registers the per-`Test`-task shard filter (plan 040). A **top-level** function so the
  * `gradle.lifecycle.beforeProject` `IsolatedAction` captures only [isLastShard] (a `Boolean`) — never
@@ -89,12 +107,22 @@ private const val SHARD_SERVICE_NAME: String = "buildhoundTestShardPlan"
 private fun installShardFilter(gradle: org.gradle.api.invocation.Gradle, isLastShard: Boolean) {
     gradle.lifecycle.beforeProject { project ->
         runCatching {
-            val service = project.gradle.sharedServices.registerIfAbsent(SHARD_SERVICE_NAME, ShardPlanService::class.java) {}
+            val service =
+                project.gradle.sharedServices.registerIfAbsent(
+                    SHARD_SERVICE_NAME,
+                    ShardPlanService::class.java,
+                ) {}
             project.tasks.withType(Test::class.java).configureEach { task ->
                 task.usesService(service)
                 task.doFirst { applyShard(service.get(), it as Test, isLastShard) }
             }
-        }.onFailure { project.logger.info("[buildhound-test-sharding] filter wiring skipped: {}", it::class.java.simpleName) }
+        }
+            .onFailure {
+                project.logger.info(
+                    "[buildhound-test-sharding] filter wiring skipped: {}",
+                    it::class.java.simpleName,
+                )
+            }
     }
 }
 
@@ -108,7 +136,9 @@ private fun applyShard(service: ShardPlanService, task: Test, isLastShard: Boole
         plan.classes.forEach { filter.includeTestsMatching(it) }
         // The last shard also runs anything the plan didn't assign (drift catch-all, Tuist §1.2).
         if (isLastShard) {
-            val unassigned = SuiteDiscovery.discover(task.testClassesDirs.files.toList()).toSet() - plan.assigned.toSet()
+            val unassigned =
+                SuiteDiscovery.discover(task.testClassesDirs.files.toList()).toSet() -
+                    plan.assigned.toSet()
             unassigned.forEach { filter.includeTestsMatching(it) }
         }
     }.onFailure {

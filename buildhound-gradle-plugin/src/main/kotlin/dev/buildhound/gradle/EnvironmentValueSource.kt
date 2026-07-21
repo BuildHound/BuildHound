@@ -70,7 +70,10 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
         val hostname = guarded("hostname") { InetAddress.getLocalHost().hostName }
         val username = guarded("user") { System.getProperty("user.name") }
         val pseudonymize = parameters.pseudonymize.getOrElse(true)
-        val salt = if (pseudonymize) guarded("salt") { IdentitySalt.readOrCreate(parameters.identitySaltFile.orNull) } else null
+        val salt =
+            if (pseudonymize)
+                guarded("salt") { IdentitySalt.readOrCreate(parameters.identitySaltFile.orNull) }
+            else null
         val identity = IdentityHashing.identityFields(pseudonymize, salt, username, hostname)
         // IDE + AI-agent detection (plan 027), pure over env + sysprop snapshots. IDE is skipped
         // when a CI context is present (an IDE never runs CI); agent detection runs regardless.
@@ -106,7 +109,7 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
     private fun totalRamMb(): Long? {
         val bean = ManagementFactory.getOperatingSystemMXBean()
         return (bean as? com.sun.management.OperatingSystemMXBean)
-            ?.totalMemorySize?.let { it / (1024 * 1024) }
+            ?.totalMemorySize?.let { it / BYTES_PER_MIB }
     }
 
     private fun <T> guarded(what: String, block: () -> T?): T? =
@@ -119,3 +122,5 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
         val logger = Logging.getLogger(EnvironmentValueSource::class.java)
     }
 }
+
+private const val BYTES_PER_MIB = 1_048_576L

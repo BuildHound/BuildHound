@@ -96,9 +96,9 @@ fun rateLimitsFromEnvironment(env: Map<String, String>): RateLimits {
         return parsed
     }
     return RateLimits(
-        ingestPerMinute = rpm("BUILDHOUND_INGEST_RPM", 60),
-        queryPerMinute = rpm("BUILDHOUND_QUERY_RPM", 120),
-        perHostPerMinute = rpm("BUILDHOUND_HOST_RPM", 600),
+        ingestPerMinute = rpm("BUILDHOUND_INGEST_RPM", DEFAULT_INGEST_RPM),
+        queryPerMinute = rpm("BUILDHOUND_QUERY_RPM", DEFAULT_QUERY_RPM),
+        perHostPerMinute = rpm("BUILDHOUND_HOST_RPM", DEFAULT_HOST_RPM),
     )
 }
 
@@ -131,6 +131,9 @@ fun main() {
  * 401-everything — fail closed.
  */
 private val applicationLogger = LoggerFactory.getLogger("dev.buildhound.server.Application")
+private const val DEFAULT_INGEST_RPM = 60
+private const val DEFAULT_QUERY_RPM = 120
+private const val DEFAULT_HOST_RPM = 600
 
 fun storesFromEnvironment(env: Map<String, String>): ServerStores {
     val logger = applicationLogger

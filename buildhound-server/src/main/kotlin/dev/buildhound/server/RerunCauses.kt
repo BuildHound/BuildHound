@@ -10,7 +10,15 @@ import kotlinx.serialization.Serializable
  * [UNCLASSIFIED] is a first-class, never-silently-dropped bucket: both an unrecognized (version-drifted)
  * reason string and a `PayloadCapper`-truncated (emptied) reason list land here.
  */
-enum class RerunCause { SOURCE, IMPL_CLASSPATH, UPSTREAM_OUTPUT, OUTPUT_MISSING, CACHING_DISABLED, FORCED, UNCLASSIFIED }
+enum class RerunCause {
+    SOURCE,
+    IMPL_CLASSPATH,
+    UPSTREAM_OUTPUT,
+    OUTPUT_MISSING,
+    CACHING_DISABLED,
+    FORCED,
+    UNCLASSIFIED,
+}
 
 /**
  * Version-tolerant substring classification of one Gradle task's `executionReasons` entry (plan 061,
@@ -35,6 +43,7 @@ enum class RerunCause { SOURCE, IMPL_CLASSPATH, UPSTREAM_OUTPUT, OUTPUT_MISSING,
  */
 object RerunCauseClassifier {
 
+    @Suppress("CyclomaticComplexMethod") // Ordered classifier precedence is part of the documented contract.
     fun classify(reason: String): RerunCause {
         val r = reason.lowercase()
         return when {
@@ -61,8 +70,11 @@ object RerunCauseClassifier {
             // "Class path of … has changed from … to …" / "The type of … has changed from '…' to '…'." /
             // "One or more additional actions for … have changed." — all three verified exact templates
             // from ImplementationChanges (buildSrc/build-logic classpath or task-class changes).
-            "classpath" in r || "class path" in r || "has changed from" in r || "additional action" in r || "implementation" in r ->
-                RerunCause.IMPL_CLASSPATH
+            "classpath" in r ||
+                "class path" in r ||
+                "has changed from" in r ||
+                "additional action" in r ||
+                "implementation" in r -> RerunCause.IMPL_CLASSPATH
 
             // "No history is available." — verified exact string, NeverUpToDateStep: never recorded at
             // all, distinct from a specific tracked output vanishing (UPSTREAM_OUTPUT below).
@@ -202,12 +214,18 @@ object RerunCauseRollupCalculator {
         // Detector 2: per-build cascade-vs-contained, over each build's own executed tasks only.
         var cascadeBuilds = 0
         var containedBuilds = 0
-        executed.indices.groupBy { executed[it].buildId }.forEach { (_, indices) ->
-            val buildTotalMs = indices.sumOf { executed[it].durationMs }
-            if (buildTotalMs <= 0L) return@forEach // nothing to score — never a divide-by-zero
-            val cascadeMs = indices.filter { i -> bucketsByTask[i].any { it in CASCADE_CAUSES } }.sumOf { executed[it].durationMs }
-            if (cascadeMs.toDouble() / buildTotalMs > CASCADE_SHARE_THRESHOLD) cascadeBuilds++ else containedBuilds++
-        }
+        executed.indices
+            .groupBy { executed[it].buildId }
+            .forEach { (_, indices) ->
+                val buildTotalMs = indices.sumOf { executed[it].durationMs }
+                if (buildTotalMs <= 0L) return@forEach // nothing to score — never a divide-by-zero
+                val cascadeMs =
+                    indices
+                        .filter { i -> bucketsByTask[i].any { it in CASCADE_CAUSES } }
+                        .sumOf { executed[it].durationMs }
+                if (cascadeMs.toDouble() / buildTotalMs > CASCADE_SHARE_THRESHOLD) cascadeBuilds++
+                else containedBuilds++
+            }
         val classifiableBuilds = cascadeBuilds + containedBuilds
         val cascadeRate = if (classifiableBuilds == 0) null else roundTo6(cascadeBuilds.toDouble() / classifiableBuilds)
 
@@ -216,7 +234,11 @@ object RerunCauseRollupCalculator {
         val storm = if (implClasspathShare > BUILD_LOGIC_STORM_SHARE_THRESHOLD) {
             BuildLogicStormCandidate(
                 sharePct = implClasspathShare,
-                message = "${String.format(java.util.Locale.ROOT, "%.1f", implClasspathShare * 100)}% of executed " +
+                message = String.format(
+                    java.util.Locale.ROOT,
+                    "%.1f%% of executed ",
+                    implClasspathShare * PERCENT_FACTOR,
+                ) +
                     "task-hours were classpath/impl rebuilds — consider migrating buildSrc to an included " +
                     "`build-logic` build",
             )
@@ -235,5 +257,5 @@ object RerunCauseRollupCalculator {
         )
     }
 
-    private fun roundTo6(value: Double): Double = Math.round(value * 1_000_000.0) / 1_000_000.0
+    private fun roundTo6(value: Double): Double = Math.round(value * SIX_DECIMAL_FACTOR) / SIX_DECIMAL_FACTOR
 }

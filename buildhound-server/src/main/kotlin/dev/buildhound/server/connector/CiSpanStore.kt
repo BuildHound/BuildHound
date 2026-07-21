@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber") // JDBC parameter positions mirror the adjacent SQL column order.
+
 package dev.buildhound.server.connector
 
 import dev.buildhound.commons.payload.BuildHoundJson

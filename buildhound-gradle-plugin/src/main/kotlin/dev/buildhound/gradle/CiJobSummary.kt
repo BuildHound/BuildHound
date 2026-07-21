@@ -8,6 +8,10 @@ import java.util.Locale
 /** Provider-native CI job summaries rendered only from the already-scrubbed payload (plan 055). */
 internal object CiJobSummary {
     private const val MAX_SUMMARY_CHARS = 16_384
+    private const val MAX_MARKDOWN_TEXT_CHARS = 1_024
+    private const val MILLIS_PER_SECOND = 1_000L
+    private const val MILLIS_PER_MINUTE = 60_000L
+    private const val SECONDS_PER_MINUTE = 60L
 
     fun render(payload: BuildPayload, dashboardBaseUrl: String?): String {
         val durationMs = (payload.finishedAt - payload.startedAt).coerceAtLeast(0)
@@ -60,14 +64,22 @@ internal object CiJobSummary {
     }
 
     private fun formatDuration(ms: Long): String = when {
-        ms < 1_000 -> "${ms}ms"
-        ms < 60_000 -> "%.1fs".format(Locale.ROOT, ms / 1_000.0)
-        else -> "%dm %02ds".format(Locale.ROOT, ms / 60_000, ms / 1_000 % 60)
+        ms < MILLIS_PER_SECOND -> "${ms}ms"
+        ms < MILLIS_PER_MINUTE -> "%.1fs".format(Locale.ROOT, ms.toDouble() / MILLIS_PER_SECOND)
+        else -> "%dm %02ds".format(
+            Locale.ROOT,
+            ms / MILLIS_PER_MINUTE,
+            ms / MILLIS_PER_SECOND % SECONDS_PER_MINUTE,
+        )
     }
 
     private fun markdownText(value: String): String =
-        value.replace("\\", "\\\\").replace("|", "\\|").replace(Regex("[\\r\\n]+"), " ").take(1_024)
+        value.replace("\\", "\\\\")
+            .replace("|", "\\|")
+            .replace(Regex("[\\r\\n]+"), " ")
+            .take(MAX_MARKDOWN_TEXT_CHARS)
 
+    @Suppress("ComplexCondition") // RFC 3986 unreserved ASCII characters are intentionally explicit.
     private fun urlSegment(value: String): String =
         value.toByteArray().joinToString("") { byte ->
             val unsigned = byte.toInt() and 0xff
@@ -82,7 +94,15 @@ internal object CiJobSummary {
         val parsed = URI(value.trim())
         val scheme = parsed.scheme?.lowercase(Locale.ROOT)
         if (scheme != "https" && scheme != "http") return null
-        if (parsed.host.isNullOrBlank() || parsed.userInfo != null || parsed.query != null || parsed.fragment != null) return null
-        URI(scheme, null, parsed.host, parsed.port, parsed.path?.trimEnd('/').orEmpty(), null, null).toASCIIString()
-    }.getOrNull()
+        if (
+            parsed.host.isNullOrBlank() ||
+                parsed.userInfo != null ||
+                parsed.query != null ||
+                parsed.fragment != null
+        )
+            return null
+        URI(scheme, null, parsed.host, parsed.port, parsed.path?.trimEnd('/').orEmpty(), null, null)
+            .toASCIIString()
+    }
+        .getOrNull()
 }

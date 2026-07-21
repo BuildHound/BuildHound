@@ -40,6 +40,7 @@ internal object JUnitXmlParser {
         runCatching { setProperty(XMLInputFactory.IS_REPLACING_ENTITY_REFERENCES, false) }
     }
 
+    @Suppress("CyclomaticComplexMethod") // Streaming XML dispatch mirrors the finite event vocabulary.
     fun parse(bytes: ByteArray): List<ParsedClass> = runCatching {
         val reader = synchronized(factory) { factory.createXMLStreamReader(ByteArrayInputStream(bytes)) }
         val suites = ArrayList<Suite>()
@@ -142,9 +143,10 @@ internal object JUnitXmlParser {
 
     /** JUnit `time` is fractional seconds; ×1000 to ms. Absent/garbage → 0. */
     private fun String?.toSecondsMs(): Long =
-        this?.toDoubleOrNull()?.let { (it * 1000).toLong() } ?: 0L
+        this?.toDoubleOrNull()?.let { (it * MILLIS_PER_SECOND).toLong() } ?: 0L
 
     private fun sha256(text: String): String =
-        MessageDigest.getInstance("SHA-256").digest(text.encodeToByteArray())
-            .joinToString("") { b -> ((b.toInt() and 0xff) + 0x100).toString(16).substring(1) }
+        MessageDigest.getInstance("SHA-256").digest(text.encodeToByteArray()).toLowerHex()
 }
+
+private const val MILLIS_PER_SECOND = 1_000.0

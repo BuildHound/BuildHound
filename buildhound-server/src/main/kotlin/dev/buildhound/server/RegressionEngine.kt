@@ -17,20 +17,29 @@ data class ProjectSettings(
     val alertChannels: List<AlertChannel> = emptyList(),
 )
 
-@Serializable
-data class AlertChannel(val kind: String, val url: String)
+@Serializable data class AlertChannel(val kind: String, val url: String)
 
-enum class VerdictStatus { INSUFFICIENT_DATA, PASS, WARN, FAIL }
+enum class VerdictStatus {
+    INSUFFICIENT_DATA,
+    PASS,
+    WARN,
+    FAIL,
+}
 
 /** Whether a rise or a fall in a metric is the *bad* direction (semantic goodness, UX §4.2.2). */
-enum class MetricDirection { HIGHER_BAD, LOWER_BAD }
+enum class MetricDirection {
+    HIGHER_BAD,
+    LOWER_BAD,
+}
 
 /** One metric of the candidate build to judge. */
 data class MetricInput(
     val name: String,
     val value: Double,
     val direction: MetricDirection,
-    /** Budgets are ceilings, so only meaningful for HIGHER_BAD metrics (duration, sizes, custom). */
+    /**
+     * Budgets are ceilings, so only meaningful for HIGHER_BAD metrics (duration, sizes, custom).
+     */
     val budgetable: Boolean = true,
 )
 
@@ -54,13 +63,13 @@ data class Verdict(
 )
 
 /**
- * Pure regression math (spec §5, research §2.6/§5.6): rolling median + MAD baselines and a
- * guarded robust-z verdict. No I/O — the route/hook feeds it the candidate metrics and the
- * per-metric baseline value lists it already loaded, so this is plain-unit-testable.
+ * Pure regression math (spec §5, research §2.6/§5.6): rolling median + MAD baselines and a guarded
+ * robust-z verdict. No I/O — the route/hook feeds it the candidate metrics and the per-metric
+ * baseline value lists it already loaded, so this is plain-unit-testable.
  *
  * Guard rails against cold-start false alarms: fewer than [MIN_BASELINE] baseline points ⇒
- * INSUFFICIENT_DATA (never FAIL); a degenerate (zero) MAD ⇒ the `>2× median` fallback rule; a
- * zero baseline median ⇒ no judgement (can't form a ratio). Budgets are absolute and evaluated
+ * INSUFFICIENT_DATA (never FAIL); a degenerate (zero) MAD ⇒ the `>2× median` fallback rule; a zero
+ * baseline median ⇒ no judgement (can't form a ratio). Budgets are absolute and evaluated
  * independently of the baseline; a breach is always FAIL.
  */
 object RegressionEngine {
@@ -83,12 +92,17 @@ object RegressionEngine {
     }
 
     /** Median absolute deviation — outlier-resistant scale (unlike stddev). */
-    fun mad(values: List<Double>, median: Double): Double =
-        median(values.map { abs(it - median) })
+    fun mad(values: List<Double>, median: Double): Double = median(values.map { abs(it - median) })
 
     /** The built-in metrics every build carries: duration (higher bad), hit rate (lower bad). */
     fun builtInMetrics(payload: BuildPayload): List<MetricInput> = buildList {
-        add(MetricInput("durationMs", (payload.finishedAt - payload.startedAt).toDouble(), MetricDirection.HIGHER_BAD))
+        add(
+            MetricInput(
+                "durationMs",
+                (payload.finishedAt - payload.startedAt).toDouble(),
+                MetricDirection.HIGHER_BAD,
+            )
+        )
         payload.derived?.cacheableHitRate?.let {
             add(MetricInput("cacheableHitRate", it, MetricDirection.LOWER_BAD, budgetable = false))
         }
@@ -101,19 +115,27 @@ object RegressionEngine {
         baselineKey: String,
     ): Verdict {
         val metrics = inputs.map { evaluateMetric(it, baselines[it.name].orEmpty(), settings) }
-        val overall = metrics.map { VerdictStatus.valueOf(it.status) }
-            .maxByOrNull { it.ordinal } ?: VerdictStatus.INSUFFICIENT_DATA
+        val overall =
+            metrics.map { VerdictStatus.valueOf(it.status) }.maxByOrNull { it.ordinal }
+                ?: VerdictStatus.INSUFFICIENT_DATA
         return Verdict(status = overall.name, metrics = metrics, baselineKey = baselineKey)
     }
 
-    private fun evaluateMetric(input: MetricInput, baseline: List<Double>, settings: ProjectSettings): MetricVerdict {
+    private fun evaluateMetric(
+        input: MetricInput,
+        baseline: List<Double>,
+        settings: ProjectSettings,
+    ): MetricVerdict {
         val budget = settings.budgets[input.name]?.takeIf { input.budgetable }
         val budgetFail = budget != null && input.value > budget
 
         if (baseline.size < MIN_BASELINE) {
             return MetricVerdict(
-                name = input.name, value = input.value, budget = budget,
-                status = (if (budgetFail) VerdictStatus.FAIL else VerdictStatus.INSUFFICIENT_DATA).name,
+                name = input.name,
+                value = input.value,
+                budget = budget,
+                status =
+                    (if (budgetFail) VerdictStatus.FAIL else VerdictStatus.INSUFFICIENT_DATA).name,
             )
         }
 
@@ -123,16 +145,19 @@ object RegressionEngine {
         var z: Double? = null
         if (mad == 0.0) {
             // Degenerate scale: fall back to the guarded ratio rule (research §2.6).
-            zStatus = if (exceedsDoubleFallback(input.value, median, input.direction)) VerdictStatus.FAIL else VerdictStatus.PASS
+            zStatus =
+                if (exceedsDoubleFallback(input.value, median, input.direction)) VerdictStatus.FAIL
+                else VerdictStatus.PASS
         } else {
             val rawZ = 0.6745 * (input.value - median) / mad
             z = rawZ
             val badZ = if (input.direction == MetricDirection.HIGHER_BAD) rawZ else -rawZ
-            zStatus = when {
-                badZ >= settings.failZ -> VerdictStatus.FAIL
-                badZ >= settings.warnZ -> VerdictStatus.WARN
-                else -> VerdictStatus.PASS
-            }
+            zStatus =
+                when {
+                    badZ >= settings.failZ -> VerdictStatus.FAIL
+                    badZ >= settings.warnZ -> VerdictStatus.WARN
+                    else -> VerdictStatus.PASS
+                }
         }
 
         val status = if (budgetFail) VerdictStatus.FAIL else zStatus
@@ -140,7 +165,11 @@ object RegressionEngine {
     }
 
     /** `>2× median` (higher-bad) or `< median/2` (lower-bad); no judgement on a zero median. */
-    private fun exceedsDoubleFallback(value: Double, median: Double, direction: MetricDirection): Boolean {
+    private fun exceedsDoubleFallback(
+        value: Double,
+        median: Double,
+        direction: MetricDirection,
+    ): Boolean {
         if (median <= 0.0) return false
         return when (direction) {
             MetricDirection.HIGHER_BAD -> value > 2.0 * median

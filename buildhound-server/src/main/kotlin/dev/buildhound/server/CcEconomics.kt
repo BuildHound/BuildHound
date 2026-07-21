@@ -105,7 +105,10 @@ data class CcEconomicsReport(
     val reuseRate: Double? = null,
     /** p50 configuration (store) cost over MISS_STORED builds' `configurationMs`; null when none. */
     val storeCostMsP50: Long? = null,
-    /** p50 of the `ccLoadMs` proxy over HIT builds; null when none (currently always null — see `DerivedMetrics.ccLoadMs`). */
+    /**
+     * p50 of the `ccLoadMs` proxy over HIT builds; null when none (currently always null — see
+     * `DerivedMetrics.ccLoadMs`).
+     */
     val loadMsP50: Long? = null,
     /** p50 of `ccEntrySizeBytes` over CC-requesting builds; null when none. */
     val entrySizeBytesP50: Long? = null,
@@ -121,10 +124,16 @@ data class CcEconomicsReport(
  */
 object CcEconomicsCalculator {
 
-    /** A window needs at least this many CC-requesting builds before a reuse verdict is honest (not INSUFFICIENT_DATA). */
+    /**
+     * A window needs at least this many CC-requesting builds before a reuse verdict is honest (not
+     * INSUFFICIENT_DATA).
+     */
     const val MIN_REQUESTED_FOR_CLASS: Int = 5
 
-    /** At or above this share of CI builds, the window is "CI-dominant" — below-healthy reuse reads as expected, not degraded. */
+    /**
+     * At or above this share of CI builds, the window is "CI-dominant" — below-healthy reuse reads
+     * as expected, not degraded.
+     */
     const val CI_DOMINANT_SHARE: Double = 0.5
 
     /** Reuse rate at or above this is healthy on any window. */
@@ -137,8 +146,11 @@ object CcEconomicsCalculator {
         }
         val hits = requested.filter { it.ccState == ConfigurationCacheState.HIT }
         val missStored = requested.filter { it.ccState == ConfigurationCacheState.MISS_STORED }
-        val reuseRate = if (requested.isEmpty()) null else roundTo6(hits.size.toDouble() / requested.size)
-        val ciShare = if (requested.isEmpty()) 0.0 else requested.count { it.mode == BuildMode.CI }.toDouble() / requested.size
+        val reuseRate =
+            if (requested.isEmpty()) null else roundTo6(hits.size.toDouble() / requested.size)
+        val ciShare =
+            if (requested.isEmpty()) 0.0
+            else requested.count { it.mode == BuildMode.CI }.toDouble() / requested.size
 
         val ciReuseClass = when {
             observed.isEmpty() -> CiReuseClass.INSUFFICIENT_DATA
@@ -163,9 +175,10 @@ object CcEconomicsCalculator {
         )
     }
 
-    private fun p50(values: List<Long>): Long? = if (values.isEmpty()) null else NearestRankPercentile.of(values, 0.50)
+    private fun p50(values: List<Long>): Long? =
+        if (values.isEmpty()) null else NearestRankPercentile.of(values, P50_QUANTILE)
 
-    private fun roundTo6(value: Double): Double = Math.round(value * 1_000_000.0) / 1_000_000.0
+    private fun roundTo6(value: Double): Double = Math.round(value * SIX_DECIMAL_FACTOR) / SIX_DECIMAL_FACTOR
 }
 
 /**
@@ -181,7 +194,10 @@ object CcEconomicsCalculator {
  */
 object CcFlipFlopDetector {
 
-    /** Defensive ceiling on findings returned for one query (house convention: every array capped, oldest-first kept). */
+    /**
+     * Defensive ceiling on findings returned for one query (house convention: every array capped,
+     * oldest-first kept).
+     */
     const val MAX_FINDINGS: Int = 500
 
     private fun CcBuildRow.requestedCc(): Boolean =

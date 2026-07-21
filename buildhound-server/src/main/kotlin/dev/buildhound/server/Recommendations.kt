@@ -480,10 +480,14 @@ object RecommendationEngine {
      * iteration rarely needs on every run. Median (not sum) so one heavy CI-shaped local build doesn't
      * dominate; self-gated to silence when no LOCAL build carries EXECUTED work.
      */
-    private fun wasteLocalVerification(payloads: List<BuildPayload>, settings: RecommendationSettings): Recommendation? {
-        val shares = payloads
-            .filter { it.mode == BuildMode.LOCAL }
-            .mapNotNull { verificationShareOf(it.tasks) }
+    private fun wasteLocalVerification(
+        payloads: List<BuildPayload>,
+        settings: RecommendationSettings,
+    ): Recommendation? {
+        val shares =
+            payloads
+                .filter { it.mode == BuildMode.LOCAL }
+                .mapNotNull { verificationShareOf(it.tasks) }
         if (shares.isEmpty()) return null
         val median = RegressionEngine.median(shares)
         if (median < settings.wasteShareThreshold) return null
@@ -515,7 +519,7 @@ object RecommendationEngine {
 
     // ---- shared formatting ----------------------------------------------------------------------
 
-    private fun round6(value: Double): Double = Math.round(value * 1_000_000.0) / 1_000_000.0
+    private fun round6(value: Double): Double = Math.round(value * SIX_DECIMAL_FACTOR) / SIX_DECIMAL_FACTOR
 
-    private fun percent(fraction: Double): String = "${Math.round(fraction * 100)}%"
+    private fun percent(fraction: Double): String = "${Math.round(fraction * PERCENT_FACTOR)}%"
 }
