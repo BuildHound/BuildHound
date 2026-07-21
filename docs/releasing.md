@@ -37,10 +37,14 @@ The Wrapper distribution is integrity-pinned by `distributionSha256Sum`. BuildHo
 use Gradle's checked-in dependency verification (`gradle/verification-metadata.xml`, dropped 2026-07-21,
 architecture decision log §7): every routine version bump needs a matching metadata regeneration or
 CI fails closed, and a purely mechanical, easy-to-miss edit (`48c1d0f`, unrelated to dependency changes)
-silently deleted the file for days before anyone noticed. Dependency integrity for a release instead
-relies on Maven Central/Plugin Portal's own transport security and the reproducible-publication digest
-compare below — treat a suspicious dependency bump as a reason to diff the artifact against the
-authoritative repository by hand, not as something the build enforces automatically.
+silently deleted the file for days before anyone noticed. The reproducible-publication digest compare
+below (plus Maven Central/Plugin Portal's own transport security) is a release-time control only — it
+re-proves that *this build's own publication* is byte-identical across the credential-free and
+protected jobs, not that every dependency resolved during CI or a contributor's local build is the
+authentic upload. Outside the release path — every CI run and every contributor build — dependency
+integrity now rests on HTTPS transport alone, with no on-disk checksum pinning; a suspicious dependency
+bump is a reason to diff the artifact against the authoritative repository by hand, since the build no
+longer does it automatically.
 
 The Portal metadata advertises `https://buildhound.dev`. Do not publish while that URL has an invalid
 certificate or does not return a direct successful HTTPS response. `publishPlugins` enforces this for
