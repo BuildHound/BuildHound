@@ -90,3 +90,19 @@ password (stays random per deploy); review-stack wiring (unchanged —
 A labeled PR's review deploy uses the variable-sourced token and the owner can browse that
 review dashboard; smoke + plan-094 replay still pass; deploy without the variable still
 succeeds on the generated fallback; no token value in any log (masked).
+
+## Status (2026-07-21)
+
+Merged to `main` via PR #88 (rebase merge, tip `bf0c82f`). The owner provisioned
+`BUILDHOUND_REVIEW_TOKEN` in the `review` environment on 2026-07-21 (placement + 64-hex
+format verified via API without printing the value). **This PR is the live-proof
+vehicle**: it is the first `deploy-review`-labeled PR whose review deploy runs the
+variable-reading workflow from `main`, so its deploy step's smoke (POST 202 +
+authenticated read-back 200) executes with the owner's stored value — a green deploy
+step is machine proof the stored token works. Remaining human check: the owner pastes the
+stored value into this review env's dashboard token bar and sees data. Note: this PR is
+docs-only, so ci.yml skips and the plan-094 payload replay soft-skips ("no ci.yml run
+found") — expected, not a failure. Promotion note: PR #88 itself merged without a green
+review-deploy proof (its last review run hit the same-SHA redeploy guard), so its
+promotion was intentionally skipped; this PR's merge carries the plan-099 changes
+through the staging→production chain instead.
