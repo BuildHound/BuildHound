@@ -467,9 +467,35 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
 
     def test_review_token_variable_fallback_and_masking(self):
         workflow = self.read(".github/workflows/review-environment.yml")
+        mapping = 'BUILDHOUND_REVIEW_TOKEN_VAR: "${{ vars.BUILDHOUND_REVIEW_TOKEN }}"'
+        self.assertEqual(
+            workflow.count(mapping),
+            1,
+            "the review token variable must be mapped exactly once, at JOB level: "
+            "the runner echoes every STEP-level env mapping unmasked into the "
+            "step's log header, which leaked the raw token into a public log "
+            "once (run 29831846143, plan 099)",
+        )
+        self.assertLess(
+            workflow.index(mapping),
+            workflow.index("steps:"),
+            "the BUILDHOUND_REVIEW_TOKEN_VAR mapping must appear before the "
+            "job's steps: block (job-level env is never echoed; step-level is)",
+        )
+        mask_step = (
+            'run: if [ -n "$BUILDHOUND_REVIEW_TOKEN_VAR" ]; '
+            'then echo "::add-mask::$BUILDHOUND_REVIEW_TOKEN_VAR"; fi'
+        )
         self.assertIn(
-            'BUILDHOUND_REVIEW_TOKEN_VAR: "${{ vars.BUILDHOUND_REVIEW_TOKEN }}"',
+            mask_step,
             workflow,
+            "the job's first step must register the mask before any other step "
+            "can log the value (plan 099 leak fix)",
+        )
+        self.assertLess(
+            workflow.index(mask_step),
+            workflow.index("actions/checkout"),
+            "the mask step must run before checkout — first step of the job",
         )
         self.assertIn(
             "BUILDHOUND_REVIEW_TOKEN="

@@ -33,8 +33,10 @@ environment's bootstrap token, so the operator can open review dashboards with t
 value and read it back from the Environment settings whenever needed; when absent each
 deploy mints a per-run token that is never surfaced (plan 099). A variable is a deliberate
 owner decision scoped to the throwaway review tier only — it is plaintext at rest,
-readable to anyone with Actions read access on the repository, and never auto-masked (the
-workflow's explicit `::add-mask::` is what keeps it out of logs). The prod/staging ingest
+readable to anyone with Actions read access on the repository, and never auto-masked —
+which is why the workflow passes it via job-level env only (the runner echoes step-level
+env mappings unmasked into step log headers) and registers a mask in the job's first
+step; policy tests pin both. The prod/staging ingest
 tokens remain secrets, never variables (plan 094 §6). Rotating it affects future deploys
 only — running review environments keep accepting the value they were deployed with until
 torn down or redeployed.
