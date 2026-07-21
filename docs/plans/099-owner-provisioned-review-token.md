@@ -14,7 +14,10 @@ provision, so one known value opens every review dashboard.
 `BUILDHOUND_REVIEW_TOKEN` when present; the plan-094 per-run `openssl rand` value stays
 as the fallback (merge-safe before the secret exists, and the old zero-persistence model
 remains available by deleting the secret). Doc updates: plan 094 §6's "no owner action"
-note, the in-workflow comment.
+note, the in-workflow comment, and `deploy/dokploy/README.md`'s environment-secret
+documentation (review addition). A regression test pins the `:-` fallback form — GitHub
+materializes an unprovisioned secret's env mapping as an empty string, so a bare `-`
+would silently break the unprovisioned path (review addition).
 
 **Out:** server changes; a read-scope mint flow (rejected alternative — plan-098 endpoint
 extension + summary publishing is more machinery than the owner wants); the per-run DB
@@ -51,10 +54,12 @@ password (stays random per deploy); review-stack wiring (unchanged —
 - **Long-lived shared credential in PR-reachable context — accepted (owner decision).**
   The deployed server runs the PR's own code with the token in its container env, so any
   same-repo `deploy-review`-labeled PR can exfiltrate it once and retain admin over all
-  *future* review envs until the secret is rotated. Bounded: review stacks are isolated,
-  TTL'd, hold only this repo's own CI telemetry, and rotation is a single secret update.
-  The fallback preserves the plan-094 zero-persistence model wherever the secret is
-  absent.
+  *future* review envs until the secret is rotated. Bounded: the token grants nothing
+  outside review envs, which are TTL'd and hold only this repo's own CI telemetry.
+  Rotation is a secret update **for future deploys only** — running review envs keep
+  accepting the value they were deployed with, so a suspected leak means rotate *and*
+  tear down (unlabel) active review envs. The fallback preserves the plan-094
+  zero-persistence model wherever the secret is absent.
 - Same token across concurrent review envs: cross-env access among them — accepted, same
   trust domain.
 

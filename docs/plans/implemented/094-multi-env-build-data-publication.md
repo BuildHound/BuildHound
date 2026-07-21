@@ -226,7 +226,9 @@ then token *before* URL); the ☑/☐ marks the 2026-07-18 state.
    URL while the token secret is absent — two layers, rely on neither alone.
 
 The review path needs no owner action: it reuses the per-run `BUILDHOUND_REVIEW_TOKEN`
-minted inside `review-environment.yml`.
+minted inside `review-environment.yml`. (Superseded by plan 099, 2026-07-20: a
+`review`-environment secret of the same name, when provisioned, replaces the per-run
+value so the owner can open review dashboards; the per-run mint remains the fallback.)
 
 Exit: a `deploy-review`-labeled PR lands the same `buildId` in all three environments; a
 merged commit lands in prod + staging; a fork PR shows "no server configured" and skipped

@@ -26,6 +26,14 @@ Store `DOKPLOY_TOKEN` only in each Environment; store
 An unset protection rule or Environment secret is a rollout blocker, not permission to use a
 repository-wide credential.
 
+Optionally store `BUILDHOUND_REVIEW_TOKEN` in the `review` Environment (64 lowercase hex
+characters — `openssl rand -hex 32`; the delivery client fails the deploy on any other
+format). When present it becomes every review environment's bootstrap token, so the
+operator can open review dashboards with that one value; when absent each deploy mints a
+per-run token that is never surfaced (plan 099). Rotating it affects future deploys only —
+running review environments keep accepting the value they were deployed with until torn
+down or redeployed.
+
 The review lifecycle first requires `settings.getDokployVersion` to report at least `v0.29.12`
 (older Dokploy releases fail closed; newer releases warn and proceed).
 The client then targets Dokploy's documented `x-api-key` API (`compose.create`, `compose.update`,
