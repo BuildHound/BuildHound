@@ -18,6 +18,11 @@ import dev.buildhound.commons.payload.ProcessRole
 internal object ProcessParsing {
 
     private const val KB_PER_MB = 1024.0
+    private const val MILLIS_PER_SECOND = 1_000.0
+    private const val CLOCK_PARTS_WITH_HOURS = 3
+    private const val HOURS_PER_DAY = 24L
+    private const val MINUTES_PER_HOUR = 60L
+    private const val SECONDS_PER_MINUTE = 60L
 
     /** jps `-l` lines are `"<pid> <fully.qualified.MainClass>"`; keep only the three JVMs we probe. */
     fun parseJpsLines(output: String): List<Pair<Long, ProcessRole>> =
@@ -74,7 +79,8 @@ internal object ProcessParsing {
     fun heapCommittedMb(gc: Map<String, Double>): Long? = sumMb(gc, "EC", "OC", "S0C", "S1C")
 
     /** Total GC time (ms) from `jstat -gc` `GCT` seconds — the total column, not `YGCT+FGCT`. */
-    fun gcTimeMs(gc: Map<String, Double>): Long? = gc["GCT"]?.let { Math.round(it * 1000.0) }
+    fun gcTimeMs(gc: Map<String, Double>): Long? =
+        gc["GCT"]?.let { Math.round(it * MILLIS_PER_SECOND) }
 
     /** Heap **max** (capacity) MB from `jstat -gccapacity` `NGCMX+OGCMX`; not the configured Xmx. */
     fun heapMaxMb(capacity: Map<String, Double>): Long? = sumMb(capacity, "NGCMX", "OGCMX")
@@ -126,6 +132,7 @@ internal object ProcessParsing {
     }
 
     /** Elapsed seconds from `ps -o etime=` (`[[dd-]hh:]mm:ss`, portable across Linux/macOS). */
+    @Suppress("ReturnCount") // Each early exit rejects a distinct malformed portable `etime` shape.
     fun uptimeSeconds(etime: String): Long? {
         val text = etime.trim()
         if (text.isEmpty()) return null
@@ -137,11 +144,11 @@ internal object ProcessParsing {
         }
         val units = hms.split(':').map { it.toLongOrNull() ?: return null }
         val (h, m, s) = when (units.size) {
-            3 -> Triple(units[0], units[1], units[2])
+            CLOCK_PARTS_WITH_HOURS -> Triple(units[0], units[1], units[2])
             2 -> Triple(0L, units[0], units[1])
             else -> return null
         }
-        return ((days * 24 + h) * 60 + m) * 60 + s
+        return ((days * HOURS_PER_DAY + h) * MINUTES_PER_HOUR + m) * SECONDS_PER_MINUTE + s
     }
 
     private fun sumMb(stats: Map<String, Double>, vararg columns: String): Long? {

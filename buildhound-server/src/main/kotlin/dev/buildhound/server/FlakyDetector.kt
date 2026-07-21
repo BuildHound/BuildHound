@@ -115,7 +115,11 @@ object FlakyDetector {
                         .sortedBy { it.startedAtMs }.map { it.buildId }.distinct().take(MAX_AFFECTED_BUILDS),
                 )
             }
-            .sortedWith(compareByDescending<FlakyRecord> { it.flakeRate }.thenBy { it.module ?: "" }.thenBy { it.className })
+            .sortedWith(
+                compareByDescending<FlakyRecord> { it.flakeRate }
+                    .thenBy { it.module ?: "" }
+                    .thenBy { it.className }
+            )
 
     /** Count of a class's cases (within one build's failed-or-retried list) that failed then passed. */
     fun retryFlakyCaseCount(outcomesPerCase: List<List<String>>): Int =
@@ -128,5 +132,5 @@ object FlakyDetector {
         return outcomes.drop(firstFail + 1).any { it == "PASSED" }
     }
 
-    private fun roundTo6(value: Double): Double = Math.round(value * 1_000_000.0) / 1_000_000.0
+    private fun roundTo6(value: Double): Double = Math.round(value * SIX_DECIMAL_FACTOR) / SIX_DECIMAL_FACTOR
 }

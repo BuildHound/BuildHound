@@ -27,10 +27,13 @@ class QueryClient(baseUrl: String, private val token: String?) {
             .header("Accept", "application/json")
         if (!token.isNullOrBlank()) builder.header("Authorization", "Bearer $token")
         val response = http.send(builder.GET().build(), HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() !in 200..299) {
+        if (response.statusCode() !in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX) {
             // Never echo the token or the full URL query; the status is enough for the agent to react.
             throw McpToolException("query failed (${response.statusCode()}) for ${path.substringBefore('?')}")
         }
         return response.body()
     }
 }
+
+private const val HTTP_SUCCESS_MIN = 200
+private const val HTTP_SUCCESS_MAX = 299

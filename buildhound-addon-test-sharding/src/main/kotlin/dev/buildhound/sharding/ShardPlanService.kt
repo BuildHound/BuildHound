@@ -9,12 +9,12 @@ import org.gradle.api.services.BuildService
 import org.gradle.api.services.BuildServiceParameters
 
 /**
- * Fetches this build's shard plan exactly once (plan 040), at execution time, and caches it for every
- * `Test` task's `doFirst`. The HTTP call lives here — not at apply time — so no shard slice is baked
- * into a configuration-cache entry and a fetch failure degrades per run. Suites are discovered from the
- * whole build's `Test` tasks (captured into [ShardingState] by the config-time `whenReady` walk), so a
- * single request covers the full suite set. Records the [TestShardingExtension] outcome (incl. the
- * run-all fallback) for the collector.
+ * Fetches this build's shard plan exactly once (plan 040), at execution time, and caches it for
+ * every `Test` task's `doFirst`. The HTTP call lives here — not at apply time — so no shard slice
+ * is baked into a configuration-cache entry and a fetch failure degrades per run. Suites are
+ * discovered from the whole build's `Test` tasks (captured into [ShardingState] by the config-time
+ * `whenReady` walk), so a single request covers the full suite set. Records the
+ * [TestShardingExtension] outcome (incl. the run-all fallback) for the collector.
  */
 abstract class ShardPlanService : BuildService<ShardPlanService.Params> {
 
@@ -37,7 +37,10 @@ abstract class ShardPlanService : BuildService<ShardPlanService.Params> {
             plan.set(response)
             if (response == null) {
                 // The run-all fallback: log once (fetch-once), never fail the build.
-                logger.warn("[buildhound-test-sharding] no shard plan (server unreachable / non-2xx / no suites) — running all tests")
+                logger.warn(
+                    "[buildhound-test-sharding] no shard plan " +
+                        "(server unreachable / non-2xx / no suites) — running all tests"
+                )
             }
             ShardingState.recordOutcome(
                 TestShardingExtension(
@@ -45,7 +48,7 @@ abstract class ShardPlanService : BuildService<ShardPlanService.Params> {
                     shardIndex = parameters.index.get(),
                     shardTotal = parameters.total.get(),
                     appliedFilter = response != null,
-                ),
+                )
             )
         }
         return plan.get()
@@ -55,13 +58,14 @@ abstract class ShardPlanService : BuildService<ShardPlanService.Params> {
         val url = parameters.serverUrl.orNull?.takeIf { it.isNotBlank() } ?: return null
         val suites = SuiteDiscovery.discover(ShardingState.testDirs().map { File(it) })
         if (suites.isEmpty()) return null
-        return ShardPlanClient(url, parameters.token.orNull).fetch(
-            ShardPlanRequest(
-                reference = parameters.reference.get(),
-                index = parameters.index.get(),
-                total = parameters.total.get(),
-                suites = suites,
-            ),
-        )
+        return ShardPlanClient(url, parameters.token.orNull)
+            .fetch(
+                ShardPlanRequest(
+                    reference = parameters.reference.get(),
+                    index = parameters.index.get(),
+                    total = parameters.total.get(),
+                    suites = suites,
+                )
+            )
     }
 }

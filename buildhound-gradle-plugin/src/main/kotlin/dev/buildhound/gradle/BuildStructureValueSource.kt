@@ -21,8 +21,8 @@ data class ProjectDescriptorInfo(
 ) : Serializable
 
 /**
- * The descriptor-tree walk's config-time output (plan 069), mailboxed from `projectsLoaded` into
- * an `AtomicReference` (the toolchain/task-dictionary pattern, plans 046/016) and delivered to
+ * The descriptor-tree walk's config-time output (plan 069), mailboxed from `projectsLoaded` into an
+ * `AtomicReference` (the toolchain/task-dictionary pattern, plans 046/016) and delivered to
  * [BuildStructureValueSource] as baked parameters — the counts and the path map are frozen at
  * configuration time; only the filesystem `.exists()` probes happen later, at execution.
  */
@@ -33,7 +33,10 @@ data class CapturedBuildStructure(
     val descriptors: Map<String, ProjectDescriptorInfo> = emptyMap(),
 ) : Serializable
 
-/** Build-structure inventory (plan 069, research F19), plugin-side DTO mirroring the commons `BuildStructureInfo` schema type. */
+/**
+ * Build-structure inventory (plan 069, research F19), plugin-side DTO mirroring the commons
+ * `BuildStructureInfo` schema type.
+ */
 data class CollectedBuildStructure(
     val projectCount: Int? = null,
     val maxDepth: Int? = null,
@@ -41,7 +44,10 @@ data class CollectedBuildStructure(
     val buildSrcPresent: Boolean? = null,
     val sourcesInRoot: Boolean? = null,
     val emptyIntermediateCandidates: List<String> = emptyList(),
-    /** How many candidates [BuildStructureValueSource.obtain] dropped past its own cap (plan 069 review). */
+    /**
+     * How many candidates [BuildStructureValueSource.obtain] dropped past its own cap (plan 069
+     * review).
+     */
     val droppedEmptyIntermediateCandidates: Int = 0,
 ) : Serializable
 
@@ -62,9 +68,9 @@ data class CollectedBuildStructure(
  *
  * Descriptors are settings-level metadata, not `Project` — the walk stays legal under isolated
  * projects (no cross-project access), unlike `taskGraph.allTasks` (plan 016's task dictionary),
- * which is why this inventory does not need an isolated-projects degradation gate. Every access here
- * (`path`/`buildFile`/`children`) is in-memory only; no `.exists()` call, so the walk itself never
- * becomes a configuration-cache fingerprint input (architecture §2 rule 9).
+ * which is why this inventory does not need an isolated-projects degradation gate. Every access
+ * here (`path`/`buildFile`/`children`) is in-memory only; no `.exists()` call, so the walk itself
+ * never becomes a configuration-cache fingerprint input (architecture §2 rule 9).
  */
 internal object BuildStructureWalker {
 
@@ -76,10 +82,11 @@ internal object BuildStructureWalker {
             count++
             val depth = depthOf(descriptor.path)
             if (depth > maxDepth) maxDepth = depth
-            descriptors[descriptor.path] = ProjectDescriptorInfo(
-                buildFilePath = descriptor.buildFile.absolutePath,
-                hasChildren = descriptor.children.isNotEmpty(),
-            )
+            descriptors[descriptor.path] =
+                ProjectDescriptorInfo(
+                    buildFilePath = descriptor.buildFile.absolutePath,
+                    hasChildren = descriptor.children.isNotEmpty(),
+                )
             for (child in descriptor.children) visit(child)
         }
         visit(settings.rootProject)
@@ -97,24 +104,25 @@ internal object BuildStructureWalker {
 
 /**
  * Execution-time half of the build-structure inventory (plan 069, research F19): the config-time
- * walk ([BuildStructureWalker], driven from `projectsLoaded`) captures the declared descriptor
- * tree with build-file *paths* only; every `.exists()` check happens here, in [obtain], at execution
+ * walk ([BuildStructureWalker], driven from `projectsLoaded`) captures the declared descriptor tree
+ * with build-file *paths* only; every `.exists()` check happens here, in [obtain], at execution
  * time — the same CC rationale as [VcsValueSource]/[FingerprintValueSource]: a `ValueSource` read
- * only through a `FlowAction` parameter re-executes on CC reuse, so the filesystem probes stay fresh
- * without re-fingerprinting configuration.
+ * only through a `FlowAction` parameter re-executes on CC reuse, so the filesystem probes stay
+ * fresh without re-fingerprinting configuration.
  *
- * [CollectedBuildStructure.emptyIntermediateCandidates] is a **ranked heuristic candidate list, not a
- * verdict** — an `allprojects{}`-configured aggregator with no build file of its own is a
- * *recommended* Gradle pattern, not necessarily dead weight, so the plugin ships only the structural
- * fact (spec §3.7: Gradle paths, never a judgment or a filesystem path). Sorted for determinism and
- * capped so a pathological monorepo can't blow the payload budget — no `PayloadCapper`/`PayloadScrubber`
- * change (there is no free text here to bound; the cap lives in the collecting `ValueSource` itself,
- * per the plan's design). The overflow doesn't stay silent, though: [CollectedBuildStructure
- * .droppedEmptyIntermediateCandidates] carries the drop count out of this cap so `PayloadAssembler`
- * can fold it into the shipped `CapsSummary` (plan 069 review) — the only `CapsSummary` field whose
- * count is decided here rather than inside `PayloadCapper`.
+ * [CollectedBuildStructure.emptyIntermediateCandidates] is a **ranked heuristic candidate list, not
+ * a verdict** — an `allprojects{}`-configured aggregator with no build file of its own is a
+ * *recommended* Gradle pattern, not necessarily dead weight, so the plugin ships only the
+ * structural fact (spec §3.7: Gradle paths, never a judgment or a filesystem path). Sorted for
+ * determinism and capped so a pathological monorepo can't blow the payload budget — no
+ * `PayloadCapper`/`PayloadScrubber` change (there is no free text here to bound; the cap lives in
+ * the collecting `ValueSource` itself, per the plan's design). The overflow doesn't stay silent,
+ * though: [CollectedBuildStructure .droppedEmptyIntermediateCandidates] carries the drop count out
+ * of this cap so `PayloadAssembler` can fold it into the shipped `CapsSummary` (plan 069 review) —
+ * the only `CapsSummary` field whose count is decided here rather than inside `PayloadCapper`.
  */
-abstract class BuildStructureValueSource : ValueSource<CollectedBuildStructure, BuildStructureValueSource.Parameters> {
+abstract class BuildStructureValueSource :
+    ValueSource<CollectedBuildStructure, BuildStructureValueSource.Parameters> {
 
     interface Parameters : ValueSourceParameters {
         /** Mirrors `buildhound { enabled }`: when false nothing is probed. */
@@ -135,22 +143,27 @@ abstract class BuildStructureValueSource : ValueSource<CollectedBuildStructure, 
         if (!parameters.enabled.getOrElse(true)) return CollectedBuildStructure()
         val rootDir = parameters.rootDir.orNull ?: return CollectedBuildStructure()
         // projectCount is the walk's own signal that projectsLoaded actually populated the mailbox
-        // (master switch off, or a guarded walk failure, both leave it null) — treat the whole block
-        // as one atomic capture rather than shipping buildSrc/sourcesInRoot alone: they are cheap to
+        // (master switch off, or a guarded walk failure, both leave it null) — treat the whole
+        // block
+        // as one atomic capture rather than shipping buildSrc/sourcesInRoot alone: they are cheap
+        // to
         // probe independently of the walk, but a partially populated block is worse than an honest
         // null one here (never-fail contract; plan 069 exit criteria: the block degrades to null).
         parameters.projectCount.orNull ?: return CollectedBuildStructure()
         val descriptors = parameters.descriptors.getOrElse(emptyMap())
 
-        val candidates = descriptors.entries
-            .asSequence()
-            // Root (":") is definitionally not an "intermediate" project — an idiomatic
-            // no-root-build-file repo (settings.gradle.kts only) would otherwise flag it on
-            // every build (plan 069 review: a near-universal false positive).
-            .filter { (path, info) -> path != ":" && info.hasChildren && !File(info.buildFilePath).exists() }
-            .map { it.key }
-            .sorted()
-            .toList()
+        val candidates =
+            descriptors.entries
+                .asSequence()
+                // Root (":") is definitionally not an "intermediate" project — an idiomatic
+                // no-root-build-file repo (settings.gradle.kts only) would otherwise flag it on
+                // every build (plan 069 review: a near-universal false positive).
+                .filter { (path, info) ->
+                    path != ":" && info.hasChildren && !File(info.buildFilePath).exists()
+                }
+                .map { it.key }
+                .sorted()
+                .toList()
         val cappedCandidates: List<String>
         val droppedCandidates: Int
         if (candidates.size > MAX_EMPTY_INTERMEDIATE_CANDIDATES) {
@@ -178,8 +191,10 @@ abstract class BuildStructureValueSource : ValueSource<CollectedBuildStructure, 
     }
 
     private companion object {
-        /** Cardinality guardrail (plan 069, spec §3.9 discipline): bounds a pathological monorepo;
-         * ranked (sorted) first so the surviving subset is deterministic. */
+        /**
+         * Cardinality guardrail (plan 069, spec §3.9 discipline): bounds a pathological monorepo;
+         * ranked (sorted) first so the surviving subset is deterministic.
+         */
         const val MAX_EMPTY_INTERMEDIATE_CANDIDATES = 500
         val logger = Logging.getLogger(BuildStructureValueSource::class.java)
     }

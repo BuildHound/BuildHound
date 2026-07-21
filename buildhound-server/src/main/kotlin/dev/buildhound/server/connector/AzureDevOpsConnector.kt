@@ -28,7 +28,8 @@ class AzureDevOpsConnector(
 ) : CiConnector {
 
     override val id: String = "azure-devops"
-    override val capabilities: Set<Capability> = setOf(Capability.TIMELINE_PULL, Capability.WEBHOOK, Capability.DEEP_LINKS)
+    override val capabilities: Set<Capability> =
+        setOf(Capability.TIMELINE_PULL, Capability.WEBHOOK, Capability.DEEP_LINKS)
 
     override suspend fun fetchRun(ref: CiRunRef, config: ConnectorConfig): CiRun? {
         val base = (config.baseUrl ?: ref.collectionUri)?.trimEnd('/') ?: return null
@@ -47,8 +48,14 @@ class AzureDevOpsConnector(
         }
         val auth = "Basic " + Base64.getEncoder().encodeToString(":$pat".encodeToByteArray())
 
-        val buildJson = getJson("$base/$project/_apis/build/builds/${ref.runId}?api-version=$apiVersion", auth) ?: return null
-        val timelineJson = getJson("$base/$project/_apis/build/builds/${ref.runId}/timeline?api-version=$apiVersion", auth)
+        val buildJson =
+            getJson("$base/$project/_apis/build/builds/${ref.runId}?api-version=$apiVersion", auth)
+                ?: return null
+        val timelineJson =
+            getJson(
+                "$base/$project/_apis/build/builds/${ref.runId}/timeline?api-version=$apiVersion",
+                auth,
+            )
 
         val queueTime = buildJson.instantMs("queueTime")
         val startedAt = buildJson.instantMs("startTime")
@@ -91,7 +98,7 @@ class AzureDevOpsConnector(
 
     private suspend fun getJson(url: String, auth: String): JsonObject? = runCatching {
         val response = client.get(url) { header("Authorization", auth) }
-        if (response.status.value !in 200..299) {
+        if (response.status.value !in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX) {
             logger.warn("azure connector: {} returned {}", url.substringBefore('?'), response.status.value)
             return null
         }
@@ -147,7 +154,11 @@ class AzureDevOpsConnector(
         /** Parses an Azure `_build/results?buildId=` URL into `(collectionUri, project)`; null on mismatch. */
         fun parseBuildUrl(buildUrl: String?): Pair<String, String>? {
             val url = buildUrl ?: return null
-            if (!url.startsWith("https://", ignoreCase = true) && !url.startsWith("http://", ignoreCase = true)) return null
+            if (
+                !url.startsWith("https://", ignoreCase = true) &&
+                    !url.startsWith("http://", ignoreCase = true)
+            )
+                return null
             val beforeBuild = url.substringBefore("/_build/results", missingDelimiterValue = "")
             if (beforeBuild.isEmpty() || beforeBuild == url) return null
             val project = beforeBuild.substringAfterLast('/')

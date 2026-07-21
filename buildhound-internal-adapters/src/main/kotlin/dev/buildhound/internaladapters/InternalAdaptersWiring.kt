@@ -61,16 +61,24 @@ object InternalAdaptersWiring {
             // degradation as on a CC hit (where whenReady did not run). The graph walk is an
             // isolated-projects violation by design → gated: on IP (or any failure) it degrades to no
             // edges, never an error (plan 016's allTasks-walk precedent).
-            val edges = if (collectCacheOrigins) {
-                runCatching {
-                    graph.allTasks.associate { task -> task.path to graph.getDependencies(task).map { it.path } }
-                }.getOrElse {
-                    logger.info("[buildhound-internal-adapters] dependency-edge walk unavailable (criticalPath omitted): {}", it.message)
+            val edges =
+                if (collectCacheOrigins) {
+                    runCatching {
+                        graph.allTasks.associate { task ->
+                            task.path to graph.getDependencies(task).map { it.path }
+                        }
+                    }
+                        .getOrElse {
+                            logger.info(
+                                "[buildhound-internal-adapters] dependency-edge walk unavailable " +
+                                    "(criticalPath omitted): {}",
+                                it.message,
+                            )
+                            emptyMap()
+                        }
+                } else {
                     emptyMap()
                 }
-            } else {
-                emptyMap()
-            }
             InternalAdaptersState.configure(
                 perFile = perFileHashes,
                 gradle = GradleVersion.current().version,
@@ -85,7 +93,9 @@ object InternalAdaptersWiring {
             // Logged before the all-off return so it fires even if it is the only toggle set (it is a
             // no-op that touches no internal API).
             if (perFileHashes) {
-                logger.warn("[buildhound] internalAdapters.perFileHashes is reserved for a v1.x follow-up and has no effect yet")
+                logger.warn(
+                    "[buildhound] internalAdapters.perFileHashes is reserved for a v1.x follow-up and has no effect yet"
+                )
             }
 
             // Nothing enabled ⇒ stop before any internal-API touch. No listener is registered and no
@@ -102,7 +112,10 @@ object InternalAdaptersWiring {
                 runCatching { registerBuildOpListener(settings) }
                     .onFailure {
                         InternalAdaptersState.releaseRegistration()
-                        logger.warn("[buildhound-internal-adapters] listener registration failed (no capture this daemon): {}", it.message)
+                        logger.warn(
+                            "[buildhound-internal-adapters] listener registration failed (no capture this daemon): {}",
+                            it.message,
+                        )
                     }
             }
 
@@ -110,7 +123,8 @@ object InternalAdaptersWiring {
             // reflection guards handle per-field mismatches) — surface it once so a break is diagnosable.
             if (VersionGate.bucket(GradleVersion.current().version) == GradleBucket.UNKNOWN) {
                 logger.info(
-                    "[buildhound-internal-adapters] Gradle {} is outside the tested 8.x/9.x range — capture is best-effort",
+                    "[buildhound-internal-adapters] Gradle {} is outside the tested 8.x/9.x range — " +
+                        "capture is best-effort",
                     GradleVersion.current().version,
                 )
             }
@@ -141,7 +155,11 @@ object InternalAdaptersWiring {
                 runCatching { registerLogListener(settings) }
                     .onFailure {
                         InternalAdaptersState.releaseLogListenerRegistration()
-                        logger.warn("[buildhound-internal-adapters] WARN-log listener registration failed (no log-warning capture this daemon): {}", it.message)
+                        logger.warn(
+                            "[buildhound-internal-adapters] WARN-log listener registration failed " +
+                                "(no log-warning capture this daemon): {}",
+                            it.message,
+                        )
                     }
             }
         }.onFailure {

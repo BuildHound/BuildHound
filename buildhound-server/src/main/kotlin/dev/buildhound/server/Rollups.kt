@@ -97,7 +97,10 @@ object PluginAttribution {
     }
 }
 
-/** One plugin's fleet-wide task-time cost (plan 058); [sharePct] is this plugin's share of the window's total task time. */
+/**
+ * One plugin's fleet-wide task-time cost (plan 058); [sharePct] is this plugin's share of the
+ * window's total task time.
+ */
 @Serializable
 data class PluginCostRow(val plugin: String, val totalMs: Long, val count: Int, val sharePct: Double)
 
@@ -128,7 +131,10 @@ data class ChangeBlastRadiusRow(
 data class ChangeBlastBuild(
     val buildId: String,
     val changedModules: List<String>,
-    /** Executed (outcome == EXECUTED) task duration summed per module for this build; null module → [NULL_MODULE_KEY]. */
+    /**
+     * Executed (outcome == EXECUTED) task duration summed per module for this build; null module →
+     * [NULL_MODULE_KEY].
+     */
     val executedMsByModule: Map<String, Long>,
 ) {
     companion object {
@@ -199,7 +205,8 @@ object RollupCalculator {
             val containingWalls = moduleRows.distinctBy { it.buildId }
             val executedWalls = containingWalls.filter { it.buildId in executedBuildIds }
             val executedAvgWall = executedWalls.map { it.buildWallMs }.averageOrZero()
-            val executedPercentInt = (executedBuildIds.size.toDouble() / totalBuilds * 100).toInt()
+            val executedPercentInt =
+                (executedBuildIds.size.toDouble() / totalBuilds * PERCENT_FACTOR).toInt()
             ProjectCostRow(
                 module = module,
                 builds = containing.size,
@@ -332,5 +339,5 @@ object RollupCalculator {
 
     private fun List<Long>.averageOrZero(): Long = if (isEmpty()) 0L else (sum() / size)
 
-    private fun roundTo6(value: Double): Double = Math.round(value * 1_000_000.0) / 1_000_000.0
+    private fun roundTo6(value: Double): Double = Math.round(value * SIX_DECIMAL_FACTOR) / SIX_DECIMAL_FACTOR
 }

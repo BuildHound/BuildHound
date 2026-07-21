@@ -9,21 +9,23 @@ import org.gradle.api.provider.SetProperty
 import org.gradle.api.provider.ValueSource
 import org.gradle.api.provider.ValueSourceParameters
 
-/** Build-level input fingerprints (plan 022), salted hashes, for CC-safe transport into the FlowAction. */
-data class CollectedFingerprints(
-    val build: Map<String, String> = emptyMap(),
-) : Serializable
+/**
+ * Build-level input fingerprints (plan 022), salted hashes, for CC-safe transport into the
+ * FlowAction.
+ */
+data class CollectedFingerprints(val build: Map<String, String> = emptyMap()) : Serializable
 
 /**
- * Build-level input fingerprinting (plan 022, spec §4) at execution time, so probes never
- * become configuration-cache inputs and the values re-hash on CC reuse. Built-in keys plus the
+ * Build-level input fingerprinting (plan 022, spec §4) at execution time, so probes never become
+ * configuration-cache inputs and the values re-hash on CC reuse. Built-in keys plus the
  * `fingerprints {}` allowlists are hashed with the shared per-project salt ([FingerprintHashing]);
  * without a salt the whole block is omitted (never plaintext), matching the identity rule.
  *
- * Gradle-property *values* arrive pre-resolved in [Parameters.gradleProperties] (they are CC
- * inputs already); system properties and env vars are read here in `obtain()`.
+ * Gradle-property *values* arrive pre-resolved in [Parameters.gradleProperties] (they are CC inputs
+ * already); system properties and env vars are read here in `obtain()`.
  */
-abstract class FingerprintValueSource : ValueSource<CollectedFingerprints, FingerprintValueSource.Parameters> {
+abstract class FingerprintValueSource :
+    ValueSource<CollectedFingerprints, FingerprintValueSource.Parameters> {
 
     interface Parameters : ValueSourceParameters {
         val enabled: Property<Boolean>
@@ -42,9 +44,12 @@ abstract class FingerprintValueSource : ValueSource<CollectedFingerprints, Finge
 
     override fun obtain(): CollectedFingerprints {
         if (!parameters.enabled.getOrElse(true)) return CollectedFingerprints()
-        val salt = runCatching { IdentitySalt.readOrCreate(parameters.identitySaltFile.orNull) }.getOrNull()
+        val salt = runCatching {
+            IdentitySalt.readOrCreate(parameters.identitySaltFile.orNull)
+        }.getOrNull()
         if (salt == null) {
-            // Requested but unsaltable (e.g. salt path is a directory): omit, warn once, never fail.
+            // Requested but unsaltable (e.g. salt path is a directory): omit, warn once, never
+            // fail.
             logger.warn("[buildhound] input fingerprints skipped: no identity salt available")
             return CollectedFingerprints()
         }
@@ -76,11 +81,21 @@ abstract class FingerprintValueSource : ValueSource<CollectedFingerprints, Finge
         val envNames = parameters.envVars.getOrElse(emptySet())
         val gradleProps = parameters.gradleProperties.getOrElse(emptyMap())
         if (sysNames.size > maxNames || envNames.size > maxNames || gradleProps.size > maxNames) {
-            logger.warn("[buildhound] fingerprint allowlist over cap ({} names/family); extra names dropped", maxNames)
+            logger.warn(
+                "[buildhound] fingerprint allowlist over cap ({} names/family); extra names dropped",
+                maxNames,
+            )
         }
-        sysNames.sorted().take(maxNames).forEach { name -> System.getProperty(name)?.let { raw["sysProps-$name"] = it } }
-        envNames.sorted().take(maxNames).forEach { name -> System.getenv(name)?.let { raw["env-$name"] = it } }
-        gradleProps.entries.sortedBy { it.key }.take(maxNames).forEach { (name, value) -> raw["gradleProp-$name"] = value }
+        sysNames.sorted().take(maxNames).forEach { name ->
+            System.getProperty(name)?.let { raw["sysProps-$name"] = it }
+        }
+        envNames.sorted().take(maxNames).forEach { name ->
+            System.getenv(name)?.let { raw["env-$name"] = it }
+        }
+        gradleProps.entries
+            .sortedBy { it.key }
+            .take(maxNames)
+            .forEach { (name, value) -> raw["gradleProp-$name"] = value }
 
         // Hash every value with the salt; truncate over-long key names.
         val hashed = LinkedHashMap<String, String>()

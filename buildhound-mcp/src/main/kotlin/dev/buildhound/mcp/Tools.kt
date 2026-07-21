@@ -28,6 +28,7 @@ object Tools {
 
     private const val MAX_DAYS = 3650
     private const val MAX_LIMIT = 500
+    private const val DEFAULT_DAYS = 30
 
     val all: List<McpTool> = listOf(
         McpTool(
@@ -76,10 +77,26 @@ object Tools {
             if (buildId.contains('/')) throw McpToolException("buildId must not contain '/'")
             "/v1/builds/${enc(buildId)}/diagnosis"
         },
-        daysTool("trends", "Fleet build duration/cache trend points over the last N days.", "/v1/trends"),
-        daysTool("project_cost", "Per-module build-cost rollup over the last N days.", "/v1/rollups/project-cost"),
-        daysTool("task_duration", "Task-duration rollup (by name/type) over the last N days.", "/v1/rollups/task-duration"),
-        daysTool("negative_avoidance", "Tasks that cost more to check than to run, over the last N days.", "/v1/rollups/negative-avoidance"),
+        daysTool(
+            "trends",
+            "Fleet build duration/cache trend points over the last N days.",
+            "/v1/trends",
+        ),
+        daysTool(
+            "project_cost",
+            "Per-module build-cost rollup over the last N days.",
+            "/v1/rollups/project-cost",
+        ),
+        daysTool(
+            "task_duration",
+            "Task-duration rollup (by name/type) over the last N days.",
+            "/v1/rollups/task-duration",
+        ),
+        daysTool(
+            "negative_avoidance",
+            "Tasks that cost more to check than to run, over the last N days.",
+            "/v1/rollups/negative-avoidance",
+        ),
     )
 
     /** A rollup/trend tool keyed only on a `days` window. */
@@ -87,7 +104,7 @@ object Tools {
         name = name,
         description = description,
         inputSchema = objectSchema { put("days", intProp("Window in days (default 30).")) },
-    ) { args -> "$path?days=${intArg(args, "days", 30).coerceIn(1, MAX_DAYS)}" }
+    ) { args -> "$path?days=${intArg(args, "days", DEFAULT_DAYS).coerceIn(1, MAX_DAYS)}" }
 
     private fun intArg(args: JsonObject, key: String, default: Int): Int =
         (args[key] as? JsonPrimitive)?.let { it.intOrNull ?: it.contentOrNull?.toIntOrNull() } ?: default
@@ -110,6 +127,13 @@ object Tools {
         }
     }
 
-    private fun stringProp(description: String): JsonObject = buildJsonObject { put("type", "string"); put("description", description) }
-    private fun intProp(description: String): JsonObject = buildJsonObject { put("type", "integer"); put("description", description) }
+    private fun stringProp(description: String): JsonObject = buildJsonObject {
+        put("type", "string")
+        put("description", description)
+    }
+
+    private fun intProp(description: String): JsonObject = buildJsonObject {
+        put("type", "integer")
+        put("description", description)
+    }
 }

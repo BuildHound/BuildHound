@@ -36,6 +36,7 @@ internal object ProjectEvalRecordIo {
     }
 
     /** Defensive: a malformed or partial file/line is skipped, never fatal. */
+    @Suppress("ReturnCount") // Defensive record parsing rejects each malformed field at its boundary.
     fun parse(text: String): ProjectEvaluation? {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return null

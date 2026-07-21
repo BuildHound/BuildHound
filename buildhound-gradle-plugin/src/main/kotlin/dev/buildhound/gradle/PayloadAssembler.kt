@@ -80,6 +80,7 @@ internal object PayloadAssembler {
         return PayloadScrubber.scrub(payload, projectRoots)
     }
 
+    @Suppress("LongMethod") // Explicit field mapping keeps the wire payload reviewable against its schema.
     fun assemble(
         buildId: String,
         projectKey: String?,
@@ -294,7 +295,12 @@ internal object PayloadAssembler {
         // folded into the CapsSummary here rather than inside PayloadCapper.cap().
         val droppedCandidates = buildStructure?.droppedEmptyIntermediateCandidates ?: 0
         return if (droppedCandidates > 0) {
-            capped.copy(caps = (capped.caps ?: CapsSummary()).copy(droppedEmptyIntermediateCandidates = droppedCandidates))
+            capped.copy(
+                caps =
+                    (capped.caps ?: CapsSummary()).copy(
+                        droppedEmptyIntermediateCandidates = droppedCandidates
+                    )
+            )
         } else {
             capped
         }
@@ -324,6 +330,7 @@ internal object PayloadAssembler {
      * AGP/KGP/KSP/Spring-Boot from plugin detection. Null only when every dimension is unknown, so the
      * block is absent on a build with neither an environment snapshot nor a detected tool version.
      */
+    @Suppress("ComplexCondition") // Absence is defined by all six independently optional dimensions.
     private fun toolchainInfo(
         environment: CollectedEnvironment?,
         agp: String?,
@@ -333,8 +340,23 @@ internal object PayloadAssembler {
     ): ToolchainInfo? {
         val gradle = environment?.gradleVersion
         val jdk = environment?.jdkVersion
-        if (gradle == null && jdk == null && agp == null && kgp == null && ksp == null && springBoot == null) return null
-        return ToolchainInfo(gradle = gradle, jdk = jdk, agp = agp, kgp = kgp, ksp = ksp, springBoot = springBoot)
+        if (
+            gradle == null &&
+                jdk == null &&
+                agp == null &&
+                kgp == null &&
+                ksp == null &&
+                springBoot == null
+        )
+            return null
+        return ToolchainInfo(
+            gradle = gradle,
+            jdk = jdk,
+            agp = agp,
+            kgp = kgp,
+            ksp = ksp,
+            springBoot = springBoot,
+        )
     }
 
     /**
@@ -363,6 +385,7 @@ internal object PayloadAssembler {
      * null/empty (a guarded failure degraded every dimension) — an all-unknown capture reports the
      * same as "uncaptured", never a half-populated block.
      */
+    @Suppress("ComplexCondition") // The aggregate is absent only when every captured dimension is empty.
     private fun buildStructureInfo(structure: CollectedBuildStructure?): BuildStructureInfo? {
         if (structure == null) return null
         if (structure.projectCount == null &&

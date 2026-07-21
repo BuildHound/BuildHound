@@ -59,8 +59,16 @@ data class MintedTokenResponse(val token: String, val scope: String, val expires
 /** Compressed request cap; the decompressed cap is the zip-bomb guard (plan 009). */
 const val MAX_COMPRESSED_BYTES: Int = 32 * 1024 * 1024
 const val MAX_DECOMPRESSED_BYTES: Int = 64 * 1024 * 1024
+private const val MAX_ADDON_KEY_CHARS = 200
+private const val DEFAULT_WINDOW_DAYS = 30
+private const val MAX_WINDOW_DAYS = 365
+private const val DEFAULT_COMPARISON_PERIOD_DAYS = 7
+private const val MAX_COMPARISON_PERIOD_DAYS = 90
 
-/** Shared across mint requests (plan 098 review) — `SecureRandom` is thread-safe, so a per-request instance is wasted setup. */
+/**
+ * Shared across mint requests (plan 098 review) — `SecureRandom` is thread-safe, so a per-request
+ * instance is wasted setup.
+ */
 private val tokenRandom = SecureRandom()
 
 fun Route.healthRoutes() {
@@ -74,6 +82,9 @@ fun Route.healthRoutes() {
  * (project, buildId). The token — not the payload's `projectKey` — determines the
  * tenant. Fails closed: no resolvable token, no ingest.
  */
+// Ktor's route DSL makes endpoint branches appear as one method; keeping the ingest transaction in
+// one route block preserves authentication, scrubbing, persistence, and response ordering.
+@Suppress("CyclomaticComplexMethod")
 fun Route.ingestRoutes(
     store: BuildStore,
     tokens: TokenStore,
@@ -108,10 +119,17 @@ fun Route.ingestRoutes(
                 )
             }
 
-            payload.projectKey?.takeIf { it != project.key }?.let {
-                // take() bounds the logged value — the raw key is attacker-sized (plan 077 log-flood guard).
-                ingestLogger.warn("payload projectKey '{}' differs from token project '{}'", it.take(MAX_HOT_STRING_CHARS), project.key)
-            }
+            payload.projectKey
+                ?.takeIf { it != project.key }
+                ?.let {
+                    // take() bounds the logged value — the raw key is attacker-sized (plan 077
+                    // log-flood guard).
+                    ingestLogger.warn(
+                        "payload projectKey '{}' differs from token project '{}'",
+                        it.take(MAX_HOT_STRING_CHARS),
+                        project.key,
+                    )
+                }
 
             // Defensive server-side scrub (plan 076): scrub BEFORE cap, mirroring the plugin's own
             // scrub-then-cap invariant (PayloadCapper's KDoc: "after the scrubber, so secret
@@ -144,15 +162,18 @@ fun Route.ingestRoutes(
                 scrubBudgetExceeded = result.budgetExceeded
                 if (result.budgetExceeded) {
                     ingestLogger.warn(
-                        "payload scrub for '{}' hit the {}ms CPU budget; remaining free-text redacted to sentinel (possible DoS)",
-                        project.key, IngestScrub.BUDGET_MS,
+                        "payload scrub for '{}' hit the {}ms CPU budget; remaining free-text " +
+                            "redacted to sentinel (possible DoS)",
+                        project.key,
+                        IngestScrub.BUDGET_MS,
                     )
                 }
                 result.payload
-            } catch (e: Exception) {
+            } catch (expected: Exception) {
                 ingestLogger.warn(
                     "payload scrub threw for '{}', storing capped-but-unscrubbed: {}",
-                    project.key, e::class.java.simpleName,
+                    project.key,
+                    expected::class.java.simpleName,
                 )
                 payload
             }
@@ -161,10 +182,14 @@ fun Route.ingestRoutes(
             // buggy client is bounded, not rejected — the telemetry survives, and only counts
             // (never keys/values) log. The byte ceilings above stay the outer wall.
             // If the timed scrub redacted anything, record the honest-degradation flag on the caps
-            // summary (set after cap() since cap() never touches it — see CapsSummary.scrubBudgetExceeded).
-            val capped = PayloadCapper.cap(scrubbed).let { c ->
-                if (scrubBudgetExceeded) c.copy(caps = (c.caps ?: CapsSummary()).copy(scrubBudgetExceeded = true)) else c
-            }
+            // summary (set after cap() since cap() never touches it — see
+            // CapsSummary.scrubBudgetExceeded).
+            val capped =
+                PayloadCapper.cap(scrubbed).let { c ->
+                    if (scrubBudgetExceeded)
+                        c.copy(caps = (c.caps ?: CapsSummary()).copy(scrubBudgetExceeded = true))
+                    else c
+                }
             if (capped.caps != payload.caps) {
                 ingestLogger.warn(
                     "clamped over-cap payload from '{}': post-cap totals {} tag(s), {} value(s), {} task(s) dropped",
@@ -203,7 +228,13 @@ fun Route.ingestRoutes(
             // handles ci.provider. buildUrl is the ingested (attacker-controlled) source parsed for the
             // collection/project — the connector's host allowlist is the SSRF guard, not this call.
             if (stored) {
-                enrichment.submit(project.id, bounded.buildId, bounded.ci?.provider, bounded.ci?.runId, bounded.ci?.buildUrl)
+                enrichment.submit(
+                    project.id,
+                    bounded.buildId,
+                    bounded.ci?.provider,
+                    bounded.ci?.runId,
+                    bounded.ci?.buildUrl,
+                )
             }
 
             call.respond(
@@ -344,22 +375,35 @@ fun Route.metricsRoutes(builds: BuildStore, metrics: MetricStore, tokens: TokenS
     }
 }
 
-private fun validateMetric(s: MetricSubmission): String? = when {
-    s.scope.isBlank() || s.scope.length > MAX_METRIC_SCOPE_CHARS -> "scope must be 1..$MAX_METRIC_SCOPE_CHARS chars"
-    s.name.isBlank() || s.name.length > MAX_METRIC_NAME_CHARS -> "name must be 1..$MAX_METRIC_NAME_CHARS chars"
-    s.value == null && s.text == null -> "a value or text is required"
-    s.value != null && s.text != null -> "provide either value or text, not both"
-    (s.text?.length ?: 0) > MAX_METRIC_VALUE_CHARS -> "text must be <= $MAX_METRIC_VALUE_CHARS chars"
-    (s.unit?.length ?: 0) > MAX_METRIC_VALUE_CHARS -> "unit must be <= $MAX_METRIC_VALUE_CHARS chars"
-    s.correlation.buildId == null && s.correlation.provider == null && s.correlation.runId == null ->
-        "a correlation (buildId, or provider + runId) is required"
-    // Correlation keys feed the custom_metrics_uniq btree index (plan 077) — reject, don't clamp
-    // (a clamped key would silently correlate to the wrong run; the CLI is ours, so 422 loudly).
-    (s.correlation.buildId?.length ?: 0) > MAX_HOT_STRING_CHARS -> "correlation buildId must be <= $MAX_HOT_STRING_CHARS chars"
-    (s.correlation.provider?.length ?: 0) > MAX_HOT_STRING_CHARS -> "correlation provider must be <= $MAX_HOT_STRING_CHARS chars"
-    (s.correlation.runId?.length ?: 0) > MAX_HOT_STRING_CHARS -> "correlation runId must be <= $MAX_HOT_STRING_CHARS chars"
-    else -> null
-}
+@Suppress("CyclomaticComplexMethod") // Ordered validation clauses each produce a distinct API error.
+private fun validateMetric(s: MetricSubmission): String? =
+    when {
+        s.scope.isBlank() || s.scope.length > MAX_METRIC_SCOPE_CHARS ->
+            "scope must be 1..$MAX_METRIC_SCOPE_CHARS chars"
+        s.name.isBlank() || s.name.length > MAX_METRIC_NAME_CHARS ->
+            "name must be 1..$MAX_METRIC_NAME_CHARS chars"
+        s.value == null && s.text == null -> "a value or text is required"
+        s.value != null && s.text != null -> "provide either value or text, not both"
+        (s.text?.length ?: 0) > MAX_METRIC_VALUE_CHARS ->
+            "text must be <= $MAX_METRIC_VALUE_CHARS chars"
+        (s.unit?.length ?: 0) > MAX_METRIC_VALUE_CHARS ->
+            "unit must be <= $MAX_METRIC_VALUE_CHARS chars"
+        s.correlation.buildId == null &&
+            s.correlation.provider == null &&
+            s.correlation.runId == null ->
+            "a correlation (buildId, or provider + runId) is required"
+        // Correlation keys feed the custom_metrics_uniq btree index (plan 077) — reject, don't
+        // clamp
+        // (a clamped key would silently correlate to the wrong run; the CLI is ours, so 422
+        // loudly).
+        (s.correlation.buildId?.length ?: 0) > MAX_HOT_STRING_CHARS ->
+            "correlation buildId must be <= $MAX_HOT_STRING_CHARS chars"
+        (s.correlation.provider?.length ?: 0) > MAX_HOT_STRING_CHARS ->
+            "correlation provider must be <= $MAX_HOT_STRING_CHARS chars"
+        (s.correlation.runId?.length ?: 0) > MAX_HOT_STRING_CHARS ->
+            "correlation runId must be <= $MAX_HOT_STRING_CHARS chars"
+        else -> null
+    }
 
 /** `GET/PUT /v1/settings` (spec §5): read with read-scope; write requires the all-scope admin token. */
 fun Route.settingsRoutes(settings: SettingsStore, tokens: TokenStore) {
@@ -418,7 +462,11 @@ fun Route.adminRoutes(settings: SettingsStore, tokens: TokenStore) {
             call.response.header(HttpHeaders.CacheControl, "no-store")
             call.respond(
                 HttpStatusCode.Created,
-                MintedTokenResponse(token = plaintext, scope = TokenScope.INGEST, expiresUnusedAt = expiresUnusedAt.value.toString()),
+                MintedTokenResponse(
+                    token = plaintext,
+                    scope = TokenScope.INGEST,
+                    expiresUnusedAt = expiresUnusedAt.value.toString(),
+                ),
             )
         }
     }
@@ -440,6 +488,8 @@ private fun validateSettings(s: ProjectSettings): String? = when {
  * computed on read over the indexed hot columns; materialized aggregates come when
  * volume demands them.
  */
+// Each Ktor endpoint is an independent branch but shares the same authenticated tenant boundary.
+@Suppress("CyclomaticComplexMethod", "LongMethod")
 fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenStore, ciSpans: CiSpanStore) {
     route("/v1") {
         // Distinct payload projectKeys for this tenant (plan 077): powers the dashboard's project
@@ -452,13 +502,20 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         get("/builds") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
-            val filter = call.buildFilterOrNull(projectKey.value)
-                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/branch/tag filter"))
-            val limit = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 200)
-            val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceIn(0, 10_000)
-            val result = call.runQuery {
-                store.count(project.id, filter) to store.list(project.id, filter, limit, offset)
-            } ?: return@get
+            val filter =
+                call.buildFilterOrNull(projectKey.value)
+                    ?: return@get call.respond(
+                        HttpStatusCode.BadRequest,
+                        ApiError("invalid mode/outcome/branch/tag filter"),
+                    )
+            val limit =
+                (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 200)
+            val offset =
+                (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceIn(0, 10_000)
+            val result =
+                call.runQuery {
+                    store.count(project.id, filter) to store.list(project.id, filter, limit, offset)
+                } ?: return@get
             val (total, builds) = result.value
             // Filter-aware total for the list's count-summary header (plan 018): additive,
             // the body stays a plain array so existing consumers are unaffected. count and
@@ -603,8 +660,12 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         get("/trends") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
-            val filter = call.buildFilterOrNull(projectKey.value)
-                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/branch/tag filter"))
+            val filter =
+                call.buildFilterOrNull(projectKey.value)
+                    ?: return@get call.respond(
+                        HttpStatusCode.BadRequest,
+                        ApiError("invalid mode/outcome/branch/tag filter"),
+                    )
             val days = (call.request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)
             call.respondQuery { store.trends(project.id, filter, days, System.currentTimeMillis()) }
         }
@@ -614,9 +675,20 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         get("/artifacts/trends") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
-            val filter = call.buildFilterOrNull(projectKey.value)
-                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/branch/tag filter"))
-            call.respondQuery { store.artifactTrends(project.id, filter, call.daysParam(), System.currentTimeMillis()) }
+            val filter =
+                call.buildFilterOrNull(projectKey.value)
+                    ?: return@get call.respond(
+                        HttpStatusCode.BadRequest,
+                        ApiError("invalid mode/outcome/branch/tag filter"),
+                    )
+            call.respondQuery {
+                store.artifactTrends(
+                    project.id,
+                    filter,
+                    call.daysParam(),
+                    System.currentTimeMillis(),
+                )
+            }
         }
 
         // Server-side rollups over the normalized task_executions table (plan 026). Read-scope,
@@ -637,7 +709,14 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.negativeAvoidance(project.id, days, System.currentTimeMillis(), projectKey.value) }
+            call.respondQuery {
+                store.negativeAvoidance(
+                    project.id,
+                    days,
+                    System.currentTimeMillis(),
+                    projectKey.value,
+                )
+            }
         }
 
         // Owning-plugin cost rollup (plan 058, research F8 Layer 1): FQCN-prefix rollup over
@@ -659,7 +738,14 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.changeBlastRadius(project.id, days, System.currentTimeMillis(), projectKey.value) }
+            call.respondQuery {
+                store.changeBlastRadius(
+                    project.id,
+                    days,
+                    System.currentTimeMillis(),
+                    projectKey.value,
+                )
+            }
         }
 
         // Benchmark series (plan 030, spec §7): mode=BENCHMARK builds grouped by (scenario, isolation)
@@ -703,7 +789,14 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.toolchainAdoption(project.id, days, System.currentTimeMillis(), projectKey.value) }
+            call.respondQuery {
+                store.toolchainAdoption(
+                    project.id,
+                    days,
+                    System.currentTimeMillis(),
+                    projectKey.value,
+                )
+            }
         }
 
         // Rerun-cause taxonomy (plan 061, research F11): per-bucket coverage of executed task-hours
@@ -737,7 +830,14 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
-            call.respondQuery { store.cacheMissDiagnostics(project.id, days, System.currentTimeMillis(), projectKey.value) }
+            call.respondQuery {
+                store.cacheMissDiagnostics(
+                    project.id,
+                    days,
+                    System.currentTimeMillis(),
+                    projectKey.value,
+                )
+            }
         }
 
         // Fleet remote-cache ROI (plan 067, research F17): per-mode remote/local hit rate from the opt-in
@@ -775,7 +875,14 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
             val days = call.daysParam()
             call.respondQuery {
-                val payloads = store.windowPayloads(project.id, days, MAX_RECOMMENDATION_ROWS, System.currentTimeMillis(), projectKey.value)
+                val payloads =
+                    store.windowPayloads(
+                        project.id,
+                        days,
+                        MAX_RECOMMENDATION_ROWS,
+                        System.currentTimeMillis(),
+                        projectKey.value,
+                    )
                 RecommendationsRollup(
                     period = days,
                     buildsAnalyzed = payloads.size,
@@ -819,15 +926,28 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         get("/trends/cohorts") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
-            val filter = call.buildFilterOrNull(projectKey.value)
-                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("invalid mode/outcome/branch/tag filter"))
+            val filter =
+                call.buildFilterOrNull(projectKey.value)
+                    ?: return@get call.respond(
+                        HttpStatusCode.BadRequest,
+                        ApiError("invalid mode/outcome/branch/tag filter"),
+                    )
             val tagKey = call.request.queryParameters["tag"]
             if (tagKey.isNullOrBlank()) {
                 return@get call.respond(HttpStatusCode.BadRequest, ApiError("tag query parameter is required"))
             }
             val days = call.daysParam()
             call.respondQuery {
-                CohortComparator.compare(tagKey, store.tagCohortTrends(project.id, tagKey, filter, days, System.currentTimeMillis()))
+                CohortComparator.compare(
+                    tagKey,
+                    store.tagCohortTrends(
+                        project.id,
+                        tagKey,
+                        filter,
+                        days,
+                        System.currentTimeMillis(),
+                    ),
+                )
             }
         }
 
@@ -836,7 +956,14 @@ fun Route.queryRoutes(store: BuildStore, verdicts: VerdictStore, tokens: TokenSt
         get("/tags") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsRead) ?: return@get
             val projectKey = call.projectKeyParamOrBadRequest() ?: return@get
-            call.respondQuery { store.tagKeys(project.id, call.daysParam(), System.currentTimeMillis(), projectKey.value) }
+            call.respondQuery {
+                store.tagKeys(
+                    project.id,
+                    call.daysParam(),
+                    System.currentTimeMillis(),
+                    projectKey.value,
+                )
+            }
         }
     }
 }
@@ -859,7 +986,10 @@ fun Route.metricsEgressRoutes(store: BuildStore, tokens: TokenStore) {
         get("/prometheus") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsMetrics) ?: return@get
             val days = call.daysParam()
-            val snapshot = call.runQuery { store.metricsSnapshot(project.id, days, System.currentTimeMillis()) } ?: return@get
+            val snapshot =
+                call.runQuery {
+                    store.metricsSnapshot(project.id, days, System.currentTimeMillis())
+                } ?: return@get
             call.respondText(
                 PrometheusExposition.render(project.key, snapshot.value),
                 ContentType.parse("text/plain; version=0.0.4; charset=utf-8"),
@@ -932,7 +1062,7 @@ private suspend fun ApplicationCall.registeredAddonId(registered: Set<String>): 
 private suspend fun ApplicationCall.addonKeyOrNull(): String? {
     val key = parameters.getOrFail("key")
     val ascii = { c: Char -> c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c in "._-" }
-    if (key.isEmpty() || key.length > 200 || !key.all(ascii)) {
+    if (key.isEmpty() || key.length > MAX_ADDON_KEY_CHARS || !key.all(ascii)) {
         respond(HttpStatusCode.BadRequest, ApiError("invalid addon key"))
         return null
     }
@@ -940,7 +1070,12 @@ private suspend fun ApplicationCall.addonKeyOrNull(): String? {
 }
 
 @Serializable
-data class ShardPlanRequest(val reference: String, val index: Int, val total: Int, val suites: List<String> = emptyList())
+data class ShardPlanRequest(
+    val reference: String,
+    val index: Int,
+    val total: Int,
+    val suites: List<String> = emptyList(),
+)
 
 @Serializable
 data class ShardPlanResponse(
@@ -964,21 +1099,40 @@ private const val MAX_SHARDS: Int = 1000
  * class timings. The first job for a reference fixes the plan; later jobs read it — so inter-job
  * discovery drift can't reshuffle shards. Tenant is the token's project, never the body.
  */
+@Suppress("ComplexCondition") // The shard tuple is valid only when all coupled bounds hold together.
 fun Route.testShardingRoutes(builds: BuildStore, shardPlans: ShardPlanStore, tokens: TokenStore) {
     post("/v1/addons/test-sharding/plan") {
         val project = call.authenticatedProject(tokens, TokenScope::allowsIngest) ?: return@post
-        val body = call.receiveBounded(1024 * 1024)
-            ?: return@post call.respond(HttpStatusCode.PayloadTooLarge, ApiError("plan request too large"))
-        val req = runCatching { BuildHoundJson.payload.decodeFromString(ShardPlanRequest.serializer(), body.decodeToString()) }
-            .getOrElse { return@post call.respond(HttpStatusCode.BadRequest, ApiError("invalid plan request")) }
-        // reference is route-body free text feeding the shard_plans btree PK (plan 078) — cap it like
+        val body =
+            call.receiveBounded(1024 * 1024)
+                ?: return@post call.respond(
+                    HttpStatusCode.PayloadTooLarge,
+                    ApiError("plan request too large"),
+                )
+        val req = runCatching {
+            BuildHoundJson.payload.decodeFromString(
+                ShardPlanRequest.serializer(),
+                body.decodeToString(),
+            )
+        }
+            .getOrElse {
+                return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiError("invalid plan request"),
+                )
+            }
+        // reference is route-body free text feeding the shard_plans btree PK (plan 078) — cap it
+        // like
         // every other index-bound string.
         if (req.reference.isBlank() || req.reference.length > MAX_HOT_STRING_CHARS ||
             req.total < 1 || req.total > MAX_SHARDS || req.index < 1 || req.index > req.total
         ) {
             return@post call.respond(
                 HttpStatusCode.BadRequest,
-                ApiError("reference must be non-blank and <= $MAX_HOT_STRING_CHARS chars, with 1 <= index <= total <= $MAX_SHARDS"),
+                ApiError(
+                    "reference must be non-blank and <= $MAX_HOT_STRING_CHARS chars, " +
+                        "with 1 <= index <= total <= $MAX_SHARDS"
+                ),
             )
         }
         val result = call.runQuery {
@@ -991,7 +1145,14 @@ fun Route.testShardingRoutes(builds: BuildStore, shardPlans: ShardPlanStore, tok
         val plan = result.value
         val classes = plan.getOrElse(req.index - 1) { emptyList() }
         val shardPlanId = sha256Hex("${project.id}|${req.reference}|${req.total}").substring(0, 12)
-        call.respond(ShardPlanResponse(shardPlanId = shardPlanId, index = req.index, classes = classes, assigned = plan.flatten()))
+        call.respond(
+            ShardPlanResponse(
+                shardPlanId = shardPlanId,
+                index = req.index,
+                classes = classes,
+                assigned = plan.flatten(),
+            )
+        )
     }
 }
 
@@ -1010,6 +1171,8 @@ fun Route.testShardingRoutes(builds: BuildStore, shardPlans: ShardPlanStore, tok
  * Testcontainers test can drive it against a real
  * [dev.buildhound.server.connector.PostgresCiSpanStore]-backed store.
  */
+// The upgrade pass combines independently optional connector, retry, and flaky evidence.
+@Suppress("CyclomaticComplexMethod")
 internal fun enrichDeliveryHealth(
     core: DeliveryHealthRollup,
     projectId: String,
@@ -1056,14 +1219,20 @@ internal fun enrichDeliveryHealth(
         var wastedMs = core.retryTax.wastedMsLowerBound
         for (sample in core.retryTax.rerunSamples) {
             val run = findRun(sample.buildId)?.run ?: continue
-            val pipelineMs = if (run.startedAt != null && run.finishedAt != null) run.finishedAt - run.startedAt else continue
+            val pipelineMs =
+                if (run.startedAt != null && run.finishedAt != null) run.finishedAt - run.startedAt
+                else continue
             if (pipelineMs > sample.durationMs) {
                 effectiveRerunMs[sample.buildId] = pipelineMs
                 wastedMs += pipelineMs - sample.durationMs
             }
         }
-        core.retryTax.copy(wastedCiMinutesLowerBound = DeliveryHealthCalculator.minutes(wastedMs), wastedMsLowerBound = wastedMs)
-    }.getOrDefault(core.retryTax)
+        core.retryTax.copy(
+            wastedCiMinutesLowerBound = DeliveryHealthCalculator.minutes(wastedMs),
+            wastedMsLowerBound = wastedMs,
+        )
+    }
+        .getOrDefault(core.retryTax)
 
     // (c) Flaky-rerun candidates: plan-036 records whose affected builds intersect the rerun set.
     val flakyRerunTax = runCatching {
@@ -1073,21 +1242,27 @@ internal fun enrichDeliveryHealth(
             val rerunIds = core.retryTax.rerunBuildIds.toSet()
             // The flaky window inherits the route's projectKey (plan 079) — otherwise a sibling repo's
             // flaky classes could claim this repo's rerun builds in the panel.
-            store.flaky(projectId, days, nowMs, projectKey).mapNotNull { record ->
-                val hits = record.affectedBuildIds.filter { it in rerunIds }
-                if (hits.isEmpty()) return@mapNotNull null
-                FlakyRerunCandidate(
-                    module = record.module,
-                    className = record.className,
-                    rerunBuildCount = hits.size,
-                    wastedCiMinutesLowerBound = DeliveryHealthCalculator.minutes(hits.sumOf { effectiveRerunMs[it] ?: 0L }),
+            store
+                .flaky(projectId, days, nowMs, projectKey)
+                .mapNotNull { record ->
+                    val hits = record.affectedBuildIds.filter { it in rerunIds }
+                    if (hits.isEmpty()) return@mapNotNull null
+                    FlakyRerunCandidate(
+                        module = record.module,
+                        className = record.className,
+                        rerunBuildCount = hits.size,
+                        wastedCiMinutesLowerBound =
+                            DeliveryHealthCalculator.minutes(
+                                hits.sumOf { effectiveRerunMs[it] ?: 0L }
+                            ),
+                    )
+                }
+                .sortedWith(
+                    compareByDescending<FlakyRerunCandidate> { it.wastedCiMinutesLowerBound }
+                        .thenByDescending { it.rerunBuildCount }
+                        .thenBy { it.className }
+                        .thenBy { it.module ?: "" },
                 )
-            }.sortedWith(
-                compareByDescending<FlakyRerunCandidate> { it.wastedCiMinutesLowerBound }
-                    .thenByDescending { it.rerunBuildCount }
-                    .thenBy { it.className }
-                    .thenBy { it.module ?: "" },
-            )
         }
     }.getOrDefault(emptyList())
 
@@ -1101,14 +1276,16 @@ internal fun enrichDeliveryHealth(
 
 /** Window size in days, defaulting to 30 and clamped to [1, 365] like /trends. */
 internal fun ApplicationCall.daysParam(): Int =
-    (request.queryParameters["days"]?.toIntOrNull() ?: 30).coerceIn(1, 365)
+    (request.queryParameters["days"]?.toIntOrNull() ?: DEFAULT_WINDOW_DAYS)
+        .coerceIn(1, MAX_WINDOW_DAYS)
 
 /**
  * Bottlenecks comparison window in days, default 7, clamped to [1, 90] (plan 032). The store scans two
  * back-to-back windows, so 90 bounds the read at 180 days — the fleet-scale cap that keeps it honest.
  */
 private fun ApplicationCall.periodParam(): Int =
-    (request.queryParameters["period"]?.toIntOrNull() ?: 7).coerceIn(1, 90)
+    (request.queryParameters["period"]?.toIntOrNull() ?: DEFAULT_COMPARISON_PERIOD_DAYS)
+        .coerceIn(1, MAX_COMPARISON_PERIOD_DAYS)
 
 private class QueryResult<T>(val value: T)
 
@@ -1157,6 +1334,7 @@ private suspend fun ApplicationCall.authenticatedProject(
  * `branch` is free text but length-capped like `projectKey` (plan 078) — stored branches are clamped
  * to the same bound, so a longer value can never match anything anyway.
  */
+@Suppress("ReturnCount") // Each guard rejects one invalid public query parameter.
 private fun ApplicationCall.buildFilterOrNull(projectKey: String? = null): BuildFilter? {
     val mode = request.queryParameters["mode"]?.uppercase()
     if (mode != null && mode !in BuildMode.entries.map { it.name }) return null
@@ -1167,7 +1345,9 @@ private fun ApplicationCall.buildFilterOrNull(projectKey: String? = null): Build
     // Benchmark builds pollute fleet p50/p95 trends (plan 030), so exclude them by default — unless
     // the caller explicitly asks for mode=benchmark or passes includeBenchmark=true.
     val includeBenchmark = request.queryParameters["includeBenchmark"].toBoolean()
-    val excludeModes = if (mode == BuildMode.BENCHMARK.name || includeBenchmark) emptySet() else setOf(BuildMode.BENCHMARK.name)
+    val excludeModes =
+        if (mode == BuildMode.BENCHMARK.name || includeBenchmark) emptySet()
+        else setOf(BuildMode.BENCHMARK.name)
     val tags = buildTagFilterOrNull() ?: return null
     return BuildFilter(
         branch = branch,

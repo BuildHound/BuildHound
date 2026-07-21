@@ -27,13 +27,17 @@ internal object ArtifactRecordIo {
         return BuildHoundJson.payload.encodeToString(JsonObject.serializer(), obj)
     }
 
+    @Suppress("ReturnCount") // Defensive parser: each early return rejects one malformed field.
     fun parse(line: String): ArtifactSize? {
         val trimmed = line.trim()
         if (trimmed.isEmpty()) return null
         return runCatching {
             val obj = BuildHoundJson.payload.parseToJsonElement(trimmed) as? JsonObject ?: return null
             val variant = obj.str("variant") ?: return null
-            val type = obj.str("type")?.let { name -> ArtifactType.entries.firstOrNull { it.name == name } } ?: return null
+            val type =
+                obj.str("type")?.let { name ->
+                    ArtifactType.entries.firstOrNull { it.name == name }
+                } ?: return null
             val sizeBytes = obj.str("sizeBytes")?.toLongOrNull() ?: return null
             ArtifactSize(variant = variant, module = obj.str("module"), type = type, sizeBytes = sizeBytes)
         }.getOrNull()

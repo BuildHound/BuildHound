@@ -13,9 +13,9 @@ import org.gradle.api.Project
  * BuildHound is a *settings* plugin, so AGP is not on its classpath (it is applied to *projects*).
  * [install] therefore references NO AGP symbol itself — it only registers `withPlugin` reactions
  * whose bodies delegate to [installApp]/[installLib], and each delegate runs inside a
- * `runCatching(Throwable)`. So on a non-Android build nothing links AGP, and even if AGP's types are
- * unresolvable from the settings classloader the resulting `NoClassDefFoundError` degrades to "no
- * artifacts" — never a failed build (architecture §2 never-fail rule). The AGP-touching code
+ * `runCatching(Throwable)`. So on a non-Android build nothing links AGP, and even if AGP's types
+ * are unresolvable from the settings classloader the resulting `NoClassDefFoundError` degrades to
+ * "no artifacts" — never a failed build (architecture §2 never-fail rule). The AGP-touching code
  * ([installApp]/[installLib], [SizeReportTask]) links AGP only when actually invoked on an Android
  * project.
  *
@@ -39,30 +39,40 @@ internal object AndroidArtifactCollector {
 
     private fun warn(project: Project, error: Throwable) {
         // Class name only — never process/build state; a linking or wiring failure is non-fatal.
-        project.logger.info("[buildhound] android artifact size collection unavailable: {}", error::class.java.simpleName)
+        project.logger.info(
+            "[buildhound] android artifact size collection unavailable: {}",
+            error::class.java.simpleName,
+        )
     }
 
     private fun installApp(project: Project, artifactsDir: File) {
-        project.extensions.getByType(ApplicationAndroidComponentsExtension::class.java).onVariants { variant ->
-            registerApk(project, variant, artifactsDir)
-            registerFile(project, variant, artifactsDir, SingleArtifact.BUNDLE, "Aab", "AAB")
-        }
+        project.extensions
+            .getByType(ApplicationAndroidComponentsExtension::class.java)
+            .onVariants { variant ->
+                registerApk(project, variant, artifactsDir)
+                registerFile(project, variant, artifactsDir, SingleArtifact.BUNDLE, "Aab", "AAB")
+            }
     }
 
     private fun installLib(project: Project, artifactsDir: File) {
-        project.extensions.getByType(LibraryAndroidComponentsExtension::class.java).onVariants { variant ->
+        project.extensions.getByType(LibraryAndroidComponentsExtension::class.java).onVariants {
+            variant ->
             registerFile(project, variant, artifactsDir, SingleArtifact.AAR, "Aar", "AAR")
         }
     }
 
     private fun registerApk(project: Project, variant: Variant, artifactsDir: File) {
-        val task = project.tasks.register(taskName(variant, "Apk"), ApkSizeReportTask::class.java) { t ->
-            t.module.set(project.path)
-            t.variant.set(variant.name)
-            t.builtArtifactsLoader.set(variant.artifacts.getBuiltArtifactsLoader())
-            t.output.set(outputFile(project, artifactsDir, variant, "apk"))
-        }
-        variant.artifacts.use(task).wiredWith(ApkSizeReportTask::apkDir).toListenTo(SingleArtifact.APK)
+        val task =
+            project.tasks.register(taskName(variant, "Apk"), ApkSizeReportTask::class.java) { t ->
+                t.module.set(project.path)
+                t.variant.set(variant.name)
+                t.builtArtifactsLoader.set(variant.artifacts.getBuiltArtifactsLoader())
+                t.output.set(outputFile(project, artifactsDir, variant, "apk"))
+            }
+        variant.artifacts
+            .use(task)
+            .wiredWith(ApkSizeReportTask::apkDir)
+            .toListenTo(SingleArtifact.APK)
     }
 
     private fun registerFile(
@@ -73,12 +83,14 @@ internal object AndroidArtifactCollector {
         taskSuffix: String,
         artifactType: String,
     ) {
-        val task = project.tasks.register(taskName(variant, taskSuffix), FileSizeReportTask::class.java) { t ->
-            t.module.set(project.path)
-            t.variant.set(variant.name)
-            t.artifactType.set(artifactType)
-            t.output.set(outputFile(project, artifactsDir, variant, artifactType.lowercase()))
-        }
+        val task =
+            project.tasks.register(taskName(variant, taskSuffix), FileSizeReportTask::class.java) {
+                t ->
+                t.module.set(project.path)
+                t.variant.set(variant.name)
+                t.artifactType.set(artifactType)
+                t.output.set(outputFile(project, artifactsDir, variant, artifactType.lowercase()))
+            }
         variant.artifacts.use(task).wiredWith(FileSizeReportTask::artifact).toListenTo(artifact)
     }
 
@@ -86,7 +98,12 @@ internal object AndroidArtifactCollector {
         "buildhound${suffix}Size${variant.name.replaceFirstChar { it.uppercase() }}"
 
     /** Collision-free per (module, variant, kind); the module path is sanitized for a file name. */
-    private fun outputFile(project: Project, artifactsDir: File, variant: Variant, kind: String): File {
+    private fun outputFile(
+        project: Project,
+        artifactsDir: File,
+        variant: Variant,
+        kind: String,
+    ): File {
         val modulePart = project.path.trim(':').ifEmpty { "root" }.replace(':', '-')
         return File(artifactsDir, "$modulePart-${variant.name}-$kind.jsonl")
     }

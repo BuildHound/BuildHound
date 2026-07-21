@@ -40,7 +40,7 @@ object LptBalancer {
     }
 
     /** Nearest-rank p90 over a duration list (plan 040 timing input); 0 when empty. See [NearestRankPercentile]. */
-    fun p90(durations: List<Long>): Long = NearestRankPercentile.of(durations, 0.90)
+    fun p90(durations: List<Long>): Long = NearestRankPercentile.of(durations, P90_QUANTILE)
 
     private fun medianLong(values: List<Long>): Long {
         val sorted = values.sorted()

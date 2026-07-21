@@ -100,7 +100,9 @@ internal fun relocatabilityRowsOf(payload: BuildPayload): List<RelocatabilityRow
             val obj = taskElement.jsonObject
             val path = obj["path"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
             val origin = obj["origin"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val parsedOrigin = RelocatabilityOrigin.entries.firstOrNull { it.name == origin } ?: RelocatabilityOrigin.OTHER
+            val parsedOrigin =
+                RelocatabilityOrigin.entries.firstOrNull { it.name == origin }
+                    ?: RelocatabilityOrigin.OTHER
             path to parsedOrigin
         }
     }.getOrElse { emptyList() }
@@ -127,10 +129,18 @@ internal fun relocatabilityRowsOf(payload: BuildPayload): List<RelocatabilityRow
 internal fun fingerprintStreamRowOf(payload: BuildPayload): FingerprintStreamRow? {
     val hostnameHash = payload.environment?.hostnameHash ?: return null
     val fingerprints = payload.fingerprints ?: return null
-    return FingerprintStreamRow(hostnameHash = hostnameHash, startedAt = payload.startedAt, buildId = payload.buildId, fingerprints = fingerprints.build)
+    return FingerprintStreamRow(
+        hostnameHash = hostnameHash,
+        startedAt = payload.startedAt,
+        buildId = payload.buildId,
+        fingerprints = fingerprints.build,
+    )
 }
 
-/** True when a payload could feed either cache-miss-diagnostics detector (plan 068's "gated to builds carrying the block"). */
+/**
+ * True when a payload could feed either cache-miss-diagnostics detector (plan 068's "gated to
+ * builds carrying the block").
+ */
 internal fun carriesCacheMissDiagnosticsBlock(payload: BuildPayload): Boolean =
     payload.extensions.containsKey(INTERNAL_ADAPTERS_EXTENSION_KEY) || payload.fingerprints != null
 
@@ -170,13 +180,22 @@ internal fun cacheConfigRowOf(payload: BuildPayload): CacheConfigRow? {
 internal fun carriesCacheRoiBlock(payload: BuildPayload): Boolean =
     payload.extensions.containsKey(INTERNAL_ADAPTERS_EXTENSION_KEY) || payload.environment?.buildCache != null
 
-/** Defensive ceiling on builds scanned for one `/rollups/cache-roi` query (plan 067), mirroring [RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS]. */
+/**
+ * Defensive ceiling on builds scanned for one `/rollups/cache-roi` query (plan 067), mirroring
+ * [RelocatabilityDetector.MAX_DIAGNOSTIC_ROWS].
+ */
 internal const val MAX_CACHE_ROI_ROWS: Int = 20_000
 
-/** Defensive ceiling on builds scanned for one `/rollups/cc-economics` query (plan 064), mirroring [MAX_CACHE_ROI_ROWS]. */
+/**
+ * Defensive ceiling on builds scanned for one `/rollups/cc-economics` query (plan 064), mirroring
+ * [MAX_CACHE_ROI_ROWS].
+ */
 internal const val MAX_CC_ECONOMICS_ROWS: Int = 20_000
 
-/** Defensive ceiling on builds scanned for one `/rollups/recommendations` query (plan 054), mirroring [MAX_CACHE_ROI_ROWS]. */
+/**
+ * Defensive ceiling on builds scanned for one `/rollups/recommendations` query (plan 054),
+ * mirroring [MAX_CACHE_ROI_ROWS].
+ */
 internal const val MAX_RECOMMENDATION_ROWS: Int = 20_000
 
 /**
@@ -217,7 +236,8 @@ internal fun dependencyEdgesOf(payload: BuildPayload): Map<String, List<String>>
  * divergence accepted, see the V15 comment. `requested_tasks_sig` needs no clamp (always a 32-char
  * md5 hex); `apk_sizes` strings are unindexed beyond buildId.
  */
-internal const val MAX_HOT_STRING_CHARS: Int = 256 // buildId, projectKey, branch, ci provider/runId/pipelineName, modules
+internal const val MAX_HOT_STRING_CHARS: Int =
+    256 // buildId, projectKey, branch, ci provider/runId/pipelineName, modules
 
 internal const val MAX_FQCN_CHARS: Int = 512 // task `type`, test class names — FQCNs run longer than names
 
@@ -237,6 +257,8 @@ private fun String?.exceeds(max: Int): Boolean = this != null && length > max
  * the compliant path: each section is copied only when one of its values exceeds a bound.
  * Idempotent — double application (ingest + save) is harmless.
  */
+// This is the single schema-shaped normalization boundary; its branches mirror optional payload blocks.
+@Suppress("ComplexCondition", "CyclomaticComplexMethod")
 internal fun boundForStorage(payload: BuildPayload): BuildPayload {
     val buildId = payload.buildId.truncateSafely(MAX_HOT_STRING_CHARS)
     val projectKey = payload.projectKey?.truncateSafely(MAX_HOT_STRING_CHARS)
@@ -253,10 +275,19 @@ internal fun boundForStorage(payload: BuildPayload): BuildPayload {
         else c.copy(provider = provider, runId = runId, pipelineName = pipelineName)
     }
     val tasks =
-        if (payload.tasks.none { it.module.exceeds(MAX_HOT_STRING_CHARS) || it.type.exceeds(MAX_FQCN_CHARS) }) payload.tasks
-        else payload.tasks.map {
-            it.copy(module = it.module?.truncateSafely(MAX_HOT_STRING_CHARS), type = it.type?.truncateSafely(MAX_FQCN_CHARS))
-        }
+        if (
+            payload.tasks.none {
+                it.module.exceeds(MAX_HOT_STRING_CHARS) || it.type.exceeds(MAX_FQCN_CHARS)
+            }
+        )
+            payload.tasks
+        else
+            payload.tasks.map {
+                it.copy(
+                    module = it.module?.truncateSafely(MAX_HOT_STRING_CHARS),
+                    type = it.type?.truncateSafely(MAX_FQCN_CHARS),
+                )
+            }
     val tests =
         if (payload.tests.none { t ->
                 t.module.exceeds(MAX_HOT_STRING_CHARS) ||
@@ -266,17 +297,38 @@ internal fun boundForStorage(payload: BuildPayload): BuildPayload {
         ) payload.tests
         // failedOrRetried className is not stored, but it is classOutcomesOf's retry-join key against
         // classes[].className — clamping both keeps the retry association intact post-clamp.
-        else payload.tests.map { t ->
-            t.copy(
-                module = t.module?.truncateSafely(MAX_HOT_STRING_CHARS),
-                classes = t.classes.map { it.copy(className = it.className.truncateSafely(MAX_FQCN_CHARS)) },
-                failedOrRetried = t.failedOrRetried.map { it.copy(className = it.className.truncateSafely(MAX_FQCN_CHARS)) },
-            )
-        }
-    return if (buildId === payload.buildId && projectKey === payload.projectKey && vcs === payload.vcs &&
-        ci === payload.ci && tasks === payload.tasks && tests === payload.tests
-    ) payload
-    else payload.copy(buildId = buildId, projectKey = projectKey, vcs = vcs, ci = ci, tasks = tasks, tests = tests)
+        else
+            payload.tests.map { t ->
+                t.copy(
+                    module = t.module?.truncateSafely(MAX_HOT_STRING_CHARS),
+                    classes =
+                        t.classes.map {
+                            it.copy(className = it.className.truncateSafely(MAX_FQCN_CHARS))
+                        },
+                    failedOrRetried =
+                        t.failedOrRetried.map {
+                            it.copy(className = it.className.truncateSafely(MAX_FQCN_CHARS))
+                        },
+                )
+            }
+    return if (
+        buildId === payload.buildId &&
+            projectKey === payload.projectKey &&
+            vcs === payload.vcs &&
+            ci === payload.ci &&
+            tasks === payload.tasks &&
+            tests === payload.tests
+    )
+        payload
+    else
+        payload.copy(
+            buildId = buildId,
+            projectKey = projectKey,
+            vcs = vcs,
+            ci = ci,
+            tasks = tasks,
+            tests = tests,
+        )
 }
 
 /**
@@ -318,7 +370,10 @@ data class BenchmarkPoint(
     val hitRate: Double? = null,
 )
 
-/** Percentile summary of one benchmark series (mirrors [dev.buildhound.commons.payload.BenchmarkSeriesCalculator.Summary]). */
+/**
+ * Percentile summary of one benchmark series (mirrors
+ * [dev.buildhound.commons.payload.BenchmarkSeriesCalculator.Summary]).
+ */
 @Serializable
 data class BenchmarkSummary(val p50: Long, val p90: Long, val min: Long, val count: Int)
 
@@ -415,6 +470,7 @@ data class MetricRecord(
  * Persistence boundary for ingested builds (architecture §5): every operation carries
  * the tenant. Real implementation is Postgres; in-memory serves tests and DB-less dev.
  */
+@Suppress("TooManyFunctions") // One tenant-scoped persistence contract shared by parity implementations.
 interface BuildStore {
     /** Idempotent on (project, [BuildPayload.buildId]); false when already stored. */
     fun save(projectId: String, payload: BuildPayload): Boolean
@@ -453,14 +509,38 @@ interface BuildStore {
      */
     fun projectKeys(projectId: String): List<ProjectKeyRow>
 
-    /** Per-module Project Cost family over the last [days] (plan 026); top-25 by cost scalar. [projectKey] narrows to one repo (plan 077). */
-    fun projectCost(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<ProjectCostRow>
+    /**
+     * Per-module Project Cost family over the last [days] (plan 026); top-25 by cost scalar.
+     * [projectKey] narrows to one repo (plan 077).
+     */
+    fun projectCost(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String? = null,
+    ): List<ProjectCostRow>
 
-    /** Task duration grouped by name and by type over the last [days] (plan 026); top-25 each. [projectKey] narrows to one repo (plan 077). */
-    fun taskDuration(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): TaskDurationRollup
+    /**
+     * Task duration grouped by name and by type over the last [days] (plan 026); top-25 each.
+     * [projectKey] narrows to one repo (plan 077).
+     */
+    fun taskDuration(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String? = null,
+    ): TaskDurationRollup
 
-    /** Negative-avoidance ranking over the last [days] (plan 026); top-25 by total excess. [projectKey] narrows to one repo (plan 077). */
-    fun negativeAvoidance(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<NegativeAvoidanceRow>
+    /**
+     * Negative-avoidance ranking over the last [days] (plan 026); top-25 by total excess.
+     * [projectKey] narrows to one repo (plan 077).
+     */
+    fun negativeAvoidance(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String? = null,
+    ): List<NegativeAvoidanceRow>
 
     /**
      * Owning-plugin cost rollup over the last [days] (plan 058, research F8 Layer 1): the same
@@ -483,7 +563,12 @@ interface BuildStore {
      * parity discipline). Empty when no windowed build carried a `changedModules` block.
      * [projectKey] narrows to one repo (plan 079).
      */
-    fun changeBlastRadius(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): List<ChangeBlastRadiusRow>
+    fun changeBlastRadius(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String? = null,
+    ): List<ChangeBlastRadiusRow>
 
     /**
      * Benchmark series over the last [days] (plan 030): `mode=BENCHMARK` builds grouped by
@@ -555,7 +640,13 @@ interface BuildStore {
      * [TagCohortCalculator.groupByCohort], so in-memory and Postgres agree byte-for-byte (the
      * plan-026 parity discipline).
      */
-    fun tagCohortTrends(projectId: String, tagKey: String, filter: BuildFilter, days: Int, nowMs: Long): List<TagCohortRaw>
+    fun tagCohortTrends(
+        projectId: String,
+        tagKey: String,
+        filter: BuildFilter,
+        days: Int,
+        nowMs: Long,
+    ): List<TagCohortRaw>
 
     /**
      * Distinct tag keys observed over [days], each with its top-N most-frequent values (plan 057) —
@@ -606,7 +697,12 @@ interface BuildStore {
      * inflate both the cross-host count and the fingerprint-volatility signal).
      * [projectKey] narrows to one repo (plan 079) — applied before the row cap, never after.
      */
-    fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long, projectKey: String? = null): CacheMissDiagnostics
+    fun cacheMissDiagnostics(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String? = null,
+    ): CacheMissDiagnostics
 
     /**
      * Fleet remote-cache ROI over the last [days] (plan 067, research F17): per-build-mode remote/local
@@ -667,7 +763,13 @@ interface BuildStore {
      * normalized rollup column carries.
      * [projectKey] narrows to one repo (plan 079) — applied before the [cap], never after.
      */
-    fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long, projectKey: String? = null): List<BuildPayload>
+    fun windowPayloads(
+        projectId: String,
+        days: Int,
+        cap: Int,
+        nowMs: Long,
+        projectKey: String? = null,
+    ): List<BuildPayload>
 
     /** Every project id with stored data (retention sweep, plan 042); default empty for a store that has none. */
     fun allProjectIds(): List<String> = emptyList()
@@ -735,14 +837,23 @@ interface SettingsStore {
  */
 interface ShardPlanStore {
     /** The stored plan for the key, or the result of [compute] stored atomically on first call. */
-    fun planOrCompute(projectId: String, reference: String, total: Int, compute: () -> List<List<String>>): List<List<String>>
+    fun planOrCompute(
+        projectId: String,
+        reference: String,
+        total: Int,
+        compute: () -> List<List<String>>,
+    ): List<List<String>>
 }
 
 class InMemoryShardPlanStore : ShardPlanStore {
     private val plans = ConcurrentHashMap<Triple<String, String, Int>, List<List<String>>>()
 
-    override fun planOrCompute(projectId: String, reference: String, total: Int, compute: () -> List<List<String>>): List<List<String>> =
-        plans.computeIfAbsent(Triple(projectId, reference, total)) { compute() }
+    override fun planOrCompute(
+        projectId: String,
+        reference: String,
+        total: Int,
+        compute: () -> List<List<String>>,
+    ): List<List<String>> = plans.computeIfAbsent(Triple(projectId, reference, total)) { compute() }
 }
 
 /**
@@ -904,21 +1015,40 @@ class InMemoryBuildStore(
                     maxDurationMs = durations.maxOrNull() ?: 0,
                     avgHitRate = hitRates.takeIf { it.isNotEmpty() }?.average(),
                     interrupted = dayBuilds.count { it.outcome.name == "INTERRUPTED" },
-                    ccMissStored = if (ccObserved == 0) null else dayBuilds.count { it.environment?.configurationCache == ConfigurationCacheState.MISS_STORED },
-                    ccHit = if (ccObserved == 0) null else dayBuilds.count { it.environment?.configurationCache == ConfigurationCacheState.HIT },
-                    ccRequested = if (ccObserved == 0) {
-                        null
-                    } else {
-                        dayBuilds.count {
-                            it.environment?.configurationCache == ConfigurationCacheState.HIT ||
-                                it.environment?.configurationCache == ConfigurationCacheState.MISS_STORED
-                        }
-                    },
+                    ccMissStored =
+                        if (ccObserved == 0) null
+                        else
+                            dayBuilds.count {
+                                it.environment?.configurationCache ==
+                                    ConfigurationCacheState.MISS_STORED
+                            },
+                    ccHit =
+                        if (ccObserved == 0) null
+                        else
+                            dayBuilds.count {
+                                it.environment?.configurationCache == ConfigurationCacheState.HIT
+                            },
+                    ccRequested =
+                        if (ccObserved == 0) {
+                            null
+                        } else {
+                            dayBuilds.count {
+                                it.environment?.configurationCache == ConfigurationCacheState.HIT ||
+                                    it.environment?.configurationCache ==
+                                        ConfigurationCacheState.MISS_STORED
+                            }
+                        },
                 )
             }
     }
 
-    override fun tagCohortTrends(projectId: String, tagKey: String, filter: BuildFilter, days: Int, nowMs: Long): List<TagCohortRaw> {
+    override fun tagCohortTrends(
+        projectId: String,
+        tagKey: String,
+        filter: BuildFilter,
+        days: Int,
+        nowMs: Long,
+    ): List<TagCohortRaw> {
         val cutoff = nowMs - days.toLong() * 86_400_000
         val rows = matching(projectId, filter)
             .filter { it.startedAt >= cutoff }
@@ -990,15 +1120,27 @@ class InMemoryBuildStore(
     override fun taskDuration(projectId: String, days: Int, nowMs: Long, projectKey: String?): TaskDurationRollup =
         RollupCalculator.taskDuration(taskRowsInWindow(projectId, days, nowMs, projectKey))
 
-    override fun negativeAvoidance(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<NegativeAvoidanceRow> =
+    override fun negativeAvoidance(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): List<NegativeAvoidanceRow> =
         RollupCalculator.negativeAvoidance(taskRowsInWindow(projectId, days, nowMs, projectKey))
 
     override fun pluginCost(projectId: String, days: Int, nowMs: Long, projectKey: String?): PluginCostRollup =
         RollupCalculator.pluginCost(taskRowsInWindow(projectId, days, nowMs, projectKey))
 
-    override fun changeBlastRadius(projectId: String, days: Int, nowMs: Long, projectKey: String?): List<ChangeBlastRadiusRow> {
-        // Same days-window, benchmark-included convention as projectCost (started_at >= cutoff), gated
-        // to builds carrying a changedModules block. Both stores flatten to ChangeBlastBuild and defer
+    override fun changeBlastRadius(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): List<ChangeBlastRadiusRow> {
+        // Same days-window, benchmark-included convention as projectCost (started_at >= cutoff),
+        // gated
+        // to builds carrying a changedModules block. Both stores flatten to ChangeBlastBuild and
+        // defer
         // to the one calculator, so in-memory and Postgres agree byte-for-byte.
         val cutoff = nowMs - days.toLong() * 86_400_000
         val builds = builds.entries
@@ -1051,7 +1193,12 @@ class InMemoryBuildStore(
             .sortedWith(compareBy({ it.scenario }, { it.isolationMode ?: "" }))
     }
 
-    override fun artifactTrends(projectId: String, filter: BuildFilter, days: Int, nowMs: Long): List<ArtifactTrendPoint> {
+    override fun artifactTrends(
+        projectId: String,
+        filter: BuildFilter,
+        days: Int,
+        nowMs: Long,
+    ): List<ArtifactTrendPoint> {
         val cutoff = nowMs - days.toLong() * 86_400_000
         return matching(projectId, filter)
             .filter { it.startedAt >= cutoff }
@@ -1097,7 +1244,12 @@ class InMemoryBuildStore(
         // The jdk dimension (plan 065): duration-carrying samples, grouped by JDK major — the
         // daemon-JDK fleet comparison; the other four dimensions stay per full version, no duration.
         val jdkSamples = payloads.map {
-            ToolchainSample(it.toolchain?.jdk, it.environment?.userId, it.startedAt, durationMs = it.finishedAt - it.startedAt)
+            ToolchainSample(
+                it.toolchain?.jdk,
+                it.environment?.userId,
+                it.startedAt,
+                durationMs = it.finishedAt - it.startedAt,
+            )
         }
         return ToolchainRollup(
             gradle = ToolchainCalculator.dimension(samples { it.toolchain?.gradle }),
@@ -1128,7 +1280,12 @@ class InMemoryBuildStore(
         return WarningCalculator.compute(windowed.flatMap { taskRowsOf(it) }, period)
     }
 
-    override fun cacheMissDiagnostics(projectId: String, days: Int, nowMs: Long, projectKey: String?): CacheMissDiagnostics {
+    override fun cacheMissDiagnostics(
+        projectId: String,
+        days: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): CacheMissDiagnostics {
         // Same fleet-view window as bottlenecks/toolchainAdoption/rerunCauses/warnings (benchmark
         // excluded), further gated to builds carrying either block and capped/tie-broken identically to
         // the Postgres store's `ORDER BY started_at DESC, build_id DESC LIMIT` so the two agree
@@ -1181,12 +1338,21 @@ class InMemoryBuildStore(
         return CcEconomicsCalculator.compute(windowed.map { ccBuildRowOf(it) })
     }
 
-    override fun windowPayloads(projectId: String, days: Int, cap: Int, nowMs: Long, projectKey: String?): List<BuildPayload> =
-        // Same fleet-view window as bottlenecks/cacheRoi/ccEconomics (benchmark excluded via payloadsBetween),
-        // most-recent-first with the same (startedAt, buildId) tie-break + cap as the Postgres LIMIT so the
-        // two stores return the identical bounded set even above the cap (plan 054 parity discipline).
+    override fun windowPayloads(
+        projectId: String,
+        days: Int,
+        cap: Int,
+        nowMs: Long,
+        projectKey: String?,
+    ): List<BuildPayload> =
+        // Same fleet-view window as bottlenecks/cacheRoi/ccEconomics (benchmark excluded via
+        // payloadsBetween),
+        // most-recent-first with the same (startedAt, buildId) tie-break + cap as the Postgres
+        // LIMIT so the
+        // two stores return the identical bounded set even above the cap (plan 054 parity
+        // discipline).
         // projectKey filters BEFORE the cap (plan 079).
-        payloadsBetween(projectId, nowMs - days.toLong() * 86_400_000, nowMs, projectKey)
+        payloadsBetween(projectId, nowMs - days.toLong() * MILLIS_PER_DAY, nowMs, projectKey)
             .sortedWith(compareByDescending<BuildPayload> { it.startedAt }.thenByDescending { it.buildId })
             .take(cap)
 
@@ -1251,7 +1417,12 @@ class InMemoryBuildStore(
     }
 
     /** Non-benchmark builds whose startedAt ∈ [fromMs, toMs) — the fleet-view window (plan 032). */
-    private fun payloadsBetween(projectId: String, fromMs: Long, toMs: Long, projectKey: String? = null): List<BuildPayload> =
+    private fun payloadsBetween(
+        projectId: String,
+        fromMs: Long,
+        toMs: Long,
+        projectKey: String? = null,
+    ): List<BuildPayload> =
         builds.entries
             .filter { it.key.first == projectId }
             .map { it.value }
@@ -1264,18 +1435,23 @@ class InMemoryBuildStore(
 
     private data class ArtifactGroupKey(val day: String, val module: String?, val variant: String, val type: String)
 
-    private fun benchmarkSeriesOf(scenario: String, isolationMode: String?, group: List<BuildPayload>): BenchmarkSeries {
-        val points = group
-            .sortedBy { it.startedAt }
-            .map {
-                BenchmarkPoint(
-                    startedAt = it.startedAt,
-                    buildId = it.buildId,
-                    iteration = it.benchmark?.iteration,
-                    durationMs = it.finishedAt - it.startedAt,
-                    hitRate = it.derived?.cacheableHitRate,
-                )
-            }
+    private fun benchmarkSeriesOf(
+        scenario: String,
+        isolationMode: String?,
+        group: List<BuildPayload>,
+    ): BenchmarkSeries {
+        val points =
+            group
+                .sortedBy { it.startedAt }
+                .map {
+                    BenchmarkPoint(
+                        startedAt = it.startedAt,
+                        buildId = it.buildId,
+                        iteration = it.benchmark?.iteration,
+                        durationMs = it.finishedAt - it.startedAt,
+                        hitRate = it.derived?.cacheableHitRate,
+                    )
+                }
         return BenchmarkSeries(scenario, isolationMode, points, summarize(points))
     }
 
@@ -1356,7 +1532,9 @@ class InMemoryVerdictStore : VerdictStore {
 
     override fun save(projectId: String, buildId: String, verdict: Verdict) {
         // Stamp evaluatedAt so in-memory (dev/tests) matches Postgres, which sets it from now().
-        val stamped = if (verdict.evaluatedAt != null) verdict else verdict.copy(evaluatedAt = System.currentTimeMillis())
+        val stamped =
+            if (verdict.evaluatedAt != null) verdict
+            else verdict.copy(evaluatedAt = System.currentTimeMillis())
         verdicts[projectId to buildId] = Stored(buildId, stamped, seq.incrementAndGet())
     }
 
@@ -1427,13 +1605,19 @@ class InMemoryTokenStore(private val clock: java.time.InstantSource = java.time.
         // Mirrors PostgresTokenStore.resolve's predicate: activated, or no deadline, or deadline not
         // yet passed. Re-checked under the same computeIfPresent below so a losing racer never observes
         // a stale "still valid" record it then activates past its own deadline.
-        val record = tokens.computeIfPresent(tokenHash) { _, existing ->
-            val stillValid = existing.activatedAt != null ||
-                existing.expiresUnusedAt == null ||
-                existing.expiresUnusedAt.isAfter(now)
-            if (stillValid && existing.activatedAt == null) existing.copy(activatedAt = now) else existing
-        } ?: return null
-        val stillValid = record.activatedAt != null || record.expiresUnusedAt == null || record.expiresUnusedAt.isAfter(now)
+        val record =
+            tokens.computeIfPresent(tokenHash) { _, existing ->
+                val stillValid =
+                    existing.activatedAt != null ||
+                        existing.expiresUnusedAt == null ||
+                        existing.expiresUnusedAt.isAfter(now)
+                if (stillValid && existing.activatedAt == null) existing.copy(activatedAt = now)
+                else existing
+            } ?: return null
+        val stillValid =
+            record.activatedAt != null ||
+                record.expiresUnusedAt == null ||
+                record.expiresUnusedAt.isAfter(now)
         if (!stillValid) return null
         val project = projects.values.firstOrNull { it.id == record.projectId } ?: return null
         return TokenPrincipal(project, record.scope)
@@ -1455,7 +1639,13 @@ class InMemoryTokenStore(private val clock: java.time.InstantSource = java.time.
 
     override fun mintToken(projectId: String, tokenHash: String, scope: String): Instant {
         val expiresUnusedAt = clock.instant().plus(TOKEN_UNUSED_TTL)
-        val record = TokenRecord(projectId = projectId, scope = scope, expiresUnusedAt = expiresUnusedAt, activatedAt = null)
+        val record =
+            TokenRecord(
+                projectId = projectId,
+                scope = scope,
+                expiresUnusedAt = expiresUnusedAt,
+                activatedAt = null,
+            )
         // putIfAbsent, not a blind assign: a hash collision must never silently rebind an existing
         // token (Postgres unique-violates the same case) — practically unreachable with 256-bit
         // randoms, but kept at parity with ensureProjectWithToken's cross-tenant guard below.

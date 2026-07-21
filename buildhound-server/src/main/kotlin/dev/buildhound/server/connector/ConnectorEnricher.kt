@@ -20,7 +20,9 @@ class ConnectorEnricher(
     private val configs: ConnectorConfigStore,
     private val spans: CiSpanStore,
     private val maxPollAttempts: Int = 6,
-    private val backoff: (attempt: Int) -> Long = { attempt -> minOf(5_000L shl (attempt - 1), 120_000L) },
+    private val backoff: (attempt: Int) -> Long = { attempt ->
+        minOf(INITIAL_BACKOFF_MS shl (attempt - 1), MAX_BACKOFF_MS)
+    },
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     /**
      * Expected-build fallback sink (plan 033): given a completed [CiRun] with no ingested payload,
@@ -41,6 +43,7 @@ class ConnectorEnricher(
      * synthesize an INTERRUPTED build. Never throws (mirrors [enrich]) and no-ops when the connector
      * or credential is absent, or the run is still running.
      */
+    @Suppress("ReturnCount") // Missing capability/config/run data are independent no-op boundaries.
     suspend fun checkExpectedBuild(projectId: String, provider: String, runId: String, buildUrl: String?) {
         runCatching {
             if (!registry.canEnrich(provider)) return
@@ -52,7 +55,15 @@ class ConnectorEnricher(
             val run = connector.fetchRun(ref, config) ?: return
             if (run.finishedAt == null) return // still running → not interrupted
             recordInterrupted(projectId, provider, runId, run)
-        }.onFailure { logger.warn("expected-build check failed for {}:{}: {}", provider, runId, it::class.java.simpleName) }
+        }
+            .onFailure {
+                logger.warn(
+                    "expected-build check failed for {}:{}: {}",
+                    provider,
+                    runId,
+                    it::class.java.simpleName,
+                )
+            }
     }
 
     suspend fun enrich(
@@ -96,11 +107,18 @@ class ConnectorEnricher(
         while (attempt <= maxPollAttempts) {
             // A per-attempt exception is transient, treated exactly like a null/incomplete result:
             // log and retry with backoff. One bad attempt (attempt 1 of N) must NOT abort the whole
-            // poll — that would give a thrown failure zero retries while a null gets the full budget.
-            val run = runCatching { connector.fetchRun(ref, config) }.getOrElse {
-                logger.warn("enrichment attempt {} for build {} failed: {}", attempt, buildId, it::class.java.simpleName)
-                null
-            }
+            // poll — that would give a thrown failure zero retries while a null gets the full
+            // budget.
+            val run = runCatching { connector.fetchRun(ref, config) }
+                .getOrElse {
+                    logger.warn(
+                        "enrichment attempt {} for build {} failed: {}",
+                        attempt,
+                        buildId,
+                        it::class.java.simpleName,
+                    )
+                    null
+                }
             if (run != null) {
                 last = run
                 if (run.finishedAt != null) {

@@ -26,8 +26,15 @@ class ShardPlanClient(baseUrl: String, private val token: String?) {
     init {
         // Match the core PayloadUploader: warn if the ingest token would ride plaintext http to a
         // non-loopback host (the token is only ever a header, but the channel is unencrypted).
-        if (!token.isNullOrBlank() && endpoint.scheme == "http" && endpoint.host !in setOf("localhost", "127.0.0.1", "::1", "[::1]")) {
-            logger.warn("[buildhound-test-sharding] BUILDHOUND_SERVER_URL uses plaintext http — the token travels unencrypted; use https")
+        if (
+            !token.isNullOrBlank() &&
+                endpoint.scheme == "http" &&
+                endpoint.host !in setOf("localhost", "127.0.0.1", "::1", "[::1]")
+        ) {
+            logger.warn(
+                "[buildhound-test-sharding] BUILDHOUND_SERVER_URL uses plaintext http — " +
+                    "the token travels unencrypted; use https"
+            )
         }
     }
 
@@ -39,7 +46,10 @@ class ShardPlanClient(baseUrl: String, private val token: String?) {
             .POST(HttpRequest.BodyPublishers.ofString(json))
         if (!token.isNullOrBlank()) builder.header("Authorization", "Bearer $token")
         val response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() !in 200..299) return null
+        if (response.statusCode() !in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX) return null
         BuildHoundJson.payload.decodeFromString(ShardPlanResponse.serializer(), response.body())
     }.getOrNull()
 }
+
+private const val HTTP_SUCCESS_MIN = 200
+private const val HTTP_SUCCESS_MAX = 299

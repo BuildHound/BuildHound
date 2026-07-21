@@ -66,6 +66,7 @@ internal object TestLocationSidecar {
         return BuildHoundJson.payload.encodeToString(JsonObject.serializer(), obj)
     }
 
+    @Suppress("ReturnCount") // Sidecar lines are untrusted; each exit rejects one malformed component.
     private fun parseLine(line: String): Pair<String, TestResultLocations>? {
         val trimmed = line.trim()
         if (trimmed.isEmpty()) return null

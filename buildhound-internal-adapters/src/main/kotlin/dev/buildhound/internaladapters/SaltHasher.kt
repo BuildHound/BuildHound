@@ -25,9 +25,14 @@ object SaltHasher {
 
     private const val SALT_BYTES = 32
     private const val DOMAIN = "fp:"
+    private const val DIGEST_PREFIX_BYTES = 8
+    private const val BYTE_MASK = 0xff
+    private const val HEX_PADDING = 0x100
+    private const val HEX_RADIX = 16
 
     fun readOrCreateSalt(saltFile: File): ByteArray? {
-        validBytesOrNull(saltFile)?.let { return it }
+        val existing = validBytesOrNull(saltFile)
+        if (existing != null) return existing
         val dir = (saltFile.parentFile ?: return null).apply { mkdirs() }
         runCatching { File(dir, ".gitignore").takeIf { !it.exists() }?.writeText("*\n") }
         val salt = ByteArray(SALT_BYTES).also(SecureRandom()::nextBytes)
@@ -55,7 +60,9 @@ object SaltHasher {
         val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(salt, "HmacSHA256")) }
         mac.update(DOMAIN.encodeToByteArray())
         val digest = mac.doFinal(value)
-        return digest.take(8).joinToString("") { ((it.toInt() and 0xff) + 0x100).toString(16).substring(1) } + "…"
+        return digest.take(DIGEST_PREFIX_BYTES).joinToString("") {
+            ((it.toInt() and BYTE_MASK) + HEX_PADDING).toString(HEX_RADIX).substring(1)
+        } + "…"
     }
 
     private fun validBytesOrNull(file: File): ByteArray? =

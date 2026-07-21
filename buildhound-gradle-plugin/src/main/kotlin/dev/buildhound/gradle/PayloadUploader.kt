@@ -20,7 +20,7 @@ internal class PayloadUploader(
     private val baseUrl: String,
     private val token: String?,
     private val spoolDir: File,
-    private val timeout: Duration = Duration.ofSeconds(15),
+    private val timeout: Duration = Duration.ofSeconds(DEFAULT_TIMEOUT_SECONDS),
 ) : AutoCloseable {
 
     private val client: HttpClient = HttpClient.newBuilder()
@@ -106,9 +106,9 @@ internal class PayloadUploader(
             .POST(HttpRequest.BodyPublishers.ofByteArray(gzipBody))
             .build()
         when (val code = client.send(request, HttpResponse.BodyHandlers.discarding()).statusCode()) {
-            in 200..299 -> Outcome.SENT
-            408, 429 -> Outcome.UNREACHABLE // retryable server states
-            in 400..499 -> Outcome.REJECTED
+            in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX -> Outcome.SENT
+            HTTP_REQUEST_TIMEOUT, HTTP_TOO_MANY_REQUESTS -> Outcome.UNREACHABLE
+            in HTTP_CLIENT_ERROR_MIN..HTTP_CLIENT_ERROR_MAX -> Outcome.REJECTED
             else -> {
                 logger.info("[buildhound] upload attempt got {}", code)
                 Outcome.UNREACHABLE
@@ -155,3 +155,11 @@ internal class PayloadUploader(
         }
     }
 }
+
+private const val DEFAULT_TIMEOUT_SECONDS = 15L
+private const val HTTP_SUCCESS_MIN = 200
+private const val HTTP_SUCCESS_MAX = 299
+private const val HTTP_REQUEST_TIMEOUT = 408
+private const val HTTP_TOO_MANY_REQUESTS = 429
+private const val HTTP_CLIENT_ERROR_MIN = 400
+private const val HTTP_CLIENT_ERROR_MAX = 499

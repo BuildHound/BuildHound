@@ -106,6 +106,7 @@ object DaemonTuningCandidates {
      * reused, a prior snapshot with the SAME pid exists, its GCT is monotonic (delta >= 0), and the
      * build duration is positive — any miss falls back to the lifetime fraction (never a guess).
      */
+    @Suppress("ReturnCount") // Guard clauses progressively fall back from delta to lifetime telemetry.
     internal fun gcFraction(
         process: ProcessInfo,
         environment: EnvironmentInfo?,
@@ -117,7 +118,9 @@ object DaemonTuningCandidates {
         val lifetime = uptimeS?.let { gcTimeMs.toDouble() / (it * 1000.0) }
         if (environment?.daemonReused != true) return lifetime
         val pid = process.pid ?: return lifetime
-        val priorGc = priorProcesses.firstOrNull { it.pid == pid && it.role == process.role }?.gcTimeMs ?: return lifetime
+        val priorGc =
+            priorProcesses.firstOrNull { it.pid == pid && it.role == process.role }?.gcTimeMs
+                ?: return lifetime
         val delta = gcTimeMs - priorGc
         if (delta < 0) return lifetime // pid reuse / daemon restart — GCT went backwards
         val duration = buildDurationMs?.takeIf { it > 0 } ?: return lifetime
@@ -180,8 +183,9 @@ object DaemonTuningCandidates {
             TuningCandidate(
                 kind = TuningKind.COMPACT_OBJECT_HEADERS.name,
                 role = process.role.name,
-                advisory = "The ${roleLabel(process.role)} uses $rssMb MB RSS on JDK $jdkMajor without compact object " +
-                    "headers — consider enabling -XX:+UseCompactObjectHeaders (~22 % heap, JEP 519).",
+                advisory =
+                    "The ${roleLabel(process.role)} uses $rssMb MB RSS on JDK $jdkMajor without compact object " +
+                        "headers — consider enabling -XX:+UseCompactObjectHeaders (~22 % heap, JEP 519).",
             ),
             severity = rssMb.toDouble(),
         )
@@ -204,7 +208,7 @@ object DaemonTuningCandidates {
         ProcessRole.GRADLE_WORKER -> "Gradle worker"
     }
 
-    private fun percent(fraction: Double): String = "${Math.round(fraction * 100)} %"
+    private fun percent(fraction: Double): String = "${Math.round(fraction * PERCENT_FACTOR)} %"
 
     /** JDK **major** = the leading numeric segment ("21.0.10" → 21); null when it is not numeric. */
     internal fun leadingNumericSegment(version: String): Int? =

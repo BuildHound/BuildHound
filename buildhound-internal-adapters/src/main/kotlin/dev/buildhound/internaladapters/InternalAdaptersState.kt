@@ -19,8 +19,8 @@ import java.util.concurrent.atomic.AtomicReference
  * The stable-per-daemon facts (salt, gradle version, per-file opt-in, dependency edges) persist across
  * CC hits deliberately — they don't change on a CC hit.
  */
+@Suppress("TooManyFunctions") // Cohesive daemon-state facade; splitting it would fragment invariants.
 object InternalAdaptersState {
-
     private val registered = AtomicBoolean(false)
     private val logListenerRegistered = AtomicBoolean(false)
     private val accumulator = AtomicReference(Accumulator())
@@ -116,6 +116,8 @@ object InternalAdaptersState {
     }
 }
 
+private const val MAX_PARENT_HOPS = 256
+
 /**
  * One build's capture, populated concurrently from the build-operation listener (build ops run in
  * parallel). `parentOf`/`taskPathOf` correlate a cache/snapshot op back to its enclosing task; the
@@ -161,7 +163,7 @@ class Accumulator {
     fun taskPathFor(opId: Long?): String? {
         var current = opId
         var hops = 0
-        while (current != null && hops < 256) {
+        while (current != null && hops < MAX_PARENT_HOPS) {
             taskPathOf[current]?.let { return it }
             current = parentOf[current]
             hops++
@@ -200,7 +202,9 @@ class TaskAccum {
      * (`-1` on a local miss, `0` on a remote miss — verified via javap against Gradle 8.14.5/9.4.0/
      * 9.4.1/9.6.1), so a plain unconditional `+=` would silently subtract from the total on every miss.
      */
-    fun addTransferBytes(bytes: Long?) { if (bytes != null && bytes >= 0) transferBytes = (transferBytes ?: 0L) + bytes }
+    fun addTransferBytes(bytes: Long?) {
+        if (bytes != null && bytes >= 0) transferBytes = (transferBytes ?: 0L) + bytes
+    }
 
     fun addLoadMs(ms: Long?) { if (ms != null) loadMs = (loadMs ?: 0L) + ms }
 

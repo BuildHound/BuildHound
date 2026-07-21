@@ -23,7 +23,10 @@ data class CacheRoiRow(val mode: String, val origin: CacheRoiOrigin)
  */
 data class CacheConfigRow(val mode: String, val remoteEnabled: Boolean)
 
-/** Per-build-mode remote/local cache-hit rate (plan 067); the rate denominator excludes `STORED` — see [CacheRoiCalculator]. */
+/**
+ * Per-build-mode remote/local cache-hit rate (plan 067); the rate denominator excludes `STORED` —
+ * see [CacheRoiCalculator].
+ */
 @Serializable
 data class CacheRoiModeRow(
     val mode: String,
@@ -90,13 +93,17 @@ object CacheRoiCalculator {
     /** A CI remote-hit rate at or below this is "near-zero reuse" — an investigate-candidate, not a verdict. */
     const val NEAR_ZERO_REUSE_RATE: Double = 0.05
 
-    /** Minimum considered CI task executions before a near-zero-reuse candidate is trustworthy (BottleneckCalculator.MIN_SAMPLES spirit). */
+    /**
+     * Minimum considered CI task executions before a near-zero-reuse candidate is trustworthy
+     * (BottleneckCalculator.MIN_SAMPLES spirit).
+     */
     const val MIN_CANDIDATE_EXECUTIONS: Long = 50
 
     fun compute(originRows: List<CacheRoiRow>, configRows: List<CacheConfigRow>): CacheRoiRollup {
         val buildsWithConfig = configRows.size
         val remoteConfiguredShare =
-            if (buildsWithConfig == 0) 0.0 else roundTo6(configRows.count { it.remoteEnabled }.toDouble() / buildsWithConfig)
+            if (buildsWithConfig == 0) 0.0
+            else roundTo6(configRows.count { it.remoteEnabled }.toDouble() / buildsWithConfig)
 
         // Availability: the opt-in module contributed origin data at all. With it off there are no origin
         // rows and the remote-hit rate is genuinely absent (never synthesized from cacheableHitRate).
@@ -142,7 +149,7 @@ object CacheRoiCalculator {
         if (ci.remoteHitRate > NEAR_ZERO_REUSE_RATE) return null
         val ciRemoteConfigured = configRows.any { it.mode == "CI" && it.remoteEnabled }
         if (!ciRemoteConfigured) return null
-        val pct = Math.round(ci.remoteHitRate * 100)
+        val pct = Math.round(ci.remoteHitRate * PERCENT_FACTOR)
         return CiReuseCandidate(
             mode = "CI",
             remoteHitRate = ci.remoteHitRate,
@@ -153,5 +160,5 @@ object CacheRoiCalculator {
         )
     }
 
-    private fun roundTo6(value: Double): Double = Math.round(value * 1_000_000.0) / 1_000_000.0
+    private fun roundTo6(value: Double): Double = Math.round(value * SIX_DECIMAL_FACTOR) / SIX_DECIMAL_FACTOR
 }

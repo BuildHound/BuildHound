@@ -71,8 +71,7 @@ internal object FailureExtractor {
     }
 
     private fun sha256(text: String): String =
-        MessageDigest.getInstance("SHA-256").digest(text.encodeToByteArray())
-            .joinToString("") { byte -> ((byte.toInt() and 0xff) + 0x100).toString(16).substring(1) }
+        MessageDigest.getInstance("SHA-256").digest(text.encodeToByteArray()).toLowerHex()
 
     /**
      * A `MultipleBuildFailures` / `DefaultMultiCauseException` exposes `getCauses(): List<Throwable>`.

@@ -24,13 +24,16 @@ object ConnectorHttpClient {
         expectSuccess = false
         followRedirects = false
         install(HttpTimeout) {
-            connectTimeoutMillis = 5_000
-            requestTimeoutMillis = 15_000
-            socketTimeoutMillis = 15_000
+            connectTimeoutMillis = CONNECT_TIMEOUT_MS
+            requestTimeoutMillis = REQUEST_TIMEOUT_MS
+            socketTimeoutMillis = REQUEST_TIMEOUT_MS
         }
         install(HttpRequestRetry) {
-            retryIf(maxRetries = 3) { _, response -> response.status.value == 429 || response.status.value in 500..599 }
-            retryOnException(maxRetries = 3, retryOnTimeout = true)
+            retryIf(maxRetries = DEFAULT_MAX_RETRIES) { _, response ->
+                response.status.value == HTTP_RATE_LIMITED ||
+                    response.status.value in HTTP_SERVER_ERROR_MIN..HTTP_SERVER_ERROR_MAX
+            }
+            retryOnException(maxRetries = DEFAULT_MAX_RETRIES, retryOnTimeout = true)
             exponentialDelay()
         }
     }

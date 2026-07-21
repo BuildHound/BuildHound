@@ -28,7 +28,13 @@ data class TagCohortRaw(val value: String, val points: List<TrendPoint>, val dur
  * value for the tag key being split on — a build missing the key never produces a row (no
  * synthetic "null" cohort).
  */
-data class TagCohortBuildRow(val value: String, val day: String, val outcome: String, val durationMs: Long, val hitRate: Double?)
+data class TagCohortBuildRow(
+    val value: String,
+    val day: String,
+    val outcome: String,
+    val durationMs: Long,
+    val hitRate: Double?,
+)
 
 /**
  * Groups raw per-build rows into per-cohort daily trend series (plan 057) — the same day-bucketing
@@ -79,7 +85,12 @@ object TagCohortCalculator {
             for ((key, value) in tags) byKey.getOrPut(key) { mutableMapOf() }.merge(value, 1, Int::plus)
         }
         return byKey.entries
-            .sortedWith(compareByDescending<Map.Entry<String, MutableMap<String, Int>>> { it.value.values.sum() }.thenBy { it.key })
+            .sortedWith(
+                compareByDescending<Map.Entry<String, MutableMap<String, Int>>> {
+                        it.value.values.sum()
+                    }
+                    .thenBy { it.key }
+            )
             .take(MAX_KEYS)
             .map { (key, valueCounts) ->
                 val values = valueCounts.entries
@@ -160,11 +171,20 @@ object CohortComparator {
     fun compare(tagKey: String, raw: List<TagCohortRaw>): TagCohortComparison {
         // Deterministic cap + tie-break: largest sample count first, ties by value ascending, so
         // the result never depends on map/row arrival order (the BottleneckCalculator discipline).
-        val capped = raw.sortedWith(compareByDescending<TagCohortRaw> { it.durationsMs.size }.thenBy { it.value }).take(MAX_COHORTS)
+        val capped =
+            raw.sortedWith(
+                    compareByDescending<TagCohortRaw> { it.durationsMs.size }.thenBy { it.value }
+                )
+                .take(MAX_COHORTS)
         if (capped.isEmpty()) return TagCohortComparison(tagKey, emptyList(), null)
 
         val cohorts = capped.map { r ->
-            TagCohortSeries(value = r.value, sampleCount = r.durationsMs.size, medianDurationMs = medianOf(r.durationsMs), points = r.points)
+            TagCohortSeries(
+                value = r.value,
+                sampleCount = r.durationsMs.size,
+                medianDurationMs = medianOf(r.durationsMs),
+                points = r.points,
+            )
         }
 
         val reference = capped.first() // already sorted by sample count desc, tie-broken by value
@@ -172,31 +192,45 @@ object CohortComparator {
         val refMedian = if (refValues.isEmpty()) 0.0 else RegressionEngine.median(refValues)
         val refMad = if (refValues.isEmpty()) 0.0 else RegressionEngine.mad(refValues, refMedian)
 
-        val comparisons = capped.filter { it.value != reference.value }.map { c ->
-            val cValues = c.durationsMs.map { it.toDouble() }
-            val cMedian = if (cValues.isEmpty()) 0.0 else RegressionEngine.median(cValues)
-            val insufficientData = c.durationsMs.size < RegressionEngine.MIN_BASELINE || reference.durationsMs.size < RegressionEngine.MIN_BASELINE
-            // Zero-MAD reference (every reference build the same duration) never crashes: z simply
-            // stays null and the status falls through to INDISTINGUISHABLE, not a divide-by-zero.
-            val z = if (!insufficientData && refMad > 0.0) 0.6745 * (cMedian - refMedian) / refMad else null
-            val status = when {
-                insufficientData -> CohortStatus.INSUFFICIENT_DATA
-                z != null && kotlin.math.abs(z) >= WARN_Z -> CohortStatus.DISTINGUISHABLE
-                else -> CohortStatus.INDISTINGUISHABLE
-            }
-            CohortComparisonRow(
-                value = c.value,
-                medianDeltaMs = Math.round(cMedian - refMedian),
-                pctChange = if (refMedian != 0.0) roundTo6((cMedian - refMedian) / refMedian) else null,
-                robustZ = z,
-                status = status.name,
-            )
-        }
+        val comparisons =
+            capped
+                .filter { it.value != reference.value }
+                .map { c ->
+                    val cValues = c.durationsMs.map { it.toDouble() }
+                    val cMedian = if (cValues.isEmpty()) 0.0 else RegressionEngine.median(cValues)
+                    val insufficientData =
+                        c.durationsMs.size < RegressionEngine.MIN_BASELINE ||
+                            reference.durationsMs.size < RegressionEngine.MIN_BASELINE
+                    // Zero-MAD reference (every reference build the same duration) never crashes: z
+                    // simply
+                    // stays null and the status falls through to INDISTINGUISHABLE, not a
+                    // divide-by-zero.
+                    val z =
+                        if (!insufficientData && refMad > 0.0)
+                            0.6745 * (cMedian - refMedian) / refMad
+                        else null
+                    val status =
+                        when {
+                            insufficientData -> CohortStatus.INSUFFICIENT_DATA
+                            z != null && kotlin.math.abs(z) >= WARN_Z ->
+                                CohortStatus.DISTINGUISHABLE
+                            else -> CohortStatus.INDISTINGUISHABLE
+                        }
+                    CohortComparisonRow(
+                        value = c.value,
+                        medianDeltaMs = Math.round(cMedian - refMedian),
+                        pctChange =
+                            if (refMedian != 0.0) roundTo6((cMedian - refMedian) / refMedian)
+                            else null,
+                        robustZ = z,
+                        status = status.name,
+                    )
+                }
         return TagCohortComparison(tagKey, cohorts, CohortDelta(reference.value, comparisons))
     }
 
     private fun medianOf(values: List<Long>): Long =
         if (values.isEmpty()) 0 else Math.round(RegressionEngine.median(values.map { it.toDouble() }))
 
-    private fun roundTo6(value: Double): Double = Math.round(value * 1_000_000.0) / 1_000_000.0
+    private fun roundTo6(value: Double): Double = Math.round(value * SIX_DECIMAL_FACTOR) / SIX_DECIMAL_FACTOR
 }

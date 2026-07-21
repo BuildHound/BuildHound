@@ -32,8 +32,12 @@ data class VerdictAlert(
     val dashboardBaseUrl: String?,
 ) : AlertContext {
     override fun summary(): String {
-        val regressed = verdict.metrics.filter { it.status == VerdictStatus.FAIL.name || it.status == VerdictStatus.WARN.name }
-            .joinToString(", ") { it.name }
+        val regressed =
+            verdict.metrics
+                .filter {
+                    it.status == VerdictStatus.FAIL.name || it.status == VerdictStatus.WARN.name
+                }
+                .joinToString(", ") { it.name }
         val link = dashboardBaseUrl?.let { " ${it.trimEnd('/')}/#/build/$buildId" } ?: ""
         return "BuildHound ${verdict.status}: $projectKey [$baselineKey] build $buildId" +
             (if (regressed.isNotEmpty()) " — regressed: $regressed" else "") + link
@@ -60,7 +64,8 @@ data class FlakyAlert(
         val loc = listOfNotNull(record.module, record.className).joinToString("/")
         val pct = Math.round(record.flakeRate * 100)
         val link = dashboardBaseUrl?.let { " ${it.trimEnd('/')}/#/flaky" } ?: ""
-        return "BuildHound flaky: $projectKey — $loc ($pct% over ${record.sampleCount} runs, signal ${record.signal})$link"
+        return "BuildHound flaky: $projectKey — $loc " +
+            "($pct% over ${record.sampleCount} runs, signal ${record.signal})$link"
     }
 
     override fun webhookJson(): String =
@@ -140,7 +145,13 @@ class HttpAlertDispatcher(
             val body = bodyFor(channel, context)
             executor.execute {
                 runCatching { send.post(channel.url, body) }
-                    .onFailure { logger.warn("alert dispatch to a '{}' channel failed: {}", channel.kind, it::class.java.simpleName) }
+                    .onFailure {
+                        logger.warn(
+                            "alert dispatch to a '{}' channel failed: {}",
+                            channel.kind,
+                            it::class.java.simpleName,
+                        )
+                    }
             }
         }
     }
@@ -169,6 +180,7 @@ class HttpAlertDispatcher(
         return addresses.any(::isInternalAddress)
     }
 
+    @Suppress("ComplexCondition") // Java exposes the disallowed address categories as separate flags.
     private fun isInternalAddress(addr: InetAddress): Boolean {
         if (addr.isLoopbackAddress || addr.isLinkLocalAddress || addr.isSiteLocalAddress ||
             addr.isAnyLocalAddress || addr.isMulticastAddress
@@ -177,7 +189,8 @@ class HttpAlertDispatcher(
         }
         // IPv6 unique-local fc00::/7 — Java's isSiteLocalAddress misses ULA.
         val bytes = addr.address
-        return bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc
+        return bytes.size == IPV6_ADDRESS_BYTES &&
+            (bytes[0].toInt() and IPV6_UNIQUE_LOCAL_MASK) == IPV6_UNIQUE_LOCAL_PREFIX
     }
 
     /** Slack: `{text}`. Teams: a MessageCard (its incoming webhook rejects a bare `{text}`). */
@@ -193,6 +206,11 @@ class HttpAlertDispatcher(
         BuildHoundJson.payload.encodeToString(MapSerializer(String.serializer(), String.serializer()), fields)
 
     companion object {
+        private const val IPV6_ADDRESS_BYTES = 16
+        private const val IPV6_UNIQUE_LOCAL_MASK = 0xfe
+        private const val IPV6_UNIQUE_LOCAL_PREFIX = 0xfc
+        private const val ALERT_QUEUE_CAPACITY = 64
+
         private val logger = LoggerFactory.getLogger("dev.buildhound.server.Alert")
 
         /** Small bounded pool with a bounded queue: alerts are rare, and a FAIL storm must not grow
@@ -200,7 +218,7 @@ class HttpAlertDispatcher(
         fun boundedExecutor(): Executor =
             ThreadPoolExecutor(
                 2, 2, 0L, TimeUnit.MILLISECONDS,
-                ArrayBlockingQueue(64),
+                ArrayBlockingQueue(ALERT_QUEUE_CAPACITY),
                 { r -> Thread(r, "buildhound-alert").apply { isDaemon = true } },
                 ThreadPoolExecutor.DiscardPolicy(),
             )

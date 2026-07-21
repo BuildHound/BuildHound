@@ -8,9 +8,10 @@ import org.slf4j.LoggerFactory
 
 /** Tokens are compared by SHA-256 hex only — the plaintext never reaches a store or log. */
 fun sha256Hex(value: String): String =
-    MessageDigest.getInstance("SHA-256")
-        .digest(value.encodeToByteArray())
-        .joinToString("") { byte -> "%02x".format(byte) }
+    MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray()).joinToString("") { byte
+        ->
+        "%02x".format(byte)
+    }
 
 fun ApplicationCall.bearerToken(): String? {
     val header = request.headers["Authorization"] ?: return null
@@ -21,8 +22,8 @@ fun ApplicationCall.bearerToken(): String? {
 
 /**
  * Starts the unactivated-token sweep on a daemon thread (plan 098), only from `main()` so
- * `testApplication` never spawns it — tests call [TokenStore.deleteExpiredUnactivatedTokens] directly.
- * [sweepMinutes] `<= 0` disables it entirely (logged, distinguishable), mirroring
+ * `testApplication` never spawns it — tests call [TokenStore.deleteExpiredUnactivatedTokens]
+ * directly. [sweepMinutes] `<= 0` disables it entirely (logged, distinguishable), mirroring
  * [startRetentionSweeper]'s single-thread scheduled-executor pattern.
  */
 fun startTokenSweeper(tokens: TokenStore, sweepMinutes: Long) {
@@ -37,10 +38,15 @@ fun startTokenSweeper(tokens: TokenStore, sweepMinutes: Long) {
     executor.scheduleAtFixedRate(
         {
             runCatching { tokens.deleteExpiredUnactivatedTokens() }
-                .onSuccess { count -> if (count > 0) logger.info("token sweep: deleted {} unactivated token(s)", count) }
+                .onSuccess { count ->
+                    if (count > 0)
+                        logger.info("token sweep: deleted {} unactivated token(s)", count)
+                }
                 .onFailure { logger.warn("token sweep failed", it) }
         },
-        sweepMinutes, sweepMinutes, TimeUnit.MINUTES,
+        sweepMinutes,
+        sweepMinutes,
+        TimeUnit.MINUTES,
     )
     logger.info("token sweep: every {}m", sweepMinutes)
 }

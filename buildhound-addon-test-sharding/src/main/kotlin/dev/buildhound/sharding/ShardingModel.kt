@@ -23,7 +23,12 @@ data class TestShardingExtension(
 
 /** Client copies of the server's plan contract (`POST /v1/addons/test-sharding/plan`, plan 040). */
 @Serializable
-data class ShardPlanRequest(val reference: String, val index: Int, val total: Int, val suites: List<String>)
+data class ShardPlanRequest(
+    val reference: String,
+    val index: Int,
+    val total: Int,
+    val suites: List<String>,
+)
 
 @Serializable
 data class ShardPlanResponse(
@@ -35,17 +40,30 @@ data class ShardPlanResponse(
 
 /**
  * Deterministic test-suite discovery (plan 040): every top-level compiled test class FQCN under the
- * `Test` tasks' `testClassesDirs`. Inner classes (`$`) and `module-info`/`package-info` are excluded;
- * sorted so the union a shard sends is stable across jobs (the join key stays `module/class` at the
- * server). Gradle-free, so it unit-tests without a build.
+ * `Test` tasks' `testClassesDirs`. Inner classes (`$`) and `module-info`/`package-info` are
+ * excluded; sorted so the union a shard sends is stable across jobs (the join key stays
+ * `module/class` at the server). Gradle-free, so it unit-tests without a build.
  */
 object SuiteDiscovery {
     fun discover(classDirs: List<File>): List<String> =
-        classDirs.filter { it.isDirectory }
+        classDirs
+            .filter { it.isDirectory }
             .flatMap { root ->
-                root.walkTopDown()
-                    .filter { it.isFile && it.extension == "class" && '$' !in it.name && !it.name.startsWith("module-info") && !it.name.startsWith("package-info") }
-                    .map { it.relativeTo(root).path.removeSuffix(".class").replace(File.separatorChar, '.') }
+                root
+                    .walkTopDown()
+                    .filter {
+                        it.isFile &&
+                            it.extension == "class" &&
+                            '$' !in it.name &&
+                            !it.name.startsWith("module-info") &&
+                            !it.name.startsWith("package-info")
+                    }
+                    .map {
+                        it.relativeTo(root)
+                            .path
+                            .removeSuffix(".class")
+                            .replace(File.separatorChar, '.')
+                    }
             }
             .distinct()
             .sorted()
