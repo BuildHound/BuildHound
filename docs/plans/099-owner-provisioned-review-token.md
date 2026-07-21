@@ -30,13 +30,16 @@ password (stays random per deploy); review-stack wiring (unchanged —
 
 ## Design
 
-- Deploy step gains env `BUILDHOUND_REVIEW_TOKEN_VAR: ${{ vars.BUILDHOUND_REVIEW_TOKEN }}`
-  (the deploy path binds `environment: review`, so the variable lives there, next to the
-  environment's `DOKPLOY_ENVIRONMENT_ID` secret).
-- Shell: `BUILDHOUND_REVIEW_TOKEN=${BUILDHOUND_REVIEW_TOKEN_VAR:-$(openssl rand -hex 32)}`;
-  the unconditional `::add-mask::` is now **load-bearing for both branches** — Actions
-  variables are never auto-masked, so it is the only thing keeping the provisioned value
-  out of run logs (a policy test pins it).
+- The review job maps `BUILDHOUND_REVIEW_TOKEN_VAR: ${{ vars.BUILDHOUND_REVIEW_TOKEN }}`
+  at **job level** (the deploy path binds `environment: review`, so the variable lives
+  there, next to the environment's `DOKPLOY_ENVIRONMENT_ID` secret) and registers
+  `::add-mask::` in the job's **first step**. Job-level on purpose: the runner echoes
+  every *step-level* env mapping — variables unmasked — into the step's log header
+  before any script line runs, which leaked the raw value once (see Risks). Policy tests
+  pin both the job-level placement and the mask-first step.
+- Shell in the deploy step:
+  `BUILDHOUND_REVIEW_TOKEN=${BUILDHOUND_REVIEW_TOKEN_VAR:-$(openssl rand -hex 32)}`; the
+  in-step `::add-mask::` stays to cover the generated fallback branch.
 - **Value contract:** must match `^[0-9a-f]{64}$` — `deploy/dokploy/lib/review.sh`
   (`_review_valid_secret`) hard-fails the deploy otherwise. Provision with
   `openssl rand -hex 32`.
@@ -67,6 +70,13 @@ password (stays random per deploy); review-stack wiring (unchanged —
   zero-persistence model wherever the variable is absent.
 - Same token across concurrent review envs: cross-env access among them — accepted, same
   trust domain.
+- **Incident (2026-07-21, remediated same day):** the first live deploy with the
+  variable (run 29831846143, PR #90) printed the raw value into the **public** Actions
+  log — the runner echoes step-level env mappings before any script line executes, so
+  the in-script `add-mask` registered too late; secrets survive this because they are
+  auto-masked, variables are not. Fix: job-level env + mask-first step (this revision).
+  Owner remediation: delete that run's logs, rotate the variable, redeploy active review
+  envs. The leaked value is compromised regardless of log deletion.
 - **Variable, not secret — accepted (owner decision, the revision that defines this
   plan).** The value is plaintext at rest in GitHub and readable via UI/API by anyone
   with Actions read access to the repository, and it is exempt from automatic log

@@ -21,11 +21,22 @@ jobs:
     environment: ${{ (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')) && 'review-cleanup' || 'review' }}
     concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
     permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write, statuses: write}
+    env:
+      # Job-level ON PURPOSE (plan 099 leak fix): the runner echoes every STEP-level
+      # env mapping into that step's log header BEFORE any script line runs, and
+      # variables — unlike secrets — get no automatic *** there. A step-level mapping
+      # printed the raw token into a public log once (run 29831846143). Job-level env
+      # is never echoed; the mask step below must stay the job's first step. On
+      # review-cleanup-bound runs the variable is out of scope and this is empty.
+      BUILDHOUND_REVIEW_TOKEN_VAR: "${{ vars.BUILDHOUND_REVIEW_TOKEN }}"
     outputs:
       deploy_outcome: ${{ steps.deploy_status.outputs.outcome }}
       publish_outcome: ${{ steps.deploy_status.outputs.publish_outcome }}
       review_request_event_id: ${{ steps.pr.outputs.review_request_event_id }}
     steps:
+      # Must be first: registers the mask before any other step can log the value.
+      - name: Mask the owner-provisioned review token
+        run: if [ -n "$BUILDHOUND_REVIEW_TOKEN_VAR" ]; then echo "::add-mask::$BUILDHOUND_REVIEW_TOKEN_VAR"; fi
       - uses: actions/checkout@v7
         with:
           ref: "${{ github.sha }}"
@@ -222,7 +233,6 @@ jobs:
           SHA: "${{ env.REVIEW_SHA }}"
           ATTEMPT_ID: "${{ github.run_id }}.${{ github.run_attempt }}"
           REVIEW_REQUEST_EVENT_ID: "${{ steps.pr.outputs.review_request_event_id }}"
-          BUILDHOUND_REVIEW_TOKEN_VAR: "${{ vars.BUILDHOUND_REVIEW_TOKEN }}"
         run: |
           [[ "$REVIEW_REQUEST_EVENT_ID" =~ ^[1-9][0-9]*$ ]]
           server=$(jq -er .images.server.image /tmp/review-images/review-images.json)
@@ -236,11 +246,12 @@ jobs:
           # deliberately (owner decision): variables are readable back from the UI/API,
           # which is the whole point; the trade-off (plaintext at rest, no auto-masking)
           # is accepted for the throwaway review tier ONLY — plan 094 §6 item 4 still
-          # forbids variables for the prod/staging ingest tokens. Because variables are
-          # never auto-masked, the add-mask below is load-bearing, not belt-and-braces.
-          # Absent variable falls back to the plan-094 per-run value (merge-safe before
-          # provisioning; deleting the variable restores the zero-persistence model). The
-          # delivery client rejects values not matching ^[0-9a-f]{64}$ — provision with
+          # forbids variables for the prod/staging ingest tokens. The value arrives via
+          # JOB-level env with a mask registered in the job's first step (see the env
+          # block comment; a step-level mapping here leaked it once). Absent variable
+          # falls back to the plan-094 per-run value (merge-safe before provisioning;
+          # deleting the variable restores the zero-persistence model). The delivery
+          # client rejects values not matching ^[0-9a-f]{64}$ — provision with
           # `openssl rand -hex 32`.
           BUILDHOUND_REVIEW_TOKEN=${BUILDHOUND_REVIEW_TOKEN_VAR:-$(openssl rand -hex 32)}; export BUILDHOUND_REVIEW_TOKEN
           echo "::add-mask::$BUILDHOUND_REVIEW_DB_PASSWORD"; echo "::add-mask::$BUILDHOUND_REVIEW_TOKEN"
