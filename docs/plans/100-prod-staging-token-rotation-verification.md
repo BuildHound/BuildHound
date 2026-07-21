@@ -91,7 +91,22 @@ ingest + authenticated read-back) with the rotated tokens. Production verify pas
 environment approval, also with the rotated tokens. Both environments serve the ingested
 smoke build back via the read token.
 
-## Status (2026-07-21)
+## Status (2026-07-21, verified)
 
-Written pre-merge. Verification outcome (review deploy result, staging/production verify
-results, any sweep or 502 retries needed) to be recorded here once the pipeline runs.
+All exit criteria met the same evening, in one pass (Deploy run 29860869556):
+
+- Review deploy on PR #93 green on the first attempt (run 29860213688, no 502 recurrence);
+  proof status `buildhound/review-deployed/pr-93` posted — plan-099's live-proof exit
+  criterion is now also satisfied.
+- Merge qualified; publish green; deploy-staging green **including** "Verify public site
+  and authenticated data path" — the rotated staging tokens' first CI use (202 ingest +
+  authenticated read-back).
+- deploy-production approved by the owner and green, including the same verify step with
+  the rotated production tokens. No sweep expiry or retries were needed.
+
+Open follow-up (out of scope here, owner action): the repo-level dogfood ingest secrets
+are dead — CI run 29857466414 shows the prod in-build upload spooling ("upload failed;
+payload spooled") and the staging publish step dropping both payloads with HTTP 401.
+Fresh ingest tokens must be minted per environment and stored as
+`BUILDHOUND_PROD_INGEST_TOKEN` / `BUILDHOUND_STAGING_INGEST_TOKEN`; the next full ci.yml
+run on main is the proof (the prod spool retries automatically).
