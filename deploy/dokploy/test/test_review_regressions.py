@@ -465,20 +465,27 @@ class ReviewRegressionPolicyTest(unittest.TestCase):
             "reintroduces the count/extraction TOCTOU",
         )
 
-    def test_review_token_secret_fallback_uses_colon_dash(self):
+    def test_review_token_variable_fallback_and_masking(self):
         workflow = self.read(".github/workflows/review-environment.yml")
         self.assertIn(
-            'BUILDHOUND_REVIEW_TOKEN_SECRET: "${{ secrets.BUILDHOUND_REVIEW_TOKEN }}"',
+            'BUILDHOUND_REVIEW_TOKEN_VAR: "${{ vars.BUILDHOUND_REVIEW_TOKEN }}"',
             workflow,
         )
         self.assertIn(
             "BUILDHOUND_REVIEW_TOKEN="
-            "${BUILDHOUND_REVIEW_TOKEN_SECRET:-$(openssl rand -hex 32)}",
+            "${BUILDHOUND_REVIEW_TOKEN_VAR:-$(openssl rand -hex 32)}",
             workflow,
-            "the owner-provisioned secret must fall back with :- (unset OR empty): "
-            "GitHub materializes an unprovisioned secret's env mapping as an empty "
+            "the owner-provisioned variable must fall back with :- (unset OR empty): "
+            "GitHub materializes an unprovisioned variable's env mapping as an empty "
             "string, never unset, so a bare - fallback would pass an empty token "
             "through instead of minting the per-run value (plan 099)",
+        )
+        self.assertIn(
+            'echo "::add-mask::$BUILDHOUND_REVIEW_TOKEN"',
+            workflow,
+            "Actions variables are never auto-masked, so this explicit add-mask is "
+            "the ONLY thing keeping the owner-provisioned review token out of run "
+            "logs (plan 099)",
         )
 
     def test_workflows_scope_dokploy_configuration(self):

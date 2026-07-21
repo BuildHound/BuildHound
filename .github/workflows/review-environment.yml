@@ -222,7 +222,7 @@ jobs:
           SHA: "${{ env.REVIEW_SHA }}"
           ATTEMPT_ID: "${{ github.run_id }}.${{ github.run_attempt }}"
           REVIEW_REQUEST_EVENT_ID: "${{ steps.pr.outputs.review_request_event_id }}"
-          BUILDHOUND_REVIEW_TOKEN_SECRET: "${{ secrets.BUILDHOUND_REVIEW_TOKEN }}"
+          BUILDHOUND_REVIEW_TOKEN_VAR: "${{ vars.BUILDHOUND_REVIEW_TOKEN }}"
         run: |
           [[ "$REVIEW_REQUEST_EVENT_ID" =~ ^[1-9][0-9]*$ ]]
           server=$(jq -er .images.server.image /tmp/review-images/review-images.json)
@@ -230,13 +230,19 @@ jobs:
           server_digest=$(jq -er .images.server.digest /tmp/review-images/review-images.json)
           site_digest=$(jq -er .images.site.digest /tmp/review-images/review-images.json)
           BUILDHOUND_REVIEW_DB_PASSWORD=$(openssl rand -hex 32); export BUILDHOUND_REVIEW_DB_PASSWORD
-          # Owner-provisioned review token (plan 099): when the review-environment secret
-          # exists it becomes every review env's bootstrap token, so the owner can open any
-          # review dashboard by pasting the one value they stored. Absent secret falls back
-          # to the plan-094 per-run value (merge-safe before provisioning; deleting the
-          # secret restores the zero-persistence model). The delivery client rejects values
-          # not matching ^[0-9a-f]{64}$ — provision with `openssl rand -hex 32`.
-          BUILDHOUND_REVIEW_TOKEN=${BUILDHOUND_REVIEW_TOKEN_SECRET:-$(openssl rand -hex 32)}; export BUILDHOUND_REVIEW_TOKEN
+          # Owner-provisioned review token (plan 099): when the review-environment
+          # VARIABLE exists it becomes every review env's bootstrap token, so the owner
+          # can open any review dashboard by pasting the value — a variable, not a secret,
+          # deliberately (owner decision): variables are readable back from the UI/API,
+          # which is the whole point; the trade-off (plaintext at rest, no auto-masking)
+          # is accepted for the throwaway review tier ONLY — plan 094 §6 item 4 still
+          # forbids variables for the prod/staging ingest tokens. Because variables are
+          # never auto-masked, the add-mask below is load-bearing, not belt-and-braces.
+          # Absent variable falls back to the plan-094 per-run value (merge-safe before
+          # provisioning; deleting the variable restores the zero-persistence model). The
+          # delivery client rejects values not matching ^[0-9a-f]{64}$ — provision with
+          # `openssl rand -hex 32`.
+          BUILDHOUND_REVIEW_TOKEN=${BUILDHOUND_REVIEW_TOKEN_VAR:-$(openssl rand -hex 32)}; export BUILDHOUND_REVIEW_TOKEN
           echo "::add-mask::$BUILDHOUND_REVIEW_DB_PASSWORD"; echo "::add-mask::$BUILDHOUND_REVIEW_TOKEN"
 
           # This is the final external check before the trusted client mutates Dokploy.
