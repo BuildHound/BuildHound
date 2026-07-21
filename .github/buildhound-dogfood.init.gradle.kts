@@ -46,10 +46,7 @@ initscript {
     )
     if (pluginJar.isFile) {
         // mavenLocal only, on purpose: the dogfooded plugin must be the one built from this
-        // commit, never a Portal/Central artifact. Dependency verification
-        // (gradle/verification-metadata.xml) needs no entry for it: Gradle exempts
-        // mavenLocal() from verification — verified empirically on 9.6.1 (plan 093), both
-        // for init-script classpaths and regular configurations.
+        // commit, never a Portal/Central artifact.
         repositories {
             mavenLocal()
         }
