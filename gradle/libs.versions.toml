@@ -15,7 +15,7 @@ agp = "9.2.1"
 # Plugin Publish 2.1.1 is the current Portal release. Shadow stays on the newest
 # line compatible with BuildHound's Gradle 8.14 support floor (9.3+ needs Gradle 9).
 gradle-plugin-publish = "2.1.1"
-shadow = "9.2.2"
+shadow = "9.6.1"
 
 [libraries]
 android-gradle-api = { module = "com.android.tools.build:gradle-api", version.ref = "agp" }
