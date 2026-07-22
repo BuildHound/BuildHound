@@ -1,5 +1,17 @@
 # 092 — Gradle Plugin Portal release
 
+## Status update (2026-07-21)
+
+The dependency-verification piece of this plan's scope (`gradle/verification-metadata.xml`,
+the design's "strict SHA-256 dependency metadata", the risks section's "Verification metadata"
+paragraph) was later **removed repo-wide**, not shipped as originally scoped — see
+`docs/architecture.md`'s 2026-07-21 decision-log entry and `docs/releasing.md` for the current
+mechanism and rationale (it broke every routine dependency-version bump, e.g. dependabot PR #86,
+and had already been silently deleted once by an unrelated commit with nothing catching it). The
+rest of this plan's scope (Portal artifact, versioning, protected release workflow) is unaffected
+and still reflects the current implementation. The sections below are left as originally written
+for historical record; do not follow the dependency-verification instructions in them.
+
 ## Source
 
 Owner request to prepare `dev.buildhound` for the Gradle Plugin Portal using local user-home

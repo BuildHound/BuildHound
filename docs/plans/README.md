@@ -25,7 +25,9 @@ active in this directory:
   previously-enabled capture toggle even when the current build's config has it off. Design and
   a `@Disabled` acceptance test exist; the fix hasn't landed.
 - [092](092-gradle-plugin-portal-release.md) — Gradle Plugin Portal release — **open**; prepares
-  `dev.buildhound` for a protected, reproducible Portal publication.
+  `dev.buildhound` for a protected, reproducible Portal publication. Its dependency-verification
+  scope was later dropped repo-wide (2026-07-21 architecture decision log; see the plan's own
+  status update) — the rest of the plan's scope is unaffected.
 
 Plans [093](implemented/093-dogfood-buildhound-telemetry.md) (dogfood telemetry) and
 [094](implemented/094-multi-env-build-data-publication.md) (multi-environment publication) are
