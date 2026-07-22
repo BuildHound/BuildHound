@@ -104,9 +104,12 @@ All exit criteria met the same evening, in one pass (Deploy run 29860869556):
 - deploy-production approved by the owner and green, including the same verify step with
   the rotated production tokens. No sweep expiry or retries were needed.
 
-Open follow-up (out of scope here, owner action): the repo-level dogfood ingest secrets
-are dead — CI run 29857466414 shows the prod in-build upload spooling ("upload failed;
-payload spooled") and the staging publish step dropping both payloads with HTTP 401.
-Fresh ingest tokens must be minted per environment and stored as
-`BUILDHOUND_PROD_INGEST_TOKEN` / `BUILDHOUND_STAGING_INGEST_TOKEN`; the next full ci.yml
-run on main is the proof (the prod spool retries automatically).
+Follow-up closed (2026-07-22): the repo-level dogfood ingest secrets had also gone dead —
+CI run 29857466414 attempt 1 showed the prod in-build upload spooling and the staging
+publish step dropping both payloads with HTTP 401. The owner minted fresh tokens and
+updated `BUILDHOUND_PROD_INGEST_TOKEN` / `BUILDHOUND_STAGING_INGEST_TOKEN` (06:56Z); a
+rerun of the same CI run (attempt 2) is the proof: the build job's prod upload logged
+"payload uploaded (4930 bytes gzip)" and the staging publish step logged both payloads at
+HTTP 202 ("2 published, 0 dropped/skipped"). The sample job's own in-build upload still
+spools by design — its demo `server.url` points at localhost and the job carries no
+credential (ci.yml comment); its payload reaches staging via the replay job.
