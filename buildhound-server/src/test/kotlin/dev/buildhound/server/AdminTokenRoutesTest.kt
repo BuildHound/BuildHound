@@ -93,6 +93,69 @@ class AdminTokenRoutesTest {
     }
 
     @Test
+    fun `mint with scope read returns a read token that queries but cannot ingest or admin`() = testApplication {
+        val fx = fx(); appWith(fx)
+
+        val response = client.post("/v1/admin/tokens") {
+            header("Authorization", "Bearer admin-token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"scope":"read"}""")
+        }
+
+        assertEquals(HttpStatusCode.Created, response.status)
+        val body = response.bodyAsText()
+        assertTrue(body.contains("\"scope\":\"read\""), body)
+        val minted = mintedToken(body)
+        assertEquals(HttpStatusCode.OK, client.get("/v1/builds") { header("Authorization", "Bearer $minted") }.status)
+        assertEquals(HttpStatusCode.Forbidden, ingestWith(minted, "read-cannot-ingest").status)
+        assertEquals(
+            HttpStatusCode.Forbidden,
+            client.get("/v1/admin/retention") { header("Authorization", "Bearer $minted") }.status,
+        )
+    }
+
+    @Test
+    fun `mint with an explicit ingest scope matches the plan 098 default`() = testApplication {
+        val fx = fx(); appWith(fx)
+
+        val response = client.post("/v1/admin/tokens") {
+            header("Authorization", "Bearer admin-token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"scope":"ingest"}""")
+        }
+
+        assertEquals(HttpStatusCode.Created, response.status)
+        assertTrue(response.bodyAsText().contains("\"scope\":\"ingest\""))
+    }
+
+    @Test
+    fun `mint rejects admin all and unknown scopes with 400`() = testApplication {
+        val fx = fx(); appWith(fx)
+
+        for (scope in listOf("admin", "all", "addon", "metrics", "banana")) {
+            val response = client.post("/v1/admin/tokens") {
+                header("Authorization", "Bearer admin-token")
+                contentType(ContentType.Application.Json)
+                setBody("""{"scope":"$scope"}""")
+            }
+            assertEquals(HttpStatusCode.BadRequest, response.status, "scope=$scope must not be mintable")
+        }
+    }
+
+    @Test
+    fun `mint rejects a malformed body with 400`() = testApplication {
+        val fx = fx(); appWith(fx)
+
+        val response = client.post("/v1/admin/tokens") {
+            header("Authorization", "Bearer admin-token")
+            contentType(ContentType.Application.Json)
+            setBody("{not json")
+        }
+
+        assertEquals(HttpStatusCode.BadRequest, response.status)
+    }
+
+    @Test
     fun `the minted plaintext authenticates POST v1 builds`() = testApplication {
         val fx = fx(); appWith(fx)
         val minted = client.post("/v1/admin/tokens") { header("Authorization", "Bearer admin-token") }.bodyAsText()

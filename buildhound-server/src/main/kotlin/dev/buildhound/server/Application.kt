@@ -275,6 +275,8 @@ fun Application.buildHoundModule(
                 addonRoutes(stores.addons, stores.tokens, stores.registeredAddons)
                 // Admin namespace (plan 042): retention config, admin-scoped; shares the query limiter.
                 adminRoutes(stores.settings, stores.tokens)
+                // Token introspection (plan 101): one cheap GET per dashboard token entry.
+                whoamiRoutes(stores.tokens)
                 // Prometheus scrape egress (plan 070): a scrape is ≈1/min, far under the query budget.
                 metricsEgressRoutes(stores.builds, stores.tokens)
             }
