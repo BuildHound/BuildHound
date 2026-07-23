@@ -38,6 +38,7 @@ class WhoamiRoutesTest {
         stores.tokens.ensureProjectWithToken("pilot", sha256Hex("all-token"))
         stores.tokens.ensureProjectWithToken("pilot", sha256Hex("read-token"), TokenScope.READ)
         stores.tokens.ensureProjectWithToken("pilot", sha256Hex("admin-token"), TokenScope.ADMIN)
+        stores.tokens.ensureProjectWithToken("pilot", sha256Hex("ingest-token"), TokenScope.INGEST)
         return Fx(stores, clock)
     }
 
@@ -58,7 +59,15 @@ class WhoamiRoutesTest {
     fun `whoami returns the caller's own projectKey and scope for any scope`() = testApplication {
         val fx = fx(); appWith(fx)
 
-        for ((token, scope) in listOf("read-token" to "read", "all-token" to "all", "admin-token" to "admin")) {
+        val matrix = listOf(
+            "read-token" to "read",
+            "all-token" to "all",
+            "admin-token" to "admin",
+            // The dashboard's rejection branch keys off this: an ingest token resolves fine here,
+            // the client then refuses to store it because the scope can't read.
+            "ingest-token" to "ingest",
+        )
+        for ((token, scope) in matrix) {
             val response = client.get("/v1/whoami") { header("Authorization", "Bearer $token") }
             assertEquals(HttpStatusCode.OK, response.status)
             val body = response.bodyAsText()

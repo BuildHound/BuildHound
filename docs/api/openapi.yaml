@@ -557,7 +557,6 @@ paths:
       responses:
         "200": { description: "`{projectKey, scope}` for the presented token." }
         "401": { $ref: '#/components/responses/Unauthorized' }
-        "503": { $ref: '#/components/responses/Unavailable' }
   /v1/metrics:
     post:
       summary: Ingest a custom measure from the metric CLI (plan 025). Ingest scope.

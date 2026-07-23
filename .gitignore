@@ -107,3 +107,6 @@ _sandbox
 
 # Android Studio captures folder
 captures/
+
+# Local dev secrets (never committed)
+.claude/*.local

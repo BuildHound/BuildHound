@@ -387,7 +387,9 @@ let lastMintScope = null; // scope carried by the most recent mint POST (plan 10
 
 // Whoami (plan 101): scope decides which storage slot the entered token lands in. "all" keeps the
 // pre-101 sessionStorage behaviour, so every earlier token-save assertion runs against it.
+// whoamiStatus drives the validation-failure branches (401 unknown token, non-ok server error).
 let whoamiScope = "all";
+let whoamiStatus = 200;
 
 // Generic read-path status override (plan 101): 401 exercises the wipe-on-dead-token path.
 let queryStatus = 200;
@@ -424,6 +426,9 @@ async function fetchStub(path, opts) {
         return { ok: true, status: 201, json: async () => ({ token: mintBody.token, scope: mintReq.scope, expiresUnusedAt: mintBody.expiresUnusedAt }), headers: headersOnly };
     }
     if (path === "/v1/whoami") {
+        if (whoamiStatus !== 200) {
+            return { ok: false, status: whoamiStatus, json: async () => ({ error: "unknown token" }), headers: headersOnly };
+        }
         return { ok: true, status: 200, json: async () => ({ projectKey: "pilot", scope: whoamiScope }), headers: headersOnly };
     }
     if (queryStatus !== 200) {
@@ -1301,6 +1306,27 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (localStore["buildhound.token"] !== undefined || store["buildhound.token"] !== undefined) throw new Error("forget must wipe both storage slots");
     if (byId["token-bar"].hidden !== false) throw new Error("forget must reshow the token bar");
     if (byId["token-forget"].hidden !== true) throw new Error("forget must hide itself once no token is stored");
+
+    // Whoami validation failures (plan 101): an unknown token (401) and a server error must store
+    // NOTHING in either slot, keep the bar visible, and surface the message — never a silent save.
+    whoamiStatus = 401;
+    byId["token-input"].value = "typo-token-000";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    if ((byId["token-status"].textContent || "").indexOf("Unknown or expired token") < 0) throw new Error("whoami 401 must surface the unknown-token message");
+    if (Object.values(store).concat(Object.values(localStore)).some(v => (v || "").indexOf("typo-token-000") >= 0)) {
+        throw new Error("a token rejected by whoami must never be stored");
+    }
+    if (byId["token-bar"].hidden !== false) throw new Error("whoami 401 must keep the token bar visible");
+    whoamiStatus = 500;
+    byId["token-input"].value = "typo-token-000";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    if ((byId["token-status"].textContent || "").indexOf("Could not verify token: 500") < 0) throw new Error("whoami server error must surface the status");
+    if (Object.values(store).concat(Object.values(localStore)).some(v => (v || "").indexOf("typo-token-000") >= 0)) {
+        throw new Error("a token unverified due to a server error must never be stored");
+    }
+    whoamiStatus = 200;
 
     // Mint scope picker (plan 101): defaults to ingest, and a picked scope rides the POST body and
     // the response hint. Re-store tokens so the admin page renders with its admin slot intact.

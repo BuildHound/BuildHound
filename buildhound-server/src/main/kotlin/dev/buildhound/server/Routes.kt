@@ -439,8 +439,9 @@ fun Route.settingsRoutes(settings: SettingsStore, tokens: TokenStore) {
 }
 
 /**
- * `GET/PUT /v1/admin/retention` (plan 042): per-tenant retention windows. `POST /tokens` (plan 098):
- * mints an ingest-scope token for the dashboard's "Generate ingest token" action. All admin-scoped —
+ * `GET/PUT /v1/admin/retention` (plan 042): per-tenant retention windows. `POST /tokens` (plan 098;
+ * scope option plan 101): mints a token for the dashboard's "Generate token" action — `ingest` by
+ * default, `read` via the optional body; `admin`/`all` are never mintable. All admin-scoped —
  * a `read` token gets 403, a missing token 401. Tenant comes from the token, never the body/params, so
  * an admin token can only ever act on its own project.
  */

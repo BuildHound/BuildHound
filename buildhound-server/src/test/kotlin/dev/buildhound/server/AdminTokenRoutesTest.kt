@@ -156,6 +156,19 @@ class AdminTokenRoutesTest {
     }
 
     @Test
+    fun `mint rejects an oversized body with 413`() = testApplication {
+        val fx = fx(); appWith(fx)
+
+        val response = client.post("/v1/admin/tokens") {
+            header("Authorization", "Bearer admin-token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"scope":"read","pad":"${"x".repeat(17 * 1024)}"}""")
+        }
+
+        assertEquals(HttpStatusCode.PayloadTooLarge, response.status)
+    }
+
+    @Test
     fun `the minted plaintext authenticates POST v1 builds`() = testApplication {
         val fx = fx(); appWith(fx)
         val minted = client.post("/v1/admin/tokens") { header("Authorization", "Bearer admin-token") }.bodyAsText()

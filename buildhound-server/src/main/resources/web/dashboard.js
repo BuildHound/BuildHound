@@ -254,7 +254,7 @@
             title: "Add a read token to get started",
             lines: [
                 "Paste an API token with read scope above to view builds and trends.",
-                "It is kept in this browser tab only (sessionStorage).",
+                "A read-scope token is remembered in this browser; an all-scope token is kept in this tab only.",
             ],
         }));
     }
@@ -850,6 +850,9 @@
         const response = await fetch(path, { headers: { Authorization: "Bearer " + token() } });
         if (response.status === 404) return null;
         if (response.status === 401 || response.status === 403) {
+            // Same dead-credential rule as authedFetch (plan 101): a 401 here must also wipe the
+            // stored token — the two authenticated helpers implement one invariant.
+            if (response.status === 401) wipeToken();
             tokenBar.hidden = false;
             throw new Error(response.status === 401 ? "token required" : "token lacks read scope");
         }
