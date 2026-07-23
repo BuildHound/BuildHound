@@ -9,8 +9,11 @@
     },
     {
       "name": "buildhound-server-dev",
-      "runtimeExecutable": "env",
-      "runtimeArgs": ["BUILDHOUND_DEV_TOKEN=dev-secret-123", "./gradlew", ":buildhound-server:run"],
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "BUILDHOUND_DEV_TOKEN=\"${BUILDHOUND_DEV_TOKEN:-$(cat .claude/dev-token.local 2>/dev/null)}\" exec ./gradlew :buildhound-server:run"
+      ],
       "port": 8080
     }
   ]
