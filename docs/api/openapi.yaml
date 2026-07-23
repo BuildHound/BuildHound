@@ -526,15 +526,38 @@ paths:
         "403": { $ref: '#/components/responses/Forbidden' }
   /v1/admin/tokens:
     post:
-      summary: Mint an ingest-scope token for this project (plan 098). Admin scope.
+      summary: Mint a read- or ingest-scope token for this project (plans 098, 101). Admin scope.
       description: >
         Generates 32 SecureRandom bytes, stores only the SHA-256 hash, and returns the plaintext once —
         it is never logged or re-readable. The token must be used (any authenticated request) within 6
-        hours or it is hard-deleted, both by the background sweep and by the auth path itself.
+        hours or it is hard-deleted, both by the background sweep and by the auth path itself. The
+        optional body picks the scope (plan 101); absent body/field keeps the plan-098 `ingest`
+        default. Only `read` and `ingest` are mintable — `admin`/`all` stay env-bootstrap-only.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope: { type: string, enum: [read, ingest], description: Defaults to ingest when absent. }
       responses:
         "201": { description: The plaintext token, its scope, and the activation deadline (ISO-8601). }
+        "400": { description: Unknown scope (only read and ingest are mintable) or malformed body. }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
+  /v1/whoami:
+    get:
+      summary: The calling token's own projectKey and scope (plan 101). Any valid token.
+      description: >
+        Token introspection for the dashboard's persistence gate — only `read`-scope tokens may be
+        remembered in localStorage, so the dashboard calls this once on token entry. Resolution counts
+        as first use and activates a freshly minted token inside its 6-hour window. `Cache-Control:
+        no-store` — the body names the tenant a live credential belongs to.
+      responses:
+        "200": { description: "`{projectKey, scope}` for the presented token." }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "503": { $ref: '#/components/responses/Unavailable' }
   /v1/metrics:
     post:
       summary: Ingest a custom measure from the metric CLI (plan 025). Ingest scope.

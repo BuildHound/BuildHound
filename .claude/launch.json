@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8791", "--directory", "docs/brand/site"],
       "port": 8791
+    },
+    {
+      "name": "buildhound-server-dev",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["BUILDHOUND_DEV_TOKEN=dev-secret-123", "./gradlew", ":buildhound-server:run"],
+      "port": 8080
     }
   ]
 }

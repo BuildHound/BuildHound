@@ -56,6 +56,18 @@ data class MintedTokenResponse(val token: String, val scope: String, val expires
     override fun toString(): String = "MintedTokenResponse(token=<redacted>, scope=$scope, expiresUnusedAt=$expiresUnusedAt)"
 }
 
+/**
+ * `POST /v1/admin/tokens` optional body (plan 101). Absent body/field keeps plan 098's `ingest`
+ * default; only `read` and `ingest` are mintable — `admin`/`all` stay env-bootstrap-only, so an
+ * API-minted admin token can never outlive a bootstrap rotation as a backdoor.
+ */
+@Serializable
+data class MintTokenRequest(val scope: String? = null)
+
+/** `GET /v1/whoami` (plan 101): the caller's own tenant + scope — the dashboard's persistence gate. */
+@Serializable
+data class WhoamiResponse(val projectKey: String, val scope: String)
+
 /** Compressed request cap; the decompressed cap is the zip-bomb guard (plan 009). */
 const val MAX_COMPRESSED_BYTES: Int = 32 * 1024 * 1024
 const val MAX_DECOMPRESSED_BYTES: Int = 64 * 1024 * 1024
@@ -451,12 +463,13 @@ fun Route.adminRoutes(settings: SettingsStore, tokens: TokenStore) {
         }
         post("/tokens") {
             val project = call.authenticatedProject(tokens, TokenScope::allowsAdmin) ?: return@post
+            val scope = call.mintScopeOrBadRequest() ?: return@post
             // 32 SecureRandom bytes, URL-safe base64 without padding — plaintext exists only in the
             // response body and is never logged; only its SHA-256 hash (Auth.kt) reaches storage.
             val randomBytes = ByteArray(32).also { tokenRandom.nextBytes(it) }
             val plaintext = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes)
             val expiresUnusedAt = call.runQuery {
-                tokens.mintToken(project.id, sha256Hex(plaintext), TokenScope.INGEST)
+                tokens.mintToken(project.id, sha256Hex(plaintext), scope)
             } ?: return@post
             // The body carries the only copy of the plaintext (RFC 6749 §5.1) — never cached.
             call.response.header(HttpHeaders.CacheControl, "no-store")
@@ -464,11 +477,51 @@ fun Route.adminRoutes(settings: SettingsStore, tokens: TokenStore) {
                 HttpStatusCode.Created,
                 MintedTokenResponse(
                     token = plaintext,
-                    scope = TokenScope.INGEST,
+                    scope = scope,
                     expiresUnusedAt = expiresUnusedAt.value.toString(),
                 ),
             )
         }
+    }
+}
+
+/**
+ * Resolves the mint scope from the optional request body (plan 101). No body/field → plan 098's
+ * `ingest` default (existing clients send nothing). Only `read`/`ingest` pass; anything else —
+ * unknown scope, `admin`/`all`, or unparseable JSON — 400s and returns null.
+ */
+private suspend fun ApplicationCall.mintScopeOrBadRequest(): String? {
+    val body = receiveBounded(16 * 1024)
+        ?: return null.also { respond(HttpStatusCode.PayloadTooLarge, ApiError("mint request too large")) }
+    if (body.isEmpty()) return TokenScope.INGEST
+    val request = runCatching {
+        BuildHoundJson.payload.decodeFromString(MintTokenRequest.serializer(), body.decodeToString())
+    }.getOrElse {
+        respond(HttpStatusCode.BadRequest, ApiError("invalid mint request body"))
+        return null
+    }
+    return when (request.scope) {
+        null, TokenScope.INGEST -> TokenScope.INGEST
+        TokenScope.READ -> TokenScope.READ
+        else -> {
+            respond(HttpStatusCode.BadRequest, ApiError("scope must be \"read\" or \"ingest\""))
+            null
+        }
+    }
+}
+
+/**
+ * `GET /v1/whoami` (plan 101): any valid token, any scope — returns the caller's own projectKey and
+ * scope. The dashboard calls it once on token entry to validate the token and decide persistence
+ * (only `read` tokens may go to localStorage). Resolution counts as first use, activating a freshly
+ * minted token inside its 6h unused window. `no-store`: the response names the tenant a live
+ * credential belongs to.
+ */
+fun Route.whoamiRoutes(tokens: TokenStore) {
+    get("/v1/whoami") {
+        val principal = call.authenticatedPrincipal(tokens) ?: return@get
+        call.response.header(HttpHeaders.CacheControl, "no-store")
+        call.respond(WhoamiResponse(projectKey = principal.project.key, scope = principal.scope))
     }
 }
 
@@ -1303,14 +1356,8 @@ private suspend inline fun <reified T : Any> ApplicationCall.respondQuery(noinli
     runQuery(block)?.let { respond(it.value) }
 }
 
-/**
- * 401s and returns null when the bearer token is missing/unknown; 403 when the
- * token's scope does not permit the operation (spec §5: ingest vs read scopes).
- */
-private suspend fun ApplicationCall.authenticatedProject(
-    tokens: TokenStore,
-    scopeCheck: (String) -> Boolean,
-): ProjectRef? {
+/** 401s and returns null when the bearer token is missing/unknown; no scope requirement (whoami). */
+private suspend fun ApplicationCall.authenticatedPrincipal(tokens: TokenStore): TokenPrincipal? {
     val token = bearerToken()
     if (token == null) {
         respond(HttpStatusCode.Unauthorized, ApiError("missing bearer token"))
@@ -1321,6 +1368,18 @@ private suspend fun ApplicationCall.authenticatedProject(
         respond(HttpStatusCode.Unauthorized, ApiError("unknown token"))
         return null
     }
+    return principal
+}
+
+/**
+ * 401s and returns null when the bearer token is missing/unknown; 403 when the
+ * token's scope does not permit the operation (spec §5: ingest vs read scopes).
+ */
+private suspend fun ApplicationCall.authenticatedProject(
+    tokens: TokenStore,
+    scopeCheck: (String) -> Boolean,
+): ProjectRef? {
+    val principal = authenticatedPrincipal(tokens) ?: return null
     if (!scopeCheck(principal.scope)) {
         respond(HttpStatusCode.Forbidden, ApiError("token scope does not permit this operation"))
         return null

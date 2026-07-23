@@ -26,7 +26,7 @@ function makeNode(tag) {
 }
 
 const byId = {};
-for (const id of ["app", "token-bar", "token-save", "token-input", "project-select"]) byId[id] = makeNode("div");
+for (const id of ["app", "token-bar", "token-save", "token-input", "project-select", "token-forget", "token-status", "token-note"]) byId[id] = makeNode("div");
 
 const documentStub = {
     createElement: makeNode,
@@ -55,6 +55,7 @@ function clickButton(node, label) {
 }
 
 const store = {};
+const localStore = {}; // localStorage backing (plan 101) — kept separate from sessionStorage's `store`
 const responses = {
     "/v1/builds?limit=50&offset=0": [
         { buildId: "b1", startedAt: 1751450000000, durationMs: 65000, outcome: "SUCCESS", mode: "CI", branch: "main", hitRate: 0.5 },
@@ -382,6 +383,14 @@ const totals = {
 // replaces rather than accumulates) and the 403 wrong-scope path.
 let mintStatus = 201;
 const mintBody = { token: "ing-mint-abc123XYZ", scope: "ingest", expiresUnusedAt: "2026-07-18T18:00:00.000Z" };
+let lastMintScope = null; // scope carried by the most recent mint POST (plan 101 picker)
+
+// Whoami (plan 101): scope decides which storage slot the entered token lands in. "all" keeps the
+// pre-101 sessionStorage behaviour, so every earlier token-save assertion runs against it.
+let whoamiScope = "all";
+
+// Generic read-path status override (plan 101): 401 exercises the wipe-on-dead-token path.
+let queryStatus = 200;
 
 const fetched = [];
 async function fetchStub(path, opts) {
@@ -402,14 +411,23 @@ async function fetchStub(path, opts) {
     }
     if (path === "/v1/admin/tokens") {
         if (opts.method !== "POST") throw new Error("token mint must POST, got " + opts.method);
-        if (opts.body) throw new Error("token mint must send no request body");
+        if (!opts.body) throw new Error("token mint must send a scope body (plan 101)");
+        const mintReq = JSON.parse(opts.body);
+        if (mintReq.scope !== "ingest" && mintReq.scope !== "read") throw new Error("mint scope must be read or ingest, got " + mintReq.scope);
+        lastMintScope = mintReq.scope;
         if (opts.headers.Authorization !== "Bearer " + store["buildhound.adminToken"]) {
             throw new Error("token mint must use the admin bearer token, got " + opts.headers.Authorization);
         }
         if (mintStatus !== 201) {
             return { ok: false, status: mintStatus, json: async () => ({ error: "forbidden" }), headers: headersOnly };
         }
-        return { ok: true, status: 201, json: async () => mintBody, headers: headersOnly };
+        return { ok: true, status: 201, json: async () => ({ token: mintBody.token, scope: mintReq.scope, expiresUnusedAt: mintBody.expiresUnusedAt }), headers: headersOnly };
+    }
+    if (path === "/v1/whoami") {
+        return { ok: true, status: 200, json: async () => ({ projectKey: "pilot", scope: whoamiScope }), headers: headersOnly };
+    }
+    if (queryStatus !== 200) {
+        return { ok: false, status: queryStatus, json: async () => ({ error: "unauthorized" }), headers: headersOnly };
     }
     const body = responses[path];
     const headers = { get: name => (name === "X-Total-Count" && totals[path] != null ? String(totals[path]) : null) };
@@ -424,6 +442,14 @@ const context = {
     sessionStorage: {
         getItem: k => (k in store ? store[k] : null),
         setItem: (k, v) => { store[k] = String(v); },
+        removeItem: k => { delete store[k]; },
+    },
+    // Separate backing map (plan 101): the read-scope persistence assertions below distinguish
+    // which storage a token landed in, so the two stubs must never share state.
+    localStorage: {
+        getItem: k => (k in localStore ? localStore[k] : null),
+        setItem: (k, v) => { localStore[k] = String(v); },
+        removeItem: k => { delete localStore[k]; },
     },
     fetch: fetchStub,
     URLSearchParams,
@@ -912,7 +938,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     // Ingest-token generation (plan 098): the section renders under the retention form on the same
     // #/admin page, a click POSTs to /v1/admin/tokens with the admin bearer token, and a 201 renders
     // the plaintext exactly once via textContent alongside the one-time / 6-hour warning.
-    if (!hasText(byId["app"], "Generate ingest token")) throw new Error("token-gen section header missing on #/admin");
+    if (!hasText(byId["app"], "Generate token")) throw new Error("token-gen section header missing on #/admin");
     let genMark = fetched.length;
     clickButton(byId["app"], "Generate token");
     await tick(); await tick();
@@ -924,10 +950,13 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     const expectedExpiresLocal = new Date(mintBody.expiresUnusedAt).toLocaleString();
     if (!hasText(byId["app"], expectedExpiresLocal)) throw new Error("rendered warning is missing the local-time expiresUnusedAt: " + expectedExpiresLocal);
     if (findTag(byId["app"], "button").filter(b => (b.textContent || "") === "Copy").length === 0) throw new Error("Copy control missing after a successful mint");
-    // The plaintext must reach only that one DOM node — never sessionStorage (nor, by extension,
-    // localStorage/URL/logs) — the exact property plan 098's security review is built to probe.
+    // The plaintext must reach only that one DOM node — never sessionStorage or localStorage
+    // (nor, by extension, URL/logs) — the exact property plan 098's security review is built to probe.
     if (Object.values(store).some(v => (v || "").indexOf(mintBody.token) >= 0)) {
         throw new Error("minted plaintext must never be persisted to sessionStorage");
+    }
+    if (Object.values(localStore).some(v => (v || "").indexOf(mintBody.token) >= 0)) {
+        throw new Error("minted plaintext must never be persisted to localStorage");
     }
 
     // Regenerating replaces the previously displayed token rather than stacking both on the page.
@@ -1214,6 +1243,82 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (byId["project-select"].hidden !== true) throw new Error("enumeration failure must hide the selector");
     responses["/v1/project-keys"] = [{ projectKey: "nowinandroid", builds: 12, lastBuildAt: 1751450000000 }];
     store["buildhound.projectKey"] = "";
+
+    // Persistent login (plan 101): whoami's scope decides the storage slot. Everything above ran
+    // with whoamiScope "all", so first pin that the all-scope token never reached localStorage and
+    // the tab-only note is showing.
+    if (localStore["buildhound.token"] !== undefined) throw new Error("an all-scope token must never reach localStorage");
+    if (store["buildhound.token"] !== "s3cr3t-token-value") throw new Error("all-scope token must sit in sessionStorage");
+    if (byId["token-note"].hidden !== false) throw new Error("all-scope save must show the tab-only note");
+    if (byId["token-forget"].hidden !== false) throw new Error("forget button must be visible while a token is stored");
+
+    // Read scope → localStorage, sessionStorage slot cleared, note hidden.
+    whoamiScope = "read";
+    byId["token-input"].value = "read-tok-123";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    if (localStore["buildhound.token"] !== "read-tok-123") throw new Error("a read-scope token must persist to localStorage");
+    if (store["buildhound.token"] !== undefined) throw new Error("a read-scope save must clear the sessionStorage slot");
+    if (byId["token-input"].value !== "") throw new Error("a successful save must clear the input");
+    if (byId["token-note"].hidden !== true) throw new Error("a read-scope save must hide the tab-only note");
+
+    // Ingest scope → rejected before any storage write; the stored read token survives.
+    whoamiScope = "ingest";
+    byId["token-input"].value = "ingest-tok-999";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    if (localStore["buildhound.token"] !== "read-tok-123") throw new Error("a rejected ingest token must not overwrite the stored token");
+    if (Object.values(store).concat(Object.values(localStore)).some(v => (v || "").indexOf("ingest-tok-999") >= 0)) {
+        throw new Error("a rejected ingest token must never be stored");
+    }
+    if ((byId["token-status"].textContent || "").indexOf("ingest token") < 0) throw new Error("ingest rejection message missing");
+
+    // A 401 on any read fetch wipes BOTH slots (dead credential must not replay) and reshows the bar.
+    queryStatus = 401;
+    byId["token-bar"].hidden = true;
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    if (localStore["buildhound.token"] !== undefined) throw new Error("401 must wipe the persisted token");
+    if (store["buildhound.token"] !== undefined) throw new Error("401 must wipe the session token slot");
+    if (byId["token-bar"].hidden !== false) throw new Error("401 must reshow the token bar");
+    if (byId["token-forget"].hidden !== true) throw new Error("401 wipe must hide the forget button");
+    queryStatus = 200;
+
+    // A 403 keeps the token (valid, just under-scoped): bar reshows, storage intact.
+    whoamiScope = "read";
+    byId["token-input"].value = "read-tok-456";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    if (localStore["buildhound.token"] !== "read-tok-456") throw new Error("second read-scope save must persist");
+    queryStatus = 403;
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    if (localStore["buildhound.token"] !== "read-tok-456") throw new Error("403 must not wipe the stored token");
+    if (byId["token-bar"].hidden !== false) throw new Error("403 must reshow the token bar");
+    queryStatus = 200;
+
+    // Forget wipes both slots and reshows the bar.
+    byId["token-forget"].listeners.click[0]();
+    await tick(); await tick();
+    if (localStore["buildhound.token"] !== undefined || store["buildhound.token"] !== undefined) throw new Error("forget must wipe both storage slots");
+    if (byId["token-bar"].hidden !== false) throw new Error("forget must reshow the token bar");
+    if (byId["token-forget"].hidden !== true) throw new Error("forget must hide itself once no token is stored");
+
+    // Mint scope picker (plan 101): defaults to ingest, and a picked scope rides the POST body and
+    // the response hint. Re-store tokens so the admin page renders with its admin slot intact.
+    whoamiScope = "all";
+    byId["token-input"].value = "s3cr3t-token-value";
+    byId["token-save"].listeners.click[0]();
+    await tick(); await tick();
+    context.location.hash = "#/admin"; context._onhashchange(); await tick(); await tick();
+    const scopePick = findTag(byId["app"], "select").find(s => findAll(s, n => n.tag === "option" && n.value === "read").length > 0);
+    if (!scopePick) throw new Error("mint scope picker missing on #/admin");
+    if (scopePick.value !== "ingest") throw new Error("mint scope picker must default to ingest, got " + scopePick.value);
+    scopePick.value = "read";
+    mark = fetched.length;
+    clickButton(byId["app"], "Generate token");
+    await tick(); await tick();
+    if (!fetched.slice(mark).includes("/v1/admin/tokens")) throw new Error("scoped mint did not POST /v1/admin/tokens");
+    if (lastMintScope !== "read") throw new Error("mint POST must carry the picked scope, got " + lastMintScope);
+    if (!hasText(byId["app"], "stay logged in")) throw new Error("read-scope mint must render the dashboard-login hint");
 
     console.log("dashboard smoke OK — fetched " + fetched.length + " request(s)");
 })().catch(err => { console.error("SMOKE FAILURE:", err); process.exit(1); });

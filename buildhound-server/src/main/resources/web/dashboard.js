@@ -5,8 +5,32 @@
 (function () {
     const app = document.getElementById("app");
     const tokenBar = document.getElementById("token-bar");
+    const tokenStatus = document.getElementById("token-status");
+    const tokenNote = document.getElementById("token-note");
+    const forgetBtn = document.getElementById("token-forget");
 
-    const token = () => sessionStorage.getItem("buildhound.token") || "";
+    // Read-scope tokens persist across browser restarts (localStorage, plan 101); the all-scope
+    // bootstrap token stays tab-only (sessionStorage). Lookup prefers the persistent slot; every
+    // write clears the other slot so exactly one copy ever exists.
+    const TOKEN_KEY = "buildhound.token";
+    const token = () => localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY) || "";
+    function storeToken(value, persist) {
+        (persist ? localStorage : sessionStorage).setItem(TOKEN_KEY, value);
+        (persist ? sessionStorage : localStorage).removeItem(TOKEN_KEY);
+        forgetBtn.hidden = false;
+    }
+    function wipeToken() {
+        localStorage.removeItem(TOKEN_KEY);
+        sessionStorage.removeItem(TOKEN_KEY);
+        forgetBtn.hidden = true;
+        tokenNote.hidden = true;
+    }
+    forgetBtn.hidden = !token();
+    forgetBtn.addEventListener("click", () => {
+        wipeToken();
+        tokenBar.hidden = false;
+        route();
+    });
 
     // Payload projectKey selector (plan 077): a per-tenant filter over which repo's builds
     // to show, separate from the auth token. "" means "All projects" — every query-building
@@ -79,13 +103,47 @@
         });
     }
 
-    document.getElementById("token-save").addEventListener("click", () => {
+    const tokenSave = document.getElementById("token-save");
+    tokenSave.addEventListener("click", async () => {
+        if (tokenSave.disabled) return;
         const input = document.getElementById("token-input");
-        sessionStorage.setItem("buildhound.token", input.value.trim());
-        input.value = ""; // don't leave the token sitting in the live DOM
-        tokenBar.hidden = true;
-        populateProjectSelect().catch(() => {});
-        route();
+        const entered = input.value.trim();
+        if (!entered) return;
+        tokenSave.disabled = true;
+        tokenStatus.textContent = "";
+        try {
+            // Scope decides storage (plan 101), so the token is validated via whoami before
+            // anything is stored — a typo'd token never lands in either slot.
+            let who;
+            try {
+                const res = await fetch("/v1/whoami", { headers: { Authorization: "Bearer " + entered } });
+                if (res.status === 401) { tokenStatus.textContent = "Unknown or expired token."; return; }
+                if (!res.ok) { tokenStatus.textContent = "Could not verify token: " + res.status; return; }
+                who = await res.json();
+            } catch (e) {
+                tokenStatus.textContent = "Could not verify token: " + (e && e.message || e);
+                return;
+            }
+            if (who.scope !== "read" && who.scope !== "all") {
+                tokenStatus.textContent = who.scope === "ingest"
+                    ? "This is an ingest token — it cannot read the dashboard. Mint a read token on the Admin page."
+                    : "This token cannot read the dashboard (scope: " + who.scope + ").";
+                return;
+            }
+            input.value = ""; // don't leave the token sitting in the live DOM
+            storeToken(entered, who.scope === "read");
+            if (who.scope === "read") {
+                tokenNote.hidden = true;
+            } else {
+                tokenNote.textContent = "All-scope token kept for this tab only — mint a read token on the Admin page to stay logged in across restarts.";
+                tokenNote.hidden = false;
+            }
+            tokenBar.hidden = true;
+            populateProjectSelect().catch(() => {});
+            route();
+        } finally {
+            tokenSave.disabled = false;
+        }
     });
 
     // Outcome strings come from the server but are untrusted in principle; only
@@ -116,6 +174,10 @@
     async function authedFetch(path) {
         const response = await fetch(path, { headers: { Authorization: "Bearer " + token() } });
         if (response.status === 401 || response.status === 403) {
+            // 401 means the stored token is dead server-side (revoked/deleted) — wipe it so a
+            // persisted copy can't keep replaying a known-bad credential (plan 101). 403 keeps
+            // the token: it is valid, it just lacks read scope.
+            if (response.status === 401) wipeToken();
             tokenBar.hidden = false;
             throw new Error(response.status === 401 ? "token required" : "token lacks read scope");
         }
@@ -1864,18 +1926,25 @@
         const form = el("div", null, "retention-form");
         app.append(form);
 
-        // Ingest-token generation (plan 098): mints a fresh ingest-scope token for the caller's
-        // project via POST /v1/admin/tokens, reusing the same admin-token bar above. The plaintext
-        // exists only in the response body and this one DOM node — never sessionStorage,
-        // localStorage, the URL/hash, console, or any log — and is gone the moment the view
-        // re-renders or the tab navigates away. A second generation replaces the first display
-        // rather than stacking both on the page.
-        app.append(el("p", "Generate ingest token", "summary-sentence"));
+        // Token generation (plan 098; scope picker plan 101): mints a fresh token for the caller's
+        // project via POST /v1/admin/tokens — ingest for CI upload, read for persistent dashboard
+        // login. The plaintext exists only in the response body and this one DOM node — never
+        // sessionStorage, localStorage, the URL/hash, console, or any log — and is gone the moment
+        // the view re-renders or the tab navigates away. A second generation replaces the first
+        // display rather than stacking both on the page.
+        app.append(el("p", "Generate token", "summary-sentence"));
         const tokenGenStatus = el("p", "", "muted");
         app.append(tokenGenStatus);
         function sayTokenGen(text, cls) { tokenGenStatus.textContent = text; tokenGenStatus.className = cls || "muted"; }
+        const scopeSelect = el("select");
+        scopeSelect.append(new Option("ingest — CI upload", "ingest"), new Option("read — dashboard login", "read"));
+        scopeSelect.value = "ingest";
+        const scopeLabel = el("label", "Scope: ");
+        scopeLabel.append(scopeSelect);
         const genBtn = el("button", "Generate token");
-        app.append(genBtn);
+        const genRow = el("div", null, "filters");
+        genRow.append(scopeLabel, genBtn);
+        app.append(genRow);
         const tokenResult = el("div", null, "token-result");
         app.append(tokenResult);
 
@@ -1893,6 +1962,11 @@
                 );
             });
             tokenResult.append(copyBtn);
+            tokenResult.append(el("p",
+                "Scope: " + minted.scope + (minted.scope === "read"
+                    ? " — paste it into the dashboard token bar to stay logged in across restarts."
+                    : " — for CI upload (BUILDHOUND_TOKEN)."),
+                "muted"));
             const expiresLocal = new Date(minted.expiresUnusedAt).toLocaleString();
             tokenResult.append(el("p",
                 "Shown once — this token will be deleted if not used within 6 hours (expires " + expiresLocal + ").",
@@ -1905,7 +1979,11 @@
             tokenResult.textContent = ""; // drop any previously displayed plaintext immediately
             sayTokenGen("Generating…");
             try {
-                const res = await fetch("/v1/admin/tokens", { method: "POST", headers: { Authorization: "Bearer " + adminToken() } });
+                const res = await fetch("/v1/admin/tokens", {
+                    method: "POST",
+                    headers: { Authorization: "Bearer " + adminToken(), "Content-Type": "application/json" },
+                    body: JSON.stringify({ scope: scopeSelect.value }),
+                });
                 if (mySeq !== renderSeq) return; // navigated away mid-request
                 // Mirrors the retention form's own 401/403 messaging above — same admin token bar,
                 // same "not admin-scoped" failure mode.

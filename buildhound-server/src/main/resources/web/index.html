@@ -81,13 +81,16 @@
         <a href="#/admin">Admin</a>
     </nav>
     <select id="project-select" hidden aria-label="Project"></select>
+    <button id="token-forget" hidden>Forget token</button>
     <span class="muted">buildhound.dev</span>
 </header>
 <div id="token-bar" hidden>
     <label>Read token: <input id="token-input" type="password" size="40" autocomplete="off"></label>
     <button id="token-save">Use</button>
-    <span class="muted">Kept in this tab only (sessionStorage); needs read scope.</span>
+    <span class="muted">A read-scope token is remembered in this browser; an all-scope token is kept for this tab only.</span>
+    <span id="token-status" class="error"></span>
 </div>
+<p id="token-note" class="muted" hidden></p>
 <main id="app"><p class="muted">Loading…</p></main>
 <script src="/timeline.js"></script>
 <script src="/dashboard.js"></script>
