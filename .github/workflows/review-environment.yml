@@ -173,7 +173,7 @@ jobs:
           test "$(jq -r .state <<<"$data")" = open
           test "$(jq -r .head.sha <<<"$data")" = "$SHA"
           gh api "repos/${GITHUB_REPOSITORY}/issues/$PR/labels" --jq '.[].name' | grep -Fx deploy-review
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@v4.5.2
         if: env.REVIEW_ACTION == 'deploy'
         with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
       - id: publish
