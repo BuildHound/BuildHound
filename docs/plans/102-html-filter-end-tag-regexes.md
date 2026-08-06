@@ -30,17 +30,30 @@ this is a filter-accuracy fix only.
 
 ## Design
 
-Replace each closing pattern with the `<\/(script|style)\b[^>]*>` form:
+Replace each tag pattern with the exact-terminator-lookahead form
+`<\/(script|style)(?=[\t\n\f\r />])[^>]*>` (same lookahead on the open side):
 
-- `\b` rejects `</scriptxyz>` (browser agrees: not an end tag).
-- `[^>]*>` accepts every browser close variant — whitespace, attributes, `/`.
-- Direction of residual divergence is fail-safe: a quoted `>` inside an end-tag
-  attribute makes the regex close *earlier* than the browser, which can only widen the
-  captured content → false positive (flag/throw), never a bypass.
+- The lookahead is the HTML tokenizer's tag-name terminator set verbatim. It accepts
+  every browser close variant — whitespace, attributes, `/` — while rejecting
+  `</scriptxyz>` *and* punctuation non-tags like `</script-x>` or `</script:evil>`,
+  which a browser reads as raw text. (First cut used `\b` here; the clean-context code
+  review showed `\b` fires on any word→non-word transition, recognising a close earlier
+  than the parser and truncating the scanned content — a content-hiding gap for the
+  style scan. Amended to the lookahead in the same PR.)
+- Remaining divergence is fail-safe: a quoted `>` inside an end-tag attribute makes the
+  regex close *earlier* than the browser, which can only widen the captured content →
+  false positive (flag/throw), never a bypass.
 
-report-smoke.js additionally broadens the opening tag to `<script\b[^>]*>` with `i` so
-an attribute-carrying or case-shifted script element can't slip past the count check.
-The count-of-2 assertion stays: the real template embeds exactly two bare inline blocks.
+report-smoke.js additionally broadens the opening tag from the bare literal `<script>`
+to the same lookahead form with `i` so an attribute-carrying or case-shifted script
+element can't slip past the count check. The count-of-2 assertion stays: the real
+template embeds exactly two bare inline blocks.
+
+Review addendum (security review MINOR): a raw-text element left unclosed at EOF
+yields zero paired matches, so its content check silently never ran — a browser
+auto-closes at EOF and executes. validate.mjs now cross-checks the generic tag scan's
+`<script>`/`<style>` open count against the paired-block count and fails loud on any
+mismatch, mirroring the structural count assertion report-smoke.js already had.
 
 ## Test strategy
 

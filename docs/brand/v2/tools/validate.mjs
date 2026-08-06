@@ -287,9 +287,11 @@ function validateCsp(page, html) {
 function validateHtml(page, html) {
     validateCsp(page, html);
 
+    const rawTextOpens = { script: 0, style: 0 };
     for (const match of html.matchAll(/<[a-z][^>]*>/gi)) {
         const tag = match[0];
         const tagName = tag.match(/^<\s*([^\s/>]+)/)?.[1].toLowerCase();
+        if (tagName in rawTextOpens) rawTextOpens[tagName] += 1;
         const attributes = parseAttributes(tag);
         if (new Set(["applet", "base", "embed", "iframe", "object"]).has(tagName)) {
             fail(`${page}: active ${tagName} element is not allowed`);
@@ -314,17 +316,26 @@ function validateHtml(page, html) {
         }
     }
 
-    // The HTML tokenizer ends raw text at `</style`/`</script` followed by whitespace,
-    // "/" or ">" and ignores end-tag attributes, so the close patterns must accept every
-    // such variant (`</script foo>`, `</script/>`) or the pairing diverges from browsers.
-    for (const match of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\b[^>]*>/gi)) {
+    // The HTML tokenizer ends raw text only at `</style`/`</script` followed by
+    // tab/LF/FF/CR/space, "/" or ">" (end-tag attributes ignored), and the same set ends
+    // a tag name on the open side. The lookahead mirrors that set exactly: `\b` would
+    // over-match (`</style-x>` is raw text to a browser, but a word boundary to `\b`),
+    // recognising a close earlier than the parser and truncating the scanned content.
+    const styleBlocks = [...html.matchAll(/<style(?=[\t\n\f\r />])[^>]*>([\s\S]*?)<\/style(?=[\t\n\f\r />])[^>]*>/gi)];
+    for (const match of styleBlocks) {
         scanCssReferences(page, match[1]);
     }
-    for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi)) {
+    const scriptBlocks = [...html.matchAll(/<script(?=[\t\n\f\r />])([^>]*)>([\s\S]*?)<\/script(?=[\t\n\f\r />])[^>]*>/gi)];
+    for (const match of scriptBlocks) {
         if (!attributesByName(`<script ${match[1]}>`).has("src") || match[2].trim()) {
             fail(`${page}: inline script content is not allowed`);
         }
     }
+    // A raw-text element left unclosed at EOF would produce zero paired matches above and
+    // silently skip its content check, while a browser auto-closes and executes it. Every
+    // open tag the generic scan saw must therefore have produced exactly one paired block.
+    if (styleBlocks.length !== rawTextOpens.style) fail(`${page}: unclosed or mis-paired style element`);
+    if (scriptBlocks.length !== rawTextOpens.script) fail(`${page}: unclosed or mis-paired script element`);
 }
 
 for (const page of pages) {
