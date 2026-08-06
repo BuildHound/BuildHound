@@ -59,4 +59,24 @@ class StyleHashCspTest {
     fun `an unclosed style block fails init instead of silently dropping its hash`() {
         assertFailsWith<IllegalStateException> { styleHashCsp("<html><style>a{color:red}") }
     }
+
+    @Test
+    fun `a literal style tag inside a block's raw text is not a dangling open`() {
+        // A tokenizer never rescans raw text, so a CSS string or comment containing
+        // "<style" must not trip the dangling-open check (plan 103 quality review).
+        val inString = """a{content:"<style>"}b"""
+        assertTrue(styleHashCsp("<style>$inString</style>").contains(sha256Token(inString)))
+        val inComment = "/* see <style tag */ a{}"
+        assertTrue(styleHashCsp("<style>$inComment</style>").contains(sha256Token(inComment)))
+    }
+
+    @Test
+    fun `a dangling open after the last paired block still fails`() {
+        // (An extra open *before* a paired block is not dangling: the browser pairs the
+        // first open with the first close, swallowing the inner tag as raw text — the
+        // block regex does the same, so those stay in agreement.)
+        assertFailsWith<IllegalStateException> {
+            styleHashCsp("<style>a{}</style><footer></footer><style media=x>")
+        }
+    }
 }
