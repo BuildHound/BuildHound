@@ -42,4 +42,18 @@ class DocsRoutesTest {
 
         assertEquals(HttpStatusCode.OK, client.get("/docs.js").status)
     }
+
+    @Test
+    fun `every style block in the docs page is hash-pinned in the CSP`() = testApplication {
+        app()
+        val page = client.get("/docs")
+        val html = page.bodyAsText()
+        val csp = page.headers["Content-Security-Policy"] ?: ""
+
+        // Tokenizer-accurate open-tag count: one sha256 token per style block (plan 103).
+        val styleOpens = Regex("""<style(?=[\t\n\f\r />])""", RegexOption.IGNORE_CASE).findAll(html).count()
+        val pinnedHashes = Regex("'sha256-").findAll(csp).count()
+        assertTrue(styleOpens > 0, "expected the docs page's inline style block")
+        assertEquals(styleOpens, pinnedHashes, csp)
+    }
 }

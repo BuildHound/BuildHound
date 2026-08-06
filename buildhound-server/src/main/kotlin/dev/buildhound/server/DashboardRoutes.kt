@@ -33,18 +33,7 @@ internal object DashboardAssets {
      * `style-src 'unsafe-inline'` (review hardening) — computed from the served
      * bytes so a style edit can never silently un-style the page.
      */
-    val csp: String = run {
-        val styleHashes = Regex("<style>(.*?)</style>", RegexOption.DOT_MATCHES_ALL)
-            .findAll(indexHtml.decodeToString())
-            .map { match ->
-                val digest = MessageDigest.getInstance("SHA-256").digest(match.groupValues[1].encodeToByteArray())
-                "'sha256-" + Base64.getEncoder().encodeToString(digest) + "'"
-            }
-            .toList()
-        val styleSrc = if (styleHashes.isEmpty()) "'none'" else styleHashes.joinToString(" ")
-        "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; " +
-            "style-src $styleSrc; script-src 'self'; connect-src 'self'"
-    }
+    val csp: String = styleHashCsp(indexHtml.decodeToString())
 
     /** Loaded once at class init — a missing resource fails startup, not a request. */
     private fun resource(path: String): ByteArray =
@@ -65,23 +54,45 @@ internal object DocsAssets {
     val docsJs: ByteArray = resource("web/docs.js")
 
     /** Inline `<style>` in docs.html is hash-pinned (same posture as the dashboard) — no unsafe-inline. */
-    val csp: String = run {
-        val styleHashes = Regex("<style>(.*?)</style>", RegexOption.DOT_MATCHES_ALL)
-            .findAll(docsHtml.decodeToString())
-            .map { match ->
-                val digest = MessageDigest.getInstance("SHA-256").digest(match.groupValues[1].encodeToByteArray())
-                "'sha256-" + Base64.getEncoder().encodeToString(digest) + "'"
-            }
-            .toList()
-        val styleSrc = if (styleHashes.isEmpty()) "'none'" else styleHashes.joinToString(" ")
-        "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; " +
-            "style-src $styleSrc; script-src 'self'; connect-src 'self'"
-    }
+    val csp: String = styleHashCsp(docsHtml.decodeToString())
 
     private fun resource(path: String): ByteArray =
         checkNotNull(javaClass.classLoader.getResourceAsStream(path)) {
             "embedded docs resource missing: $path"
         }.use { it.readBytes() }
+}
+
+/**
+ * Shared CSP for the embedded static pages, with every inline `<style>` body hash-pinned
+ * so `style-src` never needs `'unsafe-inline'`.
+ *
+ * The tag patterns mirror the HTML tokenizer: a tag name ends only at tab/LF/FF/CR/space,
+ * `/` or `>`, and end-tag attributes are ignored — so `<style media=…>`, `<STYLE>` and
+ * `</style >` all pair exactly as a browser pairs them (plan 103; same fix class as plan
+ * 102 in validate.mjs). The exact-terminator lookahead, not `\b`, is load-bearing: `\b`
+ * would also fire on non-tags like `</style-x>` and truncate a block early, hashing the
+ * wrong body. A block the extraction missed would fail closed at the browser (missing
+ * hash → style blocked), but silently un-styling the page is still a shipped bug, so
+ * open-tag/paired-block parity is checked at class init — a malformed bundled page fails
+ * startup, not a request, matching the missing-resource posture above.
+ */
+private val styleBlockPattern =
+    Regex("""<style(?=[\t\n\f\r />])[^>]*>([\s\S]*?)</style(?=[\t\n\f\r />])[^>]*>""", RegexOption.IGNORE_CASE)
+private val styleOpenPattern = Regex("""<style(?=[\t\n\f\r />])""", RegexOption.IGNORE_CASE)
+
+internal fun styleHashCsp(html: String): String {
+    val blocks = styleBlockPattern.findAll(html).toList()
+    val opens = styleOpenPattern.findAll(html).count()
+    check(blocks.size == opens) {
+        "unclosed or mis-paired <style> element in an embedded page ($opens open tags, ${blocks.size} paired blocks)"
+    }
+    val styleHashes = blocks.map { match ->
+        val digest = MessageDigest.getInstance("SHA-256").digest(match.groupValues[1].encodeToByteArray())
+        "'sha256-" + Base64.getEncoder().encodeToString(digest) + "'"
+    }
+    val styleSrc = if (styleHashes.isEmpty()) "'none'" else styleHashes.joinToString(" ")
+    return "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; " +
+        "style-src $styleSrc; script-src 'self'; connect-src 'self'"
 }
 
 fun Route.dashboardRoutes() {

@@ -96,6 +96,22 @@ class DashboardRoutesTest {
     }
 
     @Test
+    fun `every style block in the served page is hash-pinned in the CSP`() = testApplication {
+        application { buildHoundModule() }
+
+        val response = client.get("/")
+        val html = response.bodyAsText()
+        val csp = response.headers["Content-Security-Policy"] ?: ""
+
+        // Tokenizer-accurate open-tag count (tag name ends only at tab/LF/FF/CR/space, / or >):
+        // one sha256 token per style block, none dropped by a pairing miss (plan 103).
+        val styleOpens = Regex("""<style(?=[\t\n\f\r />])""", RegexOption.IGNORE_CASE).findAll(html).count()
+        val pinnedHashes = Regex("'sha256-").findAll(csp).count()
+        assertTrue(styleOpens > 0, "expected the dashboard's inline style block")
+        assertEquals(styleOpens, pinnedHashes, csp)
+    }
+
+    @Test
     fun `data endpoints stay locked while the page itself is public`() = testApplication {
         application { buildHoundModule() }
 
