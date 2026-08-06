@@ -72,9 +72,15 @@ internal object DocsAssets {
  * 102 in validate.mjs). The exact-terminator lookahead, not `\b`, is load-bearing: `\b`
  * would also fire on non-tags like `</style-x>` and truncate a block early, hashing the
  * wrong body. A block the extraction missed would fail closed at the browser (missing
- * hash → style blocked), but silently un-styling the page is still a shipped bug, so
- * open-tag/paired-block parity is checked at class init — a malformed bundled page fails
- * startup, not a request, matching the missing-resource posture above.
+ * hash → style blocked), but silently un-styling the page is still a shipped bug, so any
+ * `<style` open left over *outside* the paired blocks fails a check. Only the text
+ * outside paired blocks is scanned for leftovers: a block's raw-text body may legally
+ * contain a literal `<style` (CSS string or comment), which a tokenizer never rescans.
+ * The asset objects are lazily initialized, so [Route.dashboardRoutes] touches both CSPs
+ * during route registration — a malformed bundled page fails the boot, not the first
+ * request, matching the missing-resource posture above. Accepted limit: a quoted `>`
+ * inside an *open*-tag attribute truncates the hashed body — that also fails closed at
+ * the browser (missing hash → style blocked), never widening the policy.
  */
 private val styleBlockPattern =
     Regex("""<style(?=[\t\n\f\r />])[^>]*>([\s\S]*?)</style(?=[\t\n\f\r />])[^>]*>""", RegexOption.IGNORE_CASE)
@@ -82,9 +88,15 @@ private val styleOpenPattern = Regex("""<style(?=[\t\n\f\r />])""", RegexOption.
 
 internal fun styleHashCsp(html: String): String {
     val blocks = styleBlockPattern.findAll(html).toList()
-    val opens = styleOpenPattern.findAll(html).count()
-    check(blocks.size == opens) {
-        "unclosed or mis-paired <style> element in an embedded page ($opens open tags, ${blocks.size} paired blocks)"
+    var cursor = 0
+    var dangling = 0
+    for (block in blocks) {
+        dangling += styleOpenPattern.findAll(html.substring(cursor, block.range.first)).count()
+        cursor = block.range.last + 1
+    }
+    dangling += styleOpenPattern.findAll(html.substring(cursor)).count()
+    check(dangling == 0) {
+        "unclosed or mis-paired <style> element in an embedded page ($dangling dangling open tags, ${blocks.size} paired blocks)"
     }
     val styleHashes = blocks.map { match ->
         val digest = MessageDigest.getInstance("SHA-256").digest(match.groupValues[1].encodeToByteArray())
@@ -96,6 +108,11 @@ internal fun styleHashCsp(html: String): String {
 }
 
 fun Route.dashboardRoutes() {
+    // Route registration runs during module setup, and the asset objects are lazily
+    // initialized: touching both CSPs here makes a malformed embedded page (or missing
+    // resource) fail the boot instead of surfacing as an ExceptionInInitializerError on
+    // the first request to these routes (plan 103 reviews).
+    check(DashboardAssets.csp.isNotEmpty() && DocsAssets.csp.isNotEmpty())
     get("/") {
         call.dashboardHeaders()
         call.respondBytes(DashboardAssets.indexHtml, ContentType.Text.Html.withCharset(Charsets.UTF_8))

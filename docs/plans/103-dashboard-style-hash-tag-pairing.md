@@ -27,10 +27,19 @@ pages, the policy's directive set, or other routes.
   `<style(?=[\t\n\f\r />])[^>]*>([\s\S]*?)</style(?=[\t\n\f\r />])[^>]*>` with
   IGNORE_CASE (`[\s\S]` replaces DOT_MATCHES_ALL). The lookahead is the tokenizer's
   tag-name terminator set; `\b` is wrong in both directions (plan 102 review lesson).
-- Loud failure instead of silent un-styling: count `<style(?=[\t\n\f\r />])` opens and
-  `check(...)` block-count parity at class init — an unclosed or mis-paired style in a
-  bundled page now fails startup, matching the file's existing "missing resource fails
-  startup, not a request" posture.
+- Loud failure instead of silent un-styling: after extracting paired blocks, scan only
+  the text *outside* them for leftover `<style(?=[\t\n\f\r />])` opens and `check(...)`
+  that none remain. (First cut compared a whole-document open count against the block
+  count; the quality review showed that overcounts on well-formed input — a block's
+  raw-text body may legally contain a literal `<style` in a CSS string or comment, which
+  a tokenizer never rescans. Amended to the residual-text scan in the same PR.)
+- Fail the boot, not the first request: both asset objects are lazily initialized Kotlin
+  objects, so class-init alone would surface a malformed page as an
+  `ExceptionInInitializerError` on the first page request (both reviews flagged the
+  original "fails startup" claim as wrong for this reason). `dashboardRoutes()` now
+  touches both CSPs during route registration, which runs at module setup — restoring
+  the "fails before serving traffic" property the file's missing-resource posture
+  documents.
 - Bundled pages use bare `<style>` blocks, so produced hashes — and therefore the served
   CSP header — are byte-identical before/after.
 
