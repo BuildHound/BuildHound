@@ -314,10 +314,13 @@ function validateHtml(page, html) {
         }
     }
 
-    for (const match of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi)) {
+    // The HTML tokenizer ends raw text at `</style`/`</script` followed by whitespace,
+    // "/" or ">" and ignores end-tag attributes, so the close patterns must accept every
+    // such variant (`</script foo>`, `</script/>`) or the pairing diverges from browsers.
+    for (const match of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style\b[^>]*>/gi)) {
         scanCssReferences(page, match[1]);
     }
-    for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+    for (const match of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi)) {
         if (!attributesByName(`<script ${match[1]}>`).has("src") || match[2].trim()) {
             fail(`${page}: inline script content is not allowed`);
         }
