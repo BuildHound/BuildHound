@@ -56,10 +56,12 @@ vm.createContext(context);
 // The browser runs both inline <script> blocks in order (timeline renderer, then the render IIFE
 // which auto-executes on the embedded buildhoundData). Extract and run them the same way.
 const html = fs.readFileSync(process.argv[2], "utf8");
-// End-tag pattern mirrors the HTML tokenizer: raw text ends at `</script` + whitespace/"/"/">"
-// with end-tag attributes ignored, so breakout variants like `</script >` or `</script/>` split
-// the count here exactly as a browser would split the element.
-const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map(m => m[1]);
+// Both tag patterns mirror the HTML tokenizer: a script tag name ends only at
+// tab/LF/FF/CR/space, "/" or ">" (end-tag attributes ignored), so breakout variants like
+// `</script >` or `</script/>` split the count here exactly as a browser would split the
+// element. The exact-terminator lookahead (not `\b`) keeps non-tags like `</script-x>` —
+// raw text to a browser — from being taken as a close and truncating a block early.
+const scripts = [...html.matchAll(/<script(?=[\t\n\f\r />])[^>]*>([\s\S]*?)<\/script(?=[\t\n\f\r />])[^>]*>/gi)].map(m => m[1]);
 if (scripts.length !== 2) {
     // A hostile testTelemetry.xmlDisabledTasks entry shaped like a script breakout is in the fixture
     // (see ReportScriptTest); if ReportAssets.render()'s less-than escape ever regressed, the
