@@ -139,6 +139,27 @@ that never occurs. The rest of the harness is verified by *running* it:
 > Numbering: 105 is taken by an unmerged sibling branch
 > (`plan: composite action in CI + nightly sample benchmark to prod`), so this plan is 106.
 
+## 8. Review coverage (CLAUDE.md §3)
+
+Stated by SHA, because the branch moved while reviews ran and "reviews passed" would otherwise hide
+which commits were actually looked at:
+
+| Review | Covered |
+|---|---|
+| Security & privacy (§3.2, mandatory) | `690f95e..06c8eb2` |
+| Code & architecture — `kotlin-gradle-reviewer` | `690f95e..06c8eb2` |
+| Code & architecture — `infra-reviewer` | `690f95e..06c8eb2` |
+| `security-reviewer-infra` (CI paths, §3 routing) | `690f95e..c2c131d` |
+
+**Named gap:** `06c8eb2..802cfc5` had no completed independent review — a delta re-review was launched
+twice and stalled both times. Mitigating facts, offered as context and not as a substitute: every
+change in that range *originated as a review finding* (the `exec`/sink-leak fix was independently
+raised by two reviewers; the sink readiness guards came from the infra-security MEDIUM; the
+`ProfilerCsv` strictness and error-message changes came from the Kotlin review's nit and LOWs), and
+each was verified empirically — both sink failure paths exercised (exit 5), the happy path cleared in
+a live run, `:buildhound-commons:jvmTest` green, shellcheck clean. Re-run the two reviewers over that
+range before merge if the gap matters to the reviewer of record.
+
 ## 7. Result of the first real run (2026-08-09)
 
 A sixth defect surfaced when the verdict step finally ran: gradle-profiler writes **no summary rows
@@ -190,9 +211,11 @@ daemons alive) shows ~1.8 s while a laptop with several worktrees' daemons shows
 Plan 104 is exonerated by its own diff: it *removed* one `ps` exec per PID (two collapsed into one).
 The per-PID subprocess design predates it (plan 029).
 
-**The JVM-count scaling was then confirmed by accident.** A second harness run, started while more
-daemons happened to be alive, measured the *same* plugin-on `no_op` scenario at **~6.5 s** with 24
-live JVMs, against **~1.9 s** with 15 during the first run — same machine, same commit, same fixture.
+**The JVM-count scaling then showed up in a second run.** That run was started deliberately (to
+re-verify the harness end to end after the review fixes) and stopped early; the scaling observation
+out of it was incidental, but the numbers are straight measurements. It measured the *same* plugin-on
+`no_op` scenario at **~6.5 s** with 24 live JVMs, against **~1.9 s** with 15 during the first run —
+same machine, same commit, same fixture.
 The plugin's per-build cost is therefore not a constant to be calibrated away; it is a function of an
 ambient property of the machine. Two consequences: a developer's cost grows the more projects they
 have open, and the CI number will understate what developers feel, because a clean runner has few
