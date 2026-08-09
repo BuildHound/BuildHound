@@ -23,10 +23,11 @@ running pipelines rather than shipped-but-undriven templates.
   (the pin `publish-gradle-plugin.yml` already uses).
 - `.github/workflows/ci.yml`: new `composite-action` job that runs the action from the checkout
   (`uses: ./buildhound-ci-assets/github`), credential-free.
-- `samples/{nowinandroid,springboot-legacy,android-legacy-agp}/settings.gradle.kts`: make the demo
-  `server.url` env-overridable (`BUILDHOUND_SAMPLE_SERVER_URL`, default unchanged =
-  `http://localhost:8080`). Without this a sample can never publish anywhere but localhost — its
-  DSL literal wins over anything an init script sets in `beforeSettings`.
+- `.github/buildhound-sample-benchmark.init.gradle.kts`: CI-injection script that re-points a
+  sample's `server.url`/`server.token` at the real ingest server from
+  `BUILDHOUND_SAMPLE_SERVER_URL`/`BUILDHOUND_SAMPLE_TOKEN`. **The samples themselves are not
+  touched** — see §3.3 for why this is a `settingsEvaluated` sibling of the dogfood script rather
+  than the dogfood script itself.
 - New per-sample gradle-profiler scenario files under
   `buildhound-ci-assets/profiler-scenarios/samples/`.
 - New `.github/workflows/nightly-benchmark.yml`: scheduled matrix over
@@ -83,7 +84,7 @@ Per-job wiring:
 - Isolation is applied by appending `org.gradle.caching=false` to the pilot's `gradle.properties`
   for `no_build_cache`; the checkout is fresh per job, so no pristine-copy dance.
 - Upload target: `BUILDHOUND_SAMPLE_SERVER_URL` = `vars.BUILDHOUND_PROD_SERVER_URL`,
-  `BUILDHOUND_TOKEN` = `secrets.BUILDHOUND_PROD_INGEST_TOKEN` (the repo-level ingest slot plan 094
+  `BUILDHOUND_SAMPLE_TOKEN` = `secrets.BUILDHOUND_PROD_INGEST_TOKEN` (the repo-level ingest slot plan 094
   already provisioned). The URL expression collapses to `''` when the token secret is absent, and
   `UploadGate` skips on an empty URL (`no server configured`) — so this YAML is safe before/without
   credentials and can never POST unauthenticated.
@@ -93,6 +94,37 @@ Per-job wiring:
   8.14.5, which cannot run on 26); 26 stays available for the included BuildHound build's toolchain.
 - gradle-profiler is downloaded from `repo1.maven.org` with a pinned SHA-256, matching the
   `overhead-budget` job — not the shipped template's unpinned `repo.gradle.org` URL.
+
+### 3.3 Injecting the ingest target without editing the samples
+
+**Revision (owner question, same PR).** The first cut made each sample's `server.url` env-overridable.
+That works, but it edits three files whose job is to be the committed *reference* configuration for
+local development. The samples now stay exactly as they are, and CI injects instead — the pattern
+plan 093 already established for the root build.
+
+The existing `.github/buildhound-dogfood.init.gradle.kts` cannot be reused for this, for two
+structural reasons:
+
+1. It *applies* the plugin from mavenLocal (`initscript` classpath + `Class.forName`). The samples
+   already apply the plugin themselves from source via `includeBuild("../..")`, so that path would
+   mean two classloaders' copies of one plugin id — and would need a `publishToMavenLocal` bootstrap
+   the samples otherwise don't need.
+2. It overrides in `beforeSettings`, which runs **before** a `settings.gradle.kts` is evaluated.
+   Correct for the root build (no `buildhound { }` block of its own), wrong for a sample: the
+   sample's `server { url = "http://localhost:8080" }` literal is applied afterwards and wins.
+
+So: a sibling script, `.github/buildhound-sample-benchmark.init.gradle.kts`, hooking
+`settingsEvaluated` — the extension exists and is configured by then, and the plugin's
+`parameters.serverUrl.set(extension.server.url)` is a lazy Property→Property link, so a later `set`
+still propagates. Reflection-only and fully guarded (never fails a build); a build with no
+`buildhound` extension (the included plugin build) is a logged no-op.
+
+The workflow installs it into the runner's `~/.gradle/init.d/` rather than threading `-I` through
+every scenario's `gradle-args`, so no scenario file carries a `--project-dir`-relative path.
+
+Verified locally against `samples/springboot-legacy` with a logging HTTP sink: with the script + env
+set, the payload is POSTed to the injected URL with an `Authorization` header (the sample's localhost
+literal is overridden); with the script and no env, no upload is attempted at all.
 
 Scenario files are per-pilot (`profiler-scenarios/samples/<pilot>.scenarios`) because tasks and the
 non-ABI source path differ per sample. The shipped consumer file stays Android-pilot-shaped and
@@ -127,8 +159,8 @@ builds upload too, so a series carries `iteration=null` rows for both warm-ups a
 - **Security/privacy** — the prod ingest token is a repo secret exposed to a scheduled job on the
   default branch only (no fork, no PR trigger). Token flows env → `Authorization` header, never
   argv, never echoed. Sample telemetry is synthetic/public code; no new payload field.
-- **Sample dev loop** — the `server.url` change keeps `http://localhost:8080` as the default, so
-  `docs`/`samples/README.md`'s documented loop is unchanged.
+- **Sample dev loop** — untouched: the samples keep their committed localhost config and the
+  redirection lives entirely in an init script CI applies (§3.3).
 
 ## 6. Exit criteria
 
@@ -137,7 +169,8 @@ builds upload too, so a series carries `iteration=null` rows for both warm-ups a
 2. CI has a `composite-action` job and it is green on this PR.
 3. `.github/workflows/nightly-benchmark.yml` exists, lints, and is credential-safe when secrets are
    absent.
-4. Per-sample scenario files exist with real task and source paths.
+4. Per-sample scenario files exist with real task and source paths, and the samples'
+   `settings.gradle.kts` files are unchanged by this PR.
 5. Shipped `github-nightly-benchmark.yml` reflects the same shape we run.
 6. **Post-merge**: one `workflow_dispatch` run, and production `#/benchmark` shows rows for each
    `(pilot, scenario, isolation)` under a single seed ref. Until then this plan stays in

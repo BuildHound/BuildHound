@@ -99,13 +99,26 @@ On completion the plugin:
 To point at a different server or token without editing the sample, override via the environment:
 
 ```bash
-BUILDHOUND_SAMPLE_SERVER_URL=https://buildhound.example.com BUILDHOUND_TOKEN=some-other-token ./gradlew :core:common:assemble
+BUILDHOUND_TOKEN=some-other-token ./gradlew :core:common:assemble
 ```
 
-`BUILDHOUND_SAMPLE_SERVER_URL` is sample-scoped on purpose: `BUILDHOUND_SERVER_URL` is the plugin's
-convention fallback and would arm uploads in *any* instrumented build in the same shell. Unset ⇒ the
-`http://localhost:8080` default above. An empty value leaves the URL blank, and the plugin then skips
-the upload entirely ("no server configured") — that is how
+To send a sample's telemetry to a *different server* without editing the sample, apply the CI
+injection script — the same pattern the dogfood path uses, so the committed sample config stays the
+local-development reference it is meant to be:
+
+```bash
+BUILDHOUND_SAMPLE_SERVER_URL=https://buildhound.example.com \
+BUILDHOUND_SAMPLE_TOKEN=some-ingest-token \
+  ./gradlew -I ../../.github/buildhound-sample-benchmark.init.gradle.kts :core:common:assemble
+```
+
+The script overrides `server.url`/`server.token` in `settingsEvaluated` — after the sample's own
+`buildhound { }` block, which is why a `beforeSettings` hook (what
+`.github/buildhound-dogfood.init.gradle.kts` uses for the root build) cannot do this job. The env
+names are sample-scoped on purpose: `BUILDHOUND_SERVER_URL`/`BUILDHOUND_TOKEN` are the plugin's
+convention fallbacks and would arm uploads in *any* instrumented build in the same shell. With the
+script applied and `BUILDHOUND_SAMPLE_SERVER_URL` empty or unset, the upload is skipped entirely
+("no server configured") — that is how
 [`.github/workflows/nightly-benchmark.yml`](../.github/workflows/nightly-benchmark.yml) stays safe
 when the production ingest credentials aren't present.
 
