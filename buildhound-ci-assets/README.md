@@ -12,6 +12,7 @@ deliberately not a Gradle module.
 | `test/metric-cli-test.sh` | Stubbed-`curl` harness for the metric CLI (`sh buildhound-ci-assets/test/metric-cli-test.sh`); `shellcheck`-clean |
 | `test/wrapper-integrity-test.sh` | Harness mirroring the Azure template's `validateWrapper` grep/sha256sum logic (`sh buildhound-ci-assets/test/wrapper-integrity-test.sh`); `shellcheck`-clean (plan 066) |
 | `profiler-scenarios/buildhound.scenarios` | gradle-profiler scenarios for benchmark mode: `clean`/`no_op`/`incremental_non_abi`/`cc_hit` (plan 030) |
+| `profiler-scenarios/samples/*.scenarios` | the same four scenarios wired to BuildHound's own sample pilots (`springboot-legacy`, `android-legacy-agp`, `nowinandroid`), driven by `.github/workflows/nightly-benchmark.yml` (plan 105) |
 | `profiler-pipeline/{github,azure}-nightly-benchmark.yml` | scheduled gradle-profiler pipeline → `mode=benchmark` tagged series (plan 030) |
 | `profiler-pipeline/isolation-modes.md` | the cache-isolation (`BUILDHOUND_BENCHMARK_ISOLATION`) mode table |
 | `overhead/run-overhead.sh` | plugin-overhead self-benchmark: gradle-profiler on `overhead/fixture/` with the plugin toggled on/off → per-axis verdict vs the budget (plan 034); see [`docs/overhead-budget.md`](../docs/overhead-budget.md) |
@@ -46,7 +47,7 @@ verdict is BuildHound's rolling-baseline comparison (spec §5, plan 025).
 
 ## GitHub Actions cache posture
 
-The composite action configures `gradle/actions/setup-gradle@v6` with `cache-provider: basic` by
+The composite action configures `gradle/actions/setup-gradle` (pinned to the `v6.3.0` commit) with `cache-provider: basic` by
 default. That keeps cache-key metadata on your own GitHub/runner infrastructure while BuildHound
 provides the open telemetry and diagnostics layer. Override the action's `cache-provider` input only
 when your organization has deliberately chosen another provider; no BuildHound token is passed to

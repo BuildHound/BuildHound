@@ -99,8 +99,15 @@ On completion the plugin:
 To point at a different server or token without editing the sample, override via the environment:
 
 ```bash
-BUILDHOUND_TOKEN=some-other-token ./gradlew :core:common:assemble
+BUILDHOUND_SAMPLE_SERVER_URL=https://buildhound.example.com BUILDHOUND_TOKEN=some-other-token ./gradlew :core:common:assemble
 ```
+
+`BUILDHOUND_SAMPLE_SERVER_URL` is sample-scoped on purpose: `BUILDHOUND_SERVER_URL` is the plugin's
+convention fallback and would arm uploads in *any* instrumented build in the same shell. Unset ⇒ the
+`http://localhost:8080` default above. An empty value leaves the URL blank, and the plugin then skips
+the upload entirely ("no server configured") — that is how
+[`.github/workflows/nightly-benchmark.yml`](../.github/workflows/nightly-benchmark.yml) stays safe
+when the production ingest credentials aren't present.
 
 ### 3. Iterate
 

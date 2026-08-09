@@ -1,0 +1,47 @@
+# gradle-profiler scenarios for the android-legacy-agp sample (plan 105).
+#
+# Driven by .github/workflows/nightly-benchmark.yml, one scenario per profiler invocation, with a
+# matching BUILDHOUND_BENCHMARK_SCENARIO exported for that invocation. The scenario NAMES must stay
+# inside the plugin's allowlist (BenchmarkActivation.SCENARIOS) — clean | no_op |
+# incremental_non_abi | cc_hit.
+#
+# This pilot sits on the bottom of the supported window (AGP 8.5.2 on Gradle 8.14.5), so its series
+# is the early-warning signal for the floor. Build cache and configuration cache are ON in its
+# gradle.properties, so both isolation modes the nightly wires (full_cache, no_build_cache) are
+# meaningful here.
+#
+# warm-ups/iterations are set explicitly: gradle-profiler's 6/10 benchmark defaults would not
+# finish inside a nightly window.
+
+clean {
+    title = "Clean assembleDebug (android-legacy-agp)"
+    tasks = ["assembleDebug"]
+    cleanup-tasks = ["clean"]
+    warm-ups = 1
+    iterations = 3
+}
+
+no_op {
+    title = "No-op (fully up-to-date) assembleDebug (android-legacy-agp)"
+    tasks = ["assembleDebug"]
+    warm-ups = 1
+    iterations = 3
+}
+
+incremental_non_abi {
+    title = "Incremental non-ABI source change (android-legacy-agp)"
+    tasks = ["assembleDebug"]
+    # A leaf module (no project dependencies) that every layer above compiles against; a
+    # method-body-only change exercises incremental compilation without invalidating downstream ABI.
+    apply-non-abi-change-to = ["library/logging/src/main/java/dev/buildhound/sample/library/logging/Marker.kt"]
+    warm-ups = 1
+    iterations = 3
+}
+
+cc_hit {
+    title = "Configuration-cache hit assembleDebug (android-legacy-agp)"
+    tasks = ["assembleDebug"]
+    gradle-args = ["--configuration-cache"]
+    warm-ups = 1
+    iterations = 3
+}

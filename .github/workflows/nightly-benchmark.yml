@@ -1,0 +1,139 @@
+name: nightly-benchmark
+
+# Scheduled gradle-profiler benchmark series for BuildHound's own sample pilots (plan 105; spec §7,
+# plan 030 benchmark mode). Each measured build is uploaded by the plugin as mode=benchmark tagged
+# with (scenario, isolationMode, seedRef); the server keeps those out of fleet trends and surfaces
+# them at #/benchmark on the production dashboard.
+#
+# Shape notes (they are load-bearing, see plan 105 §3.2):
+#  - ONE scenario per job. The plugin reads BUILDHOUND_BENCHMARK_* inside the measured daemon, and
+#    gradle-profiler reuses daemons; a job per scenario means a fresh runner and a fresh daemon, so
+#    a scenario can never inherit the previous scenario's label.
+#  - The seed ref is github.run_id, so every job of one nightly shares a single series anchor. A
+#    per-job timestamp would split the matrix across N series.
+#  - The samples apply the plugin from source (settings.gradle.kts includeBuild("../..")), so no
+#    publishToMavenLocal bootstrap is needed here — unlike the root-build dogfood path in ci.yml.
+#  - No setup-gradle cache restore: each job starts with a cold Gradle user home and the scenario's
+#    warm-up build warms it. Cross-run cache restore would add variance the series can't attribute.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC nightly
+  workflow_dispatch: {} # allow manual runs (also how this is verified after merge)
+
+permissions:
+  contents: read
+
+# Never let two nightlies (or a nightly and a manual run) interleave into one seed ref's series;
+# queue rather than cancel so a manual verification run isn't killed by the schedule.
+concurrency:
+  group: nightly-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: "${{ matrix.pilot }} · ${{ matrix.scenario }} · ${{ matrix.isolation }}"
+    # Forks inherit scheduled workflows; without this a fork would run a 20-job Android matrix
+    # nightly (and, with no secrets, upload nothing anyway).
+    if: github.repository == 'BuildHound/BuildHound'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Watched, non-blocking (roadmap guardrail, same posture as overhead-budget): a runner OOM or a
+    # flaky Android SDK download must not turn the nightly red and train us to ignore it.
+    continue-on-error: true
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      # Caps concurrent runners; the full matrix is 20 jobs of real Gradle/Android builds.
+      max-parallel: 4
+      matrix:
+        pilot: [springboot-legacy, android-legacy-agp, nowinandroid]
+        isolation: [full_cache, no_build_cache]
+        scenario: [clean, no_op, incremental_non_abi, cc_hit]
+        exclude:
+          # springboot-legacy ships org.gradle.caching=false on purpose (it is the deliberately
+          # sub-optimal pilot). Labelling that run `full_cache` would be a false label, and forcing
+          # caching on would erase what the sample exists to show — so it only runs no_build_cache.
+          - pilot: springboot-legacy
+            isolation: full_cache
+    # Job-level env on purpose: the runner echoes STEP-level env mappings verbatim, which leaks
+    # `vars.*` values (secrets stay masked). Job-level env is not echoed per step.
+    env:
+      # Sample-scoped name, read by each sample's settings.gradle.kts. NOT BUILDHOUND_SERVER_URL:
+      # that is the plugin's convention fallback and would arm uploads in any other instrumented
+      # build in this environment. The expression collapses to '' when the prod ingest secret is
+      # absent, and UploadGate skips on an empty URL ("no server configured") — so this workflow is
+      # safe to merge before/without credentials and can never POST unauthenticated.
+      BUILDHOUND_SAMPLE_SERVER_URL: ${{ secrets.BUILDHOUND_PROD_INGEST_TOKEN != '' && vars.BUILDHOUND_PROD_SERVER_URL || '' }}
+      # Ingest-scoped (plan 094 slot). Leaves only via the plugin's Authorization header; never
+      # echoed, never on argv.
+      BUILDHOUND_TOKEN: ${{ secrets.BUILDHOUND_PROD_INGEST_TOKEN }}
+      BUILDHOUND_BENCHMARK_SCENARIO: ${{ matrix.scenario }}
+      BUILDHOUND_BENCHMARK_ISOLATION: ${{ matrix.isolation }}
+      BUILDHOUND_BENCHMARK_SEED_REF: ${{ github.run_id }}
+      PILOT: ${{ matrix.pilot }}
+      ISOLATION: ${{ matrix.isolation }}
+      SCENARIO: ${{ matrix.scenario }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # 26 for the included BuildHound build's toolchain, 21 LAST so it stays JAVA_HOME: Gradle
+      # 8.14.5 (android-legacy-agp) cannot RUN on 26 (plan 011). Same pattern as ci.yml's
+      # build-floor / overhead-budget jobs. The Android pilots use the runner image's preinstalled
+      # SDK via ANDROID_HOME / ANDROID_SDK_ROOT.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: |
+            26
+            21
+
+      # Version + SHA-256 pinned, from Maven Central (gradle-profiler's distribution channel) —
+      # identical posture to ci.yml's overhead-budget job. The checksum turns a swapped asset into
+      # a loud failure instead of a silent binary substitution.
+      - name: Install gradle-profiler
+        env:
+          PROFILER_VERSION: "0.24.0"
+          PROFILER_SHA256: "74f39882a444d6d5616d35b3e9197f7423cd252f63f339bd3e01f662573b319c"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o gradle-profiler.zip \
+            "https://repo1.maven.org/maven2/org/gradle/profiler/gradle-profiler/${PROFILER_VERSION}/gradle-profiler-${PROFILER_VERSION}.zip"
+          echo "${PROFILER_SHA256}  gradle-profiler.zip" | sha256sum -c -
+          unzip -q gradle-profiler.zip
+          echo "$PWD/gradle-profiler-${PROFILER_VERSION}/bin" >> "$GITHUB_PATH"
+
+      # The isolation mechanism from profiler-pipeline/isolation-modes.md. The checkout is fresh per
+      # job, so this is a plain append — no pristine-copy dance. full_cache = the pilot's committed
+      # configuration, untouched.
+      - name: Apply cache isolation
+        run: |
+          set -euo pipefail
+          if [ "$ISOLATION" = "no_build_cache" ]; then
+            echo "org.gradle.caching=false" >> "samples/$PILOT/gradle.properties"
+            echo "isolation=$ISOLATION: appended org.gradle.caching=false to samples/$PILOT/gradle.properties"
+          else
+            echo "isolation=$ISOLATION: pilot configuration left untouched"
+          fi
+
+      # One scenario per invocation (the plugin reads the scenario env once per daemon). Scenario
+      # files are per-pilot because tasks and the non-ABI source path differ; the scenario NAMES are
+      # the plugin's allowlist (BenchmarkActivation.SCENARIOS).
+      - name: Run benchmark
+        run: |
+          set -euo pipefail
+          gradle-profiler --benchmark \
+            --project-dir "samples/$PILOT" \
+            --scenario-file "buildhound-ci-assets/profiler-scenarios/samples/$PILOT.scenarios" \
+            --output-dir "profiler-out/$PILOT-$ISOLATION-$SCENARIO" \
+            "$SCENARIO"
+
+      # gradle-profiler's own measurements, kept independently of what reached the dashboard: when a
+      # series looks wrong, this is how we tell "the build was slow" from "the upload was lost".
+      - name: Upload profiler output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-${{ matrix.pilot }}-${{ matrix.isolation }}-${{ matrix.scenario }}
+          path: profiler-out/**
+          if-no-files-found: warn
+          retention-days: 7
