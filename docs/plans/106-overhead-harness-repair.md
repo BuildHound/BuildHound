@@ -100,6 +100,16 @@ that never occurs. The rest of the harness is verified by *running* it:
 - **A first real run may report a breach.** The committed caps were never calibrated against a real
   measurement. A breach is a finding to report with numbers, not something to silence by widening
   `DEFAULT` — that is out of scope per §2.
+- **The noise-separation guard goes live with this change, uncalibrated.** `OverheadCalculator`
+  suppresses a breach unless `delta > treatment.stddev + baseline.stddev`, and `requireSeparation`
+  is on for three of the four axes. Until now `stddevMs` was always `0.0` on real input — the
+  `stddev` row it read never existed — so the guard could never suppress anything. Computing a real
+  spread makes it consequential for the first time, and its threshold has had no more calibration
+  than the caps: a genuine regression smaller than the combined spread will now pass silently. The
+  printed `Separated` column is the only signal, so **read it, not just the verdict**. Bounding that
+  threshold belongs with the cap calibration, on real CI numbers. Relatedly, `OverheadCli`'s
+  "no spread" warning now almost never fires (a real stddev is essentially never exactly zero) —
+  it warns that the guard is *toothless*, not that it is *wrong*.
 - **Local ≠ CI.** A green macOS table proves the harness works; plan 104 criterion 5 says the *CI
   job* passes. The note added to plan 104 records "harness repaired + local measurements"; the
   criterion only closes on a green CI run with a real table.

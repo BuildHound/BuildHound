@@ -67,9 +67,12 @@ object ProfilerCsv {
             names.forEachIndexed { i, rawName ->
                 val name = rawName.trim()
                 if (name.isEmpty()) return@forEachIndexed
-                // Skip this scenario's other metric columns; a blank/absent cell stays eligible.
-                val metric = valueRow?.getOrNull(i + 1)?.trim()
-                if (!metric.isNullOrEmpty() && !metric.equals(TOTAL_EXECUTION_TIME, ignoreCase = true)) {
+                // Keep only this scenario's total-execution-time column. When the file names its
+                // metrics at all, the match must be explicit — treating a blank cell as eligible
+                // would let a partially-filled `value` row select `task start` by accident.
+                if (valueRow != null &&
+                    !valueRow.getOrNull(i + 1)?.trim().equals(TOTAL_EXECUTION_TIME, ignoreCase = true)
+                ) {
                     return@forEachIndexed
                 }
                 val column = i + 1
@@ -86,6 +89,12 @@ object ProfilerCsv {
                             ?: throw IllegalArgumentException("benchmark.csv scenario '$name' has no numeric mean"),
                         stddevMs = stddevRow?.getOrNull(column)?.toDoubleOrNull() ?: 0.0,
                     )
+                    // Distinguish "the rows are missing" from "the rows are there but unreadable" —
+                    // they send a debugger to completely different places.
+                    measuredRows.isNotEmpty() -> throw IllegalArgumentException(
+                        "benchmark.csv scenario '$name' has '$MEASURED_PREFIX #N' rows but no numeric " +
+                            "values in its column, and no 'mean' row to fall back on",
+                    )
                     else -> throw IllegalArgumentException(
                         "benchmark.csv scenario '$name' has no '$MEASURED_PREFIX #N' rows and no 'mean' row " +
                             "— nothing to measure (did gradle-profiler change its row labels?)",
@@ -95,11 +104,20 @@ object ProfilerCsv {
                 put(name, stats)
             }
         }
-        // Every column filtered away means the metric was renamed — say so, naming what was sought,
-        // so a profiler upgrade is a one-look diagnosis instead of an all-axes ⚠ MISSING mystery.
-        require(parsed.isNotEmpty() || names.none { it.isNotBlank() }) {
-            "benchmark.csv has no '$TOTAL_EXECUTION_TIME' column for any scenario " +
-                "(value row: ${valueRow?.drop(1)?.joinToString() ?: "absent"}) — did gradle-profiler rename the metric?"
+        // A scenario that survives naming but yields no column had its metric renamed or dropped.
+        // Fail per scenario, naming it and what its columns did carry: a silent drop resurfaces
+        // downstream as a bare ⚠ MISSING axis, which is the undiagnosable mystery this parser's
+        // own defects used to cause.
+        val missing = names.map { it.trim() }.filter { it.isNotEmpty() }.distinct() - parsed.keys
+        require(missing.isEmpty()) {
+            val carried = missing.joinToString("; ") { name ->
+                val metrics = names.withIndex()
+                    .filter { (_, n) -> n.trim() == name }
+                    .mapNotNull { (i, _) -> valueRow?.getOrNull(i + 1)?.trim() }
+                "'$name' carries [${metrics.joinToString()}]"
+            }
+            "benchmark.csv has no '$TOTAL_EXECUTION_TIME' column for: $carried " +
+                "— did gradle-profiler rename the metric?"
         }
         return parsed
     }

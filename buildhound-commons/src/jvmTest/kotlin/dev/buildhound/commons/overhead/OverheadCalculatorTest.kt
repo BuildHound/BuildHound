@@ -24,11 +24,14 @@ class OverheadCalculatorTest {
 
     @Test
     fun `every axis resolves against real gradle-profiler output`() {
-        // benchmark-{on,off}.csv are captured from an actual harness run (plan 106), so this is the
-        // regression guard for the defect class that made the CI job inert: with titled scenarios, a
-        // position-indexed parser, or missing summary-row handling, every axis reports ⚠ MISSING and
-        // the budget verifies nothing. Asserting only "no data missing" here — the measured numbers
-        // themselves are a machine-dependent finding, not a fact to pin in a unit test.
+        // benchmark-{on,off}.csv are captured from an actual harness run (plan 106). This guards the
+        // two defects that make an axis unresolvable — scenario columns named by title instead of id,
+        // and the absence of summary rows — either of which reports ⚠ MISSING for every axis while
+        // the job claims to have verified a budget. It does NOT guard the column-selection defect:
+        // reading `task start` instead of `total execution time` still yields positive, present
+        // values, so this test would pass. That one is pinned by ProfilerCsvTest's exact means.
+        // Only "no data missing" is asserted here — the measured numbers are a machine-dependent
+        // finding, not a fact to freeze in a unit test.
         val on = ProfilerCsv.parse(resource("benchmark-on.csv"))
         val off = ProfilerCsv.parse(resource("benchmark-off.csv"))
         val report = OverheadCalculator.evaluate(on, off, OverheadBudget.DEFAULT)

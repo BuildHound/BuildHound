@@ -3,6 +3,7 @@ package dev.buildhound.commons.overhead
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ProfilerCsvTest {
@@ -109,6 +110,43 @@ class ProfilerCsvTest {
         val error = assertFailsWith<IllegalArgumentException> { ProfilerCsv.parse(csv) }
         assertTrue(error.message!!.contains("total execution time"), error.message)
         assertTrue(error.message!!.contains("task start"), "names what the file did carry: ${error.message}")
+    }
+
+    @Test
+    fun `fails loudly when only one scenario of several loses its metric column`() {
+        // A partial drop is the nastier shape: the other axes still resolve, so without a per-scenario
+        // check the missing one reappears downstream as a bare ⚠ MISSING with nothing to debug.
+        val csv = """
+            scenario,no_op,no_op,cc_hit,cc_hit
+            value,total execution time,task start,task start,garbage collection time
+            mean,1900.0,1200.0,900.0,30.0
+        """.trimIndent()
+        val error = assertFailsWith<IllegalArgumentException> { ProfilerCsv.parse(csv) }
+        assertTrue(error.message!!.contains("cc_hit"), "names the scenario that lost it: ${error.message}")
+        assertFalse(error.message!!.contains("'no_op'"), "does not blame the healthy one: ${error.message}")
+    }
+
+    @Test
+    fun `a blank metric cell is not treated as the wanted column`() {
+        // With a `value` row present the match must be explicit, or a partially-filled row would let
+        // `task start` — a cumulative timestamp — be selected as the mean.
+        val csv = """
+            scenario,no_op,no_op
+            value,,task start
+            measured build #1,1900.0,1200.0
+        """.trimIndent()
+        assertFailsWith<IllegalArgumentException> { ProfilerCsv.parse(csv) }
+    }
+
+    @Test
+    fun `distinguishes unreadable measured rows from absent ones`() {
+        val csv = """
+            scenario,no_op
+            value,total execution time
+            measured build #1,n/a
+        """.trimIndent()
+        val error = assertFailsWith<IllegalArgumentException> { ProfilerCsv.parse(csv) }
+        assertTrue(error.message!!.contains("no numeric values"), error.message)
     }
 
     @Test

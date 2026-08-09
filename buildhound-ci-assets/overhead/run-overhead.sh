@@ -9,6 +9,11 @@ fixture="$here/fixture"
 out="${OVERHEAD_OUT:-$here/build}"
 port="${BUILDHOUND_OVERHEAD_PORT:-8099}"
 export BUILDHOUND_OVERHEAD_SINK="http://127.0.0.1:$port"
+# Measure the plugin, not the developer's live configuration. `no_op_ci` deliberately runs in CI
+# mode with NO server so it can be the upload axis's baseline — but the plugin falls back to
+# BUILDHOUND_SERVER_URL/BUILDHOUND_TOKEN from the environment, so a dogfooding shell would both
+# distort that baseline and POST 16 synthetic fixture builds at a real ingest.
+unset BUILDHOUND_SERVER_URL BUILDHOUND_TOKEN
 # The Gradle version gradle-profiler drives the fixture with — pinned (and matched to the CI
 # setup-gradle version) so the driving Gradle is explicit, not an implicit PATH/no-wrapper fallback.
 gradle_version="${BUILDHOUND_OVERHEAD_GRADLE:-9.6.1}"
