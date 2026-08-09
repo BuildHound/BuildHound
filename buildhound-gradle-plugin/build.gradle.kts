@@ -366,6 +366,14 @@ tasks.check {
 
 tasks.named<Test>("test") {
     useJUnitPlatform()
+    // CiAssetsContractTest reads buildhound-ci-assets/ straight off disk — files this module does
+    // not otherwise depend on, so without declaring them the task stays up-to-date (or gets a build
+    // cache hit) across an asset edit and reports a stale PASS. That is not hypothetical: the
+    // plan-105 setup-gradle bump was cached-green on Linux while the cold-cache macOS and Windows
+    // legs caught the drift.
+    inputs.dir(rootProject.layout.projectDirectory.dir("buildhound-ci-assets"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("ciAssets")
 }
 
 tasks.withType<Test>().configureEach {
