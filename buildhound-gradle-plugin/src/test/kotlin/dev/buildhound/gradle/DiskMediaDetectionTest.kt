@@ -3,6 +3,7 @@ package dev.buildhound.gradle
 import dev.buildhound.commons.payload.DiskMedia
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /** Every branch of the plan-104 media classifier, with sysfs injected — no real disk touched. */
 class DiskMediaDetectionTest {
@@ -76,5 +77,25 @@ class DiskMediaDetectionTest {
     @Test
     fun `a device that is all digits is never trimmed away to an empty lookup`() {
         assertEquals(DiskMedia.SSD, classify(device = "/dev/123", sysfs = mapOf("/sys/block/123/queue/rotational" to "0")))
+    }
+
+    @Test
+    fun `traversal-shaped device names never reach a sysfs read`() {
+        // The device name is concatenated into a filesystem path, so it is allowlisted by shape.
+        // `..` is the case a naive `[A-Za-z0-9._-]+` class would accept, since `.` is legal inside a
+        // real name — these assert the leading-alphanumeric anchor holds.
+        val probed = mutableListOf<String>()
+        fun classifyRecording(device: String): DiskMedia =
+            DiskMediaDetection.classify("Linux", device, "ext4") { path -> probed.add(path); null }
+
+        for (hostile in listOf("/dev/..", "/dev/.", "/dev/../../etc/passwd", "/dev/sda x", "/dev/-sda")) {
+            assertEquals(DiskMedia.UNKNOWN, classifyRecording(hostile), hostile)
+        }
+        assertTrue(probed.isEmpty(), "no sysfs path may be composed from a rejected device name: $probed")
+
+        // Surrounding whitespace is normalized away rather than treated as hostile — the result
+        // is an ordinary device name and an ordinary sysfs path, no traversal involved.
+        assertEquals(DiskMedia.UNKNOWN, classifyRecording("/dev/ sda "))
+        assertEquals(listOf("/sys/block/sda/queue/rotational"), probed)
     }
 }

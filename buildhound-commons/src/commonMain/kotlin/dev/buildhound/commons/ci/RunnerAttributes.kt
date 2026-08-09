@@ -58,18 +58,43 @@ object RunnerAttributes {
     )
 
     /**
+     * The provider-specific allowlist for a [CiContext.provider] id, empty for a provider with no
+     * known runner variables. Every provider still gets [RUNNER_CLASS_ENV] via [of] — that is the
+     * point of the neutral opt-in.
+     */
+    fun allowlistFor(provider: String): List<Pair<String, String>> = when (provider) {
+        "github-actions" -> GITHUB
+        "azure-devops" -> AZURE
+        "gitlab" -> GITLAB
+        else -> emptyList()
+    }
+
+    /**
      * Maps [allowlist] over [env], plus the provider-neutral [RUNNER_CLASS_ENV]. Blank values are
      * dropped (an unset GitHub variable is often present-but-empty rather than absent), and every
-     * value is trimmed and capped at [MAX_VALUE_LENGTH]. Empty when nothing matched — providers
-     * merge the result into their own `attributes`, so an empty map costs nothing.
+     * value is trimmed and capped at [MAX_VALUE_LENGTH]. Empty when nothing matched — the caller
+     * merges the result into the detected context's own `attributes`, so an empty map costs nothing.
      */
     fun of(env: Map<String, String>, allowlist: List<Pair<String, String>>): Map<String, String> =
         buildMap {
             for ((envKey, attributeKey) in allowlist) {
                 sanitize(env[envKey])?.let { put(attributeKey, it) }
             }
-            sanitize(env[RUNNER_CLASS_ENV])?.let { put("runnerClass", it) }
+            // The one operator-supplied value here, so it is *enforced* categorical rather than
+            // merely documented as such: anything outside the shape a runner label takes is dropped
+            // whole rather than mangled into a truncated half-value. Provider-set values above are
+            // trusted to their own vocabulary and only length-capped.
+            sanitize(env[RUNNER_CLASS_ENV])?.takeIf(CATEGORICAL::matches)?.let { put("runnerClass", it) }
         }
+
+    /**
+     * Letters, digits and the separators real runner labels use — `ubuntu-latest-8-core`,
+     * `saas-linux-medium-amd64`, `windows_2022`, `linux/arm64`, `pool:build`, `Self Hosted Pool`.
+     * Excludes quotes, backticks, `$`, angle brackets, newlines and control bytes: none of those
+     * appear in a SKU name, and their absence is what makes "categorical" a property rather than a
+     * request.
+     */
+    private val CATEGORICAL = Regex("[A-Za-z0-9_.+/:@\\- ]{1,$MAX_VALUE_LENGTH}")
 
     private fun sanitize(value: String?): String? =
         value?.trim()?.takeIf { it.isNotEmpty() }?.take(MAX_VALUE_LENGTH)

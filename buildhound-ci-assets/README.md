@@ -52,6 +52,30 @@ provides the open telemetry and diagnostics layer. Override the action's `cache-
 when your organization has deliberately chosen another provider; no BuildHound token is passed to
 the setup step.
 
+## CI runner class (plan 104)
+
+The runner's *measured* hardware already reaches the payload from inside the job — the plugin reads
+cores, RAM and the build filesystem's capacity/media directly, and those reads are cgroup-aware, so
+a 4-core runner reports 4. What the JVM cannot see is which runner *class* the job asked for:
+GitHub's `runs-on` labels and Azure's pool/`vmImage` are pipeline-definition values that reach no
+environment variable. Supply it here to slice telemetry by runner SKU:
+
+| Provider | How |
+|---|---|
+| GitHub Actions | `runner-class: ${{ matrix.os }}` (or a literal, e.g. `ubuntu-latest-8-core`) |
+| Azure Pipelines | `runnerClass: "ubuntu-24.04"` on the steps template |
+| GitLab CI | `BUILDHOUND_CI_RUNNER_CLASS: "saas-linux-medium-amd64"` in the job's `variables:` |
+
+All three export `BUILDHOUND_CI_RUNNER_CLASS`, which the plugin records as
+`ci.attributes.runnerClass`. Empty/unset by default — nothing is collected unless you opt in.
+
+**Categorical labels only.** The value is recorded verbatim (trimmed to 64 chars, and dropped
+entirely if it contains anything outside the shape a SKU name takes), so never put a runner
+hostname, a user name, or a secret there. The provider's own categorical variables — arch, OS,
+hosted-image version, runner version — are collected automatically and need no configuration.
+GitLab's `CI_RUNNER_DESCRIPTION`/`CI_RUNNER_TAGS` and Azure's `AGENT_MACHINENAME` are deliberately
+never collected: they are operator-set free text that routinely carries hostnames.
+
 ## Wrapper-integrity check (plan 066, research F16)
 
 Set `validateWrapper: warn|fail` on the steps template for a **preventive** check that runs

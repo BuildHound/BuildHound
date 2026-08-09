@@ -16,15 +16,6 @@ data class CollectedResourceUsage(
     val systemMemTotalMb: Long? = null,
     val systemMemFreeMb: Long? = null,
 ) : Serializable {
-    /** True when every field degraded — the caller ships null rather than an all-null block. */
-    fun isEmpty(): Boolean =
-        windowMs == null &&
-            daemonCpuMs == null &&
-            systemCpuLoadPct == null &&
-            systemLoadAverage == null &&
-            systemMemTotalMb == null &&
-            systemMemFreeMb == null
-
     private companion object {
         private const val serialVersionUID: Long = 1L
     }
@@ -45,6 +36,15 @@ data class CollectedResourceUsage(
  *
  * Every read is individually guarded and degrades to null. A JVM without the `com.sun.management`
  * extension (a non-HotSpot runtime) simply reports fewer fields; nothing here can fail a build.
+ *
+ * **Known scope limit (composite builds).** The baseline is stamped from the collector build
+ * service's instantiation, which in a composite topology an *included* build's task completion can
+ * trigger while the **root** build is still configuring. On such a build the window would include
+ * some root configuration time under a label that says it does not. The bias direction is
+ * indeterminate — numerator and denominator are padded from the same early anchor — and this is the
+ * pre-existing plan-064 anchor's behaviour, not a new mechanism; plan 064's own consumer is gated on
+ * a configuration-cache HIT (where configuration is skipped) and so never met it. Recorded rather
+ * than silently inherited; untested for composites.
  */
 internal object ResourceUsageProbe {
 
@@ -62,36 +62,44 @@ internal object ResourceUsageProbe {
     }.getOrNull()
 
     /**
-     * Combines the [baseline] with an end sample taken now. Returns null when *nothing* could be
-     * read, so an all-null block never ships as if it were data.
+     * Combines the [baseline] with an end sample taken now.
+     *
+     * **Returns null when the window could not be measured** — i.e. the execution anchor never
+     * fired, on a zero-task or `--dry-run` build. The system point samples below are readable on
+     * essentially any JVM, so gating on "every field degraded" would have made this block *always*
+     * non-null and quietly broken the documented contract that `resourceUsage == null` means "no
+     * execution-window data" (caught in review). The window is what the block is *for*; four system
+     * readings taken at the finalizer of a build that executed nothing are not a substitute.
      *
      * The CPU delta is emitted only when both endpoints exist and the reading did not go backwards
-     * (a daemon restart between the two would do that). The window is emitted independently of the
-     * CPU delta: knowing the measurement window is useful even when the CPU half degraded, and
+     * (a daemon restart between the two would do that) — it can be null while the window is not, and
      * `DerivedMetricsCalculator.daemonCpuUtilization` already refuses to divide without both.
+     *
+     * Each read is individually guarded, so one unreadable bean drops one field rather than
+     * discarding the window that was already measured.
      */
-    fun collect(baseline: DaemonState.ResourceBaseline): CollectedResourceUsage? = runCatching {
+    fun collect(baseline: DaemonState.ResourceBaseline): CollectedResourceUsage? {
         val endNanos = System.nanoTime()
-        val endCpuNanos = processCpuNanos()
-        val windowMs = baseline.startNanos?.let { start ->
-            ((endNanos - start) / NANOS_PER_MILLI).coerceAtLeast(0L)
-        }
+        val start = baseline.startNanos ?: return null
+        val windowMs = ((endNanos - start) / NANOS_PER_MILLI).coerceAtLeast(0L)
         val daemonCpuMs = baseline.startCpuNanos?.let { startCpu ->
-            endCpuNanos?.takeIf { it >= startCpu }?.let { (it - startCpu) / NANOS_PER_MILLI }
+            processCpuNanos()?.takeIf { it >= startCpu }?.let { (it - startCpu) / NANOS_PER_MILLI }
         }
-        val bean = sunBean()
-        CollectedResourceUsage(
+        return CollectedResourceUsage(
             windowMs = windowMs,
             daemonCpuMs = daemonCpuMs,
-            systemCpuLoadPct = bean?.cpuLoad?.takeIf { !it.isNaN() && it >= 0 }
+            systemCpuLoadPct = read { sunBean()?.cpuLoad?.takeIf { !it.isNaN() && it >= 0 } }
                 ?.let { Math.round(it * PERCENT).toInt() },
             // Negative means "not available on this platform" (Windows) — an honest null, not a 0.
-            systemLoadAverage = ManagementFactory.getOperatingSystemMXBean()
-                .systemLoadAverage.takeIf { it >= 0 },
-            systemMemTotalMb = bean?.totalMemorySize?.takeIf { it > 0 }?.let { it / BYTES_PER_MIB },
-            systemMemFreeMb = bean?.freeMemorySize?.takeIf { it >= 0 }?.let { it / BYTES_PER_MIB },
-        ).takeUnless { it.isEmpty() }
-    }.getOrNull()
+            systemLoadAverage = read {
+                ManagementFactory.getOperatingSystemMXBean().systemLoadAverage.takeIf { it >= 0 }
+            },
+            systemMemTotalMb = read { sunBean()?.totalMemorySize?.takeIf { it > 0 } }?.div(BYTES_PER_MIB),
+            systemMemFreeMb = read { sunBean()?.freeMemorySize?.takeIf { it >= 0 } }?.div(BYTES_PER_MIB),
+        )
+    }
+
+    private fun <T> read(block: () -> T?): T? = runCatching(block).getOrNull()
 
     private fun sunBean(): com.sun.management.OperatingSystemMXBean? =
         ManagementFactory.getOperatingSystemMXBean() as? com.sun.management.OperatingSystemMXBean

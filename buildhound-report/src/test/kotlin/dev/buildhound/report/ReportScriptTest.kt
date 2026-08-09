@@ -68,6 +68,7 @@ class ReportScriptTest {
             "arch": "amd64",
             "cores": 8,
             "ramMb": 32768,
+            "workersMax": 6,
             "machine": { "diskTotalMb": 486400, "diskFreeMb": 204800, "diskMedia": "NVME" }
           },
           "resourceUsage": {
@@ -82,9 +83,67 @@ class ReportScriptTest {
             "provider": "github-actions",
             "attributes": {
               "runnerEnvironment": "github-hosted",
+              "runnerOs": "Linux",
+              "runnerArch": "X64",
+              "runnerImageOs": "ubuntu24",
+              "runnerImageVersion": "20250801.1.0",
+              "runnerVersion": "17.3.0",
               "runnerClass": "ubuntu</script><script>evil()//-8-core"
             }
           }
+        }
+    """.trimIndent()
+
+    /**
+     * The degraded halves of the plan-104 usage block, which the rich fixture above can never
+     * exercise because it supplies every input. Two distinct hazards in one payload:
+     *  - `cores` is absent, so utilization is undivideable and the chip must fall back to an
+     *    absolute duration under a *different* label (reusing "daemon cpu" for both units was a
+     *    review finding);
+     *  - `daemonCpuMs` is negative — impossible from the plugin, which guards it, but the report
+     *    renders whatever payload it is handed, and an unclamped ratio printed "-0.3% of 8 cores".
+     */
+    private val degradedUsagePayload = """
+        {
+          "schemaVersion": 1,
+          "buildId": "report-degraded-usage-build",
+          "startedAt": 1751450000000,
+          "finishedAt": 1751450005000,
+          "outcome": "SUCCESS",
+          "mode": "ci",
+          "tasks": [],
+          "environment": { "os": "Linux", "ramMb": 32768 },
+          "resourceUsage": { "windowMs": 5000, "daemonCpuMs": 2400 }
+        }
+    """.trimIndent()
+
+    /** An overshoot (CPU > window × cores) and a negative delta — both must clamp, never print raw. */
+    private val clampedUsagePayload = """
+        {
+          "schemaVersion": 1,
+          "buildId": "report-clamped-usage-build",
+          "startedAt": 1751450000000,
+          "finishedAt": 1751450005000,
+          "outcome": "SUCCESS",
+          "mode": "ci",
+          "tasks": [],
+          "environment": { "cores": 4 },
+          "resourceUsage": { "windowMs": 100, "daemonCpuMs": 900 }
+        }
+    """.trimIndent()
+
+    /** A negative CPU delta must be dropped entirely, not rendered as a negative percentage. */
+    private val negativeUsagePayload = """
+        {
+          "schemaVersion": 1,
+          "buildId": "report-negative-usage-build",
+          "startedAt": 1751450000000,
+          "finishedAt": 1751450005000,
+          "outcome": "SUCCESS",
+          "mode": "ci",
+          "tasks": [],
+          "environment": { "cores": 8 },
+          "resourceUsage": { "windowMs": 5000, "daemonCpuMs": -100 }
         }
     """.trimIndent()
 
@@ -113,6 +172,21 @@ class ReportScriptTest {
     @Test
     fun `a payload without machine specs or resource usage keeps the Machine section hidden`() {
         runHarness(bareMachinePayload, mode = "bare")
+    }
+
+    @Test
+    fun `an undivideable cpu figure falls back to a duration under a distinct label`() {
+        runHarness(degradedUsagePayload, mode = "degraded-usage")
+    }
+
+    @Test
+    fun `a cpu ratio over capacity clamps to 100 percent`() {
+        runHarness(clampedUsagePayload, mode = "clamped-usage")
+    }
+
+    @Test
+    fun `a negative cpu delta renders no utilization at all`() {
+        runHarness(negativeUsagePayload, mode = "negative-usage")
     }
 
     private fun runHarness(payload: String, mode: String) {

@@ -28,8 +28,6 @@ class AzureDevOpsCiEnvironmentProvider : CiEnvironmentProvider {
             targetBranch = env["SYSTEM_PULLREQUEST_TARGETBRANCH"]?.stripGitRef(),
             buildUrl = buildUrl(env["SYSTEM_COLLECTIONURI"], env["SYSTEM_TEAMPROJECT"], buildId),
             agentName = env["AGENT_NAME"],
-            // Runner class (plan 104): agent OS/arch + hosted image version, categorical allowlist only.
-            attributes = RunnerAttributes.of(env, RunnerAttributes.AZURE),
         )
     }
 
@@ -69,11 +67,7 @@ class GitHubActionsCiEnvironmentProvider : CiEnvironmentProvider {
             targetBranch = env["GITHUB_BASE_REF"]?.takeIf { it.isNotEmpty() },
             buildUrl = buildUrl(env["GITHUB_SERVER_URL"], env["GITHUB_REPOSITORY"], runId, runAttempt),
             agentName = env["RUNNER_NAME"],
-            attributes = buildMap {
-                runAttempt?.let { put("runAttempt", it) }
-                // Runner class (plan 104): hosted-vs-self-hosted, arch, image identity.
-                putAll(RunnerAttributes.of(env, RunnerAttributes.GITHUB))
-            },
+            attributes = buildMap { runAttempt?.let { put("runAttempt", it) } },
         )
     }
 
@@ -192,12 +186,7 @@ class GitLabCiEnvironmentProvider : CiEnvironmentProvider {
             pullRequestId = env["CI_MERGE_REQUEST_IID"],
             targetBranch = env["CI_MERGE_REQUEST_TARGET_BRANCH_NAME"],
             pipelineName = env["CI_PROJECT_PATH"],
-            attributes = buildMap {
-                env["CI_PIPELINE_URL"]?.takeIf { it.isHttpUrl() }?.let { put("pipelineUrl", it) }
-                // Runner class (plan 104): arch + runner version. CI_RUNNER_DESCRIPTION/TAGS stay
-                // excluded — operator-set free text that routinely carries hostnames.
-                putAll(RunnerAttributes.of(env, RunnerAttributes.GITLAB))
-            },
+            attributes = buildMap { env["CI_PIPELINE_URL"]?.takeIf { it.isHttpUrl() }?.let { put("pipelineUrl", it) } },
         )
     }
 }
@@ -347,10 +336,32 @@ object CiEnvironment {
         env: Map<String, String>,
         extraProviders: List<CiEnvironmentProvider> = emptyList(),
     ): CiContext? {
-        // A throwing provider (third-party SPI) must not abort detection for the rest.
+        // A throwing provider (third-party SPI) must not abort detection for the rest. The runner
+        // merge sits INSIDE the guard so the never-fail boundary stays where this file already
+        // draws it — it is pure map/regex work, but the guard costs nothing and needs no caveat.
         for (provider in builtIns + extraProviders) {
-            runCatching { provider.detect(env) }.getOrNull()?.let { return it }
+            runCatching { provider.detect(env)?.let { withRunnerAttributes(it, env) } }
+                .getOrNull()?.let { return it }
         }
-        return runCatching { generic.detect(env) }.getOrNull()
+        return runCatching { generic.detect(env)?.let { withRunnerAttributes(it, env) } }.getOrNull()
+    }
+
+    /**
+     * Merges the plan-104 runner-class attributes into whichever provider won.
+     *
+     * **Applied here, at the dispatcher, deliberately.** The first cut added
+     * [RunnerAttributes.of] inside three built-in providers, which made the "provider-neutral"
+     * opt-in silently a no-op on the other eight, on every third-party `ServiceLoader` provider, and
+     * on the generic provider's bare-`CI` tier — the exact audience an operator-set runner label is
+     * for. One call on the winning context covers all of them and cannot drift as providers are
+     * added.
+     *
+     * The provider's own attributes win on a key clash: a provider that has learned to report a
+     * runner dimension natively knows more than a generic env read does.
+     */
+    private fun withRunnerAttributes(context: CiContext, env: Map<String, String>): CiContext {
+        val runner = RunnerAttributes.of(env, RunnerAttributes.allowlistFor(context.provider))
+        if (runner.isEmpty()) return context
+        return context.copy(attributes = runner + context.attributes)
     }
 }

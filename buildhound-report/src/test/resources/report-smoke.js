@@ -87,6 +87,47 @@ if (mode === "bare") {
     process.exit(0);
 }
 
+// The degraded halves of the usage block, which the rich fixture can never reach.
+if (mode !== "full") {
+    const usage = byId["machine-usage"];
+    // Each chip is <b>label </b><span>value</span>; match the label node EXACTLY rather than by
+    // prefix, or "daemon cpu time" answers a lookup for "daemon cpu" and the two units stop being
+    // distinguishable — which is the very thing these assertions exist to check.
+    const text = node => (node && node.textContent) || "";
+    const chips = (usage.children || []).map(li => ({
+        label: text((li.children || [])[0]).trim(),
+        value: text((li.children || [])[1]),
+    }));
+    const chip = label => chips.find(c => c.label === label);
+    if (mode === "degraded-usage") {
+        // No core count → nothing to divide by, so the chip must switch to an absolute duration AND
+        // to a distinct label. Reusing "daemon cpu " for both units invited reading a duration as a
+        // share of capacity — the exact misreading this feature exists to avoid.
+        if (chip("daemon cpu")) throw new Error("a percentage chip rendered with no core count to divide by");
+        const fallback = chip("daemon cpu time");
+        if (!fallback) throw new Error("no fallback duration chip rendered when utilization was undivideable");
+        if (fallback.value !== "2.4 s") throw new Error("fallback chip must show the absolute duration, got: " + fallback.value);
+    } else if (mode === "clamped-usage") {
+        // 900 ms of CPU over a 100 ms window on 4 cores overshoots; two samples read at slightly
+        // different instants can do this, and it must read as 100%, never 225%.
+        const cpu = chip("daemon cpu");
+        if (!cpu || cpu.value !== "100% of 4 cores") throw new Error("an overshoot must clamp to 100%, got: " + (cpu && cpu.value));
+    } else if (mode === "negative-usage") {
+        // A negative delta is not data. It must vanish, not render as "-0.3% of 8 cores".
+        if (chip("daemon cpu") || chip("daemon cpu time")) {
+            throw new Error("a negative cpu delta must render no utilization chip at all");
+        }
+        const negative = chips.filter(c => c.value.indexOf("-") >= 0);
+        if (negative.length) throw new Error("no negative value may reach a usage chip: " + JSON.stringify(negative));
+        // The rest of the block still renders — one bad field drops one chip, not the section.
+        if (!chip("measured over")) throw new Error("the window chip must survive a dropped cpu delta");
+    } else {
+        throw new Error("unknown harness mode: " + mode);
+    }
+    console.log("report smoke OK (" + mode + ")");
+    process.exit(0);
+}
+
 // Failure section (plan 044): exception class + message in the summary, stacktrace in the <pre>.
 const failure = byId["failure"];
 if (!failure || failure.hidden) throw new Error("failure section stayed hidden on a failed build");
@@ -157,6 +198,10 @@ if (!hasText(specs, "32.0 GB")) throw new Error("memory spec missing");
 // Media label + free-of-total, both from the same chip.
 if (!hasText(specs, "NVMe · 200.0 GB free of 475.0 GB")) throw new Error("disk spec missing or mis-formatted");
 if (!hasText(specs, "github-hosted")) throw new Error("runner environment spec missing");
+// Deliberately 6, not the fixture's 8 cores, so this can't accidentally match the cpus chip.
+if (!hasExactText(specs, "6")) throw new Error("max-workers spec missing");
+if (!hasText(specs, "ubuntu24 20250801.1.0")) throw new Error("runner image spec missing");
+if (!hasText(specs, "17.3.0")) throw new Error("runner version spec missing");
 // The hostile operator-set runner class must survive the JSON-escape + textContent chain intact —
 // same proof as the testTelemetry entry above, on the one plan-104 field an operator controls.
 if (!hasText(specs, "ubuntu</script><script>evil()//-8-core")) {

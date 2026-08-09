@@ -42,11 +42,11 @@ class DaemonStateResourceBaselineTest {
     }
 
     @Test
-    fun `an unstamped baseline yields no window rather than a zero one`() {
+    fun `an unstamped baseline yields no usage block rather than a zero-length window`() {
         DaemonState.executionRan() // drain whatever a previous test left
 
         val usage = ResourceUsageProbe.collect(DaemonState.executionRan().resourceBaseline)
 
-        assertNull(usage?.windowMs, "a build that never stamped must report no window, not a 0 ms one")
+        assertNull(usage, "a build that never stamped must report no usage block, not a 0 ms window")
     }
 }
