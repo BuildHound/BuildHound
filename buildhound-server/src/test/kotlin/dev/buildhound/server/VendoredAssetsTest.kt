@@ -50,10 +50,20 @@ class VendoredAssetsTest {
         // below for the bytes as shipped today.
         val body = vendoredBody().trimStart('\n')
         val digest = MessageDigest.getInstance("SHA-256").digest(body.encodeToByteArray())
+        // Name the likeliest cause in the failure itself: a checkout that rewrote LF to CRLF
+        // fails this with no other symptom, and the digest alone does not say so. `.gitattributes`
+        // marks this path `-text` to prevent it; if that is ever dropped, this message is the
+        // only breadcrumb.
+        val eolHint = if (body.contains('\r')) {
+            " — the file contains CR bytes, so the checkout rewrote its line endings; check that" +
+                " .gitattributes still marks this path `-text`"
+        } else {
+            ""
+        }
         assertEquals(
             upstreamSha256,
             digest.joinToString("") { "%02x".format(it) },
-            "the bytes below the provenance header must be the recorded upstream release, unmodified",
+            "the bytes below the provenance header must be the recorded upstream release, unmodified$eolHint",
         )
     }
 
