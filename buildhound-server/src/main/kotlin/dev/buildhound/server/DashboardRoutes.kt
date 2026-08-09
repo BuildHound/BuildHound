@@ -83,7 +83,10 @@ internal object DocsAssets {
  * the browser (missing hash → style blocked), never widening the policy.
  */
 private val styleBlockPattern =
-    Regex("""<style(?=[\t\n\f\r />])[^>]*>([\s\S]*?)</style(?=[\t\n\f\r />])[^>]*>""", RegexOption.IGNORE_CASE)
+    Regex(
+        """<style(?=[\t\n\f\r />])[^>]*>([\s\S]*?)</style(?=[\t\n\f\r />])[^>]*>""",
+        RegexOption.IGNORE_CASE
+    )
 private val styleOpenPattern = Regex("""<style(?=[\t\n\f\r />])""", RegexOption.IGNORE_CASE)
 
 internal fun styleHashCsp(html: String): String {
@@ -96,15 +99,17 @@ internal fun styleHashCsp(html: String): String {
     }
     dangling += styleOpenPattern.findAll(html.substring(cursor)).count()
     check(dangling == 0) {
-        "unclosed or mis-paired <style> element in an embedded page ($dangling dangling open tags, ${blocks.size} paired blocks)"
+        "unclosed or mis-paired <style> element in an embedded page "+
+                "($dangling dangling open tags, ${blocks.size} paired blocks)"
     }
     val styleHashes = blocks.map { match ->
-        val digest = MessageDigest.getInstance("SHA-256").digest(match.groupValues[1].encodeToByteArray())
+        val digest =
+            MessageDigest.getInstance("SHA-256").digest(match.groupValues[1].encodeToByteArray())
         "'sha256-" + Base64.getEncoder().encodeToString(digest) + "'"
     }
     val styleSrc = if (styleHashes.isEmpty()) "'none'" else styleHashes.joinToString(" ")
     return "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; " +
-        "style-src $styleSrc; script-src 'self'; connect-src 'self'"
+            "style-src $styleSrc; script-src 'self'; connect-src 'self'"
 }
 
 fun Route.dashboardRoutes() {
@@ -115,21 +120,33 @@ fun Route.dashboardRoutes() {
     check(DashboardAssets.csp.isNotEmpty() && DocsAssets.csp.isNotEmpty())
     get("/") {
         call.dashboardHeaders()
-        call.respondBytes(DashboardAssets.indexHtml, ContentType.Text.Html.withCharset(Charsets.UTF_8))
+        call.respondBytes(
+            DashboardAssets.indexHtml,
+            ContentType.Text.Html.withCharset(Charsets.UTF_8)
+        )
     }
     get("/dashboard.js") {
         call.dashboardHeaders()
-        call.respondBytes(DashboardAssets.dashboardJs, ContentType.Text.JavaScript.withCharset(Charsets.UTF_8))
+        call.respondBytes(
+            DashboardAssets.dashboardJs,
+            ContentType.Text.JavaScript.withCharset(Charsets.UTF_8)
+        )
     }
     get("/timeline.js") {
         call.dashboardHeaders()
-        call.respondBytes(DashboardAssets.timelineJs, ContentType.Text.JavaScript.withCharset(Charsets.UTF_8))
+        call.respondBytes(
+            DashboardAssets.timelineJs,
+            ContentType.Text.JavaScript.withCharset(Charsets.UTF_8)
+        )
     }
     // Zero-CDN API docs (plan 042): the spec is public (docs, not data); the viewer + its script are
     // served under the docs CSP.
     get("/openapi.yaml") {
         call.docsHeaders()
-        call.respondBytes(DocsAssets.openApiYaml, ContentType("application", "yaml").withCharset(Charsets.UTF_8))
+        call.respondBytes(
+            DocsAssets.openApiYaml,
+            ContentType("application", "yaml").withCharset(Charsets.UTF_8)
+        )
     }
     get("/docs") {
         call.docsHeaders()
@@ -137,7 +154,10 @@ fun Route.dashboardRoutes() {
     }
     get("/docs.js") {
         call.docsHeaders()
-        call.respondBytes(DocsAssets.docsJs, ContentType.Text.JavaScript.withCharset(Charsets.UTF_8))
+        call.respondBytes(
+            DocsAssets.docsJs,
+            ContentType.Text.JavaScript.withCharset(Charsets.UTF_8)
+        )
     }
 }
 
