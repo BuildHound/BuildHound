@@ -149,7 +149,12 @@ self-test green in both directions, and a real table:
 deltas are near-identical (1508 / 1862 / 1825 ms) because the plugin's per-build cost is essentially
 constant and every axis subtracts a plugin-off baseline from a plugin-on one. A corollary for the
 follow-up: while a fixed cost of this size dominates, the per-task axis cannot measure anything
-per-task, so fixing the cost has to come before trusting that axis's shape.
+per-task, so fixing the cost has to come before trusting that axis's shape. The axes are also less
+distinct than they look — the fixture sets `org.gradle.configuration-cache=true`, so `no_op` is
+already a configuration-cache-hit build (a manual run without the flag prints "Configuration cache
+entry reused"), and the `cc_hit` scenario differs from it only by passing `--configuration-cache`
+explicitly. Separating the configuration axis from the finalizer axis therefore needs fixture work,
+not just a cheaper probe.
 
 The upload axis's `✅` is a real measurement, not an absent one — a fixture build in CI mode against
 the loopback sink logs `payload uploaded (3037 bytes gzip)`. But `separated: no` means the honest
