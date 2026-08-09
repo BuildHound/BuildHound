@@ -1,5 +1,6 @@
 package dev.buildhound.server
 
+import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -24,6 +25,15 @@ class VendoredAssetsTest {
 
     private val marker = "// THE SOFTWARE."
 
+    /**
+     * sha256 of `dist/uPlot.iife.min.js` from the recorded upstream tarball. This is the check
+     * that makes the greps below meaningful rather than decorative: without it, a re-vendoring
+     * that placed the provenance block *after* the code would leave [marker] at the end of the
+     * file, hand every grep a one-character body, and pass all of them while scanning nothing.
+     * Bump this and the header together, never one alone.
+     */
+    private val upstreamSha256 = "19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f"
+
     private fun vendoredBody(): String {
         val text = checkNotNull(javaClass.classLoader.getResourceAsStream("web/uplot.js"))
             .use { it.readBytes() }.decodeToString()
@@ -33,11 +43,32 @@ class VendoredAssetsTest {
     }
 
     @Test
-    fun `vendored chart library sets no inline style attribute`() {
+    fun `vendored chart library is byte-identical to the recorded upstream release`() {
+        // Everything else in this class is a substring search, and a substring search over the
+        // wrong bytes proves nothing. Pinning the digest is what turns "we checked the library"
+        // into a claim a reviewer can trust after a version bump — and it subsumes every grep
+        // below for the bytes as shipped today.
+        val body = vendoredBody().trimStart('\n')
+        val digest = MessageDigest.getInstance("SHA-256").digest(body.encodeToByteArray())
+        assertEquals(
+            upstreamSha256,
+            digest.joinToString("") { "%02x".format(it) },
+            "the bytes below the provenance header must be the recorded upstream release, unmodified",
+        )
+    }
+
+    @Test
+    fun `vendored chart library sets no style attribute`() {
         // The decisive check. `style-src` pins hashes and never allows `'unsafe-inline'`, and
         // hashes do not cover style *attributes*, so setAttribute("style", …) is blocked. This
         // is not hypothetical: the runner-up library emits 14 such attributes per chart through
-        // a generic attribute helper that a search for the literal call site does not find.
+        // a generic attribute helper that a search for the literal call site does not find —
+        // hence the search for `setAttribute` at all, not for `setAttribute("style"`.
+        //
+        // Note what this does NOT say: uPlot does set inline styles, through the CSSOM
+        // (`el.style.width = …`). That is deliberate and safe — `style-src` governs style
+        // attributes and `<style>` elements, not CSSOM assignment, which is precisely why this
+        // library works under a hash-only policy at all.
         val body = vendoredBody()
         assertFalse(body.contains("setAttribute"), "a vendored chart library must not set attributes")
         assertFalse(body.contains("cssText"), "cssText would bypass the hash-pinned style-src")
@@ -68,9 +99,20 @@ class VendoredAssetsTest {
     @Test
     fun `vendored chart library makes no network or worker calls`() {
         val body = vendoredBody()
-        // `connect-src 'self'` and the absence of img-src/worker-src/child-src mean anything
-        // here would be blocked; more to the point, a chart library has no business calling out.
-        for (hazard in listOf("fetch(", "XMLHttpRequest", "new Worker", "createObjectURL", "import(", "toDataURL")) {
+        // `connect-src 'self'` and the absence of img-src/worker-src/child-src mean most of
+        // these would be blocked anyway; a chart library still has no business calling out.
+        //
+        // `location` earns its place for the opposite reason: the CSP does NOT constrain
+        // top-level navigation (no form-action, no navigate-to), so a `top.location = …` is
+        // the one exfiltration path the policy would not stop — and the dashboard's read token
+        // lives in localStorage. Storage and postMessage are listed for the same reason.
+        val hazards = listOf(
+            "fetch(", "XMLHttpRequest", "sendBeacon", "WebSocket", "EventSource",
+            "new Worker", "createObjectURL", "import(", "toDataURL", "new Image",
+            "location", "postMessage", "localStorage", "sessionStorage", "document.cookie",
+            "sourceMappingURL",
+        )
+        for (hazard in hazards) {
             assertFalse(body.contains(hazard), "a vendored chart library must not use $hazard")
         }
     }

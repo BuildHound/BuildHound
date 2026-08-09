@@ -2447,6 +2447,13 @@
     }
 
     function route() {
+        // Reap charts the previous navigation detached (plan 105). Only the two chart-rendering
+        // views call resetCharts() themselves, so without this a chart left behind by navigating
+        // to a chart-less view would keep uPlot's document-level listeners alive until the next
+        // chart happened to mount — possibly never. Pruning here, rather than destroying the
+        // outgoing view's charts up front, keeps them drawn while the next view is still
+        // fetching; the cost is that a detached chart survives until the following navigation.
+        pruneCharts();
         // decodeURIComponent throws synchronously on malformed input (Firefox returns
         // location.hash pre-decoded, so a stored %xx can arrive re-broken) — the try
         // must cover it, not just the promise.

@@ -936,9 +936,10 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
         throw new Error("the x scale must be a time scale, not an array index");
     }
     if (duration.opts.legend.show !== false) throw new Error("uPlot's own legend must stay off — its toggles take no keyboard focus");
-    // 2026-01-02 and 2026-01-04 are consecutive entries in the canned trends response with
-    // 2026-01-03 missing; a calendar axis must place them two days apart, which an index-based
-    // axis (the bug this rewrite exists to fix) cannot express.
+    // 2026-07-01 and 2026-07-04 are consecutive entries in the canned trends response (the
+    // two days between them had no builds, so the server never emits them); a calendar axis
+    // must place them three days apart, which an index-based axis — the bug this rewrite
+    // exists to fix — cannot express.
     const xs = duration.data[0];
     const gaps = [];
     for (let i = 1; i < xs.length; i++) gaps.push(xs[i] - xs[i - 1]);
