@@ -13,6 +13,10 @@ name: nightly-benchmark
 #    per-job timestamp would split the matrix across N series.
 #  - The samples apply the plugin from source (settings.gradle.kts includeBuild("../..")), so no
 #    publishToMavenLocal bootstrap is needed here — unlike the root-build dogfood path in ci.yml.
+#  - The samples keep their committed local-development config (server.url = http://localhost:8080).
+#    The ingest target is injected by .github/buildhound-sample-benchmark.init.gradle.kts, installed
+#    into the runner's ~/.gradle/init.d below — the CI-injection pattern the dogfood path already
+#    uses, so no sample file is edited for CI's benefit.
 #  - No setup-gradle cache restore: each job starts with a cold Gradle user home and the scenario's
 #    warm-up build warms it. Cross-run cache restore would add variance the series can't attribute.
 
@@ -58,15 +62,16 @@ jobs:
     # Job-level env on purpose: the runner echoes STEP-level env mappings verbatim, which leaks
     # `vars.*` values (secrets stay masked). Job-level env is not echoed per step.
     env:
-      # Sample-scoped name, read by each sample's settings.gradle.kts. NOT BUILDHOUND_SERVER_URL:
-      # that is the plugin's convention fallback and would arm uploads in any other instrumented
-      # build in this environment. The expression collapses to '' when the prod ingest secret is
-      # absent, and UploadGate skips on an empty URL ("no server configured") — so this workflow is
-      # safe to merge before/without credentials and can never POST unauthenticated.
+      # Sample-scoped names, read by the init script only. NOT BUILDHOUND_SERVER_URL /
+      # BUILDHOUND_TOKEN: those are the plugin's plan-027 convention fallbacks and would arm uploads
+      # in any other instrumented build on this runner. The URL expression collapses to '' when the
+      # prod ingest secret is absent, and UploadGate skips on an empty URL ("no server configured")
+      # — so this workflow is safe to merge before/without credentials and can never POST
+      # unauthenticated.
       BUILDHOUND_SAMPLE_SERVER_URL: ${{ secrets.BUILDHOUND_PROD_INGEST_TOKEN != '' && vars.BUILDHOUND_PROD_SERVER_URL || '' }}
       # Ingest-scoped (plan 094 slot). Leaves only via the plugin's Authorization header; never
       # echoed, never on argv.
-      BUILDHOUND_TOKEN: ${{ secrets.BUILDHOUND_PROD_INGEST_TOKEN }}
+      BUILDHOUND_SAMPLE_TOKEN: ${{ secrets.BUILDHOUND_PROD_INGEST_TOKEN }}
       BUILDHOUND_BENCHMARK_SCENARIO: ${{ matrix.scenario }}
       BUILDHOUND_BENCHMARK_ISOLATION: ${{ matrix.isolation }}
       BUILDHOUND_BENCHMARK_SEED_REF: ${{ github.run_id }}
@@ -101,6 +106,18 @@ jobs:
           echo "${PROFILER_SHA256}  gradle-profiler.zip" | sha256sum -c -
           unzip -q gradle-profiler.zip
           echo "$PWD/gradle-profiler-${PROFILER_VERSION}/bin" >> "$GITHUB_PATH"
+
+      # Init-script injection (plan 105), the same CI-injection pattern as the dogfood path: an
+      # init.d script applies to every Gradle invocation gradle-profiler makes without touching the
+      # pilot or the scenario files, so no --project-dir-relative -I path has to be threaded through
+      # gradle-args. It redirects the sample's committed localhost demo server to the env-provided
+      # ingest target; on a build with no `buildhound` extension (the included plugin build) it is a
+      # no-op. Empty/absent BUILDHOUND_SAMPLE_SERVER_URL => the upload is skipped, not retargeted.
+      - name: Install BuildHound sample init script
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.gradle/init.d"
+          cp .github/buildhound-sample-benchmark.init.gradle.kts "$HOME/.gradle/init.d/"
 
       # The isolation mechanism from profiler-pipeline/isolation-modes.md. The checkout is fresh per
       # job, so this is a plain append — no pristine-copy dance. full_cache = the pilot's committed
