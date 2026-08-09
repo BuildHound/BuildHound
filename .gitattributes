@@ -14,3 +14,11 @@
 *.js diff
 *.json diff
 *.sql diff
+
+# Vendored third-party bundles are byte-exact artifacts, not source. Because the rules above
+# deliberately avoid `text`, EOL handling falls through to the client's core.autocrlf — which
+# is `true` on a Git-for-Windows checkout, rewriting LF to CRLF and changing the bytes. That
+# breaks more than a test: VendoredAssetsTest pins the sha256 and THIRD-PARTY-NOTICES.md
+# claims byte-identity with the upstream release, so an image built on Windows would ship
+# something that is no longer the release we vetted. `-text` pins the bytes on every platform.
+buildhound-server/src/main/resources/web/uplot.js -text
