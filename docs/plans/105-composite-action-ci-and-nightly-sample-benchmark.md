@@ -154,6 +154,10 @@ builds upload too, so a series carries `iteration=null` rows for both warm-ups a
 ## 4. Test strategy
 
 - `actionlint` (already a CI step) covers both new/edited workflow files.
+- `CiAssetsContractTest` pins the `setup-gradle` line in `action.yml`, so the bump had to be made
+  there too. It reads `buildhound-ci-assets/` straight off disk without those files being task
+  inputs, which made the `test` task report a stale PASS from the build cache on Linux while the
+  cold-cache macOS/Windows legs failed — the assets are now declared as an input of that task.
 - `composite-action` job is itself the test for the composite action.
 - `SampleBenchmarkInitScriptFunctionalTest` (TestKit, functionalTest source set) applies the real
   `.github/buildhound-sample-benchmark.init.gradle.kts` against a fixture shaped like the samples —

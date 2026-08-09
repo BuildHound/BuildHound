@@ -14,7 +14,7 @@ class CiAssetsContractTest {
     fun `GitHub action opts into the basic cache provider without inlining secrets`() {
         val action = asset("github/action.yml")
 
-        assertTrue(action.contains("uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6"))
+        assertTrue(action.contains("uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0"))
         assertTrue(action.contains("cache-provider: ${'$'}{{ inputs.cache-provider }}"))
         assertTrue(Regex("cache-provider:[\\s\\S]*?default: \\\"basic\\\"").containsMatchIn(action))
         assertFalse(Regex("(?i)(token|secret):\\s*['\\\"][A-Za-z0-9_-]{16,}").containsMatchIn(action))
