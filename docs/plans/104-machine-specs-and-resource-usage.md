@@ -321,5 +321,22 @@ Default empty everywhere → nothing is collected unless the operator opts in.
 5. **`./gradlew build` green, and the `overhead-budget` CI job passes** — the finalizer axis stays
    within its ≤150 ms / ≤8 % cap (`docs/overhead-budget.md`). This is the plan's answer to "must not
    impact build performance whatsoever": measured, not asserted.
+
+   > **Status (2026-08-09) — still open, but no longer unmeasurable.** This criterion could not be
+   > met at all while the `overhead-budget` job was inert: it reported success in ~17 s without
+   > running the benchmark (gradle-profiler rejected the harness's `-P` flag, and the CI step's
+   > missing `pipefail` discarded the failure). Plan 106 repaired the harness and produced the first
+   > real measurements, taken against **this plan's implementation** at `690f95e`, locally on macOS
+   > /aarch64: finalizer Δ **1824.6 ms** against a 150 ms cap — a breach, along with the
+   > configuration and per-task axes. The cause is **not** this plan's telemetry: isolation shows the
+   > process probe (plan 029, four JVM-tool subprocesses per detected JVM) accounts for ~4.5 s of it,
+   > and plan 104's diff *reduced* the probe's per-PID exec count. Full numbers and the isolation
+   > table are in plan 106 §7.
+   >
+   > Remaining to close this criterion: a green (or at least *measuring*) `overhead-budget` run on
+   > the CI reference runner — a local macOS table cannot stand in for it, and the probe's cost
+   > scales with the number of live JVMs, which differs sharply between a laptop and a clean runner.
+   > The budget caps themselves are still uncalibrated (`docs/overhead-budget.md`), so the first CI
+   > table is also the calibration input.
 6. `docs/build-telemetry-spec.md` §3.2/§3.6 updated with the new fields; `docs/architecture.md`
    updated only if a review invalidates an assumption here.

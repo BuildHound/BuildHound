@@ -35,17 +35,24 @@ mkdir -p "$out"
 
 run_variant() {
     variant="$1"
+    # The variant reaches the build through the scenario file's gradle-args, which read
+    # BUILDHOUND_OVERHEAD_PLUGIN from the environment: gradle-profiler has no -P (nor
+    # --gradle-argument) option of its own, and passing one makes it exit with a usage dump.
+    # Scoped to this command, not exported, so the `on` value cannot leak into the `off` run.
+    BUILDHOUND_OVERHEAD_PLUGIN="$variant" \
     gradle-profiler --benchmark --measure-config-time \
         --gradle-version "$gradle_version" \
         --project-dir "$fixture" \
         --scenario-file "$here/overhead.scenarios" \
         --output-dir "$out/$variant" \
         --gradle-user-home "$out/guh-$variant" \
-        -Pbuildhound.overhead.plugin="$variant" \
         no_op incremental cc_hit no_op_upload no_op_ci
 }
 
 # Toggle self-test (anti-rot, plan 034 §5): plugin-on must emit telemetry; plugin-off must not.
+# Pre-clean first, or a leftover directory from an earlier run would let plugin-on pass the check
+# on someone else's output — the self-test has to observe THIS run.
+rm -rf "$fixture/build/buildhound"
 run_variant on
 if [ ! -d "$fixture/build/buildhound" ]; then
     echo "self-test FAILED: plugin-on produced no build/buildhound output — the toggle is broken" >&2
