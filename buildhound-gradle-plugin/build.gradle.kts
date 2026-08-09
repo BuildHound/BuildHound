@@ -328,6 +328,16 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
     )
     inputs.files(rootProject.layout.projectDirectory.file(".github/buildhound-dogfood.init.gradle.kts"))
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // Same contract for the sample-pilot injection script (plan 105), exercised by
+    // SampleBenchmarkInitScriptFunctionalTest: its reflection into the extension degrades to a warn,
+    // so only a test that applies the real script catches shape drift.
+    systemProperty(
+        "buildhound.sample.init-script",
+        rootProject.layout.projectDirectory.file(".github/buildhound-sample-benchmark.init.gradle.kts")
+            .asFile.absolutePath,
+    )
+    inputs.files(rootProject.layout.projectDirectory.file(".github/buildhound-sample-benchmark.init.gradle.kts"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     // Fingerprint the deterministic publication sources, not the generated repository: SNAPSHOT
     // Maven metadata and filenames change on every publish even when the artifact is identical.
     // These are the files the fixture resolves and validates, including the plugin marker POM.

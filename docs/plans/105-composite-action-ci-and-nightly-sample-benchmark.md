@@ -42,6 +42,9 @@ running pipelines rather than shipped-but-undriven templates.
   posture change).
 - A shell harness for the composite action's verdict-gate script (`buildhound-ci-assets/test/*.sh`
   is the honest home for its deeper branches) — follow-up.
+- Linting the shipped `profiler-pipeline/*.yml` templates in CI (infra review, LOW): the actionlint
+  step only scans `.github/workflows/**`, so those consumer templates stay unparsed — the same
+  blind spot this plan closes for `github/action.yml`. Follow-up; they lint clean today.
 - Promoting either new job to blocking. Both are advisory this round.
 - Benchmarking the root BuildHound build itself (its CI dogfood series already exists, plan 093).
 
@@ -115,16 +118,29 @@ structural reasons:
 
 So: a sibling script, `.github/buildhound-sample-benchmark.init.gradle.kts`, hooking
 `settingsEvaluated` — the extension exists and is configured by then, and the plugin's
-`parameters.serverUrl.set(extension.server.url)` is a lazy Property→Property link, so a later `set`
-still propagates. Reflection-only and fully guarded (never fails a build); a build with no
+`spec.parameters.serverUrl.set(extension.server.url)` is a lazy Property→Property link into its
+**Flow-action** parameters (resolved at build finish), so a later `set` still propagates. Not a
+BuildService's parameters, which freeze on first instantiation (plan 044) — the distinction matters
+if this reasoning is ever transplanted. Reflection-only and fully guarded (never fails a build); a build with no
 `buildhound` extension (the included plugin build) is a logged no-op.
 
 The workflow installs it into the runner's `~/.gradle/init.d/` rather than threading `-I` through
 every scenario's `gradle-args`, so no scenario file carries a `--project-dir`-relative path.
 
-Verified locally against `samples/springboot-legacy` with a logging HTTP sink: with the script + env
-set, the payload is POSTed to the injected URL with an `Authorization` header (the sample's localhost
-literal is overridden); with the script and no env, no upload is attempted at all.
+The URL override is **gated on the token** (Kotlin review, MEDIUM): `UploadGate` keys on the URL
+alone and `PayloadUploader` merely omits the `Authorization` header when the token is absent, so a
+URL-without-token injection — one missing line in the documented manual invocation — would POST the
+build's telemetry unauthenticated. Either variable missing or blank now disables the upload, and the
+script says so at `warn` (the stray-`~/.gradle/init.d`-copy case, which otherwise silently kills a
+developer's local sample telemetry).
+
+Covered by `SampleBenchmarkInitScriptFunctionalTest` (Kotlin review, MEDIUM): the sibling dogfood
+script has a TestKit suite applying the *real* script, and this one needs the same — every failure
+path is a `runCatching`-swallowed reflection error, so a rename of `BuildHoundExtension.server` /
+`ServerSpec.url` / `.token` would turn the script into a silent no-op that CI would never notice. The
+four cases: redirect beats the fixture's own `server { }` literal (asserted against a stub HTTP
+server, including the `Bearer` header), URL-without-token uploads nothing, no-env warns loudly, and a
+build without the plugin is a no-op.
 
 Scenario files are per-pilot (`profiler-scenarios/samples/<pilot>.scenarios`) because tasks and the
 non-ABI source path differ per sample. The shipped consumer file stays Android-pilot-shaped and
@@ -139,6 +155,10 @@ builds upload too, so a series carries `iteration=null` rows for both warm-ups a
 
 - `actionlint` (already a CI step) covers both new/edited workflow files.
 - `composite-action` job is itself the test for the composite action.
+- `SampleBenchmarkInitScriptFunctionalTest` (TestKit, functionalTest source set) applies the real
+  `.github/buildhound-sample-benchmark.init.gradle.kts` against a fixture shaped like the samples —
+  it declares its own `buildhound { server { url = ... } }`, which is precisely what a
+  `beforeSettings` hook cannot beat.
 - The nightly workflow cannot be proven by CI: it is verified by a `workflow_dispatch` run **after
   merge** (a scheduled workflow must be on the default branch to be dispatchable), then by reading
   the production dashboard `#/benchmark` for rows tagged with the expected
@@ -154,6 +174,16 @@ builds upload too, so a series carries `iteration=null` rows for both warm-ups a
 - **Runner capacity** — `nowinandroid` asks for `-Xmx4g` plus a 4 GB Kotlin daemon on a 4-vCPU
   runner. `continue-on-error` keeps an OOM from reddening the nightly; if it recurs, the fix is a
   bigger runner label (needs an `actionlint.yaml` entry too).
+- **Android SDK on the runner** (infra review, MEDIUM) — this is the first Android build in this
+  repo's CI, so nothing has ever exercised the runner image's SDK. `nowinandroid` needs compileSdk
+  36 and `android-legacy-agp` 34; both are installed explicitly via `android-actions/setup-android`,
+  which also accepts the licences AGP needs to auto-download matching build-tools.
+- **A failed cell is not red** (infra review, MEDIUM) — `continue-on-error` means a crashed or
+  OOM-killed cell still concludes "success" at run level, which suppresses GitHub's scheduled-failure
+  mail; and a scheduled run has no PR, so `gh-ci-babysitter` never watches it. Kept deliberately (a
+  noisy nightly gets ignored) but no longer invisible: a `failure()` step annotates the run and the
+  job summary with the cell that died. A run-level aggregation job is the next step if this proves
+  too quiet in practice.
 - **Cost** — 20 nightly jobs of real Android builds. `max-parallel` caps concurrency; the matrix is
   trimmable per pilot.
 - **Security/privacy** — the prod ingest token is a repo secret exposed to a scheduled job on the

@@ -92,6 +92,17 @@ jobs:
             26
             21
 
+      # First Android build in this repo's CI (infra review): nothing here has ever depended on the
+      # runner image's SDK, so the platform each pilot compiles against is installed explicitly
+      # rather than assumed — nowinandroid is compileSdk 36, android-legacy-agp is 34. The action
+      # also accepts the SDK licenses, which is what lets AGP auto-download the matching
+      # build-tools. Skipped for the JVM-only pilot.
+      - name: Set up Android SDK
+        if: matrix.pilot != 'springboot-legacy'
+        uses: android-actions/setup-android@v4
+        with:
+          packages: ${{ matrix.pilot == 'nowinandroid' && 'platforms;android-36' || 'platforms;android-34' }}
+
       # Version + SHA-256 pinned, from Maven Central (gradle-profiler's distribution channel) —
       # identical posture to ci.yml's overhead-budget job. The checksum turns a swapped asset into
       # a loud failure instead of a silent binary substitution.
@@ -159,6 +170,18 @@ jobs:
             --scenario-file "buildhound-ci-assets/profiler-scenarios/samples/$PILOT.scenarios" \
             --output-dir "profiler-out/$PILOT-$ISOLATION-$SCENARIO" \
             "$SCENARIO"
+
+      # continue-on-error makes a failed cell conclude "success" at the run level, which also
+      # suppresses GitHub's scheduled-failure mail (infra review). That posture is deliberate — a
+      # noisy nightly gets ignored — but a failure must not be invisible: this leaves a run-page
+      # annotation and a summary line naming the cell that died. Step-level `failure()` still
+      # evaluates inside a continue-on-error job.
+      - name: Flag failed cell
+        if: failure()
+        run: |
+          set -euo pipefail
+          echo "::warning title=BuildHound benchmark::$PILOT / $SCENARIO / $ISOLATION failed — this run publishes no series for that cell"
+          echo "❌ $PILOT · $SCENARIO · $ISOLATION failed" >> "$GITHUB_STEP_SUMMARY"
 
       # gradle-profiler's own measurements, kept independently of what reached the dashboard: when a
       # series looks wrong, this is how we tell "the build was slow" from "the upload was lost".
