@@ -66,5 +66,8 @@ if [ -d "$fixture/build/buildhound" ]; then
     exit 4
 fi
 
-# Verdict (math in buildhound-commons); its non-zero exit on a breach propagates out of this script.
-exec "$here/bin/buildhound-overhead" "$out/on/benchmark.csv" "$out/off/benchmark.csv"
+# Verdict (math in buildhound-commons); its non-zero exit on a breach propagates out of this script
+# via `set -e`. Deliberately NOT `exec`: exec replaces this shell, so the EXIT trap above never runs
+# and the sink is orphaned — it then keeps the port bound, and the next run's readiness probe
+# succeeds against that stale sink while its own fails to bind, hiding the failure (plan 106).
+"$here/bin/buildhound-overhead" "$out/on/benchmark.csv" "$out/off/benchmark.csv"
