@@ -1,3 +1,11 @@
+# Blacksmith runner labels are provisioned outside GitHub's hosted-label set, so
+# actionlint needs them declared explicitly to avoid `runner-label` errors.
+self-hosted-runner:
+  labels:
+    - blacksmith-4vcpu-ubuntu-2404
+    - blacksmith-4vcpu-windows-2025
+    - blacksmith-6vcpu-macos-15
+
 # actionlint 1.7.12 predates GitHub's `concurrency.queue` schema (added in 2026).
 # Keep every other workflow check enabled; remove this narrow exception after the
 # linter release learns the official `queue: max` key.
