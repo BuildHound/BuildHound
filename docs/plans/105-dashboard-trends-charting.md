@@ -201,8 +201,7 @@ role with tabular numerals (§4:188).
      aligned on one shared x domain. This pass needs no browser API and is where the real bugs live.
   The existing `countTag(app,"svg") >= 5` assertion (`:651`) is replaced by assertions on the figure
   and value table; the three timeline `svg` assertions (`:503`, `:661`, `:667`) are unaffected.
-- **`DashboardScriptTest.kt`** — write `uplot.js` into the temp dir and pass it as a 4th argv
-  (`:29`); the harness loads it only for pass 3.
+- **`DashboardScriptTest.kt`** — unchanged, see the divergence note in §7.
 - **`DashboardRoutesTest.kt`** — new case for `/uplot.js` mirroring the `/dashboard.js` one (200,
   `text/javascript`, UTF-8, CSP, `no-cache`). The `style-src` hash regex (`:45`) and the
   `no "unsafe"` assertion (`:46`) must stay **unchanged and green** — that is the proof the CSP was
@@ -262,3 +261,31 @@ role with tabular numerals (§4:188).
 9. Code & architecture review (`frontend-reviewer` for JS/HTML, `kotlin-gradle-reviewer` for the
    Kotlin) plus the mandatory §3.2 security & privacy review, both in fresh contexts, findings fixed
    or explicitly accepted.
+
+## 7. Divergences from this plan (recorded during implementation)
+
+1. **Pass 3 of the smoke harness uses a recording stub, not the real vendored library.** The plan
+   had `DashboardScriptTest` pass `uplot.js` as a 4th argv. Loading the real library in the node
+   stub is not viable: at module load it needs `navigator`, `devicePixelRatio`, `matchMedia` and
+   `CustomEvent`, and at render it needs a canvas 2D context and real layout measurement — stubbing
+   that would test the stub, not the dashboard. The recording stub asserts the *call contract*
+   (time-scale x values, honest nulls, shared cohort domain), which is where charting bugs live,
+   and the vendored bytes get their own `VendoredAssetsTest` instead. `DashboardScriptTest` is
+   therefore unchanged. Browser verification covers what neither can.
+2. **Builds per day is two labelled series, not one bar recoloured on failure.** The plan carried
+   the old "failures highlighted" framing. Plotting `builds` and `failures` as separate labelled
+   series shows *how many* failed rather than only *that* something did, and stops meaning resting
+   on hue alone (DESIGN-V2 §3:173).
+3. **Artifact sizes render as one grouped chart, not one chart per series.** Same shared-axis
+   argument as the cohorts: variants are only comparable on one domain.
+4. **Two DESIGN-V2 conformance fixes found only in the browser**, neither predicted by the plan:
+   the page-wide `svg { width: 100% }` rule (`index.html:38`, pre-existing, meant for full-width
+   charts) stretched the 16×10 legend swatches to button width; and the legend buttons measured
+   31 px tall against §5:219's 36 px desktop / 44 px mobile command-target floor. Both are fixed in
+   the chart-scoped CSS. This is the concrete argument for the mandatory browser step: a green
+   `./gradlew` run cannot see either.
+5. **The smoke fixtures gained a calendar gap and unequal cohort day-sets.** The canned trends
+   response had two consecutive days and two equal cohorts, which cannot distinguish a correct
+   calendar axis from the index axis being replaced. Extending the fixture is what makes the new
+   assertions meaningful — verified by mutation: reverting to an index axis, coercing a null to
+   zero, or dropping the shared domain each fails its own assertion.
