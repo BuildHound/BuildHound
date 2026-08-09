@@ -42,7 +42,11 @@ class DashboardRoutesTest {
         assertTrue(csp.contains("frame-ancestors 'none'"))
         assertTrue(csp.contains("base-uri 'none'"))
         // The style block is hash-pinned; no 'unsafe-*' source anywhere in the policy.
-        assertTrue(Regex("style-src 'sha256-[A-Za-z0-9+/=]+'").containsMatchIn(csp), csp)
+        // Anchored through the directive's terminator on purpose: an unanchored match would
+        // also accept `style-src 'sha256-…' 'self'`, which is the exact widening a library
+        // needing its own stylesheet would tempt someone into (plan 105 rejected two such
+        // libraries to keep this directive hashes-only).
+        assertTrue(Regex("""style-src (?:'sha256-[A-Za-z0-9+/=]+' ?)+(?:;|$)""").containsMatchIn(csp), csp)
         assertFalse(csp.contains("unsafe"), csp)
     }
 
