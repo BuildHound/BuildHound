@@ -1069,6 +1069,10 @@
         grid: tokenColor("--bh-grid", "#E7DED3"),
         axis: tokenColor("--bh-control-border", "#96897B"),
         label: tokenColor("--bh-text-muted", "#6F655A"),
+        // Canvas text cannot resolve a CSS var(), so the axis font has to be a literal string —
+        // read it from the same token the rest of the page uses rather than duplicating the
+        // stack here, where it would drift the first time the token changes.
+        font: "12px " + tokenColor("--bh-font-ui", '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'),
     });
 
     // A calendar day (yyyy-MM-dd, UTC — the bucket key the server aggregates on) as the
@@ -1095,7 +1099,12 @@
                 if (key != null && !seen.has(key)) { seen.add(key); keys.push(key); }
             }
         }
-        keys.sort();
+        // Sorted by the numeric x, not by the key's string form. A plain sort() would be correct
+        // only while every key happens to be fixed-width and zero-padded (both current callers
+        // are, by luck of `LocalDate.toString()` and `toISOString()`); ordering the axis by the
+        // value it is actually plotted at removes that unstated contract on future callers —
+        // and a misordered axis is precisely the class of bug this rewrite exists to end.
+        keys.sort((a, b) => toX(a) - toX(b));
         const series = inputs.map(input => {
             const byKey = new Map();
             for (const point of input.points) {
@@ -1113,15 +1122,11 @@
     // Live charts of the currently-rendered view. uPlot attaches document-level listeners,
     // so a view swap destroys them rather than leaking one set per render.
     let liveCharts = [];
-    function resetCharts() {
-        for (const chart of liveCharts) {
-            try { chart.destroy(); } catch (e) { /* a half-built chart still must not break the view */ }
-        }
-        liveCharts = [];
-    }
-    // A view can also replace a chart in place (the benchmark isolation-mode picker rebuilds
-    // one section without touching the others), so detached charts are reaped on the next
-    // mount rather than only on a full view swap.
+    // Reaping is by reachability, not by bookkeeping at each call site: a chart is dead once its
+    // node is no longer in the page, however that happened — a view swap clearing #app, a section
+    // rebuilt in place by the benchmark isolation-mode picker, or a re-render of the same view.
+    // Runs on every mount and on every navigation, which covers all three without any view
+    // needing to remember to announce itself.
     function pruneCharts() {
         liveCharts = liveCharts.filter(chart => {
             const attached = !chart.root || chart.root.isConnected !== false;
@@ -1163,7 +1168,20 @@
     // "success" and a violet one as "flaky" on data that is neither. Until a categorical
     // palette is reconciled into the design system, cohorts are distinguished by dash plus a
     // direct label — which §3 prefers over hue anyway.
-    const SERIES_DASHES = [[], [8, 4], [2, 3], [12, 4, 2, 4], [6, 3, 2, 3], [1, 4]];
+    const SERIES_DASHES = [[], [8, 4], [2, 3], [12, 4, 2, 4], [6, 3, 2, 3], [1, 4], [16, 5], [4, 2, 1, 2], [10, 3, 3, 3]];
+
+    /**
+     * Series past the dash cycle repeat a pattern, and since every series shares one colour that
+     * makes them indistinguishable *on the canvas* — the labels, legend, summary and value table
+     * stay correct. Say so in the caption rather than letting a reader assume two identical lines
+     * are the same series (DESIGN-V2 §3: meaning never rests on the mark alone). Artifact sizes
+     * reach this easily: it is module x variant x type.
+     */
+    function seriesCollisionNote(count) {
+        return count > SERIES_DASHES.length
+            ? " Beyond " + SERIES_DASHES.length + " series, line styles repeat — use the value table to tell them apart."
+            : "";
+    }
 
     /**
      * The one chart entry point. `spec` is:
@@ -1178,7 +1196,7 @@
         const figure = el("figure", null, "chart-card");
         const caption = el("figcaption");
         caption.append(el("b", spec.title));
-        caption.append(el("span", " " + spec.caption));
+        caption.append(el("span", " " + spec.caption + seriesCollisionNote(spec.series.length)));
         figure.append(caption);
 
         const aligned = alignSeries(spec.series, spec.keyToX);
@@ -1194,9 +1212,12 @@
         // rather than exposed as an unlabelled graphic. It is attached only once a chart
         // actually mounted, so a missing library leaves no empty gridded box behind.
         plot.setAttribute("aria-hidden", "true");
-        if (mountChart(plot, spec, aligned)) figure.append(plot);
+        const mounted = mountChart(plot, spec, aligned);
+        if (mounted) figure.append(plot);
         figure.append(el("p", chartSummary(spec, aligned), "sr-only"));
-        if (aligned.series.length > 1) figure.append(seriesToggles(aligned));
+        // Only when there is a chart to toggle: in the degraded path the buttons would flip their
+        // own state and change nothing a reader can see, since the value table lists every series.
+        if (mounted && aligned.series.length > 1) figure.append(seriesToggles(aligned));
         figure.append(chartValueTable(spec, aligned));
         return figure;
     }
@@ -1280,7 +1301,7 @@
                 stroke: palette.axis,
                 grid: { stroke: palette.grid, width: 1 },
                 ticks: { stroke: palette.axis, width: 1 },
-                font: '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+                font: palette.font,
             };
             const chart = new uPlot({
                 width: plot.clientWidth || CHART_FALLBACK_WIDTH,
@@ -1373,7 +1394,6 @@
         if (seq !== renderSeq) return;
 
         app.textContent = "";
-        resetCharts();
         app.append(filterControls(filter, next => trendsView(next, days).catch(fail)));
         const rangeBar = el("div", null, "filters");
         for (const range of [30, 90]) {
@@ -1820,7 +1840,6 @@
         if (seq !== renderSeq) return;
 
         app.textContent = "";
-        resetCharts();
         app.append(el("h2", "Benchmark series"));
         if (!series.length) {
             app.append(emptyState({
@@ -2447,12 +2466,11 @@
     }
 
     function route() {
-        // Reap charts the previous navigation detached (plan 105). Only the two chart-rendering
-        // views call resetCharts() themselves, so without this a chart left behind by navigating
-        // to a chart-less view would keep uPlot's document-level listeners alive until the next
-        // chart happened to mount — possibly never. Pruning here, rather than destroying the
-        // outgoing view's charts up front, keeps them drawn while the next view is still
-        // fetching; the cost is that a detached chart survives until the following navigation.
+        // Reap charts the previous navigation detached (plan 105). Mounting a chart also prunes,
+        // but a view that renders none would otherwise strand the outgoing view's charts —
+        // holding uPlot's document-level listeners until another chart happened to mount,
+        // possibly never. Pruning here rather than destroying the outgoing charts up front keeps
+        // them drawn while the next view is still fetching.
         pruneCharts();
         // decodeURIComponent throws synchronously on malformed input (Firefox returns
         // location.hash pre-decoded, so a stored %xx can arrive re-broken) — the try

@@ -201,7 +201,7 @@ role with tabular numerals (§4:188).
      aligned on one shared x domain. This pass needs no browser API and is where the real bugs live.
   The existing `countTag(app,"svg") >= 5` assertion (`:651`) is replaced by assertions on the figure
   and value table; the three timeline `svg` assertions (`:503`, `:661`, `:667`) are unaffected.
-- **`DashboardScriptTest.kt`** — unchanged, see the divergence note in §7.
+- **`DashboardScriptTest.kt`** — unchanged, see the divergence note in §8.
 - **`DashboardRoutesTest.kt`** — new case for `/uplot.js` mirroring the `/dashboard.js` one (200,
   `text/javascript`, UTF-8, CSP, `no-cache`). The `style-src` hash regex (`:45`) and the
   `no "unsafe"` assertion (`:46`) must stay **unchanged and green** — that is the proof the CSP was
@@ -262,7 +262,28 @@ role with tabular numerals (§4:188).
    Kotlin) plus the mandatory §3.2 security & privacy review, both in fresh contexts, findings fixed
    or explicitly accepted.
 
-## 7. Divergences from this plan (recorded during implementation)
+## 7. Verification record
+
+Browser verification (§4, §6.6) was performed against a locally-run server seeded with 58 builds
+across 29 active days, deliberately containing three calendar gaps (3, 6 and 5 days), three days
+whose cache-hit rate is honestly null, and two tag cohorts sampled on **23 vs 13 different days** —
+none of which a single sample build would produce. What it showed:
+
+- All five charts mount; canvas pixel sampling confirms the DESIGN-V2 solids in **both** themes
+  (dark `#A89D8E`/`#6FA8FF`/`#E5646A`/`#2B261F`/`#7D705F`, light `#6F655A`/`#2A6FD1`/`#C22E33`/
+  `#E7DED3`/`#96897B`).
+- **Zero CSP violations** across full re-renders in both themes with a `securitypolicyviolation`
+  listener attached; the served policy is unchanged and still hashes-only.
+- Cache-hit rate breaks at the null days rather than dipping to zero; the cohort value table spans
+  one shared 29-day domain with `—` where a cohort has no data.
+- Series toggle: focusable, `aria-pressed` flips, and the canvas's painted-pixel count drops —
+  the series genuinely hides.
+- No horizontal overflow at 375 px; command targets 44 px there, 36 px on desktop.
+
+Two defects were found only here and are fixed: the page-wide `svg { width: 100% }` rule stretched
+the legend swatches, and command targets measured 31 px. Neither is visible to `./gradlew`.
+
+## 8. Divergences from this plan (recorded during implementation)
 
 1. **Pass 3 of the smoke harness uses a recording stub, not the real vendored library.** The plan
    had `DashboardScriptTest` pass `uplot.js` as a 4th argv. Loading the real library in the node
@@ -284,7 +305,22 @@ role with tabular numerals (§4:188).
    31 px tall against §5:219's 36 px desktop / 44 px mobile command-target floor. Both are fixed in
    the chart-scoped CSS. This is the concrete argument for the mandatory browser step: a green
    `./gradlew` run cannot see either.
-5. **The smoke fixtures gained a calendar gap and unequal cohort day-sets.** The canned trends
+5. **No `role="img"` on the plot, contrary to §3.4.** The plot is `aria-hidden` outright instead.
+   `role="img"` would announce a graphic with no accessible name a screen reader could use — the
+   canvas carries no text — while the caption, sr-only summary and value table already state
+   everything the chart shows. Hiding the duplicate beats exposing an unlabelled one.
+6. **`resetCharts()` was written, then deleted as dead code.** Reaping charts by reachability
+   (`pruneCharts`, run on every mount and every navigation) covers view swaps, in-place section
+   rebuilds and re-renders alike, so the explicit per-view reset it was paired with changed no
+   outcome. Found by mutation: making `resetCharts` a no-op left the suite green, which is the
+   signal that it was redundant rather than untested.
+7. **Series past the dash cycle repeat a line style.** Every multi-series chart draws in one
+   neutral solid (Risk 1), so beyond the available dash patterns two series become
+   indistinguishable *on the canvas* — labels, legend, summary and value table stay correct.
+   Artifact sizes reach this easily (module × variant × type). The caption now says so rather
+   than letting a reader assume two identical lines are one series. A categorical palette would
+   remove the limit; see Risk 1.
+8. **The smoke fixtures gained a calendar gap and unequal cohort day-sets.** The canned trends
    response had two consecutive days and two equal cohorts, which cannot distinguish a correct
    calendar axis from the index axis being replaced. Extending the fixture is what makes the new
    assertions meaningful — verified by mutation: reverting to an index axis, coercing a null to
