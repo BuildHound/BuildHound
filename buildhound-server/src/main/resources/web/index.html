@@ -141,7 +141,9 @@
         }
         .chart-empty { color: var(--bh-text-muted); font-size: .85rem; margin: .5rem 0; }
         .chart-values { margin-top: 12px; }
-        .chart-values > summary { cursor: pointer; font-size: .85rem; color: var(--bh-text-secondary); padding: .5rem 0; min-height: 36px; display: flex; align-items: center; }
+        /* Height via padding, not display:flex — flex on a <summary> drops its disclosure
+           marker, and the triangle is the affordance that says the values can be opened. */
+        .chart-values > summary { cursor: pointer; font-size: .85rem; color: var(--bh-text-secondary); padding: .6rem 0; min-height: 36px; box-sizing: border-box; }
         .chart-values table { margin-top: .5rem; }
         .chart-values td.num { font-family: var(--bh-font-mono); }
         /* The page-wide `svg { width: 100% }` rule above is meant for full-width charts and
