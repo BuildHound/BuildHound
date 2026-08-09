@@ -151,15 +151,23 @@ which commits were actually looked at:
 | Code & architecture — `kotlin-gradle-reviewer` | `690f95e..06c8eb2` |
 | Code & architecture — `infra-reviewer` | `690f95e..06c8eb2` |
 | `security-reviewer-infra` (CI paths, §3 routing) | `690f95e..c2c131d` |
+| Delta: infra + security & privacy | `06c8eb2..c59ae12` — verdict "correct and landable" |
+| Delta: `kotlin-gradle-reviewer` | `06c8eb2..802cfc5` — verdict MERGE-OK, one MEDIUM + one LOW, both fixed below |
 
-**Named gap:** `06c8eb2..802cfc5` had no completed independent review — a delta re-review was launched
-twice and stalled both times. Mitigating facts, offered as context and not as a substitute: every
-change in that range *originated as a review finding* (the `exec`/sink-leak fix was independently
-raised by two reviewers; the sink readiness guards came from the infra-security MEDIUM; the
-`ProfilerCsv` strictness and error-message changes came from the Kotlin review's nit and LOWs), and
-each was verified empirically — both sink failure paths exercised (exit 5), the happy path cleared in
-a live run, `:buildhound-commons:jvmTest` green, shellcheck clean. Re-run the two reviewers over that
-range before merge if the gap matters to the reviewer of record.
+**Named gap: everything after `ee55169` has had no independent review**, plus `c59ae12..ee55169`
+(the `BUILDHOUND_*` scrub loop and the CI `shellcheck` line). The post-`ee55169` content is Kotlin:
+`OverheadScenarioContractTest` and its `jvmTest` input declaration (closing the delta review's
+MEDIUM — the id↔title coupling was enforced only by prose in two files), and the `(blank)` rendering
+in `ProfilerCsv`'s diagnostic (its LOW).
+
+Mitigation, offered as context and not as a substitute for review: every change in the gap
+*originated as a review finding* — the `exec`/sink-leak fix was independently raised by two
+reviewers, the sink guards came from the infra-security MEDIUM, and the namespace scrub came from the
+delta review's M2. Each was verified empirically: both sink failure paths exercised (exit 5, correct
+message), the scrub proven to keep `BUILDHOUND_OVERHEAD_*` and drop everything else, the trap's
+`|| true` proven not to clobber the exit status in `sh`/`bash`/`dash`, shellcheck clean, and
+`:buildhound-commons:jvmTest` green. **Unverified locally:** the added `shellcheck` line sits inside a
+`run: |` block that actionlint gates in CI, and there is no actionlint on this machine.
 
 ## 7. Result of the first real run (2026-08-09)
 
