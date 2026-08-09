@@ -22,11 +22,13 @@ import dev.buildhound.commons.payload.GuhWarmth
 import dev.buildhound.commons.payload.InvocationInfo
 import dev.buildhound.commons.payload.JvmArtifactSize
 import dev.buildhound.commons.payload.KotlinInfo
+import dev.buildhound.commons.payload.MachineInfo
 import dev.buildhound.commons.payload.PayloadCapper
 import dev.buildhound.commons.payload.PayloadCaps
 import dev.buildhound.commons.payload.PayloadScrubber
 import dev.buildhound.commons.payload.ProcessInfo
 import dev.buildhound.commons.payload.ProjectEvaluation
+import dev.buildhound.commons.payload.ResourceUsageInfo
 import dev.buildhound.commons.payload.StartMarker
 import dev.buildhound.commons.payload.TaskExecution
 import dev.buildhound.commons.payload.TestTaskResult
@@ -115,6 +117,8 @@ internal object PayloadAssembler {
         // no executed task ran with the flag off this build.
         testTelemetry: TestTelemetryInfo? = null,
         processes: List<CollectedProcess> = emptyList(),
+        // Execution-window resource usage (plan 104); null when the execution anchor never fired.
+        resourceUsage: CollectedResourceUsage? = null,
         benchmark: CollectedBenchmark? = null,
         artifacts: List<ArtifactSize> = emptyList(),
         // JVM archive sizes (plan 072, research F22); empty on a non-JVM-archive build. Rides beside
@@ -206,6 +210,9 @@ internal object PayloadAssembler {
                     workersMax = it.workersMax,
                     // Committed build-cache config snapshot (plan 067); null when uncaptured or all-null.
                     buildCache = buildCacheConfigInfo(buildCache),
+                    // Build-root filesystem capacity + media class (plan 104); null when every
+                    // dimension degraded — an all-null block reports the same as "uncaptured".
+                    machine = machineInfo(it),
                 )
             },
             // AGP/KGP/KSP (plan 046) + Spring Boot (plan 072) join Gradle/JDK here; emitted whenever any
@@ -278,8 +285,13 @@ internal object PayloadAssembler {
                     pid = it.pid?.takeIf { p -> p in 1..Int.MAX_VALUE.toLong() }?.toInt(),
                     gcCollector = it.gcCollector,
                     compactObjectHeaders = it.compactObjectHeaders,
+                    // Lifetime-to-date process CPU (plan 104), from the same merged `ps` line as rss/etime.
+                    cpuTimeMs = it.cpuTimeMs,
                 )
             },
+            // Execution-window resource usage (plan 104); null when the anchor never fired or every
+            // management-bean read degraded — the probe itself already collapses an all-null block.
+            resourceUsage = resourceUsageInfo(resourceUsage),
             // Addon-contributed sections (plan 039), keyed by addon id. Opaque JSON — the scrubber
             // leaves it untouched (core can't know an addon's shape; addons carry the §3.7 bar
             // themselves), the capper bounds it to its byte budget.
@@ -453,6 +465,39 @@ internal object PayloadAssembler {
             remoteEnabled = snapshot.remoteEnabled,
             remotePush = snapshot.remotePush,
             remoteType = snapshot.remoteType,
+        )
+    }
+
+    /**
+     * Execution-window resource usage (plan 104): a straight DTO→wire map. [ResourceUsageProbe]
+     * already collapses an all-null capture to null, so there is no emptiness rule to repeat here.
+     */
+    private fun resourceUsageInfo(usage: CollectedResourceUsage?): ResourceUsageInfo? = usage?.let {
+        ResourceUsageInfo(
+            windowMs = it.windowMs,
+            daemonCpuMs = it.daemonCpuMs,
+            systemCpuLoadPct = it.systemCpuLoadPct,
+            systemLoadAverage = it.systemLoadAverage,
+            systemMemTotalMb = it.systemMemTotalMb,
+            systemMemFreeMb = it.systemMemFreeMb,
+        )
+    }
+
+    /**
+     * Build-root filesystem capacity + media class (plan 104). Null when every dimension degraded,
+     * so an all-unknown capture reports the same as "uncaptured" rather than shipping an empty block
+     * — the same rule the surrounding helpers follow. A resolved [DiskMedia.UNKNOWN] is *data*, not
+     * an absence, so it keeps the block alive: "we looked and could not tell" differs from "we never
+     * looked", and only the former should stop a consumer re-asking.
+     */
+    private fun machineInfo(environment: CollectedEnvironment): MachineInfo? {
+        if (environment.diskTotalMb == null && environment.diskFreeMb == null && environment.diskMedia == null) {
+            return null
+        }
+        return MachineInfo(
+            diskTotalMb = environment.diskTotalMb,
+            diskFreeMb = environment.diskFreeMb,
+            diskMedia = environment.diskMedia,
         )
     }
 

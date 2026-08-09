@@ -59,28 +59,76 @@ class ReportScriptTest {
             ]
           },
           "processes": [
-            { "role": "GRADLE_DAEMON", "heapUsedMb": 1462, "configuredXmxMb": 4096, "gcTimeMs": 3120, "uptimeS": 812, "pid": 41214, "gcCollector": "G1" },
+            { "role": "GRADLE_DAEMON", "heapUsedMb": 1462, "configuredXmxMb": 4096, "gcTimeMs": 3120, "uptimeS": 812, "pid": 41214, "gcCollector": "G1", "cpuTimeMs": 214000 },
             { "role": "KOTLIN_DAEMON", "heapUsedMb": 1900, "configuredXmxMb": 2048, "pid": 41377 },
             { "role": "KOTLIN_DAEMON", "heapUsedMb": 800, "configuredXmxMb": 4096, "gcTimeMs": 4000, "uptimeS": 20, "rssMb": 3072, "pid": 55832, "gcCollector": "G1", "compactObjectHeaders": false }
-          ]
+          ],
+          "environment": {
+            "os": "Linux",
+            "arch": "amd64",
+            "cores": 8,
+            "ramMb": 32768,
+            "machine": { "diskTotalMb": 486400, "diskFreeMb": 204800, "diskMedia": "NVME" }
+          },
+          "resourceUsage": {
+            "windowMs": 59000,
+            "daemonCpuMs": 141600,
+            "systemCpuLoadPct": 63,
+            "systemLoadAverage": 4.75,
+            "systemMemTotalMb": 32768,
+            "systemMemFreeMb": 9216
+          },
+          "ci": {
+            "provider": "github-actions",
+            "attributes": {
+              "runnerEnvironment": "github-hosted",
+              "runnerClass": "ubuntu</script><script>evil()//-8-core"
+            }
+          }
+        }
+    """.trimIndent()
+
+    /**
+     * A payload carrying none of the plan-104 blocks — the case every older plugin and every
+     * fully-degraded probe produces. The Machine section must stay hidden rather than render a row
+     * of blanks or a fabricated 0 %.
+     */
+    private val bareMachinePayload = """
+        {
+          "schemaVersion": 1,
+          "buildId": "report-bare-machine-build",
+          "startedAt": 1751450000000,
+          "finishedAt": 1751450005000,
+          "outcome": "SUCCESS",
+          "mode": "ci",
+          "tasks": []
         }
     """.trimIndent()
 
     @Test
     fun `report render populates the failure and warnings sections`() {
+        runHarness(failurePayload, mode = "full")
+    }
+
+    @Test
+    fun `a payload without machine specs or resource usage keeps the Machine section hidden`() {
+        runHarness(bareMachinePayload, mode = "bare")
+    }
+
+    private fun runHarness(payload: String, mode: String) {
         assumeTrue(nodeAvailable(), "node not on PATH — report smoke harness skipped")
 
         val dir = Files.createTempDirectory("buildhound-report-smoke")
-        val html = dir.resolve("report.html").also { it.writeText(ReportAssets.render(failurePayload)) }
+        val html = dir.resolve("report.html").also { it.writeText(ReportAssets.render(payload)) }
         val harness = dir.resolve("report-smoke.js").also { it.writeBytes(resource("report-smoke.js")) }
 
-        val process = ProcessBuilder("node", harness.toString(), html.toString())
+        val process = ProcessBuilder("node", harness.toString(), html.toString(), mode)
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.readBytes().decodeToString()
         assumeTrue(process.waitFor(60, TimeUnit.SECONDS), "node did not finish in time")
 
-        assertEquals(0, process.exitValue(), "report smoke harness failed:\n$output")
+        assertEquals(0, process.exitValue(), "report smoke harness ($mode) failed:\n$output")
     }
 
     private fun nodeAvailable(): Boolean = runCatching {

@@ -44,6 +44,8 @@ function findAll(node, pred, out) {
     return out;
 }
 const hasText = (node, sub) => findAll(node, n => (n.textContent || "").indexOf(sub) >= 0).length > 0;
+// Exact match, for short values a substring check would find inside an unrelated chip.
+const hasExactText = (node, exact) => findAll(node, n => (n.textContent || "") === exact).length > 0;
 
 const context = {
     document: documentStub,
@@ -69,6 +71,21 @@ if (scripts.length !== 2) {
     throw new Error("expected exactly the timeline + render script blocks, found " + scripts.length);
 }
 scripts.forEach((src, i) => vm.runInContext(src, context, { filename: "report-script-" + i + ".js" }));
+
+// argv[3] selects the fixture's expectations: "full" = the rich payload below, "bare" = a payload
+// carrying none of the plan-104 blocks, where the Machine section must stay hidden.
+const mode = process.argv[3] || "full";
+if (mode === "bare") {
+    // The stub can't model the markup's initial `hidden` attribute, so "stayed hidden" is asserted
+    // as "render never reached for the element": unhiding requires a getElementById, which byId
+    // records. The chip lists ARE fetched unconditionally, so those are asserted empty instead.
+    if (byId["machine"]) throw new Error("Machine section was unhidden on a payload with no specs and no usage");
+    if (byId["machine-usage-note"]) throw new Error("usage caveat note was unhidden with no resourceUsage block");
+    if (byId["machine-specs"].children.length) throw new Error("spec chips rendered with no environment block");
+    if (byId["machine-usage"].children.length) throw new Error("usage chips rendered with no resourceUsage block");
+    console.log("report smoke OK (bare)");
+    process.exit(0);
+}
 
 // Failure section (plan 044): exception class + message in the summary, stacktrace in the <pre>.
 const failure = byId["failure"];
@@ -127,5 +144,42 @@ if (!jvmSection || jvmSection.hidden) throw new Error("jvm-artifacts section sta
 const jvmRows = byId["jvm-artifacts-table"].querySelector("tbody");
 if (!hasText(jvmRows, "BOOT_JAR")) throw new Error("bootJar kind missing from the JVM artifacts table");
 if (!hasText(jvmRows, "23.0 MB")) throw new Error("bootJar human-readable size missing from the JVM artifacts table");
+
+// Machine specs + resource usage (plan 104). Specs come from environment/environment.machine, the
+// usage chips from resourceUsage, and the runner class from ci.attributes.
+const machine = byId["machine"];
+if (!machine || machine.hidden) throw new Error("machine section stayed hidden with populated specs");
+const specs = byId["machine-specs"];
+if (!hasText(specs, "Linux · amd64")) throw new Error("os/arch spec missing");
+// Exact match: a substring "8" would also hit the runner class below.
+if (!hasExactText(specs, "8")) throw new Error("cpu count spec missing");
+if (!hasText(specs, "32.0 GB")) throw new Error("memory spec missing");
+// Media label + free-of-total, both from the same chip.
+if (!hasText(specs, "NVMe · 200.0 GB free of 475.0 GB")) throw new Error("disk spec missing or mis-formatted");
+if (!hasText(specs, "github-hosted")) throw new Error("runner environment spec missing");
+// The hostile operator-set runner class must survive the JSON-escape + textContent chain intact —
+// same proof as the testTelemetry entry above, on the one plan-104 field an operator controls.
+if (!hasText(specs, "ubuntu</script><script>evil()//-8-core")) {
+    throw new Error("runner class missing or mangled by the escaping chain");
+}
+
+// 141600 ms of daemon CPU over a 59 s window on 8 cores = 30 % — computed in the report from the
+// raw numerator/denominator, never shipped pre-divided.
+const usage = byId["machine-usage"];
+if (usage.hidden) throw new Error("usage chips stayed hidden with a populated resourceUsage block");
+if (!hasText(usage, "30% of 8 cores")) throw new Error("daemon cpu utilization missing or mis-computed");
+if (!hasText(usage, "59.0 s")) throw new Error("measurement window missing");
+if (!hasText(usage, "63%")) throw new Error("system cpu load missing");
+if (!hasText(usage, "4.75")) throw new Error("load average missing");
+if (!hasText(usage, "23.0 GB used of 32.0 GB")) throw new Error("system memory used/total missing");
+// The caveat is load-bearing: without it the number reads as whole-machine build CPU.
+if (!hasText(byId["machine-usage-note"], "Gradle daemon process only, over the execution phase")) {
+    throw new Error("resource-usage caveat note missing");
+}
+
+// Per-process CPU rides in the existing process table (plan 104's merged `ps`).
+if (!hasText(byId["processes-table"].querySelector("tbody"), "3.6 min")) {
+    throw new Error("per-process CPU time column missing (214000 ms → 3.6 min)");
+}
 
 console.log("report smoke OK");

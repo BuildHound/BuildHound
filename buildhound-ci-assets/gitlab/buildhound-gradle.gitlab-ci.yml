@@ -13,6 +13,15 @@
 #     variables:
 #       BUILDHOUND_GRADLE_TASKS: "build"
 #       BUILDHOUND_VERDICT_GATE: "warn"   # off | warn | fail
+#       BUILDHOUND_CI_RUNNER_CLASS: "saas-linux-medium-amd64"   # optional, see below
+#
+# Runner class (plan 104): the runner's measured specs (cores, RAM, disk) already reach the payload
+# from inside the JVM, and the runner's arch + version come from CI_RUNNER_* automatically. What no
+# variable carries is which runner *class* the job selected — the tag or SaaS plan it was routed to.
+# Set BUILDHOUND_CI_RUNNER_CLASS to slice telemetry by it. Categorical label only: it is collected
+# verbatim (trimmed to 64 chars), so never put a runner hostname, a user name, or a secret there.
+# CI_RUNNER_DESCRIPTION and CI_RUNNER_TAGS are deliberately never collected — operator-set free text
+# that routinely carries hostnames.
 #
 # BUILDHOUND_SERVER_URL and BUILDHOUND_TOKEN come from masked, protected CI/CD variables — never
 # inline them here. The plugin auto-detects the GitLab pipeline (project path + pipeline id from

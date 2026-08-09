@@ -43,6 +43,17 @@ inputs:
     description: "Gradle Actions cache provider. Defaults to the open basic provider; set empty to disable setup-gradle caching."
     required: false
     default: "basic"
+  runner-class:
+    # The runner's measured specs (cores, RAM, disk) already reach the payload from inside the JVM —
+    # availableProcessors() and the OS memory bean are cgroup-aware, so a 4-core runner reports 4.
+    # What the JVM cannot see is which runner SKU the job asked for: `runs-on` is a workflow-
+    # definition value that reaches no environment variable. Pass it here to slice telemetry by
+    # runner class, e.g. runner-class: ${{ matrix.os }} or "ubuntu-latest-8-core".
+    # Categorical label only — never put a hostname, a user name, or anything secret here; it is
+    # collected verbatim (trimmed to 64 chars) into ci.attributes.runnerClass.
+    description: "Optional runner class/SKU label (e.g. ubuntu-latest-8-core). Empty = not collected."
+    required: false
+    default: ""
 
 runs:
   using: "composite"
@@ -65,6 +76,10 @@ runs:
         # Map a secret in the consuming workflow; never echo it.
         BUILDHOUND_TOKEN: ${{ inputs.token }}
         BUILDHOUND_SERVER_URL: ${{ inputs.server-url }}
+        # Runner class (plan 104). Bound as env like GRADLE_TASKS above and never interpolated into
+        # the run: script — a caller wiring untrusted data here must not be able to reach the shell
+        # that holds BUILDHOUND_TOKEN. Empty => the plugin collects nothing.
+        BUILDHOUND_CI_RUNNER_CLASS: ${{ inputs.runner-class }}
 
     - name: "BuildHound verdict gate (${{ inputs.verdict-gate }})"
       if: ${{ inputs.verdict-gate != 'off' }}

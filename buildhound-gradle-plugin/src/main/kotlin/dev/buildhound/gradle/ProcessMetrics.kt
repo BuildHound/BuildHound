@@ -1,16 +1,21 @@
 package dev.buildhound.gradle
 
 /**
- * The six JDK-tool/`ps` probes the collector drives (plan 029). An interface so [ProcessProbeCollector]
+ * The JDK-tool/`ps` probes the collector drives (plan 029). An interface so [ProcessProbeCollector]
  * can be unit-tested against a fake that records invocations, without spawning real processes.
+ *
+ * Five probes since plan 104, down from six: the separate `ps -o rss=` and `ps -o etime=` execs
+ * collapsed into a single [psSnapshot] that also returns `time=` (cumulative process CPU). One exec
+ * fewer per probed PID, and the highest-value usage metric arrives with it — the probe got cheaper
+ * while getting richer, which is what let CPU usage ship under a "must not cost build performance"
+ * constraint.
  */
 internal interface ProcessTools {
     fun jpsListing(): BoundedExec.Result
     fun jstatGc(pid: Long): BoundedExec.Result
     fun jstatCapacity(pid: Long): BoundedExec.Result
     fun jinfoFlags(pid: Long): BoundedExec.Result
-    fun psRss(pid: Long): BoundedExec.Result
-    fun psEtime(pid: Long): BoundedExec.Result
+    fun psSnapshot(pid: Long): BoundedExec.Result
 }
 
 /**
@@ -37,9 +42,18 @@ internal class ProcessMetrics(
 
     override fun jinfoFlags(pid: Long): BoundedExec.Result = run(jinfo, listOf("-flags", pid.toString()))
 
-    override fun psRss(pid: Long): BoundedExec.Result = run(ps, listOf("-o", "rss=", "-p", pid.toString()))
-
-    override fun psEtime(pid: Long): BoundedExec.Result = run(ps, listOf("-o", "etime=", "-p", pid.toString()))
+    /**
+     * One `ps` for all three per-process numbers (plan 104). `rss`, `etime` and `time` are POSIX
+     * standard format keywords, so the merged format string is as portable as the two it replaced;
+     * a platform that rejects it loses three best-effort-nullable fields instead of two, and Windows
+     * (no `ps`) reported null before and after.
+     *
+     * Each keyword carries an empty `=` header override, and POSIX suppresses the header line only
+     * when **every** header is null — hence the `=` on all three. [ProcessParsing.parsePsSnapshot]
+     * still tolerates a stray header line rather than trusting that.
+     */
+    override fun psSnapshot(pid: Long): BoundedExec.Result =
+        run(ps, listOf("-o", "rss=,etime=,time=", "-p", pid.toString()))
 
     private fun run(executable: String, args: List<String>): BoundedExec.Result =
         BoundedExec.run(listOf(executable) + args, timeoutMillis)

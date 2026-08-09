@@ -179,4 +179,58 @@ class ProcessParsingTest {
         assertNull(ProcessParsing.parseGcCollector(onlyHostile))
         assertNull(ProcessParsing.parseCompactObjectHeaders(onlyHostile))
     }
+
+    // ---- plan 104: the merged `ps -o rss=,etime=,time=` snapshot ----
+
+    @Test
+    fun `the merged ps line splits into rss, etime and cpu time`() {
+        val snapshot = ProcessParsing.parsePsSnapshot("  524288 03:20:15 01:02:03\n")
+        assertEquals("524288", snapshot?.rss)
+        assertEquals("03:20:15", snapshot?.etime)
+        assertEquals("01:02:03", snapshot?.cpuTime)
+    }
+
+    @Test
+    fun `a stray header line from a non-conforming ps is skipped`() {
+        // POSIX suppresses the header when every -o header override is empty, but the parser takes
+        // the last non-blank line rather than trusting that on every platform's ps.
+        val snapshot = ProcessParsing.parsePsSnapshot("  RSS ELAPSED TIME\n 1024 00:10 00:01\n")
+        assertEquals("1024", snapshot?.rss)
+        assertEquals("00:01", snapshot?.cpuTime)
+    }
+
+    @Test
+    fun `a ragged ps line costs only the missing columns`() {
+        val snapshot = ProcessParsing.parsePsSnapshot("1024 00:10\n")
+        assertEquals(1L, snapshot?.rss?.let(ProcessParsing::rssMb))
+        assertEquals(10L, snapshot?.etime?.let(ProcessParsing::uptimeSeconds))
+        assertNull(snapshot?.cpuTime)
+        assertNull(ProcessParsing.parsePsSnapshot("   \n\n"))
+    }
+
+    @Test
+    fun `cpu time parses the Linux whole-second and macOS fractional-second forms alike`() {
+        assertEquals(123_000L, ProcessParsing.cpuTimeMs("00:02:03")) // Linux hh:mm:ss
+        assertEquals(123_460L, ProcessParsing.cpuTimeMs("02:03.46")) // macOS mm:ss.ff
+        assertEquals(93_784_000L, ProcessParsing.cpuTimeMs("1-02:03:04")) // dd-hh:mm:ss
+        assertEquals(1_500L, ProcessParsing.cpuTimeMs(" 1.5 ")) // seconds only
+        assertEquals(0L, ProcessParsing.cpuTimeMs("00:00"))
+    }
+
+    @Test
+    fun `malformed cpu time degrades to null rather than a wrong number`() {
+        assertNull(ProcessParsing.cpuTimeMs(""))
+        assertNull(ProcessParsing.cpuTimeMs("-"))
+        assertNull(ProcessParsing.cpuTimeMs("not-a-time"))
+        assertNull(ProcessParsing.cpuTimeMs("1:2:3:4")) // too many clock fields
+        assertNull(ProcessParsing.cpuTimeMs("1.5:02:03")) // only the seconds field may be fractional
+        assertNull(ProcessParsing.cpuTimeMs("x-01:02"))
+    }
+
+    @Test
+    fun `uptime parsing keeps its strictness and does not inherit fractional tolerance`() {
+        // etime has no fractional form; loosening uptimeSeconds would move pinned plan-029 behavior.
+        assertEquals(3_600L, ProcessParsing.uptimeSeconds("01:00:00"))
+        assertNull(ProcessParsing.uptimeSeconds("02:03.46"))
+    }
 }
