@@ -333,10 +333,28 @@ Default empty everywhere → nothing is collected unless the operator opts in.
    > and plan 104's diff *reduced* the probe's per-PID exec count. Full numbers and the isolation
    > table are in plan 106 §7.
    >
-   > Remaining to close this criterion: a green (or at least *measuring*) `overhead-budget` run on
-   > the CI reference runner — a local macOS table cannot stand in for it, and the probe's cost
-   > scales with the number of live JVMs, which differs sharply between a laptop and a clean runner.
-   > The budget caps themselves are still uncalibrated (`docs/overhead-budget.md`), so the first CI
-   > table is also the calibration input.
+   > **Update — measured on the reference runner, and this criterion is NOT met.** The first real
+   > `overhead-budget` run (Actions run 31337018812, PR #116, `blacksmith-4vcpu-ubuntu-2404`,
+   > 4m25s) produced a full table:
+   >
+   > | Axis | Baseline (ms) | Plugin (ms) | Δ (ms) | Allowance (ms) | Verdict |
+   > |---|---:|---:|---:|---:|:---:|
+   > | configuration | 71.8 | 408.5 | 336.7 | 40.0 | ❌ BREACH |
+   > | per-task | 487.5 | 998.0 | 510.5 | 24.4 | ❌ BREACH |
+   > | finalizer | 74.6 | 666.1 | **591.5** | 150.0 | ❌ BREACH |
+   > | upload | 413.4 | 409.1 | −4.3 | 250.0 | ✅ ok |
+   >
+   > The finalizer axis is **~4× over** its 150 ms cap, so this plan's answer to "must not impact
+   > build performance whatsoever" is now measured and negative. The cause is still not this plan's
+   > telemetry — it is the process probe (plan 029), per the isolation in plan 106 §7 — but the
+   > criterion as written is failed, not pending.
+   >
+   > CI is *milder* than local (591 ms vs 1825 ms on a laptop), which confirms the predicted
+   > direction: a clean runner has few live JVMs and the probe's cost scales with that count. A
+   > developer's machine is the worse case, not the better one.
+   >
+   > Closing this criterion now requires the probe cost to be fixed — a follow-up plan — not another
+   > measurement. The caps in `OverheadBudget.DEFAULT` remain uncalibrated and must not be widened to
+   > make this green (`docs/overhead-budget.md`).
 6. `docs/build-telemetry-spec.md` §3.2/§3.6 updated with the new fields; `docs/architecture.md`
    updated only if a review invalidates an assumption here.

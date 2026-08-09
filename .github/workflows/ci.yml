@@ -422,8 +422,9 @@ jobs:
     # A RED RUN HERE IS UNINFORMATIVE ON ITS OWN (plan 106) — open the overhead-budget artifact and
     # read overhead-table.md. Until plan 106 this job was inert: green in ~17 s without running the
     # benchmark, so no historical green means anything. Local runs breach three axes for a known,
-    # disclosed reason (the process probe's per-JVM subprocess cost, plan 106 §7) and CI is expected
-    # to do the same, though no repaired run has landed here yet to confirm it. Red also covers a
+    # disclosed reason (the process probe's per-JVM subprocess cost, plan 106 §7), and the first
+    # repaired run here confirmed it: run 31337018812, 4m25s, finalizer 591.5 ms over a 150 ms cap.
+    # Red also covers a
     # missing gradle-profiler (exit 3), a failed toggle self-test (exit 4), the timeout, and a
     # genuinely new regression — the table distinguishes them. Promotion to blocking cannot be
     # assessed while a known true breach is present. Delete this note once that cost is fixed.

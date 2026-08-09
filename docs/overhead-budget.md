@@ -79,6 +79,12 @@ regressions caught by a deliberately-tightened-budget check), drop `continue-on-
 promotion in the decision log — the same promote-or-defer discipline as the macOS/Windows/IP jobs
 (plan 021).
 
+> **First reference-runner measurement (Actions run 31337018812, 4m25s):** configuration 336.7 ms,
+> per-task 510.5 ms, finalizer 591.5 ms over their caps; upload −4.3 ms (ok). Milder than a laptop
+> (finalizer 1825 ms there) because the probe's cost scales with live JVM count and a clean runner
+> has few. These are the calibration inputs the note above asks for — but calibrate against a *fixed*
+> plugin, not against this, or the caps would be sized to accommodate the regression.
+>
 > **The promotion clock has not started.** That criterion asks for runs with no *false* breaches,
 > which cannot be assessed while every run carries a *true* one: the repaired harness (plan 106)
 > reports a real breach on three axes, caused by the process probe's per-JVM subprocess cost — see
