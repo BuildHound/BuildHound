@@ -17,9 +17,13 @@
 // Substitution rules (these files are HOCON, and getting this wrong is silent, not loud — plan 106):
 //   * A ${VAR} reference inside a QUOTED string is NOT substituted; it reaches Gradle as literal
 //     text. Concatenate instead — "-Pflag="${VAR} — which is what every line below does.
-//   * Always the mandatory ${VAR} form, never the optional ${?VAR}: an unset variable must abort
-//     the run. Dropping the toggle silently would leave the fixture on its `off` default, so the
-//     plugin-on run would measure no plugin and report ~0 overhead — a false pass.
+//   * Always the mandatory ${VAR} form, never the optional ${?VAR}: an UNSET variable then aborts
+//     the run instead of silently dropping the argument, which would leave the fixture on its `off`
+//     default and let a nominal plugin-on run measure no plugin at all — a false pass.
+//     Note the limit of that guarantee: HOCON treats a variable set to the EMPTY STRING as defined,
+//     so `BUILDHOUND_OVERHEAD_PLUGIN=""` substitutes to `-Pbuildhound.overhead.plugin=` and reaches
+//     the same false-pass state. run-overhead.sh validates the value against on|off for that case,
+//     and the toggle self-test is the backstop that actually proves the plugin ran.
 //
 // Naming: no scenario sets `title`, deliberately. gradle-profiler names each benchmark.csv column
 // after the title when one is set and after the scenario **id** otherwise (verified against 0.24.0),

@@ -190,9 +190,29 @@ daemons alive) shows ~1.8 s while a laptop with several worktrees' daemons shows
 Plan 104 is exonerated by its own diff: it *removed* one `ps` exec per PID (two collapsed into one).
 The per-PID subprocess design predates it (plan 029).
 
+**The JVM-count scaling was then confirmed by accident.** A second harness run, started while more
+daemons happened to be alive, measured the *same* plugin-on `no_op` scenario at **~6.5 s** with 24
+live JVMs, against **~1.9 s** with 15 during the first run — same machine, same commit, same fixture.
+The plugin's per-build cost is therefore not a constant to be calibrated away; it is a function of an
+ambient property of the machine. Two consequences: a developer's cost grows the more projects they
+have open, and the CI number will understate what developers feel, because a clean runner has few
+JVMs. Any follow-up must report the JVM count alongside the timing, or the numbers are not
+comparable between runs.
+
 Fixing the probe is out of scope here — this plan repairs the instrument, and the instrument's first
 reading is a finding for its own plan. What must not happen is widening `OverheadBudget.DEFAULT` to
 make the table green.
+
+An eighth came out of review: the sink readiness loop had **no failure path**. `python3 … &` is
+backgrounded, so `set -e` never sees a bind failure, and the plugin degrades an unreachable server to
+a warn rather than failing the build (a hard rule). A dead sink therefore made `no_op_upload` return
+early and the upload axis report a spuriously tiny overhead — a false pass, dressed as a `✅`. Like
+the others it was unreachable while the harness never ran. The script now refuses to start when
+something already serves the port (a leaked sink from an earlier run would otherwise answer the probe
+in place of ours) and asserts readiness after the loop; both paths exit 5 and were tested by
+occupying the port and by pointing the harness at an unusable one. `run_variant` also validates its
+argument against `on|off`, closing the empty-string hole in HOCON's mandatory-substitution guarantee
+(an unset variable aborts, but an empty one substitutes and reads as the fixture's `off` default).
 
 A seventh defect surfaced while verifying the upload axis: the script ended with
 `exec bin/buildhound-overhead`, and `exec` replaces the shell, so the `EXIT` trap never fired and the
