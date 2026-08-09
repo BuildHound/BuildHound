@@ -112,6 +112,11 @@ BUILDHOUND_SAMPLE_TOKEN=some-ingest-token \
   ./gradlew -I ../../.github/buildhound-sample-benchmark.init.gradle.kts :core:common:assemble
 ```
 
+**Both** variables are required: with either one missing or blank the script disables the upload
+entirely rather than publishing. That is deliberate — `UploadGate` keys on the URL alone and the
+uploader simply omits the `Authorization` header when the token is absent, so a URL-only override
+would POST your build's telemetry unauthenticated to whatever host you named.
+
 The script overrides `server.url`/`server.token` in `settingsEvaluated` — after the sample's own
 `buildhound { }` block, which is why a `beforeSettings` hook (what
 `.github/buildhound-dogfood.init.gradle.kts` uses for the root build) cannot do this job. The env
