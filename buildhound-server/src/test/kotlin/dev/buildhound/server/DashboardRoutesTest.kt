@@ -96,6 +96,26 @@ class DashboardRoutesTest {
     }
 
     @Test
+    fun `vendored chart library is served with a javascript content type and CSP`() = testApplication {
+        application { buildHoundModule() }
+
+        val response = client.get("/uplot.js")
+
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(ContentType.parse("text/javascript"), response.contentType()?.withoutParameters())
+        assertEquals(Charsets.UTF_8, response.contentType()?.charset())
+        assertEquals(DashboardAssets.csp, response.headers["Content-Security-Policy"])
+        assertEquals("no-cache", response.headers["Cache-Control"])
+        assertEquals("nosniff", response.headers["X-Content-Type-Options"])
+        val served = response.bodyAsText()
+        assertTrue(served.contains("uPlot"), "the vendored bundle must expose the uPlot global")
+        // Attribution travels with the bytes: the upstream minified header carries only a URL,
+        // so the MIT notice is prepended and must survive any future re-vendoring.
+        assertTrue(served.contains("The MIT License (MIT)"), "the vendored file must carry its license")
+        assertTrue(served.contains("Copyright (c) 2022 Leon Sorokin"), "the vendored file must carry its copyright")
+    }
+
+    @Test
     fun `every style block in the served page is hash-pinned in the CSP`() = testApplication {
         application { buildHoundModule() }
 

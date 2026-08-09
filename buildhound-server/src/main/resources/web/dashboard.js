@@ -1031,80 +1031,300 @@
         return node;
     };
 
-    function trendChart(points, valueOf, color, formatValue) {
-        const width = 720, height = 160, pad = 30;
-        const svg = svgEl("svg", { viewBox: "0 0 " + width + " " + height });
-        const values = points.map(valueOf);
-        const max = Math.max(...values.filter(v => v != null), 1);
-        const stepX = points.length > 1 ? (width - 2 * pad) / (points.length - 1) : 0;
-        const x = i => pad + i * stepX;
-        const y = v => height - pad - (v / max) * (height - 2 * pad);
-        svg.append(svgEl("line", { x1: pad, y1: height - pad, x2: width - pad, y2: height - pad, stroke: "#8886" }));
-        let path = "";
-        points.forEach((point, i) => {
-            const value = valueOf(point);
-            if (value == null) return;
-            path += (path ? " L" : "M") + x(i).toFixed(1) + " " + y(value).toFixed(1);
-            const dot = svgEl("circle", { cx: x(i).toFixed(1), cy: y(value).toFixed(1), r: 2.5, fill: color });
-            const title = document.createElementNS(SVG_NS, "title");
-            title.textContent = point.day + ": " + formatValue(value);
-            dot.append(title);
-            svg.append(dot);
+    // ---------------------------------------------------------------------------------
+    // Charts (plan 105) — built on the vendored uPlot at /uplot.js.
+    //
+    // The hand-rolled predecessors indexed the x-axis by array position, which silently
+    // misrepresented calendar time (a day with no builds is simply absent from the
+    // response, so a three-week gap drew the same width as a one-day gap), connected
+    // straight through null gaps, gave each cohort series its own x scale, and drew no
+    // y-axis at all. Every one of those is a scale/axis concern, so all series here are
+    // aligned onto ONE shared, calendar-correct x domain before they reach uPlot, and a
+    // day a series has no value for stays `null` — never 0.
+    //
+    // uPlot renders to canvas, which assistive technology cannot read, so the chart is
+    // never the only representation: chartFigure() always emits a caption naming the
+    // encoding in words, an sr-only summary, and a real value table (DESIGN-V2 §9). That
+    // table doubles as the degraded rendering when the global is missing or throws — the
+    // same contract /timeline.js already has, and the reason a chart failure can never
+    // blank the page.
+    // ---------------------------------------------------------------------------------
+
+    const CHART_HEIGHT = 240;
+    const CHART_FALLBACK_WIDTH = 720;
+
+    // Series colors come from the DESIGN-V2 custom properties in index.html so both themes
+    // track automatically. getComputedStyle is browser-only; the literal fallbacks keep the
+    // value table's swatches meaningful anywhere else.
+    function tokenColor(name, fallback) {
+        if (typeof getComputedStyle !== "function" || !document.documentElement) return fallback;
+        const value = getComputedStyle(document.documentElement).getPropertyValue(name);
+        return (value && value.trim()) || fallback;
+    }
+    const chartPalette = () => ({
+        neutral: tokenColor("--bh-neutral-solid", "#6F655A"),
+        info: tokenColor("--bh-info-solid", "#2A6FD1"),
+        failure: tokenColor("--bh-failure-solid", "#C22E33"),
+        success: tokenColor("--bh-success-solid", "#1F8055"),
+        grid: tokenColor("--bh-grid", "#E7DED3"),
+        axis: tokenColor("--bh-control-border", "#96897B"),
+        label: tokenColor("--bh-text-muted", "#6F655A"),
+    });
+
+    // A calendar day (yyyy-MM-dd, UTC — the bucket key the server aggregates on) as the
+    // epoch seconds uPlot's time scale expects. Parsed explicitly rather than via Date
+    // parsing rules so the bucket never shifts into the viewer's local timezone.
+    function dayToEpochSeconds(day) {
+        const parts = String(day).split("-");
+        return Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])) / 1000;
+    }
+
+    // Collapses N independently-sampled series onto one shared x domain: the sorted union
+    // of their keys, with null wherever a series has no value at that key. This is what
+    // makes several cohorts (or artifact variants) genuinely comparable — each used to be
+    // drawn on its own implicit scale. Keys are sortable strings (a UTC day for the daily
+    // aggregates, an ISO instant for per-run series); `keyToX` turns one into the epoch
+    // seconds uPlot's time scale plots, and the key itself labels the value table.
+    function alignSeries(inputs, keyToX) {
+        const toX = keyToX || dayToEpochSeconds;
+        const keys = [];
+        const seen = new Set();
+        for (const input of inputs) {
+            for (const point of input.points) {
+                const key = input.keyOf(point);
+                if (key != null && !seen.has(key)) { seen.add(key); keys.push(key); }
+            }
+        }
+        keys.sort();
+        const series = inputs.map(input => {
+            const byKey = new Map();
+            for (const point of input.points) {
+                const value = input.valueOf(point);
+                // A null stays null: `avgHitRate`/`ccHit`/`ccRequested` are honestly
+                // nullable server-side ("no data" ≠ "observed zero"), and flattening that
+                // here would invent cache misses that were never measured.
+                if (value !== undefined) byKey.set(input.keyOf(point), value == null ? null : value);
+            }
+            return Object.assign({}, input, { values: keys.map(key => (byKey.has(key) ? byKey.get(key) : null)) });
         });
-        if (path) svg.append(svgEl("path", { d: path, fill: "none", stroke: color, "stroke-width": 1.5 }));
+        return { days: keys, xValues: keys.map(toX), series };
+    }
+
+    // Live charts of the currently-rendered view. uPlot attaches document-level listeners,
+    // so a view swap destroys them rather than leaking one set per render.
+    let liveCharts = [];
+    function resetCharts() {
+        for (const chart of liveCharts) {
+            try { chart.destroy(); } catch (e) { /* a half-built chart still must not break the view */ }
+        }
+        liveCharts = [];
+    }
+    // A view can also replace a chart in place (the benchmark isolation-mode picker rebuilds
+    // one section without touching the others), so detached charts are reaped on the next
+    // mount rather than only on a full view swap.
+    function pruneCharts() {
+        liveCharts = liveCharts.filter(chart => {
+            const attached = !chart.root || chart.root.isConnected !== false;
+            if (!attached) {
+                try { chart.destroy(); } catch (e) { /* nothing left to keep consistent */ }
+            }
+            return attached;
+        });
+    }
+    if (typeof window !== "undefined" && window.addEventListener) {
+        window.addEventListener("resize", () => {
+            for (const chart of liveCharts) {
+                const width = chart.root && chart.root.parentNode && chart.root.parentNode.clientWidth;
+                if (width) {
+                    try { chart.setSize({ width: width, height: CHART_HEIGHT }); } catch (e) { /* keep the other charts */ }
+                }
+            }
+        });
+    }
+
+    // A dot for a solid series; a line sample carrying the actual dash pattern when the
+    // series is distinguished by dash rather than by hue (see the cohort chart, where
+    // DESIGN-V2 has no qualitative palette to draw six hues from).
+    function legendSwatch(color, dash) {
+        const svg = svgEl("svg", { viewBox: "0 0 16 10", width: "16", height: "10", "aria-hidden": "true" });
+        if (dash && dash.length) {
+            svg.append(svgEl("line", {
+                x1: 0, y1: 5, x2: 16, y2: 5, stroke: color, "stroke-width": 2,
+                "stroke-dasharray": dash.join(" "),
+            }));
+        } else {
+            svg.append(svgEl("circle", { cx: 8, cy: 5, r: 4, fill: color }));
+        }
         return svg;
     }
 
-    // Tag-cohort comparison (plan 057, research F7): a fixed color cycle for the multi-series chart
-    // + legend, reused by both (an SVG `fill` attribute, not a CSS class — the same literal-hex
-    // pattern trendChart/bottlenecksView already use for series colors).
-    const COHORT_COLORS = ["#3b82f6", "#22c55e", "#f97316", "#a855f7", "#ef4444", "#06b6d4"];
+    // Six visually separable dash patterns. DESIGN-V2 defines seven *semantic* solids and no
+    // qualitative palette, and its status mapping means a green cohort line would read as
+    // "success" and a violet one as "flaky" on data that is neither. Until a categorical
+    // palette is reconciled into the design system, cohorts are distinguished by dash plus a
+    // direct label — which §3 prefers over hue anyway.
+    const SERIES_DASHES = [[], [8, 4], [2, 3], [12, 4, 2, 4], [6, 3, 2, 3], [1, 4]];
 
-    function legendSwatch(color) {
-        const svg = svgEl("svg", { viewBox: "0 0 10 10", width: "10", height: "10" });
-        svg.append(svgEl("circle", { cx: 5, cy: 5, r: 5, fill: color }));
-        return svg;
+    /**
+     * The one chart entry point. `spec` is:
+     *   caption      sentence naming what is plotted AND how it is encoded (never hue alone)
+     *   xLabel       column header for the x column of the value table
+     *   series       [{ label, points, keyOf, valueOf, color, dash?, bars? }]
+     *   keyToX       key -> epoch seconds; defaults to parsing a yyyy-MM-dd UTC day
+     *   formatValue  value -> display string, shared by the axis, cursor and table
+     *   emptyText    shown instead of a chart when nothing is plottable
+     */
+    function chartFigure(spec) {
+        const figure = el("figure", null, "chart-card");
+        const caption = el("figcaption");
+        caption.append(el("b", spec.title));
+        caption.append(el("span", " " + spec.caption));
+        figure.append(caption);
+
+        const aligned = alignSeries(spec.series, spec.keyToX);
+        const plotted = aligned.series.some(s => s.values.some(v => v != null));
+        if (!aligned.days.length || !plotted) {
+            figure.append(el("p", spec.emptyText || "No data in this range.", "chart-empty"));
+            return figure;
+        }
+
+        const plot = el("div", null, "chart-plot");
+        // Decorative duplicate of the value table below it (DESIGN-V2 §9): the canvas
+        // carries no text an assistive technology could read, so it is hidden outright
+        // rather than exposed as an unlabelled graphic. It is attached only once a chart
+        // actually mounted, so a missing library leaves no empty gridded box behind.
+        plot.setAttribute("aria-hidden", "true");
+        if (mountChart(plot, spec, aligned)) figure.append(plot);
+        figure.append(el("p", chartSummary(spec, aligned), "sr-only"));
+        if (aligned.series.length > 1) figure.append(seriesToggles(aligned));
+        figure.append(chartValueTable(spec, aligned));
+        return figure;
     }
 
-    function cohortLegend(cohorts) {
-        const ul = el("ul", null, "chips");
-        cohorts.forEach((cohort, i) => {
-            const li = el("li");
-            li.append(legendSwatch(COHORT_COLORS[i % COHORT_COLORS.length]));
-            li.append(el("span", " " + cohort.value + " (n=" + cohort.sampleCount + ")"));
-            ul.append(li);
-        });
-        return ul;
+    // The text summary DESIGN-V2 §9 requires: shape of the data in words, for a reader who
+    // will never see the canvas.
+    function chartSummary(spec, aligned) {
+        const parts = [spec.title + ", " + aligned.days.length
+            + (aligned.days.length === 1 ? " day" : " days")
+            + " from " + aligned.days[0] + " to " + aligned.days[aligned.days.length - 1] + "."];
+        for (const series of aligned.series) {
+            const values = series.values.filter(v => v != null);
+            if (!values.length) { parts.push(series.label + ": no values."); continue; }
+            const first = values[0], last = values[values.length - 1];
+            const direction = last > first ? "rising" : last < first ? "falling" : "flat";
+            parts.push(series.label + ": " + direction
+                + " from " + spec.formatValue(first) + " to " + spec.formatValue(last)
+                + ", lowest " + spec.formatValue(Math.min.apply(null, values))
+                + ", highest " + spec.formatValue(Math.max.apply(null, values))
+                + ", " + values.length + " of " + aligned.days.length + " days with data.");
+        }
+        return parts.join(" ");
     }
 
-    // Generalizes trendChart to overlay one line per cohort (plan 057) — same axis/tooltip
-    // conventions, a distinct color per series from COHORT_COLORS.
-    function cohortChart(cohorts) {
-        const width = 720, height = 200, pad = 30;
-        const svg = svgEl("svg", { viewBox: "0 0 " + width + " " + height });
-        const values = cohorts.flatMap(c => c.points.map(p => p.avgDurationMs)).filter(v => v != null);
-        const max = Math.max(...values, 1);
-        svg.append(svgEl("line", { x1: pad, y1: height - pad, x2: width - pad, y2: height - pad, stroke: "#8886" }));
-        cohorts.forEach((cohort, ci) => {
-            const color = COHORT_COLORS[ci % COHORT_COLORS.length];
-            const points = cohort.points;
-            const stepX = points.length > 1 ? (width - 2 * pad) / (points.length - 1) : 0;
-            const x = i => pad + i * stepX;
-            const y = v => height - pad - (v / max) * (height - 2 * pad);
-            let path = "";
-            points.forEach((point, i) => {
-                const value = point.avgDurationMs;
-                if (value == null) return;
-                path += (path ? " L" : "M") + x(i).toFixed(1) + " " + y(value).toFixed(1);
-                const dot = svgEl("circle", { cx: x(i).toFixed(1), cy: y(value).toFixed(1), r: 2.5, fill: color });
-                const title = document.createElementNS(SVG_NS, "title");
-                title.textContent = cohort.value + " · " + point.day + ": " + ms(value);
-                dot.append(title);
-                svg.append(dot);
+    // Keyboard parity for the pointer-driven legend (DESIGN-V2 §8): real buttons, so the
+    // series toggle is reachable and focusable. uPlot's own legend is switched off — its
+    // header cells respond to a click but take no focus.
+    function seriesToggles(aligned) {
+        const bar = el("div", null, "filters");
+        aligned.series.forEach((series, index) => {
+            const button = el("button");
+            button.append(legendSwatch(series.color, series.dash));
+            button.append(el("span", series.label));
+            button.setAttribute("aria-pressed", "true");
+            button.addEventListener("click", () => {
+                const shown = button.getAttribute("aria-pressed") !== "false";
+                button.setAttribute("aria-pressed", shown ? "false" : "true");
+                for (const chart of liveCharts) {
+                    if (chart.__series === aligned.series) {
+                        try { chart.setSeries(index + 1, { show: !shown }); } catch (e) { /* leave the table authoritative */ }
+                    }
+                }
             });
-            if (path) svg.append(svgEl("path", { d: path, fill: "none", stroke: color, "stroke-width": 1.5 }));
+            bar.append(button);
         });
-        return svg;
+        return bar;
+    }
+
+    // The keyboard-reachable detail (DESIGN-V2 §9) — and the rendering when uPlot is
+    // absent. Collapsed by default so it explains the chart rather than competing with it.
+    function chartValueTable(spec, aligned) {
+        const details = el("details", null, "chart-values");
+        details.append(el("summary", "Show values"));
+        const table = el("table");
+        const head = el("tr");
+        head.append(el("th", spec.xLabel || "Day"));
+        for (const series of aligned.series) head.append(el("th", series.label));
+        table.append(head);
+        aligned.days.forEach((day, i) => {
+            const row = el("tr");
+            row.append(el("td", day));
+            for (const series of aligned.series) {
+                const value = series.values[i];
+                row.append(el("td", value == null ? "—" : spec.formatValue(value), "num"));
+            }
+            table.append(row);
+        });
+        details.append(table);
+        return details;
+    }
+
+    // Everything browser-only lives here. A missing or throwing global leaves the caption,
+    // summary and value table standing — the page never loses a section to a chart.
+    // Returns whether a chart was mounted, so the caller knows to attach the plot node.
+    function mountChart(plot, spec, aligned) {
+        if (typeof uPlot !== "function") return false;
+        pruneCharts();
+        try {
+            const palette = chartPalette();
+            const axis = {
+                stroke: palette.axis,
+                grid: { stroke: palette.grid, width: 1 },
+                ticks: { stroke: palette.axis, width: 1 },
+                font: '12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            };
+            const chart = new uPlot({
+                width: plot.clientWidth || CHART_FALLBACK_WIDTH,
+                height: CHART_HEIGHT,
+                legend: { show: false },
+                cursor: { y: false, drag: { x: true, y: false } },
+                scales: { x: { time: true } },
+                axes: [
+                    Object.assign({}, axis),
+                    Object.assign({}, axis, {
+                        size: 68,
+                        values: (self, ticks) => ticks.map(spec.formatValue),
+                    }),
+                ],
+                series: [{}].concat(aligned.series.map(series => ({
+                    label: series.label,
+                    stroke: series.color,
+                    fill: series.bars ? series.color : undefined,
+                    width: 2,
+                    dash: series.dash,
+                    paths: series.bars && uPlot.paths.bars
+                        ? uPlot.paths.bars({ size: [0.6, 24], align: 0 })
+                        : undefined,
+                    points: { show: aligned.days.length <= 45 },
+                    value: (self, value) => (value == null ? "—" : spec.formatValue(value)),
+                }))),
+            }, [aligned.xValues].concat(aligned.series.map(s => s.values)), plot);
+            chart.__series = aligned.series;
+            liveCharts.push(chart);
+            // The figure is still detached at this point, so the container has no width yet
+            // and the chart is built at a fallback size. Re-measure once it has landed in
+            // the document — same reason the resize handler exists.
+            setTimeout(() => {
+                const width = plot.clientWidth;
+                if (width) {
+                    try { chart.setSize({ width: width, height: CHART_HEIGHT }); } catch (e) { /* keep the drawn chart */ }
+                }
+            }, 0);
+            return true;
+        } catch (e) {
+            // Never leave a half-built canvas next to a table that already tells the truth.
+            plot.textContent = "";
+            return false;
+        }
     }
 
     // Per-cohort delta table (plan 057): the reference row first (labelled, no delta against
@@ -1153,6 +1373,7 @@
         if (seq !== renderSeq) return;
 
         app.textContent = "";
+        resetCharts();
         app.append(filterControls(filter, next => trendsView(next, days).catch(fail)));
         const rangeBar = el("div", null, "filters");
         for (const range of [30, 90]) {
@@ -1181,29 +1402,44 @@
             + " in the last " + days + " days",
             "summary-sentence"));
 
-        app.append(el("h3", "Average build duration"));
-        app.append(trendChart(points, p => p.avgDurationMs, "#3b82f6", ms));
-        app.append(el("h3", "Cache hit rate"));
-        app.append(trendChart(points, p => p.avgHitRate == null ? null : p.avgHitRate * 100, "#22c55e", v => Math.round(v) + "%"));
-        app.append(el("h3", "Builds per day (failures highlighted)"));
-        const width = 720, height = 120, pad = 30;
-        const bars = svgEl("svg", { viewBox: "0 0 " + width + " " + height });
-        const maxBuilds = Math.max(...points.map(p => p.builds), 1);
-        const barWidth = Math.max(2, (width - 2 * pad) / points.length - 2);
-        points.forEach((point, i) => {
-            const barHeight = (point.builds / maxBuilds) * (height - 2 * pad);
-            const barX = pad + i * ((width - 2 * pad) / points.length);
-            const bar = svgEl("rect", {
-                x: barX.toFixed(1), y: (height - pad - barHeight).toFixed(1),
-                width: barWidth.toFixed(1), height: barHeight.toFixed(1),
-                fill: point.failures > 0 ? "#ef4444" : "#3b82f6",
-            });
-            const title = document.createElementNS(SVG_NS, "title");
-            title.textContent = point.day + ": " + point.builds + " build(s), " + point.failures + " failure(s)";
-            bar.append(title);
-            bars.append(bar);
-        });
-        app.append(bars);
+        const palette = chartPalette();
+        const day = p => p.day;
+        app.append(chartFigure({
+            title: "Average build duration",
+            caption: "One point per day with builds. Gaps are days with no builds, not zero-duration days.",
+            series: [{ label: "Average duration", points: points, keyOf: day, valueOf: p => p.avgDurationMs, color: palette.neutral }],
+            formatValue: ms,
+            emptyText: "No durations in this range.",
+        }));
+        // Cache state is "information", not "success", in DESIGN-V2's status mapping — the
+        // predecessor drew this series in success green, which read as a verdict on a rate.
+        // A day with no cache data stays a gap: `avgHitRate` is null when nothing reported.
+        app.append(chartFigure({
+            title: "Cache hit rate",
+            caption: "Share of cacheable work served from the cache, per day. Gaps are days that reported no cache data.",
+            series: [{
+                label: "Hit rate",
+                points: points,
+                keyOf: day,
+                valueOf: p => (p.avgHitRate == null ? null : p.avgHitRate * 100),
+                color: palette.info,
+            }],
+            formatValue: v => Math.round(v) + "%",
+            emptyText: "No cache data in this range.",
+        }));
+        // Two labelled series rather than one bar recolored on failure: the count of failed
+        // builds is the number a reader wants, and a label carries the meaning instead of
+        // hue alone (DESIGN-V2 §3).
+        app.append(chartFigure({
+            title: "Builds per day",
+            caption: "Total builds and, alongside them, how many failed. Both series are labelled — colour alone carries no meaning.",
+            series: [
+                { label: "Builds", points: points, keyOf: day, valueOf: p => p.builds, color: palette.neutral, bars: true },
+                { label: "Failures", points: points, keyOf: day, valueOf: p => p.failures, color: palette.failure, bars: true },
+            ],
+            formatValue: v => String(Math.round(v)),
+            emptyText: "No builds in this range.",
+        }));
 
         // Tag-cohort comparison (plan 057, research F7): a "split by tag" picker populated from
         // /v1/tags; when a key is selected, fetch the per-cohort series + delta and render a
@@ -1235,16 +1471,34 @@
                     if (!comparison.cohorts.length) {
                         app.append(el("p", "No builds carry the \"" + selectedTagKey + "\" tag in this range.", "muted"));
                     } else {
-                        app.append(cohortLegend(comparison.cohorts));
-                        app.append(cohortChart(comparison.cohorts));
+                        // One shared x domain across every cohort. Each cohort used to be
+                        // stretched across the full width by its own point count, so two
+                        // cohorts with different numbers of active days were overlaid on
+                        // different time scales and compared as if aligned.
+                        app.append(chartFigure({
+                            title: "Average build duration by " + selectedTagKey,
+                            caption: "One line per tag value on a shared calendar axis; series are told apart by line style and label, not colour.",
+                            xLabel: "Day",
+                            series: comparison.cohorts.map((cohort, i) => ({
+                                label: cohort.value + " (n=" + cohort.sampleCount + ")",
+                                points: cohort.points,
+                                keyOf: p => p.day,
+                                valueOf: p => p.avgDurationMs,
+                                color: palette.neutral,
+                                dash: SERIES_DASHES[i % SERIES_DASHES.length],
+                            })),
+                            formatValue: ms,
+                            emptyText: "No durations for this tag in this range.",
+                        }));
                         if (comparison.delta) app.append(cohortDeltaTable(comparison.cohorts, comparison.delta));
                     }
                 }
             }
         } catch (e) { /* keep the rest of the trends page */ }
 
-        // Artifact sizes (plan 031): one line per (module, variant, type), reusing trendChart with a
-        // bytes→MB formatter. Best-effort — a fetch error just omits the panel, never blanks the page.
+        // Artifact sizes (plan 031): one series per (module, variant, type). Grouped onto one
+        // shared axis now instead of one chart each, so variants are directly comparable.
+        // Best-effort — a fetch error just omits the panel, never blanks the page.
         try {
             const artifacts = await api("/v1/artifacts/trends?" + params);
             if (seq !== renderSeq) return;
@@ -1259,10 +1513,20 @@
                     if (!bySeries.has(label)) bySeries.set(label, []);
                     bySeries.get(label).push(p);
                 }
-                for (const [label, series] of bySeries) {
-                    app.append(el("p", label, "muted"));
-                    app.append(trendChart(series, p => p.avgSizeBytes, "#a855f7", mb));
-                }
+                app.append(chartFigure({
+                    title: "Artifact sizes",
+                    caption: "Average built artifact size per day, one line per module, variant and type — told apart by line style and label.",
+                    series: Array.from(bySeries, ([label, series], i) => ({
+                        label: label,
+                        points: series,
+                        keyOf: p => p.day,
+                        valueOf: p => p.avgSizeBytes,
+                        color: palette.neutral,
+                        dash: SERIES_DASHES[i % SERIES_DASHES.length],
+                    })),
+                    formatValue: mb,
+                    emptyText: "No artifact sizes in this range.",
+                }));
             }
         } catch (e) { /* keep the rest of the trends page */ }
     }
@@ -1556,6 +1820,7 @@
         if (seq !== renderSeq) return;
 
         app.textContent = "";
+        resetCharts();
         app.append(el("h2", "Benchmark series"));
         if (!series.length) {
             app.append(emptyState({
@@ -1590,9 +1855,25 @@
                 chips.append(chipItem("min", ms(g.summary.min)));
                 chips.append(chipItem("runs", g.summary.count));
                 holder.append(chips);
-                // Reuse the trend chart: map each benchmark point to {day,durationMs} for its tooltip.
-                const points = g.points.map(p => ({ day: when(p.startedAt), durationMs: p.durationMs }));
-                holder.append(trendChart(points, p => p.durationMs, "#2563eb", ms));
+                // Benchmark points are individual runs, not daily buckets, so the key is the
+                // run's instant rather than a UTC day — the shared axis machinery only needs a
+                // sortable key plus a way to turn it into epoch seconds. The old {day,durationMs}
+                // shim existed solely to satisfy the removed trendChart's tooltip.
+                holder.append(chartFigure({
+                    title: "Benchmark duration",
+                    caption: "One point per benchmark run, positioned by when the run started.",
+                    xLabel: "Run started",
+                    keyToX: iso => Date.parse(iso) / 1000,
+                    series: [{
+                        label: "Duration",
+                        points: g.points,
+                        keyOf: p => new Date(p.startedAt).toISOString(),
+                        valueOf: p => p.durationMs,
+                        color: chartPalette().neutral,
+                    }],
+                    formatValue: ms,
+                    emptyText: "No runs in this series.",
+                }));
             };
             select.addEventListener("change", () => renderGroup(select.value));
             if (groups.length > 1) section.append(select);
