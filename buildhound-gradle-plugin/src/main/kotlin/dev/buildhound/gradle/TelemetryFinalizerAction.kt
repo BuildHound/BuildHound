@@ -499,6 +499,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                     tests = tests,
                     testTelemetry = testTelemetry,
                     processes = parameters.processes.getOrElse(emptyList()),
+                    // Execution-window resource usage (plan 104): the end sample is taken here — the
+                    // finalizer is the last plugin-controlled instant, pairing with the baseline the
+                    // collector service stamped at execution start. Guarded like every other probe:
+                    // an unreadable management bean degrades the block to null, never the build.
+                    resourceUsage = runCatching { ResourceUsageProbe.collect(execution.resourceBaseline) }
+                        .getOrNull(),
                     benchmark = benchmark,
                     artifacts = artifacts,
                     jvmArtifacts = jvmArtifacts,

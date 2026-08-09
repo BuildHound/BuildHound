@@ -56,7 +56,7 @@ Settings plugin: `plugins { id("dev.buildhound") version "x" }` in `settings.gra
 
 - **TaskEventCollector**: `BuildEventsListenerRegistry.onTaskCompletion(BuildService)`. Per `TaskFinishEvent`: path, module (derived), start/end ms, result → outcome enum `EXECUTED | UP_TO_DATE | FROM_CACHE | SKIPPED | NO_SOURCE | FAILED`, incremental flag, execution reasons (when present). Task type/class captured at configuration time into the service parameter map (provider-lazy, CC-safe).
 - **Excluded task names** (plan 054, F4): `settings.startParameter.excludedTaskNames`, sorted, into a finalizer param parallel to `requestedTasks` — part of the CC key, replayed verbatim on a hit. Feeds the server's rule-based recommendations engine (a wasted-work rule: the habitual `-x test`-on-CI smell) via `GET /v1/rollups/recommendations` and `GET /v1/builds/{id}/recommendations`.
-- **EnvironmentCollector**: ValueSources for git (branch, sha, dirty), hostname, user (hashed per §3.7), OS/arch/cores/RAM, toolchain versions (Gradle, JDK; AGP/KGP/KSP read from plugin classpaths where applied), daemon reuse.
+- **EnvironmentCollector**: ValueSources for git (branch, sha, dirty), hostname, user (hashed per §3.7), OS/arch/cores/RAM, toolchain versions (Gradle, JDK; AGP/KGP/KSP read from plugin classpaths where applied), daemon reuse. **Machine specs (plan 104):** the build root's filesystem capacity/usable space via `java.nio` `Files.getFileStore` and a best-effort storage-media class (`environment.machine`, §4) — pure NIO plus, on Linux only, a `/sys/block/…/queue/rotational` read; no subprocess on any platform, and the device name/filesystem type are classifier input that never ships.
 - **Finalizer**: `FlowAction` on `FlowProviders.buildWorkResult` — assembles the payload from the service, computes derived metrics (hit rate, avoidance estimate, critical path, parallel utilization), writes HTML artifact, invokes uploader. Never fails the build: all errors log at `warn` and write a failure marker file.
 - **Config-cache state** recorded as `HIT | MISS_STORED | DISABLED | INCOMPATIBLE` (from start parameters + heuristics; refined later). **CC economics (plan 064, F14):** additionally `environment.configurationCacheParallel` (the `org.gradle.configuration-cache.parallel` flag), `derived.ccEntrySizeBytes` (finalizer-time byte sum of the newest CC entry dir — a count, no path §3.7), and `derived.ccLoadMs` (a labelled entry-load proxy on a HIT; a distinct field from `configurationMs`, which stays 0 on a HIT). Server-side: extracted `cc_state` column (V14) → per-day `/trends` CC counters, and `GET /v1/rollups/cc-economics` (advisory CI-reuse class + store/load/entry-size p50s + flip-flop findings over salted `fingerprints.build` within one machine's salt stream).
 - **Invocation posture** (plan 051): `environment.invocation` ships genuinely-new plaintext `fileEncoding`/`locale` plus the fixed 5-key `gradle.properties` allowlist (`org.gradle.caching`, `org.gradle.parallel`, `org.gradle.vfs.watch`, `android.enableJetifier`, `android.nonTransitiveRClass`), each with its declaring layer — alongside, never replacing, the salted `FingerprintInfo` hashes (§3.7).
@@ -87,6 +87,8 @@ data class CiContext(
 ```
 
 Discovery: built-ins first, then `ServiceLoader` for third-party implementations on the settings classpath, then a **generic provider** honoring `BUILDHOUND_CI_*` env vars so unsupported CIs work with zero code. *As built (plan 027):* the built-in matrix is the CCUD 10 — Azure DevOps, GitHub Actions, GitLab, Jenkins, TeamCity (env-only partial), CircleCI, Bamboo, Travis, Bitrise, GoCD, Buildkite — registered most-specific-marker-first. GitHub carries `runAttempt` (+ an `/attempts/N` URL suffix so re-runs don't collide). When no `BUILDHOUND_CI_*` variable is active, the generic provider still classifies the build as CI — provider `generic`, no mapped fields — if the conventional `CI` variable is set and not `false`/`0` (CircleCI, GitLab, Jenkins, Travis and most others set it). The same truthiness rule applies to `BUILDHOUND_CI`: truthy activates the mapping, and an explicit falsy value forces non-CI for the generic provider, overriding `BUILDHOUND_CI_PROVIDER` and the bare-`CI` fallback (plan 014). First non-null `detect()` wins; explicit override via `buildhound { ci.provider = "..." }`. Azure mapping: `TF_BUILD`→detected, `BUILD_BUILDID`→runId, `BUILD_DEFINITIONNAME`→pipelineName (fallback `SYSTEM_DEFINITIONNAME`), `BUILD_SOURCEBRANCH`, `BUILD_SOURCEVERSION`, `SYSTEM_PULLREQUEST_PULLREQUESTID`, `AGENT_NAME`, URL composed from `SYSTEM_COLLECTIONURI`+project+buildId. The same interface file lives in `buildhound-commons` and is documented as a public extension point (README recipe: "add your CI in 30 lines").
+
+**Runner class (plan 104).** A runner's *measured* specs already reach the payload from inside the job — `Runtime.availableProcessors()` and the OS memory bean are cgroup-aware, so a 4-core runner reports 4. What the JVM cannot see is which runner *class* the job asked for: GitHub's `runs-on` labels and Azure's pool/`vmImage` are pipeline-definition values that reach no environment variable. So the built-in providers add a fixed **categorical allowlist** to `attributes` (`RunnerAttributes`) — GitHub `RUNNER_ENVIRONMENT`/`RUNNER_OS`/`RUNNER_ARCH`/`ImageOS`/`ImageVersion`, Azure `AGENT_OS`/`AGENT_OSARCHITECTURE`/`ImageVersion`, GitLab `CI_RUNNER_EXECUTABLE_ARCH`/`CI_RUNNER_VERSION` — plus a provider-neutral, opt-in `BUILDHOUND_CI_RUNNER_CLASS` that the `buildhound-ci-assets` GitHub/Azure/GitLab templates export from the pipeline definition (empty by default, so nothing is collected unless the operator asks). Values are trimmed and capped at 64 chars; the key list is a compile-time constant, so widening it is a plan's decision, not a build's (the plan-051/065 discipline). **Never collected:** GitLab `CI_RUNNER_DESCRIPTION`/`CI_RUNNER_TAGS` and Azure `AGENT_MACHINENAME` — operator-set free text that routinely carries hostnames (§3.7); `agentName` remains the one place a runner's own name belongs.
 
 ### 3.4 Configuration DSL
 
@@ -145,6 +147,8 @@ Collector parses JUnit XML from test tasks (works for JVM + KMP jvm targets; And
 End-of-build (Finalizer): enumerate JVMs via `jps -l` matching main classes (`GradleDaemon`, `KotlinCompileDaemon`, `GradleWorkerMain`), then per PID `jstat -gc` + `jstat -gccapacity`, `jinfo -flags`, and `ps` (as implemented, plan 029). Record per process: `role`, `pid`, heap used/committed/max, GC time, RSS, configured `-Xmx`, uptime, `gcCollector`, `compactObjectHeaders` → the "configured vs used" delta.
 
 **Measurement math (locked, research §4.1):** heap **used** = `EU+OU+S0U+S1U` (survivors **included**); **committed** = `EC+OC+S0C+S1C`; **max** = `-gccapacity` `NGCMX+OGCMX` (JVM capacity, *distinct* from configured `-Xmx`); **GC time** = jstat `GCT` **total** column (never `YGCT+FGCT`, which omits `CGCT` and undercounts concurrent G1/ZGC); configured **`-Xmx`** = jinfo `-XX:MaxHeapSize`; **RSS** = `ps -o rss=` (portable, replacing the earlier Linux-only `/proc`); **uptime** = `ps -o etime=`. jstat columns are read **by header name**, not position (JDK layouts differ). *`pid` ships (plan 065), superseding the original "no PID" decision above:* it is an ephemeral, host-local integer — not PII, a path, or a secret — meaningful only as a correlation key *within one* `hostnameHash` (e.g. the GC-time pid-delta refinement, research F15), never a rollup group key. **Command line is never stored** (jinfo/ps args can embed secrets — §3.7); since plan 065 the same jinfo `-flags` line additionally feeds a **typed allowlist** (`gcCollector`, `compactObjectHeaders`) — only fixed `-XX:` flags are parsed and every output is an enum/bool/int, so the `-Dtoken=…`/`-cp`/classpath content on that line is discarded by construction, not merely scrubbed (unit-pinned leak test, the plan-051 allowlist discipline). `role` remains the **primary** key, so multiple workers are still repeated `GRADLE_WORKER` rows; `pid` is a within-host refinement, not a replacement.
+
+**Per-process CPU + machine resource usage (plan 104).** The two `ps` execs per PID (`-o rss=`, `-o etime=`) merged into one `ps -o rss=,etime=,time=`, adding `cpuTimeMs` — a *lifetime-to-date* per-process total — at one exec **fewer** per process. Alongside it, `resourceUsage` reports the Gradle daemon's own CPU over the execution window plus end-of-build system load/memory point samples, taken from `com.sun.management.OperatingSystemMXBean` at two instants the plugin already owned (build-service instantiation, finalizer). **No sampling thread**: the requirement that collection must not cost build performance rules out the one design that inherently does, so v1 has no *peak* and no usage *timeline* — both are deferred, and nothing is labelled "peak". `MemoryPoolMXBean.resetPeakUsage()` is refused outright (JVM-global mutation inside a shared daemon). The honest scope, repeated in the payload doc and rendered in the report: one process, the execution phase only.
 
 **Payload semantics / blind spots.** One snapshot, no sampling (time-series is v1.x). `processes: []` means "nothing observable" — not an error: JDK tools absent (JRE-only agent), a Kotlin daemon that exited before the finalizer, in-process compilation, or `processProbe { enabled = false }` all yield an empty list. A daemon killed before the finalizer runs never reports at all (that lost-build case is plan 033). Every exec is timeout-bounded; any failure degrades to `[]`, never a failed build.
 
@@ -210,6 +214,18 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
     //   alongside — never replacing — the salted FingerprintInfo hashes (§3.7). properties is the fixed
     //   5-key gradle.properties allowlist, each attributed to its declaring layer (origin, presence-by-
     //   precedence not value-matching). Null when uncaptured.
+                   "machine": { "diskTotalMb": 0, "diskFreeMb": 0, "diskMedia": "NVME|SSD|ROTATIONAL|NETWORK|UNKNOWN" },
+    // ^ machine (plan 104): the build ROOT's filesystem — the one whose exhaustion breaks the build,
+    //   not every mount. Capacity/usable space via java.nio Files.getFileStore (pure NIO, no subprocess,
+    //   every platform); diskFreeMb is *usable* space, so reserved blocks are already accounted for.
+    //   diskMedia is best-effort and conservative: only an actual reading produces a class. UNKNOWN on
+    //   every non-Linux host (macOS needs a diskutil subprocess, Windows WMI — both cost more than the
+    //   datum is worth on the always-on path) and on Linux layouts with no resolvable block device
+    //   (LVM, dm-crypt, btrfs subvolumes, container overlayfs). §3.7: the classifier's inputs — the
+    //   FileStore device NAME (/dev/nvme0n1p2) and filesystem TYPE — are discarded; the extraction
+    //   returns an enum, so there is no string to scrub (the plan-065 jinfo-allowlist discipline).
+    //   cores/ramMb stay above, unduplicated — they are already cgroup-aware, so a 4-core CI runner
+    //   reports 4. CPU model/brand string is deliberately NOT collected (subprocess + new free text).
                    "isolatedProjects": false, "workersMax": 8,
     // ^ isolatedProjects (plan 069, F19): buildFeatures.isolatedProjects.active at whenReady. workersMax
     //   (plan 065, F15 narrowing): plaintext org.gradle.workers.max posture, the benchmark-slicing
@@ -280,7 +296,25 @@ Top-level document (kotlinx-serialization models in `buildhound-commons`; server
     //   XML happens to sit on disk), so an entry here and a `tests[]` entry for the same path never
     //   coexist. Null when no such task ran this build.
   "processes": [ { "role": "KOTLIN_DAEMON", "heapUsedMb": 0, "heapCommittedMb": 0, "heapMaxMb": 0,
-                   "configuredXmxMb": 0, "gcTimeMs": 0, "rssMb": 0, "uptimeS": 0 } ],
+                   "configuredXmxMb": 0, "gcTimeMs": 0, "rssMb": 0, "uptimeS": 0, "cpuTimeMs": 0 } ],
+    // ^ cpuTimeMs (plan 104): cumulative process CPU from `ps -o time=`, a LIFETIME-to-date total —
+    //   not this build's alone (pair with uptimeS to reason about a long-lived reused daemon). It
+    //   rides on the same single `ps` invocation as rssMb/uptimeS, which plan 104 merged from the two
+    //   execs plan 029 spawned per PID: one exec fewer per process, with the CPU number added.
+  "resourceUsage": { "windowMs": 0, "daemonCpuMs": 0, "systemCpuLoadPct": 0, "systemLoadAverage": 0.0,
+                     "systemMemTotalMb": 0, "systemMemFreeMb": 0 },
+    // ^ execution-window resource usage (plan 104). TWO POINT SAMPLES, no sampler thread: a baseline
+    //   stamped at the collector build service's instantiation (the first plugin-controlled instant of
+    //   execution, and on a CC hit the moment right after the entry is deserialized) and one end sample
+    //   in the finalizer. Read windowMs BEFORE daemonCpuMs: the window is the EXECUTION PHASE of the
+    //   GRADLE DAEMON PROCESS — it excludes configuration, and excludes CPU burned in the Kotlin
+    //   daemon/workers/test JVMs (that is processes[].cpuTimeMs). Numerator and denominator both ship
+    //   raw so the denominator stays visible; DerivedMetricsCalculator.daemonCpuUtilization is the one
+    //   blessed way to combine them. Nothing here is a "peak" — a two-point measurement cannot see one,
+    //   and MemoryPoolMXBean.resetPeakUsage() is refused (it mutates state in a shared daemon).
+    //   Null when the anchor never fired (a zero-task or --dry-run build) or every bean read degraded;
+    //   systemLoadAverage is null on Windows and systemCpuLoadPct null before the JVM's first sampling
+    //   interval — honest nulls, never zeroes.
   "benchmark": { "scenario": "clean", "iteration": 3, "isolationMode": "no_build_cache", "seedRef": "..." },
   "artifacts": { "android": [ { "variant": "release", "module": ":app", "type": "APK", "sizeBytes": 0 } ],
                 "jvm": [ { "module": ":service", "kind": "BOOT_JAR", "sizeBytes": 0 } ] },

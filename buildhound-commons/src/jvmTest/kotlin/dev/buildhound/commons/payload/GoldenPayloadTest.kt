@@ -228,6 +228,51 @@ class GoldenPayloadTest {
     }
 
     @Test
+    fun `pre-104 payloads default machine, resourceUsage, and process cpu time to null`() {
+        // The plan-029 processes golden predates plan 104 — untouched, it must keep deserializing
+        // with the machine/usage additions defaulted null (the additive guarantee).
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-processes.json"))
+        assertNull(payload.resourceUsage)
+        assertNull(payload.environment?.machine)
+        for (process in payload.processes) assertNull(process.cpuTimeMs)
+    }
+
+    @Test
+    fun `schema v1 machine golden file deserializes with hardware specs, resource usage, and runner class`() {
+        val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden("build-payload-v1-machine.json"))
+
+        assertEquals(1, payload.schemaVersion, "machine specs and resource usage are additive — the envelope stays schema v1")
+        // Hardware: the always-present cores/RAM stay at the environment level, the new filesystem
+        // facts hang off `machine` — pinned so a refactor can't quietly duplicate or relocate them.
+        assertEquals(8, payload.environment?.cores)
+        assertEquals(32768, payload.environment?.ramMb)
+        val machine = payload.environment?.machine
+        assertEquals(486400, machine?.diskTotalMb)
+        assertEquals(204800, machine?.diskFreeMb)
+        assertEquals(DiskMedia.NVME, machine?.diskMedia)
+
+        // Usage: the raw numerator and denominator both ride so the derivation stays inspectable.
+        val usage = payload.resourceUsage
+        assertEquals(59000, usage?.windowMs)
+        assertEquals(141600, usage?.daemonCpuMs)
+        assertEquals(63, usage?.systemCpuLoadPct)
+        assertEquals(4.75, usage?.systemLoadAverage)
+        assertEquals(9216, usage?.systemMemFreeMb)
+        // 141600 ms of CPU over a 59 s window on 8 cores = 30% of the machine's capacity.
+        assertEquals(0.3, DerivedMetricsCalculator.daemonCpuUtilization(usage, payload.environment?.cores))
+
+        // Per-process CPU rides on the same row as rss/uptime (one merged `ps`, plan 104).
+        assertEquals(214000, payload.processes.first { it.role == ProcessRole.GRADLE_DAEMON }.cpuTimeMs)
+        assertEquals(96500, payload.processes.first { it.role == ProcessRole.KOTLIN_DAEMON }.cpuTimeMs)
+
+        // Runner class: categorical values only — no hostname, no free-text description.
+        val attributes = payload.ci?.attributes.orEmpty()
+        assertEquals("github-hosted", attributes["runnerEnvironment"])
+        assertEquals("ubuntu-latest-8-core", attributes["runnerClass"])
+        assertEquals("20250801.1.0", attributes["runnerImageVersion"])
+    }
+
+    @Test
     fun `schema v1 build-structure golden file deserializes with a populated inventory and isolatedProjects flag`() {
         val payload = BuildHoundJson.payload.decodeFromString(
             BuildPayload.serializer(),
@@ -677,6 +722,7 @@ class GoldenPayloadTest {
             "build-payload-v1-changed-modules.json",
             "build-payload-v1-cc-economics.json",
             "build-payload-v1-excluded-tasks.json",
+            "build-payload-v1-machine.json",
         )) {
             val original = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), golden(name))
             val reEncoded = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), original)

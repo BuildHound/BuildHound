@@ -47,7 +47,21 @@ class ProcessMetricsTest {
     fun `stderr is never captured`() {
         // Writes only to stderr, exits 0 with empty stdout — stderr (which can hold paths/args) is discarded.
         val ps = fake("fake-ps", "printf 'secret /abs/path\\n' 1>&2")
-        val success = assertIs<BoundedExec.Result.Success>(ProcessMetrics(timeoutMillis = 10_000, ps = ps).psRss(1))
+        val success = assertIs<BoundedExec.Result.Success>(ProcessMetrics(timeoutMillis = 10_000, ps = ps).psSnapshot(1))
         assertEquals("", success.stdout)
+    }
+
+    @Test
+    fun `the merged ps snapshot passes one format string and parses all three columns`() {
+        // Echoes its own argv so the exact format string reaching `ps` is pinned, then a real parse
+        // of a representative line proves the merge (plan 104) is wired end to end.
+        val ps = fake("fake-ps", "printf '%s\\n' \"\$*\"")
+        val success = assertIs<BoundedExec.Result.Success>(ProcessMetrics(timeoutMillis = 10_000, ps = ps).psSnapshot(4242))
+        assertEquals("-o rss=,etime=,time= -p 4242\n", success.stdout)
+
+        val snapshot = ProcessParsing.parsePsSnapshot(" 2097152 1-02:03:04 00:01:30\n")
+        assertEquals(2048, snapshot?.rss?.let(ProcessParsing::rssMb))
+        assertEquals(93_784, snapshot?.etime?.let(ProcessParsing::uptimeSeconds))
+        assertEquals(90_000, snapshot?.cpuTime?.let(ProcessParsing::cpuTimeMs))
     }
 }

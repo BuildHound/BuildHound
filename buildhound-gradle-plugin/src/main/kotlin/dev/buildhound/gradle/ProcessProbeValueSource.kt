@@ -25,6 +25,8 @@ data class CollectedProcess(
     val uptimeS: Long? = null,
     val gcCollector: GcCollector? = null,
     val compactObjectHeaders: Boolean? = null,
+    /** Lifetime-to-date process CPU time (plan 104), from the merged `ps` snapshot. */
+    val cpuTimeMs: Long? = null,
 ) : Serializable
 
 /**

@@ -114,6 +114,28 @@ object DerivedMetricsCalculator {
         return (busyMs.toDouble() / (wallMs.toDouble() * cores)).coerceIn(0.0, 1.0)
     }
 
+    /**
+     * Gradle-daemon CPU utilization over the execution window (plan 104): `daemonCpuMs / (windowMs ×
+     * cores)`, clamped to [0, 1] — the same shape as [parallelUtilization], and clamped for the same
+     * reason (the two samples are read at slightly different instants, so an arithmetic overshoot is
+     * possible and must not surface as >100 %).
+     *
+     * Kept here rather than computed in the report so the artifact, the server and any later
+     * dashboard divide the same way. Deliberately **not** stored on the payload: `windowMs` and
+     * `daemonCpuMs` ship raw so the denominator stays visible (see [ResourceUsageInfo]).
+     *
+     * Null whenever the quotient would be meaningless: either input missing, a non-positive window
+     * (a build so short the anchor and the finalizer land in the same millisecond), or unknown
+     * cores. Null, never a placeholder — an unknown utilization must not render as 0 %.
+     */
+    fun daemonCpuUtilization(usage: ResourceUsageInfo?, cores: Int?): Double? {
+        if (cores == null || cores <= 0) return null
+        val windowMs = usage?.windowMs ?: return null
+        val cpuMs = usage.daemonCpuMs ?: return null
+        if (windowMs <= 0 || cpuMs < 0) return null
+        return (cpuMs.toDouble() / (windowMs.toDouble() * cores)).coerceIn(0.0, 1.0)
+    }
+
     /** First task start to last task end; 0 when timestamps are unusable. */
     fun wallClockMs(tasks: List<TaskExecution>): Long {
         val start = tasks.minOfOrNull { it.startMs } ?: return 0

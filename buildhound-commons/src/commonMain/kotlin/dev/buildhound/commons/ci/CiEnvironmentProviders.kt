@@ -28,6 +28,8 @@ class AzureDevOpsCiEnvironmentProvider : CiEnvironmentProvider {
             targetBranch = env["SYSTEM_PULLREQUEST_TARGETBRANCH"]?.stripGitRef(),
             buildUrl = buildUrl(env["SYSTEM_COLLECTIONURI"], env["SYSTEM_TEAMPROJECT"], buildId),
             agentName = env["AGENT_NAME"],
+            // Runner class (plan 104): agent OS/arch + hosted image version, categorical allowlist only.
+            attributes = RunnerAttributes.of(env, RunnerAttributes.AZURE),
         )
     }
 
@@ -67,7 +69,11 @@ class GitHubActionsCiEnvironmentProvider : CiEnvironmentProvider {
             targetBranch = env["GITHUB_BASE_REF"]?.takeIf { it.isNotEmpty() },
             buildUrl = buildUrl(env["GITHUB_SERVER_URL"], env["GITHUB_REPOSITORY"], runId, runAttempt),
             agentName = env["RUNNER_NAME"],
-            attributes = buildMap { runAttempt?.let { put("runAttempt", it) } },
+            attributes = buildMap {
+                runAttempt?.let { put("runAttempt", it) }
+                // Runner class (plan 104): hosted-vs-self-hosted, arch, image identity.
+                putAll(RunnerAttributes.of(env, RunnerAttributes.GITHUB))
+            },
         )
     }
 
@@ -186,7 +192,12 @@ class GitLabCiEnvironmentProvider : CiEnvironmentProvider {
             pullRequestId = env["CI_MERGE_REQUEST_IID"],
             targetBranch = env["CI_MERGE_REQUEST_TARGET_BRANCH_NAME"],
             pipelineName = env["CI_PROJECT_PATH"],
-            attributes = buildMap { env["CI_PIPELINE_URL"]?.takeIf { it.isHttpUrl() }?.let { put("pipelineUrl", it) } },
+            attributes = buildMap {
+                env["CI_PIPELINE_URL"]?.takeIf { it.isHttpUrl() }?.let { put("pipelineUrl", it) }
+                // Runner class (plan 104): arch + runner version. CI_RUNNER_DESCRIPTION/TAGS stay
+                // excluded — operator-set free text that routinely carries hostnames.
+                putAll(RunnerAttributes.of(env, RunnerAttributes.GITLAB))
+            },
         )
     }
 }

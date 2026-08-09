@@ -237,4 +237,43 @@ class DerivedMetricsCalculatorTest {
     fun negative_avoidance_of_an_empty_build_is_zero() {
         assertEquals(0, DerivedMetricsCalculator.negativeAvoidanceMs(emptyList()))
     }
+
+    // ---- plan 104: daemon CPU utilization over the execution window ----
+
+    @Test
+    fun daemon_cpu_utilization_divides_by_the_window_times_the_core_count() {
+        // 4 s of CPU over a 2 s window on 4 cores = half of the machine's capacity for that window.
+        val usage = ResourceUsageInfo(windowMs = 2_000, daemonCpuMs = 4_000)
+        assertEquals(0.5, DerivedMetricsCalculator.daemonCpuUtilization(usage, cores = 4))
+    }
+
+    @Test
+    fun daemon_cpu_utilization_clamps_an_arithmetic_overshoot_to_one() {
+        // The two samples are read at slightly different instants, so a >100% quotient is possible
+        // on a very short window and must not surface as such.
+        val usage = ResourceUsageInfo(windowMs = 100, daemonCpuMs = 900)
+        assertEquals(1.0, DerivedMetricsCalculator.daemonCpuUtilization(usage, cores = 4))
+    }
+
+    @Test
+    fun daemon_cpu_utilization_is_null_whenever_the_quotient_would_be_meaningless() {
+        val complete = ResourceUsageInfo(windowMs = 1_000, daemonCpuMs = 500)
+        assertNull(DerivedMetricsCalculator.daemonCpuUtilization(complete, cores = null))
+        assertNull(DerivedMetricsCalculator.daemonCpuUtilization(complete, cores = 0))
+        assertNull(DerivedMetricsCalculator.daemonCpuUtilization(null, cores = 4))
+        // A build so short both samples land in the same millisecond: no denominator, so no answer.
+        assertNull(DerivedMetricsCalculator.daemonCpuUtilization(ResourceUsageInfo(windowMs = 0, daemonCpuMs = 5), 4))
+        // Half-degraded blocks: an unknown utilization must be null, never rendered as 0%.
+        assertNull(DerivedMetricsCalculator.daemonCpuUtilization(ResourceUsageInfo(windowMs = 1_000), cores = 4))
+        assertNull(DerivedMetricsCalculator.daemonCpuUtilization(ResourceUsageInfo(daemonCpuMs = 500), cores = 4))
+    }
+
+    @Test
+    fun daemon_cpu_utilization_of_a_fully_idle_daemon_is_zero_not_null() {
+        // Zero measured CPU is data — a build that spent its window waiting. Distinct from "unknown".
+        assertEquals(
+            0.0,
+            DerivedMetricsCalculator.daemonCpuUtilization(ResourceUsageInfo(windowMs = 1_000, daemonCpuMs = 0), 8),
+        )
+    }
 }

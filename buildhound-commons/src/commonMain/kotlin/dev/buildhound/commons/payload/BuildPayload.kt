@@ -56,6 +56,12 @@ data class BuildPayload(
     val links: LinksInfo? = null,
     /** End-of-build JVM process snapshot (plan 029, spec §3.6); empty when disabled or unobservable. */
     val processes: List<ProcessInfo> = emptyList(),
+    /**
+     * Machine resource usage over the build's execution phase (plan 104): the Gradle daemon's own CPU
+     * consumption plus end-of-build system load/memory point samples. Null when the execution anchor
+     * never fired (a zero-task or `--dry-run` build) or every read degraded — never a fabricated zero.
+     */
+    val resourceUsage: ResourceUsageInfo? = null,
     /** gradle-profiler benchmark context (plan 030, spec §7); null on non-benchmark builds. */
     val benchmark: BenchmarkInfo? = null,
     /** APK/AAB/AAR sizes for an Android build (plan 031, spec §4); null on non-Android builds. */
@@ -611,10 +617,80 @@ data class EnvironmentInfo(
      * committed `buildCache {}` config, not the invocation switch.
      */
     val buildCache: BuildCacheConfigInfo? = null,
+    /**
+     * Static machine facts that need more than a system property to read (plan 104): the build
+     * root's filesystem capacity and its storage media class. The always-present
+     * [os]/[arch]/[cores]/[ramMb] stay where they are — this block carries only what is new, so
+     * nothing is duplicated on the wire. Null when uncaptured.
+     */
+    val machine: MachineInfo? = null,
 )
 
 @Serializable
 enum class ConfigurationCacheState { HIT, MISS_STORED, DISABLED, INCOMPATIBLE }
+
+/**
+ * Storage media backing the build root's filesystem (plan 104). Best-effort and deliberately
+ * conservative: [UNKNOWN] is the honest answer whenever the media cannot be *established*, which
+ * includes every non-Linux host (macOS needs a `diskutil` subprocess and Windows needs WMI — both
+ * cost more than the datum is worth on the always-on path) and the many Linux layouts whose block
+ * device does not resolve (LVM, dm-crypt, btrfs subvolumes, container overlayfs). A guess is never
+ * substituted for a reading.
+ */
+@Serializable
+enum class DiskMedia { NVME, SSD, ROTATIONAL, NETWORK, UNKNOWN }
+
+/**
+ * Machine hardware facts beyond the system-property basics (plan 104).
+ *
+ * **Privacy (spec §3.7):** the classifier's inputs — the `FileStore` device name
+ * (`/dev/nvme0n1p2`, `/dev/mapper/vg-root`) and its filesystem type — are read only to produce
+ * [diskMedia] and are then discarded. The extraction returns an enum, never a string, so (like the
+ * plan-065 jinfo allowlist reads) there is no free text here to scrub and no path to leak. Only the
+ * enum and two rounded MB counts ship.
+ *
+ * [diskFreeMb] is *usable* space for the running user, not raw free space, so it already accounts
+ * for reserved blocks. Both counts describe the filesystem holding the build root — the one whose
+ * exhaustion actually breaks a build — not every mount on the host.
+ */
+@Serializable
+data class MachineInfo(
+    val diskTotalMb: Long? = null,
+    val diskFreeMb: Long? = null,
+    val diskMedia: DiskMedia? = null,
+)
+
+/**
+ * Resource usage over the build (plan 104), from two point samples the plugin already had hooks for
+ * — no sampling thread, no poller (the feature request's binding constraint was that collection
+ * must not cost build performance, and a sampler is the one design that inherently does).
+ *
+ * **Read [windowMs] before [daemonCpuMs].** The window is the **execution phase** of the **Gradle
+ * daemon process**: it starts at the collector build service's instantiation (the first
+ * plugin-controlled instant of execution, and on a configuration-cache hit the moment right after
+ * the entry is deserialized) and ends in the finalizer. So it excludes configuration, and it
+ * excludes CPU burned in the Kotlin daemon, Gradle workers and forked test JVMs — those are
+ * `ProcessInfo.cpuTimeMs`'s job. The raw numerator and denominator both ship precisely so a consumer
+ * can see what a utilization figure is divided by instead of trusting a pre-divided percentage;
+ * `DerivedMetricsCalculator.daemonCpuUtilization` is the one blessed way to combine them.
+ *
+ * Every field is an honest null when unreadable: [systemLoadAverage] is negative on Windows,
+ * [systemCpuLoadPct] is `NaN` before the JVM's first sampling interval, and a non-HotSpot JVM has no
+ * `com.sun.management` bean at all. None of those become zero.
+ */
+@Serializable
+data class ResourceUsageInfo(
+    /** Wall length of the measurement window; null when the execution anchor never fired. */
+    val windowMs: Long? = null,
+    /** Gradle-daemon process CPU time consumed *within* [windowMs] — a delta, not a lifetime total. */
+    val daemonCpuMs: Long? = null,
+    /** End-of-build point sample of system-wide CPU load, 0..100. */
+    val systemCpuLoadPct: Int? = null,
+    /** End-of-build point sample of the OS load average; null where the platform reports none. */
+    val systemLoadAverage: Double? = null,
+    val systemMemTotalMb: Long? = null,
+    val systemMemFreeMb: Long? = null,
+)
 
 /**
  * Build-cache configuration snapshot (plan 067, research F17), read from the public `Settings.buildCache`
@@ -841,4 +917,15 @@ data class ProcessInfo(
     val gcCollector: GcCollector? = null,
     /** JEP 519 `-XX:[+-]UseCompactObjectHeaders` (plan 065); null when the flag was not printed. */
     val compactObjectHeaders: Boolean? = null,
+    /**
+     * Cumulative process CPU time from `ps -o time=` (plan 104) — this JVM's **lifetime-to-date**
+     * total, *not* scoped to this build's window (unlike `ResourceUsageInfo.daemonCpuMs`). Read from
+     * the same single `ps` invocation as [rssMb]/[uptimeS], which plan 104 merged from the two execs
+     * plan 029 spawned per PID — so this field arrived while making the probe cheaper, not dearer.
+     *
+     * Pair it with [uptimeS] to reason about a reused daemon: a large [cpuTimeMs] over a long
+     * [uptimeS] is many builds' work, not this one's. Null when `ps` is absent (Windows), failed, or
+     * printed an unparseable value.
+     */
+    val cpuTimeMs: Long? = null,
 )

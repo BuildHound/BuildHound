@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "buildId": "c7e4a2b1-9d3f-4c5a-8e6b-1f2a3b4c5d6e",
+  "projectKey": "pilot-android",
+  "startedAt": 1754700000000,
+  "finishedAt": 1754700061000,
+  "outcome": "SUCCESS",
+  "requestedTasks": ["assembleRelease"],
+  "mode": "ci",
+  "tags": {},
+  "values": {},
+  "tasks": [
+    {
+      "path": ":app:compileReleaseKotlin",
+      "module": ":app",
+      "startMs": 1754700002000,
+      "durationMs": 41000,
+      "outcome": "EXECUTED",
+      "incremental": false,
+      "executionReasons": []
+    }
+  ],
+  "environment": {
+    "os": "Linux",
+    "arch": "amd64",
+    "cores": 8,
+    "ramMb": 32768,
+    "machine": {
+      "diskTotalMb": 486400,
+      "diskFreeMb": 204800,
+      "diskMedia": "NVME"
+    }
+  },
+  "ci": {
+    "provider": "github-actions",
+    "runId": "17209384756",
+    "attributes": {
+      "runAttempt": "1",
+      "runnerEnvironment": "github-hosted",
+      "runnerOs": "Linux",
+      "runnerArch": "X64",
+      "runnerImageOs": "ubuntu24",
+      "runnerImageVersion": "20250801.1.0",
+      "runnerClass": "ubuntu-latest-8-core"
+    }
+  },
+  "processes": [
+    {
+      "role": "GRADLE_DAEMON",
+      "heapUsedMb": 1462,
+      "heapCommittedMb": 2048,
+      "heapMaxMb": 4096,
+      "configuredXmxMb": 4096,
+      "gcTimeMs": 3120,
+      "rssMb": 2711,
+      "uptimeS": 812,
+      "cpuTimeMs": 214000
+    },
+    {
+      "role": "KOTLIN_DAEMON",
+      "heapUsedMb": 640,
+      "heapCommittedMb": 1024,
+      "heapMaxMb": 2048,
+      "configuredXmxMb": 2048,
+      "gcTimeMs": 410,
+      "rssMb": 1180,
+      "uptimeS": 205,
+      "cpuTimeMs": 96500
+    }
+  ],
+  "resourceUsage": {
+    "windowMs": 59000,
+    "daemonCpuMs": 141600,
+    "systemCpuLoadPct": 63,
+    "systemLoadAverage": 4.75,
+    "systemMemTotalMb": 32768,
+    "systemMemFreeMb": 9216
+  }
+}

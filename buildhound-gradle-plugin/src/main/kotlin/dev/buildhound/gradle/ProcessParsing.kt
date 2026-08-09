@@ -125,10 +125,65 @@ internal object ProcessParsing {
     fun parseCompactObjectHeaders(jinfoFlags: String): Boolean? =
         COMPACT_OBJECT_HEADERS.find(jinfoFlags)?.let { it.groupValues[1] == "+" }
 
+    /**
+     * The three columns of one `ps -o rss=,etime=,time=` line (plan 104), split by whitespace.
+     *
+     * Robust rather than trusting: `ps` should print exactly one bare values line, but the parser
+     * takes the **last** non-blank line (so a stray header from a non-conforming `ps` is skipped)
+     * and returns null for any column the line did not carry. A ragged line therefore costs the
+     * missing fields only — the per-field degradation contract plan 029 established for the two
+     * separate execs this replaced.
+     */
+    fun parsePsSnapshot(output: String): PsSnapshot? {
+        val line = output.lineSequence().map { it.trim() }.lastOrNull { it.isNotEmpty() } ?: return null
+        val cells = line.split(WHITESPACE)
+        return PsSnapshot(
+            rss = cells.getOrNull(0),
+            etime = cells.getOrNull(1),
+            cpuTime = cells.getOrNull(2),
+        )
+    }
+
+    /** Raw, unvalidated columns of a `ps` snapshot line; each is parsed by its own function. */
+    data class PsSnapshot(val rss: String?, val etime: String?, val cpuTime: String?)
+
     /** RSS MB from `ps -o rss=` (KB); null when the output is not a number. */
     fun rssMb(psRss: String): Long? {
         val kb = psRss.trim().toLongOrNull() ?: return null
         return Math.round(kb / KB_PER_MB)
+    }
+
+    /**
+     * Cumulative process CPU time (ms) from `ps -o time=` (plan 104). Same `[[dd-]hh:]mm:ss` clock
+     * family as [uptimeSeconds], with one platform difference that matters: macOS prints fractional
+     * seconds (`12:34.56`) where Linux prints whole (`00:12:34`). Both are accepted here.
+     *
+     * [uptimeSeconds] is deliberately **not** loosened to share this tolerance — its strictness is
+     * pinned behaviour, and `etime` has no fractional form to accept.
+     */
+    @Suppress("ReturnCount") // Each early exit rejects a distinct malformed `time` shape, as in uptimeSeconds.
+    fun cpuTimeMs(psTime: String): Long? {
+        val text = psTime.trim()
+        if (text.isEmpty()) return null
+        val (days, hms) = if (text.contains('-')) {
+            val parts = text.split('-', limit = 2)
+            (parts[0].toLongOrNull() ?: return null) to parts[1]
+        } else {
+            0L to text
+        }
+        val units = hms.split(':')
+        // Only the seconds field may be fractional; hours/minutes must be whole.
+        val seconds = units.lastOrNull()?.toDoubleOrNull() ?: return null
+        val whole = units.dropLast(1).map { it.toLongOrNull() ?: return null }
+        val (h, m) = when (whole.size) {
+            2 -> whole[0] to whole[1]
+            1 -> 0L to whole[0]
+            0 -> 0L to 0L
+            else -> return null
+        }
+        val totalSeconds = ((days * HOURS_PER_DAY + h) * MINUTES_PER_HOUR + m) * SECONDS_PER_MINUTE + seconds
+        if (totalSeconds < 0) return null
+        return Math.round(totalSeconds * MILLIS_PER_SECOND)
     }
 
     /** Elapsed seconds from `ps -o etime=` (`[[dd-]hh:]mm:ss`, portable across Linux/macOS). */

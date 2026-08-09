@@ -241,6 +241,13 @@ Default empty everywhere → nothing is collected unless the operator opts in.
 - **plugin (TestKit):** a build run **twice** asserting run 2 (CC hit) reports a fresh, non-replayed
   `resourceUsage`; a build asserting `environment.machine.diskTotalMb` is populated and that no
   device path or filesystem name appears anywhere in the payload.
+
+  *As built:* "non-replayed" is pinned two ways rather than by comparing two runs' values (which a
+  fast pair of builds could coincidentally match). `DaemonStateResourceBaselineTest` proves the
+  mechanism deterministically — the baseline is read **and reset** by `executionRan()`, so build N's
+  anchor cannot survive into build N+1 — and `MachineSpecsFunctionalTest` asserts the observable
+  consequence on the CC hit: the reported window fits inside that build's own wall duration, which a
+  replayed baseline (spanning the previous build and the gap since) could not satisfy.
 - **report:** `ReportScriptTest` (node) fixture extended with the new blocks — asserts the Machine
   section renders, that a build *without* them stays hidden, and that a hostile string in a new
   field lands as text. `ReportAssetsTest` zero-network invariant unchanged and not weakened.

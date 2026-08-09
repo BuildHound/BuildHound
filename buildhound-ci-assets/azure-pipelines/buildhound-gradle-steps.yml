@@ -55,6 +55,12 @@ parameters:
   - name: expectedWrapperJarSha256
     type: string
     default: ""
+  # Optional runner class/SKU label (plan 104), e.g. "ubuntu-24.04" or a self-hosted pool name.
+  # Categorical label only — never an agent hostname, a user name, or anything secret: it is
+  # collected verbatim (trimmed to 64 chars) into ci.attributes.runnerClass. Empty = not collected.
+  - name: runnerClass
+    type: string
+    default: ""
 
 steps:
   - ${{ if ne(parameters.validateWrapper, 'off') }}:
@@ -125,6 +131,10 @@ steps:
       # Map the secret in the consuming pipeline; never echo it.
       BUILDHOUND_TOKEN: $(BUILDHOUND_TOKEN)
       BUILDHOUND_SERVER_URL: ${{ parameters.buildhoundServerUrl }}
+      # Runner class (plan 104); empty => the plugin collects nothing. Agent OS/arch and the hosted
+      # ImageVersion already reach the payload from the agent's own environment — this carries the
+      # pool/vmImage the pipeline *asked for*, which no agent variable exposes.
+      BUILDHOUND_CI_RUNNER_CLASS: ${{ parameters.runnerClass }}
 
   - ${{ if ne(parameters.verdictGate, 'off') }}:
       - script: |

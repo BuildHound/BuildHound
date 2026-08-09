@@ -406,6 +406,10 @@ constructor(
                 // Plaintext workers.max (plan 065): the same CC-safe start-parameter scalar the
                 // fingerprints (plan 022) and invocation posture (plan 051) capture below.
                 spec.parameters.workersMax.set(settings.startParameter.maxWorkerCount)
+                // Build root (plan 104): only the *path string* is captured here — the filesystem is
+                // queried inside the value source at execution time, for the same reason the salt is
+                // (a config-phase file read is a CC fingerprint input).
+                spec.parameters.rootDir.set(settings.rootDir.absolutePath)
             }
 
         val vcs =

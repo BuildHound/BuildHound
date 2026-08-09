@@ -31,6 +31,8 @@ internal object DaemonState {
     private val configStartNanos = AtomicLong(UNSET)
     private val configEndNanos = AtomicLong(UNSET)
     private val executionStartedMs = AtomicLong(UNSET)
+    private val executionStartNanos = AtomicLong(UNSET)
+    private val executionStartCpuNanos = AtomicLong(UNSET)
 
     fun configurationRan() {
         configuredSinceLastExecution.set(true)
@@ -57,6 +59,13 @@ internal object DaemonState {
      */
     fun executionStarted() {
         executionStartedMs.set(System.currentTimeMillis())
+        // Resource-usage baseline (plan 104). Two cheap reads at the instant the CC-load anchor above
+        // already occupies — no extra hook, no sampler thread. `nanoTime` (monotonic) is the right
+        // clock *here*, unlike the wall-clock anchor above: this pair is only ever subtracted from a
+        // later reading of itself, never compared against Gradle's epoch-ms event times, so it must
+        // be immune to a wall-clock step (NTP, DST) mid-build.
+        executionStartNanos.set(System.nanoTime())
+        executionStartCpuNanos.set(ResourceUsageProbe.processCpuNanos() ?: UNSET)
     }
 
     /** Called once per build from the finalizer; returns and resets the heuristic state. */
@@ -70,8 +79,20 @@ internal object DaemonState {
             configuredThisBuild = configuredSinceLastExecution.getAndSet(false),
             configurationMs = configurationMs,
             executionStartedMs = executionStarted,
+            resourceBaseline = ResourceBaseline(
+                startNanos = executionStartNanos.getAndSet(UNSET).takeUnless { it == UNSET },
+                startCpuNanos = executionStartCpuNanos.getAndSet(UNSET).takeUnless { it == UNSET },
+            ),
         )
     }
+
+    /**
+     * The plan-104 execution-phase baseline, read and reset by [executionRan] alongside the rest of
+     * the per-build state. Both halves are independently nullable: a build that never instantiated
+     * the collector (zero tasks, `--dry-run`) has neither, and a JVM without the `com.sun.management`
+     * bean has the wall half but no CPU half. Absent means absent — never zero.
+     */
+    data class ResourceBaseline(val startNanos: Long? = null, val startCpuNanos: Long? = null)
 
     data class Execution(
         val daemonReused: Boolean,
@@ -79,5 +100,7 @@ internal object DaemonState {
         val configurationMs: Long? = null,
         /** Epoch-ms anchor for the CC entry-load proxy (plan 064); null when never stamped this build. */
         val executionStartedMs: Long? = null,
+        /** Monotonic + CPU baseline for the plan-104 resource window; empty when never stamped. */
+        val resourceBaseline: ResourceBaseline = ResourceBaseline(),
     )
 }

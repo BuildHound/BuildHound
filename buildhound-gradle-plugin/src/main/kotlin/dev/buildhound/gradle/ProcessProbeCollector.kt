@@ -25,8 +25,8 @@ internal object ProcessProbeCollector {
             val gc = probe.stdout("jstat") { tools.jstatGc(pid) }?.let(ProcessParsing::parseJstat)
             val capacity = probe.stdout("jstat") { tools.jstatCapacity(pid) }?.let(ProcessParsing::parseJstat)
             val flags = probe.stdout("jinfo") { tools.jinfoFlags(pid) }
-            val rss = probe.stdout("ps") { tools.psRss(pid) }
-            val etime = probe.stdout("ps") { tools.psEtime(pid) }
+            // One `ps` for rss + etime + cpu time (plan 104), replacing plan 029's two execs.
+            val ps = probe.stdout("ps") { tools.psSnapshot(pid) }?.let(ProcessParsing::parsePsSnapshot)
             processes.add(
                 CollectedProcess(
                     role = role,
@@ -37,8 +37,9 @@ internal object ProcessProbeCollector {
                     heapMaxMb = capacity?.let(ProcessParsing::heapMaxMb),
                     configuredXmxMb = flags?.let(ProcessParsing::configuredXmxMb),
                     gcTimeMs = gc?.let(ProcessParsing::gcTimeMs),
-                    rssMb = rss?.let(ProcessParsing::rssMb),
-                    uptimeS = etime?.let(ProcessParsing::uptimeSeconds),
+                    rssMb = ps?.rss?.let(ProcessParsing::rssMb),
+                    uptimeS = ps?.etime?.let(ProcessParsing::uptimeSeconds),
+                    cpuTimeMs = ps?.cpuTime?.let(ProcessParsing::cpuTimeMs),
                     // Typed-allowlist reads over the SAME jinfo line (plan 065) — no new subprocess.
                     gcCollector = flags?.let(ProcessParsing::parseGcCollector),
                     compactObjectHeaders = flags?.let(ProcessParsing::parseCompactObjectHeaders),

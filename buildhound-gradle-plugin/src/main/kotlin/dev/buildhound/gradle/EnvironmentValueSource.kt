@@ -2,9 +2,12 @@ package dev.buildhound.gradle
 
 import dev.buildhound.commons.ci.CiEnvironment
 import dev.buildhound.commons.ci.EnvironmentDetection
+import dev.buildhound.commons.payload.DiskMedia
 import java.io.Serializable
 import java.lang.management.ManagementFactory
 import java.net.InetAddress
+import java.nio.file.Files
+import java.nio.file.Path
 import org.gradle.api.logging.Logging
 import org.gradle.api.provider.Property
 import org.gradle.api.provider.ValueSource
@@ -36,6 +39,12 @@ data class CollectedEnvironment(
      * this copy is the environment-level benchmark-slicing dimension.
      */
     val workersMax: Int? = null,
+    /** Build-root filesystem capacity (plan 104), from `Files.getFileStore` — pure NIO, no subprocess. */
+    val diskTotalMb: Long? = null,
+    /** *Usable* space for the running user, so reserved blocks are already accounted for. */
+    val diskFreeMb: Long? = null,
+    /** Storage media class (plan 104); [DiskMedia.UNKNOWN] whenever it cannot be established. */
+    val diskMedia: DiskMedia? = null,
 ) : Serializable
 
 /**
@@ -63,6 +72,14 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
          * like the fingerprints' `parallel`/`maxWorkers` params, so no new CC fingerprint input.
          */
         val workersMax: Property<Int>
+
+        /**
+         * Absolute path of the build root (plan 104): the filesystem whose capacity/media is
+         * reported is the one holding the build, since that is the one whose exhaustion breaks it.
+         * Only the path string is baked at registration — the filesystem itself is queried here at
+         * execution time, exactly like [identitySaltFile].
+         */
+        val rootDir: Property<String>
     }
 
     override fun obtain(): CollectedEnvironment {
@@ -89,6 +106,10 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
                 ?: EnvironmentDetection.IdeInfo(null, null, null)
         }
         val aiAgent = guarded("agent") { EnvironmentDetection.detectAgent(env, sysProps) }
+        // Build-root filesystem (plan 104). One `statvfs`-class NIO call plus, on Linux only, at most
+        // two one-byte sysfs reads — no subprocess on any platform, so this cannot move the build's
+        // measured cost. Guarded per-probe like everything else here.
+        val fileStore = guarded("filestore") { Files.getFileStore(Path.of(parameters.rootDir.get())) }
         return CollectedEnvironment(
             os = guarded("os") { System.getProperty("os.name") },
             arch = guarded("arch") { System.getProperty("os.arch") },
@@ -103,6 +124,20 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
             ideSync = ide.sync,
             aiAgent = aiAgent,
             workersMax = parameters.workersMax.orNull,
+            diskTotalMb = fileStore?.let { store -> guarded("disk-total") { store.totalSpace / BYTES_PER_MIB } },
+            diskFreeMb = fileStore?.let { store -> guarded("disk-free") { store.usableSpace / BYTES_PER_MIB } },
+            diskMedia = fileStore?.let { store ->
+                guarded("disk-media") {
+                    DiskMediaDetection.classify(
+                        osName = System.getProperty("os.name"),
+                        // Classifier input only — the device name is a path and never leaves this call
+                        // (spec §3.7); `classify` returns an enum, so there is no string to scrub.
+                        deviceName = store.name(),
+                        fileStoreType = store.type(),
+                        readSysfs = ::readSysfs,
+                    )
+                }
+            },
         )
     }
 
@@ -111,6 +146,14 @@ abstract class EnvironmentValueSource : ValueSource<CollectedEnvironment, Enviro
         return (bean as? com.sun.management.OperatingSystemMXBean)
             ?.totalMemorySize?.let { it / BYTES_PER_MIB }
     }
+
+    /**
+     * Reads a `/sys/block/…/queue/rotational` pseudo-file; null when absent or unreadable. The path
+     * is composed by [DiskMediaDetection] from a device name, never from user input, and only sysfs
+     * paths are ever passed — the guard here is against a missing file, not a hostile one.
+     */
+    private fun readSysfs(path: String): String? =
+        runCatching { Path.of(path).takeIf { Files.isReadable(it) }?.let(Files::readString) }.getOrNull()
 
     private fun <T> guarded(what: String, block: () -> T?): T? =
         runCatching(block).onFailure {

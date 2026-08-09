@@ -75,12 +75,19 @@
         <h2>Warnings</h2>
         <div id="warnings-body"></div>
     </section>
+    <section id="machine" hidden>
+        <h2>Machine</h2>
+        <ul id="machine-specs" class="chips"></ul>
+        <ul id="machine-usage" class="chips" hidden></ul>
+        <p id="machine-usage-note" class="muted" hidden></p>
+    </section>
     <section id="processes" hidden>
         <h2>Process snapshot</h2>
         <table id="processes-table">
-            <thead><tr><th>Process</th><th class="num">Heap used</th><th class="num">Committed</th><th class="num">Max</th><th class="num">-Xmx</th><th>Used vs -Xmx</th><th class="num">GC time</th><th class="num">RSS</th><th class="num">Uptime</th></tr></thead>
+            <thead><tr><th>Process</th><th class="num">Heap used</th><th class="num">Committed</th><th class="num">Max</th><th class="num">-Xmx</th><th>Used vs -Xmx</th><th class="num">GC time</th><th class="num">RSS</th><th class="num">CPU time</th><th class="num">Uptime</th></tr></thead>
             <tbody></tbody>
         </table>
+        <p id="processes-note" class="muted">Probed at the end of the build — JVMs that had already exited are not listed. CPU time is each process's lifetime total, not this build's alone.</p>
         <div id="tuning-candidates" hidden></div>
     </section>
     <section id="artifacts" hidden>
@@ -263,6 +270,85 @@
             document.getElementById("warnings").hidden = false;
         }
 
+        // Machine specs + build resource usage (plan 104). Two chip rows: what the build ran ON
+        // (static hardware) and what it USED (execution-window measurements). Every field is
+        // individually conditional and the whole section stays hidden when none is present, so an
+        // older payload — or one where every best-effort probe degraded — renders exactly as before.
+        // All values reach the DOM through the same el()/textContent helper as every other section.
+        (function machineSection() {
+            const env = d.environment || {};
+            const machine = env.machine || {};
+            const usage = d.resourceUsage || {};
+            const gb = n => n == null ? null : (n >= 1024 ? (n / 1024).toFixed(1) + " GB" : n + " MB");
+            const MEDIA_LABELS = {
+                NVME: "NVMe", SSD: "SSD", ROTATIONAL: "HDD", NETWORK: "network", UNKNOWN: "unknown",
+            };
+
+            const specs = document.getElementById("machine-specs");
+            const spec = (label, value) => {
+                if (value == null || value === "") return;
+                const li = el("li");
+                li.append(el("b", label + " "));
+                li.append(el("span", value));
+                specs.append(li);
+            };
+            spec("os", env.os && env.arch ? env.os + " · " + env.arch : env.os || env.arch);
+            spec("cpus", env.cores);
+            spec("memory", gb(env.ramMb));
+            // Media and capacity are independent probes: a filesystem whose media could not be
+            // established (every non-Linux host, and container/LVM layouts) still reports its size.
+            if (machine.diskTotalMb != null || machine.diskMedia) {
+                const media = MEDIA_LABELS[machine.diskMedia] || machine.diskMedia;
+                const size = machine.diskTotalMb != null
+                    ? (machine.diskFreeMb != null ? gb(machine.diskFreeMb) + " free of " + gb(machine.diskTotalMb) : gb(machine.diskTotalMb))
+                    : null;
+                spec("disk", [media, size].filter(Boolean).join(" · "));
+            }
+            if (env.workersMax != null) spec("max workers", env.workersMax);
+            const ci = d.ci || {};
+            const ciAttributes = ci.attributes || {};
+            spec("runner", ciAttributes.runnerClass);
+            spec("runner image", ciAttributes.runnerImageOs && ciAttributes.runnerImageVersion
+                ? ciAttributes.runnerImageOs + " " + ciAttributes.runnerImageVersion
+                : ciAttributes.runnerImageOs || ciAttributes.runnerImageVersion);
+            spec("runner env", ciAttributes.runnerEnvironment);
+
+            const usageChips = document.getElementById("machine-usage");
+            const use = (label, value) => {
+                if (value == null || value === "") return;
+                const li = el("li");
+                li.append(el("b", label + " "));
+                li.append(el("span", value));
+                usageChips.append(li);
+            };
+            // Utilization is computed here rather than shipped, and only when BOTH the window and
+            // the core count are known — an unknown utilization must never render as 0%.
+            if (usage.daemonCpuMs != null && usage.windowMs > 0 && env.cores > 0) {
+                const pct = Math.min(1, usage.daemonCpuMs / (usage.windowMs * env.cores)) * 100;
+                use("daemon cpu", pct.toFixed(pct < 10 ? 1 : 0) + "% of " + env.cores + " cores");
+            } else if (usage.daemonCpuMs != null) {
+                use("daemon cpu", ms(usage.daemonCpuMs));
+            }
+            if (usage.windowMs != null) use("measured over", ms(usage.windowMs));
+            if (usage.systemCpuLoadPct != null) use("system cpu", usage.systemCpuLoadPct + "%");
+            if (usage.systemLoadAverage != null) use("load avg", usage.systemLoadAverage.toFixed(2));
+            if (usage.systemMemTotalMb != null && usage.systemMemFreeMb != null) {
+                use("system memory", gb(usage.systemMemTotalMb - usage.systemMemFreeMb) + " used of " + gb(usage.systemMemTotalMb));
+            }
+            if (usageChips.children.length) {
+                usageChips.hidden = false;
+                const note = document.getElementById("machine-usage-note");
+                // The honest caveat: this is one process over part of the build, not a machine total.
+                note.textContent = "Gradle daemon process only, over the execution phase — configuration"
+                    + " time and work done in Kotlin/worker/test JVMs are not included. System load and"
+                    + " memory are single readings taken at the end of the build.";
+                note.hidden = false;
+            }
+            if (specs.children.length || usageChips.children.length) {
+                document.getElementById("machine").hidden = false;
+            }
+        })();
+
         // Process snapshot (plan 029): daemon/Kotlin/worker JVM heap-used-vs-configured, GC, RSS.
         // Hidden entirely when the probe collected nothing (disabled or JDK tools absent). Roles are
         // an allowlisted enum; every value reaches the DOM via textContent.
@@ -289,6 +375,7 @@
                 row.append(barCell);
                 row.append(el("td", p.gcTimeMs != null ? ms(p.gcTimeMs) : "", "num"));
                 row.append(el("td", mb(p.rssMb), "num"));
+                row.append(el("td", p.cpuTimeMs != null ? ms(p.cpuTimeMs) : "", "num"));
                 row.append(el("td", p.uptimeS != null ? ms(p.uptimeS * 1000) : "", "num"));
                 pbody.append(row);
             }

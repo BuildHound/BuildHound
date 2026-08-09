@@ -27,8 +27,11 @@ class ProcessProbeCollectorTest {
             calls.add("jinfoFlags($pid)")
             return ok("-XX:MaxHeapSize=4294967296 -XX:+UseG1GC -XX:-UseCompactObjectHeaders")
         }
-        override fun psRss(pid: Long): BoundedExec.Result { calls.add("psRss($pid)"); return ok("1048576") }
-        override fun psEtime(pid: Long): BoundedExec.Result { calls.add("psEtime($pid)"); return ok("01:00") }
+        // One merged `ps` since plan 104: rss KB, etime, cumulative CPU time.
+        override fun psSnapshot(pid: Long): BoundedExec.Result {
+            calls.add("psSnapshot($pid)")
+            return ok(" 1048576 01:00 00:02:30\n")
+        }
     }
 
     @Test
@@ -53,12 +56,16 @@ class ProcessProbeCollectorTest {
         val result = ProcessProbeCollector.collect(tools)
 
         assertEquals(2, result.size)
-        // jps + 5 probes per PID — plan 065's collector/headers/pid ride existing execs, adding none.
-        assertEquals(1 + 2 * 5, tools.calls.size)
+        // jps + 4 execs per PID. Plan 065's collector/headers/pid ride existing execs, adding none;
+        // plan 104 *removed* one (the two `ps` calls merged) while adding cpuTimeMs — pinned here so
+        // a future field can't silently reintroduce a per-PID subprocess.
+        assertEquals(1 + 2 * 4, tools.calls.size)
         val daemon = result.first { it.role == ProcessRole.GRADLE_DAEMON }
         assertEquals(4096, daemon.configuredXmxMb)
         assertNotNull(daemon.heapUsedMb)
         assertEquals(1024, daemon.rssMb) // 1048576 KB → 1024 MB
+        assertEquals(60, daemon.uptimeS) // 01:00 is mm:ss → 1 min
+        assertEquals(150_000, daemon.cpuTimeMs) // 00:02:30 → 150 s
         // Plan 065: the jps pid is carried, and the SAME jinfo line yields the typed tuning flags.
         assertEquals(1L, daemon.pid)
         assertEquals(GcCollector.G1, daemon.gcCollector)
