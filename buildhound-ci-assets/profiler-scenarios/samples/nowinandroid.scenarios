@@ -1,0 +1,46 @@
+# gradle-profiler scenarios for the nowinandroid sample (plan 105).
+#
+# Driven by .github/workflows/nightly-benchmark.yml, one scenario per profiler invocation, with a
+# matching BUILDHOUND_BENCHMARK_SCENARIO exported for that invocation. The scenario NAMES must stay
+# inside the plugin's allowlist (BenchmarkActivation.SCENARIOS) — clean | no_op |
+# incremental_non_abi | cc_hit.
+#
+# The realistic large Android pilot: many modules, KSP/Hilt/Compose, build cache and configuration
+# cache ON, so both wired isolation modes (full_cache, no_build_cache) are meaningful.
+#
+# Only two measured iterations (and one warm-up) per scenario: a clean :app:assembleDemoDebug on a
+# 4-vCPU runner is the most expensive cell in the nightly matrix. Raise this only alongside a
+# runner-size change.
+
+clean {
+    title = "Clean :app:assembleDemoDebug (nowinandroid)"
+    tasks = [":app:assembleDemoDebug"]
+    cleanup-tasks = ["clean"]
+    warm-ups = 1
+    iterations = 2
+}
+
+no_op {
+    title = "No-op (fully up-to-date) :app:assembleDemoDebug (nowinandroid)"
+    tasks = [":app:assembleDemoDebug"]
+    warm-ups = 1
+    iterations = 2
+}
+
+incremental_non_abi {
+    title = "Incremental non-ABI source change (nowinandroid)"
+    tasks = [":app:assembleDemoDebug"]
+    # A core module the feature modules depend on; a method-body-only change exercises incremental
+    # Kotlin compilation without invalidating downstream ABI.
+    apply-non-abi-change-to = ["core/datastore/src/main/kotlin/com/google/samples/apps/nowinandroid/core/datastore/NiaPreferencesDataSource.kt"]
+    warm-ups = 1
+    iterations = 2
+}
+
+cc_hit {
+    title = "Configuration-cache hit :app:assembleDemoDebug (nowinandroid)"
+    tasks = [":app:assembleDemoDebug"]
+    gradle-args = ["--configuration-cache"]
+    warm-ups = 1
+    iterations = 2
+}

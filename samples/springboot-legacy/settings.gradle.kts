@@ -43,7 +43,15 @@ buildhound {
     // nothing). DEMO DEVIATION: pointed at the local BuildHound stack from deploy/compose.yaml
     //   docker compose -f ../../deploy/compose.yaml up --build
     server {
-        url = "http://localhost:8080"
+        // Env-overridable so a pipeline (e.g. .github/workflows/nightly-benchmark.yml) can point
+        // the sample at a real ingest server without editing this file. Unset => the localhost
+        // demo default below, so the documented local dev loop is unchanged. The name is
+        // sample-scoped on purpose: BUILDHOUND_SERVER_URL is the plugin's convention fallback and
+        // would arm uploads in any other instrumented build in the same environment. An empty
+        // value (a CI expression that collapsed to '') leaves the URL blank and UploadGate skips
+        // with "no server configured" — never an unauthenticated POST.
+        url = providers.environmentVariable("BUILDHOUND_SAMPLE_SERVER_URL")
+            .orElse("http://localhost:8080")
         // The committed local-dev token from deploy/compose.yaml (project "pilot"). Real deployments
         // must supply the token via the environment only — never hardcode a real one.
         token = providers.environmentVariable("BUILDHOUND_TOKEN")

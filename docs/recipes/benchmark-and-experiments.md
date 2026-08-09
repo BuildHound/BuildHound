@@ -21,10 +21,29 @@ Each measured build the profiler runs uploads as `mode=benchmark` with `scenario
 ## Running the series
 
 Wire the scheduled pipeline (`profiler-pipeline/{github,azure}-nightly-benchmark.yml`) with an
-ingest-scoped `BUILDHOUND_TOKEN` secret and your server URL. It loops over `(isolation, scenario)`
-pairs, exporting `BUILDHOUND_BENCHMARK_{SCENARIO,ITERATION,ISOLATION,SEED_REF}` per invocation.
-v1 wires two isolation modes — `full_cache` (baseline) and `no_build_cache` — see
+ingest-scoped `BUILDHOUND_TOKEN` secret and your server URL. It runs one job per
+`(isolation, scenario)` pair, exporting `BUILDHOUND_BENCHMARK_{SCENARIO,ITERATION,ISOLATION,SEED_REF}`
+per invocation. v1 wires two isolation modes — `full_cache` (baseline) and `no_build_cache` — see
 [isolation-modes.md](../../buildhound-ci-assets/profiler-pipeline/isolation-modes.md).
+
+**One scenario per job, not a loop.** The plugin reads `BUILDHOUND_BENCHMARK_*` inside the measured
+Gradle daemon and gradle-profiler reuses daemons, so a serial loop can leak the previous scenario's
+label into the next one — and the plugin would mislabel the series rather than fail. A job per
+scenario gives each label a fresh daemon. For the same reason the seed ref is one value for the whole
+matrix (the CI run id), not a per-job timestamp.
+
+### BuildHound's own nightly (plan 105)
+
+This repository runs the pipeline against its own sample pilots:
+[`.github/workflows/nightly-benchmark.yml`](../../.github/workflows/nightly-benchmark.yml), with
+per-pilot scenario files under `buildhound-ci-assets/profiler-scenarios/samples/`. It publishes to
+**production** via `vars.BUILDHOUND_PROD_SERVER_URL` + `secrets.BUILDHOUND_PROD_INGEST_TOKEN`; the
+samples read the URL from `BUILDHOUND_SAMPLE_SERVER_URL` (unset ⇒ their `http://localhost:8080` dev
+default). `springboot-legacy` runs `no_build_cache` only — its committed config has the build cache
+off, so `full_cache` would be a false label.
+
+Caveat when reading these series: gradle-profiler does not export `BUILDHOUND_BENCHMARK_ITERATION`,
+and warm-up builds upload too, so rows carry `iteration=null` for both warm-ups and measured runs.
 
 ## Reading a low-noise series
 

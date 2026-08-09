@@ -1,0 +1,47 @@
+# gradle-profiler scenarios for the springboot-legacy sample (plan 105).
+#
+# Driven by .github/workflows/nightly-benchmark.yml, one scenario per profiler invocation, with a
+# matching BUILDHOUND_BENCHMARK_SCENARIO exported for that invocation. The scenario NAMES must stay
+# inside the plugin's allowlist (BenchmarkActivation.SCENARIOS) — clean | no_op |
+# incremental_non_abi | cc_hit — or the plugin refuses to activate benchmark mode.
+#
+# This pilot is deliberately sub-optimally configured (no build cache, no configuration cache, no
+# parallelism, -Xmx1g over 52 modules), so the nightly labels it isolation=no_build_cache — the
+# truthful label for its committed gradle.properties. cc_hit passes --configuration-cache
+# explicitly, overriding the sample's org.gradle.configuration-cache=false.
+#
+# warm-ups/iterations are set explicitly: gradle-profiler's 6/10 benchmark defaults would not
+# finish inside a nightly window on this build.
+
+clean {
+    title = "Clean assemble (springboot-legacy)"
+    tasks = ["assemble"]
+    cleanup-tasks = ["clean"]
+    warm-ups = 1
+    iterations = 3
+}
+
+no_op {
+    title = "No-op (fully up-to-date) assemble (springboot-legacy)"
+    tasks = ["assemble"]
+    warm-ups = 1
+    iterations = 3
+}
+
+incremental_non_abi {
+    title = "Incremental non-ABI source change (springboot-legacy)"
+    tasks = ["assemble"]
+    # A leaf library other modules compile against: a method-body-only change exercises
+    # incremental compilation without invalidating downstream ABI.
+    apply-non-abi-change-to = ["libs/util/src/main/java/dev/buildhound/sample/libs/util/Module.java"]
+    warm-ups = 1
+    iterations = 3
+}
+
+cc_hit {
+    title = "Configuration-cache hit assemble (springboot-legacy)"
+    tasks = ["assemble"]
+    gradle-args = ["--configuration-cache"]
+    warm-ups = 1
+    iterations = 3
+}

@@ -488,3 +488,32 @@ jobs:
 
       - name: Build
         run: gradle build
+
+  composite-action:
+    name: Composite action self-test
+    # The shipped consumer asset (buildhound-ci-assets/github/action.yml, plan 041) is the one CI
+    # file nothing in this repo parses: actionlint lints .github/workflows/** only, never a
+    # composite action.yml. Running it from the checkout is what keeps it from rotting — it proves
+    # the action's YAML is valid, its input defaults resolve, its pinned setup-gradle SHA still
+    # exists, the input→env mapping works, and the verdict-gate step's `if:` plus the gate script's
+    # early exits behave. Deliberately credential-free: no server-url, no token, so this job holds
+    # no secret and the gate takes its "no payload written; skipping" path.
+    # `help` keeps it cheap — the point is the action's wiring, not another build of this repo.
+    # It is also the only job driving ./gradlew instead of the setup-gradle-provisioned `gradle`.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 26
+
+      # Local action reference: `./<path>` resolves against the checkout, so this exercises the
+      # action at the PR's commit — not a published ref.
+      - uses: ./buildhound-ci-assets/github
+        with:
+          gradle-tasks: "help"
+          verdict-gate: "warn"
+          runner-class: "blacksmith-4vcpu-ubuntu-2404"
