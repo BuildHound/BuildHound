@@ -166,8 +166,10 @@ reviewers, the sink guards came from the infra-security MEDIUM, and the namespac
 delta review's M2. Each was verified empirically: both sink failure paths exercised (exit 5, correct
 message), the scrub proven to keep `BUILDHOUND_OVERHEAD_*` and drop everything else, the trap's
 `|| true` proven not to clobber the exit status in `sh`/`bash`/`dash`, shellcheck clean, and
-`:buildhound-commons:jvmTest` green. **Unverified locally:** the added `shellcheck` line sits inside a
-`run: |` block that actionlint gates in CI, and there is no actionlint on this machine.
+`:buildhound-commons:jvmTest` green. The added `shellcheck` line sits inside a `run: |` block that
+actionlint gates in CI and could not be checked on this machine — **since verified in CI**: the
+`Build & test` job passed on run 31337328080, and that job runs both actionlint (with its shellcheck
+integration) and the CI-assets shell-check step the line was added to.
 
 ## 7. Result of the first real run (2026-08-09)
 
@@ -199,6 +201,11 @@ in the artifact — not exit 3 (no profiler), exit 4 (toggle self-test) or exit 
 | finalizer     |          74.6 |       666.1 |  591.5 |          150.0 |    yes    | ❌ BREACH |
 | upload        |         413.4 |       409.1 |   −4.3 |          250.0 |    no     | ✅ ok     |
 ```
+
+A second CI run (31337328080) reproduced it within ~10 %: configuration 352.2, per-task 576.4,
+finalizer 536.7, upload +2.9 (ok). Two independent runs breaching the same three axes by similar
+margins is the run-to-run variance figure the promote-to-blocking criterion asks for — recorded here
+because it is the one input that criterion has never had.
 
 The breach reproduces on a clean Linux runner, and it is **milder there than locally** (finalizer
 591 ms vs 1825 ms) — the direction predicted by the JVM-count scaling below, since a fresh runner has
