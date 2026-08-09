@@ -122,6 +122,11 @@ jobs:
           sh buildhound-ci-assets/test/wrapper-integrity-test.sh
           shellcheck .github/scripts/gradle-plugin-publication-digest.sh
           shellcheck .github/scripts/verify-gradle-plugin-publication-digest.sh
+          # The overhead harness carries measurement-integrity logic (sink guards, variant
+          # validation, env scrubbing), and nothing kept it shellcheck-clean before (plan 106).
+          # Linted in the fast `build` job, not in overhead-budget, so a lint break is loud
+          # rather than buried in a watched, continue-on-error job.
+          shellcheck buildhound-ci-assets/overhead/run-overhead.sh buildhound-ci-assets/overhead/bin/buildhound-overhead
 
   sample-springboot:
     name: Sample build (springboot-legacy)
@@ -414,11 +419,14 @@ jobs:
     # criterion lives in docs/overhead-budget.md. It runs gradle-profiler on a synthetic fixture with
     # the plugin toggled on/off and fails on a budget breach (OverheadCalculator, buildhound-commons).
     #
-    # EXPECT THIS JOB TO BE RED (plan 106). It was inert until then — green in ~17 s without running
-    # the benchmark — and the first real run breaches three axes for a known, disclosed reason (the
-    # process probe's per-JVM subprocess cost, plan 106 §7), not because of runner noise. A red run
-    # here currently means "the known cost is still there"; read overhead-table.md in the artifact
-    # before assuming a new regression. Promotion to blocking cannot be assessed until that is fixed.
+    # A RED RUN HERE IS UNINFORMATIVE ON ITS OWN (plan 106) — open the overhead-budget artifact and
+    # read overhead-table.md. Until plan 106 this job was inert: green in ~17 s without running the
+    # benchmark, so no historical green means anything. Local runs breach three axes for a known,
+    # disclosed reason (the process probe's per-JVM subprocess cost, plan 106 §7) and CI is expected
+    # to do the same, though no repaired run has landed here yet to confirm it. Red also covers a
+    # missing gradle-profiler (exit 3), a failed toggle self-test (exit 4), the timeout, and a
+    # genuinely new regression — the table distinguishes them. Promotion to blocking cannot be
+    # assessed while a known true breach is present. Delete this note once that cost is fixed.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     # A real run is 160 fixture builds (5 scenarios × 16 × 2 variants) plus a cold Gradle
