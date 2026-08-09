@@ -166,6 +166,23 @@ pre-divided percentage.
 `resourceUsage` is `null`. `getSystemLoadAverage()` returns a negative on Windows → `null`.
 `getCpuLoad()` returns `NaN` before its first interval → `null`. Never `0`.
 
+*As built (review fix):* the null-collapse keys off `windowMs` specifically. The first cut collapsed
+only when *every* field was null, but the four system point samples are readable on essentially any
+JVM — so the block would have been permanently non-null and the contract above quietly false. The
+window is what the block is for; four readings taken at the finalizer of a build that executed
+nothing are not a substitute for it.
+
+**Known scope limit — composite builds (review finding, accepted).** The baseline rides the
+plan-064 anchor, and in a composite topology an *included* build's task completion can instantiate
+the shared collector service while the **root** build is still configuring. On such a build the
+window would include some root configuration time under a label that says it does not; the bias
+direction is indeterminate, since numerator and denominator are padded from the same early anchor.
+This is the existing anchor's behaviour, not a new mechanism — but plan 064's own consumer
+(`ccLoadMs`) is gated on a configuration-cache HIT, where configuration is skipped, so it never met
+the case and plan 104's consumer does. Recorded in `ResourceUsageProbe`'s KDoc rather than silently
+inherited. Untested for composites; a composite fixture is a follow-up, not a blocker for a
+best-effort, honestly-labelled metric.
+
 ### 3.4 Tier 3 collection — merged `ps`, one exec instead of two
 
 `ProcessTools.psRss(pid)` + `psEtime(pid)` collapse into `psSnapshot(pid)` running
@@ -188,7 +205,7 @@ already exited are not in the listing. This is a partial, end-of-build view — 
 ### 3.5 Tier 4 — CI runner class
 
 **In the plugin/commons providers** (zero cost — the env map is already snapshotted): a fixed
-**categorical allowlist** added to each built-in provider's `attributes`:
+**categorical allowlist** merged into the detected context's `attributes`:
 
 | Provider | Keys added |
 |---|---|
@@ -199,6 +216,15 @@ already exited are not in the listing. This is a partial, end-of-build view — 
 Plus a provider-neutral `BUILDHOUND_CI_RUNNER_CLASS` read (see below). Values are length-capped;
 keys are a compile-time constant list, so widening it is a follow-up plan's decision, not a build's
 — the plan-051/065 allowlist discipline.
+
+*As built (review fix):* the merge happens once in `CiEnvironment.detect`, on whichever provider
+won, **not** inside individual providers. The first cut added it to the three providers with an
+allowlist, which silently made the "provider-neutral" opt-in a no-op on the other eight built-ins,
+on every third-party `ServiceLoader` provider, and on the generic provider's bare-`CI` tier — i.e.
+on exactly the unsupported-CI audience an operator-set label exists for. A provider's own attribute
+wins on a key clash. The `runnerClass` value is additionally shape-checked, not merely length-capped:
+it is the one operator-supplied string here, so anything outside the character set a real SKU label
+uses is dropped whole rather than truncated — "categorical" enforced rather than documented.
 
 **In `buildhound-ci-assets`** — the genuinely CI-only datum. The *measured* specs (cores, RAM, disk)
 are already correct from inside the runner, because `Runtime.availableProcessors()` and
@@ -251,8 +277,16 @@ Default empty everywhere → nothing is collected unless the operator opts in.
 - **report:** `ReportScriptTest` (node) fixture extended with the new blocks — asserts the Machine
   section renders, that a build *without* them stays hidden, and that a hostile string in a new
   field lands as text. `ReportAssetsTest` zero-network invariant unchanged and not weakened.
-- **ci-assets:** the existing shell test harness pattern covers the new input plumbing; assert a
-  final completion marker rather than an exit code (the `set -u`/`|| fail` trap).
+- **ci-assets:** ~~the existing shell test harness pattern covers the new input plumbing~~ — wrong,
+  and corrected in review: that pattern mirrors *shell logic* extracted from a YAML step, and this
+  change adds none (it is a purely declarative `env:`/`parameters:` binding). Nor does CI lint these
+  files: `actionlint` only checks a composite action a local workflow references via `uses: ./path`,
+  which none does, and the Azure/GitLab templates have no lint at all. So the coverage went into
+  `CiAssetsContractTest` instead — one test pinning that all three templates export
+  `BUILDHOUND_CI_RUNNER_CLASS` under exactly the name `RunnerAttributes.RUNNER_CLASS_ENV` reads, and
+  one pinning the injection invariant that no `${{ inputs.* }}` is interpolated into a `run:` script
+  (previously a code comment only). Without these, a typo's only symptom is a consumer silently
+  collecting nothing.
 
 ## 5. Risks
 
@@ -262,8 +296,13 @@ Default empty everywhere → nothing is collected unless the operator opts in.
   measured — see exit criteria.
 - **CC replay** — mitigated by design §3.3 and pinned by the twice-run TestKit test.
 - **Privacy** — device paths and filesystem names are classifier input only and never ship; CI
-  attributes are a categorical compile-time allowlist; `runner-class` is opt-in and capped. Goes to
-  the mandatory §3.2 security & privacy review.
+  attributes are a categorical compile-time allowlist; `runner-class` is opt-in, shape-checked and
+  capped. Reviewed under CLAUDE.md §3.2: no high findings; the device-name guard was tightened from
+  a "contains no slash" blocklist to a leading-alphanumeric allowlist (a bare `[A-Za-z0-9._-]+`
+  class would have accepted `..`, since `.` is legal inside a real device name), with a traversal
+  regression test. `machine.diskTotalMb` is a stronger stable quasi-identifier than the `cores`/
+  `ramMb` beside it and is now named in spec §3.7's residual list, with bucketing (not suppression)
+  as the `pseudonymize=strict` treatment when that mode lands.
 - **`ps` portability** — a platform whose `ps` rejects the merged format string loses three fields
   rather than two. Accepted: all three keywords are POSIX-standard, and the fields were already
   best-effort nullable. Windows has no `ps` and reports null today and after.

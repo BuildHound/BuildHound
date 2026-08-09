@@ -9,6 +9,7 @@
 #         verdictGate: "warn"          # off | warn | fail
 #         validateWrapper: "fail"      # off | warn | fail (plan 066)
 #         expectedWrapperJarSha256: "" # optional: pin gradle-wrapper.jar to a known-good hash
+#         runnerClass: "ubuntu-24.04"  # optional: the agent pool/vmImage this job asked for (plan 104)
 #
 # Optionally runs a preventive wrapper-integrity check FIRST (plan 066, off by default), then runs
 # Gradle with telemetry wired, then optionally polls the per-build regression verdict (plan 025) and

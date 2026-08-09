@@ -469,8 +469,9 @@ internal object PayloadAssembler {
     }
 
     /**
-     * Execution-window resource usage (plan 104): a straight DTO→wire map. [ResourceUsageProbe]
-     * already collapses an all-null capture to null, so there is no emptiness rule to repeat here.
+     * Execution-window resource usage (plan 104): a straight DTO→wire map. The emptiness rule lives
+     * in [ResourceUsageProbe], which returns null when the window itself could not be measured — so
+     * there is nothing to re-decide here, and no second definition of "empty" to drift from it.
      */
     private fun resourceUsageInfo(usage: CollectedResourceUsage?): ResourceUsageInfo? = usage?.let {
         ResourceUsageInfo(

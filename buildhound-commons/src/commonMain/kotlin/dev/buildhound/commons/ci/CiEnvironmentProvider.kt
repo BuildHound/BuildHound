@@ -69,10 +69,6 @@ class GenericCiEnvironmentProvider : CiEnvironmentProvider {
             targetBranch = env["BUILDHOUND_CI_TARGET_BRANCH"],
             buildUrl = env["BUILDHOUND_CI_BUILD_URL"],
             agentName = env["BUILDHOUND_CI_AGENT_NAME"],
-            // Opt-in runner class (plan 104). Only on this full-mapping tier: tier 2 is documented
-            // as a minimal, field-less context, and an operator wiring BUILDHOUND_CI_RUNNER_CLASS is
-            // by definition already wiring the BUILDHOUND_CI_* variables that select this tier.
-            attributes = RunnerAttributes.of(env, emptyList()),
         )
     }
 

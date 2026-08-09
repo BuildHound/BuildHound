@@ -28,6 +28,13 @@ internal object DiskMediaDetection {
 
     private const val DEV_PREFIX = "/dev/"
     private const val NVME_PREFIX = "nvme"
+
+    /**
+     * The shape a kernel block-device name actually takes; anything else is not asked about. The
+     * leading-alphanumeric anchor is load-bearing: `.` is a legal *interior* character, so a class
+     * of `[A-Za-z0-9._-]+` alone would happily accept `..` — the one traversal token that matters.
+     */
+    private val DEVICE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
     private const val ROTATIONAL_TRUE = "1"
     private const val ROTATIONAL_FALSE = "0"
 
@@ -45,15 +52,16 @@ internal object DiskMediaDetection {
     ): DiskMedia {
         // A network mount is a network mount on every OS — checked before the Linux gate, since it
         // is the one class knowable without sysfs.
-        // A network mount is a network mount on every OS — checked before the Linux gate, since it
-        // is the one class knowable without sysfs.
         if (fileStoreType != null && fileStoreType.lowercase() in NETWORK_FILESYSTEMS) return DiskMedia.NETWORK
         if (osName == null || !osName.startsWith("Linux", ignoreCase = true)) return DiskMedia.UNKNOWN
 
         val device = deviceName?.removePrefix(DEV_PREFIX)?.trim().orEmpty()
         return when {
-            // `mapper/vg-root`, `overlay`, an empty name: no block device to ask about.
-            device.isEmpty() || device.contains('/') -> DiskMedia.UNKNOWN
+            // An allowlist, not a "contains no slash" blocklist: this string is concatenated into a
+            // filesystem path, so `..`, control bytes and NUL must be rejected by shape rather than
+            // by enumerating what to exclude. `mapper/vg-root` and `overlay` fall out here too — no
+            // block device to ask about.
+            !DEVICE_NAME.matches(device) -> DiskMedia.UNKNOWN
             // NVMe is decided by the device namespace name, not by rotational: an NVMe SSD reports
             // rotational=0 like a SATA SSD, so the finer class would be lost if this ran second.
             device.startsWith(NVME_PREFIX) -> DiskMedia.NVME

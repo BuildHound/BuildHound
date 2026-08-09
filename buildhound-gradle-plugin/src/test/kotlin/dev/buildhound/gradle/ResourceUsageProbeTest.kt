@@ -32,13 +32,14 @@ class ResourceUsageProbeTest {
     }
 
     @Test
-    fun `a never-stamped baseline reports no window and no cpu delta, not zeroes`() {
+    fun `a never-stamped baseline yields no block at all, not one carrying only system samples`() {
         val usage = ResourceUsageProbe.collect(DaemonState.ResourceBaseline())
 
-        // A build that never instantiated the collector (zero tasks, --dry-run) has no window. The
-        // block may still exist for the system point samples — but the unmeasured halves stay null.
-        assertNull(usage?.windowMs)
-        assertNull(usage?.daemonCpuMs)
+        // A build that never instantiated the collector (zero tasks, --dry-run) has no window, and
+        // the window is what this block is for. The system point samples are readable on any JVM,
+        // so returning a block whenever *they* succeed would make `resourceUsage` always non-null
+        // and break the schema's documented "null means no execution-window data" contract.
+        assertNull(usage, "no window ⇒ no block; system point samples alone are not resource usage")
     }
 
     @Test
