@@ -145,6 +145,16 @@ self-test green in both directions, and a real table:
 | upload        |        1592.6 |      1595.0 |     2.4 |     0.1 |          250.0 |    no     | ✅ ok     |
 ```
 
+**These are not three independent regressions — they are one fixed cost seen three times.** The
+deltas are near-identical (1508 / 1862 / 1825 ms) because the plugin's per-build cost is essentially
+constant and every axis subtracts a plugin-off baseline from a plugin-on one. A corollary for the
+follow-up: while a fixed cost of this size dominates, the per-task axis cannot measure anything
+per-task, so fixing the cost has to come before trusting that axis's shape.
+
+The upload axis's `✅` is a real measurement, not an absent one — a fixture build in CI mode against
+the loopback sink logs `payload uploaded (3037 bytes gzip)`. But `separated: no` means the honest
+reading is "the upload's cost is not resolvable above this fixture's noise", not "upload is free".
+
 **The breach is real, not a harness artifact**, and it is not plan 104's doing. Isolated on the same
 fixture at steady state (fully up-to-date, configuration-cache hit):
 
@@ -168,3 +178,9 @@ The per-PID subprocess design predates it (plan 029).
 Fixing the probe is out of scope here — this plan repairs the instrument, and the instrument's first
 reading is a finding for its own plan. What must not happen is widening `OverheadBudget.DEFAULT` to
 make the table green.
+
+A seventh defect surfaced while verifying the upload axis: the script ended with
+`exec bin/buildhound-overhead`, and `exec` replaces the shell, so the `EXIT` trap never fired and the
+loopback sink was orphaned (verified both ways with a minimal reproduction). The stale sink keeps the
+port bound, so the *next* run's readiness probe succeeds against it while its own sink fails to bind
+— a masked failure on any machine that runs the harness twice. The `exec` is gone.
