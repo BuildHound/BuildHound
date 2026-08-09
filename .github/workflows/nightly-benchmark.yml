@@ -119,6 +119,22 @@ jobs:
           mkdir -p "$HOME/.gradle/init.d"
           cp .github/buildhound-sample-benchmark.init.gradle.kts "$HOME/.gradle/init.d/"
 
+      # Make the credential-absent path OBSERVABLE. Everything else about a non-publishing run is
+      # silent by design: UploadGate's "no server configured" skip logs at info (invisible at
+      # Gradle's default level), the plugin never fails a build, and this job is continue-on-error.
+      # Without this step a rotated-away or renamed credential produces 20 green jobs a night that
+      # publish nothing, indefinitely. Neither value is echoed — the URL is a repo *variable*, which
+      # the runner does not mask.
+      - name: Report ingest wiring
+        run: |
+          set -euo pipefail
+          if [ -z "${BUILDHOUND_SAMPLE_SERVER_URL:-}" ] || [ -z "${BUILDHOUND_SAMPLE_TOKEN:-}" ]; then
+            echo "::warning title=BuildHound benchmark::no ingest target configured — this job measures but publishes nothing (check vars.BUILDHOUND_PROD_SERVER_URL / secrets.BUILDHOUND_PROD_INGEST_TOKEN)"
+            echo "⚠️ no ingest target configured — measured, published nothing" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "✅ ingest target configured — benchmark builds publish to production" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       # The isolation mechanism from profiler-pipeline/isolation-modes.md. The checkout is fresh per
       # job, so this is a plain append — no pristine-copy dance. full_cache = the pilot's committed
       # configuration, untouched.

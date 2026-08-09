@@ -159,6 +159,20 @@ builds upload too, so a series carries `iteration=null` rows for both warm-ups a
 - **Security/privacy** — the prod ingest token is a repo secret exposed to a scheduled job on the
   default branch only (no fork, no PR trigger). Token flows env → `Authorization` header, never
   argv, never echoed. Sample telemetry is synthetic/public code; no new payload field.
+- **Silent non-publication** (security review, MEDIUM) — every layer of a non-publishing run is
+  quiet: `UploadGate`'s skip logs at `info`, the plugin never fails a build, and the job is
+  `continue-on-error`. A rotated-away credential would give 20 green jobs a night that publish
+  nothing. Addressed by the `Report ingest wiring` step: a `::warning::` + job-summary line
+  whenever the URL or token is empty, so absence of publication is visible without opening the
+  dashboard.
+- **`workflow_dispatch` as a token-exposure entry point** (security review, LOW) — a
+  write-collaborator can dispatch an edited copy of this workflow from any branch, reaching the
+  same prod ingest secret plan 094 already accepts as write-collaborator-exposed. Same actor class
+  and same ingest-only blast radius; plan 094's risk section is updated to name this entry point.
+- **`http://` ingest URLs** (security review, LOW, pre-existing) — `UploadGate` accepts `http://`
+  and `PayloadUploader` only warns, so a mis-set `vars.BUILDHOUND_PROD_SERVER_URL` would put the
+  Bearer token on the wire in cleartext. Not introduced here (this plan only routes an existing
+  credential through the existing gate at nightly scale); tightening the gate is a separate change.
 - **Sample dev loop** — untouched: the samples keep their committed localhost config and the
   redirection lives entirely in an init script CI applies (§3.3).
 
