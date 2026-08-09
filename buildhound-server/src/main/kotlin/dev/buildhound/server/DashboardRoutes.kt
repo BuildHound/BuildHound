@@ -96,7 +96,8 @@ internal fun styleHashCsp(html: String): String {
     }
     dangling += styleOpenPattern.findAll(html.substring(cursor)).count()
     check(dangling == 0) {
-        "unclosed or mis-paired <style> element in an embedded page ($dangling dangling open tags, ${blocks.size} paired blocks)"
+        "unclosed or mis-paired <style> element in an embedded page " +
+            "($dangling dangling open tags, ${blocks.size} paired blocks)"
     }
     val styleHashes = blocks.map { match ->
         val digest = MessageDigest.getInstance("SHA-256").digest(match.groupValues[1].encodeToByteArray())
