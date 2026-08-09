@@ -55,12 +55,28 @@ beside a `"30 % of 8 cores"` figure whose core count appears nowhere is worse th
 
 Port, do not share. A new `machinePanel(build)` in `dashboard.js` follows the `warningsPanel`
 null-or-fragment idiom, is appended in `detailView` between the Work-avoidance ledger and the
-Process snapshot, and returns `null` when neither chip row has children — so a pre-104 payload
-renders exactly as before. Extracting a shared `machine.js` the way `timeline.js` is shared would
+Process snapshot, and returns `null` when neither chip row has children.
+
+*Corrected in review:* an earlier draft of this plan said that made the section invisible on a
+pre-104 payload. It does not, and should not — the hardware chips read `environment` fields present
+since schema v1, so a pre-104 payload with an `environment` block renders the hardware row and no
+usage row, which is precisely the Tier-0 rendering this plan set out to deliver. Only a payload with
+neither machine-relevant `environment` data nor `resourceUsage` hides the section. A dedicated smoke
+fixture now pins that distinction in both directions.
+
+Extracting a shared `machine.js` the way `timeline.js` is shared would
 mean refactoring already-merged report code (an IIFE writing into fixed template ids) into a pure
 function and rewriting its smoke assertions, for a ~70-line presentation port; the cheaper drift
 guard is keeping the two harnesses' assertion **strings byte-identical**, so a divergence fails one
 of them. Recorded here so the shared-module option is a deferred decision, not an oversight.
+
+The same applies to the utilization math. Plan 104 §3.1 put `DerivedMetricsCalculator` in commons
+"so it is unit-tested once and shared by the report and any later dashboard", and this is that later
+dashboard — yet it recomputes the percentage in JS. Not an oversight either: utilization is
+deliberately *not* shipped on the payload, so consuming the Kotlin would require the server-side
+projection this plan excludes, and the Kotlin has no equivalent of the absolute-duration fallback
+the chip needs when window or cores are unknown. The clamp is kept identical to
+`coerceIn(0.0, 1.0)` on both sides so the two agree wherever both apply.
 
 Existing helpers only — `el()`, `ms()`, `chipItem()`, and `memMb` (already byte-parity with the
 report's `sizeMb`). **No new CSS**: `style-src` is pinned to a hash of the served bytes and plan 103
@@ -123,7 +139,8 @@ XSS (everything goes through `el()`/`textContent`, the plan-012 no-innerHTML rul
 ## 6. Exit criteria
 
 1. Build detail renders machine specs, resource usage, the process CPU column and runner chips for
-   an ingested plan-104 payload, and shows nothing for a payload without them.
+   an ingested plan-104 payload; renders the hardware row alone for a pre-104 payload carrying an
+   `environment` block; and hides the section entirely for a payload carrying neither.
 2. No server Kotlin change other than the round-trip test; no endpoint/schema/migration/OpenAPI
    change.
 3. `./gradlew build` green on CI (node present, so the new harness assertions actually execute);

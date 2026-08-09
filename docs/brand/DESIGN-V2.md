@@ -410,6 +410,28 @@ file exists and has been visually verified.
 8. Adopt V2 in runtime product code only through a separate implementation plan with
    regression tests.
 
+### Runtime adoption status
+
+Neither production surface has been converted to V2. The standalone HTML report, generated
+from buildhound-report/src/main/resources/dev/buildhound/report/report-template.html, and
+the server dashboard, served from buildhound-server/src/main/resources/web/index.html and
+its dashboard.js, both still carry their original pre-V2 styling: literal hex colors, system
+font stacks, and none of the V2 token layer. This is a deliberate deferral under item 8
+above, not an oversight.
+
+Plan 104 added a machine-specs and resource-usage section to the report, and plan 105 added
+the same section to the dashboard. Each was written in its own surface's existing pre-V2
+idiom rather than half-converting one section of an otherwise pre-V2 page, because a partial
+conversion leaves a page that follows neither system. Neither plan introduced an external
+stylesheet link, an image element, a CSS url() reference, an @import, a webfont, or a
+relative asset reference, and neither weakened the report's asset test or the dashboard's
+content security policy style-hash tests.
+
+Converting either surface still requires exactly what item 8 requires: a separate
+implementation plan with regression tests. This subsection records where the two surfaces
+stand so a later plan can cite it instead of rediscovering it. It is a status record, not a
+rule, and it exempts no work from V2.
+
 ### Known risks
 
 - Trace H's double-step is more specific than the prior candidates, but recognition and

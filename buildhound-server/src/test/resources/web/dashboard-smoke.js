@@ -48,6 +48,24 @@ const findTag = (node, tag) => findAll(node, n => n.tag === tag);
 const hasText = (node, sub) => findAll(node, n => (n.textContent || "").indexOf(sub) >= 0).length > 0;
 const hasExact = (node, text) => findAll(node, n => (n.textContent || "") === text).length > 0;
 const hasClass = (node, cls) => findAll(node, n => (n.className || "").indexOf(cls) >= 0).length > 0;
+// Chip parser (plan 105), ported from report-smoke.js: the stub's textContent getter returns a
+// node's OWN text, and a chip is <b>label </b><span>value</span> — two separate children — so a
+// hasText for "daemon cpu 12% of 8 cores" can never match. Labels are compared exactly (hence the
+// trim of chipItem's trailing space), or "daemon cpu time" answers a lookup for "daemon cpu" and
+// the two units stop being distinguishable, which is what these assertions exist to check.
+const chipsOf = ul => (ul.children || []).map(li => ({
+    label: (((li.children || [])[0] || {}).textContent || "").trim(),
+    value: ((li.children || [])[1] || {}).textContent || "",
+}));
+// machinePanel returns a fragment whose first child is its <h3>, and the stub keeps fragments in
+// the tree, so the section is findable by that shape — and scoping every assertion to it keeps a
+// bare hasExact("8") off the rest of the detail page. Null when the section did not render at all.
+function machineSection(root) {
+    const panel = findAll(root, n => n.tag === "fragment" && (((n.children || [])[0] || {}).textContent === "Machine"))[0];
+    if (!panel) return null;
+    const chips = findTag(panel, "ul").reduce((all, ul) => all.concat(chipsOf(ul)), []);
+    return { panel: panel, chips: chips, chip: label => chips.find(c => c.label === label) };
+}
 function clickButton(node, label) {
     const button = findTag(node, "button").find(b => (b.textContent || "") === label);
     if (!button || !button.listeners.click) throw new Error("button not found: " + label);
@@ -151,6 +169,92 @@ const responses = {
         tasks: [{ path: ":app:testDebugUnitTest", module: ":app", outcome: "EXECUTED", durationMs: 12000 }],
         tests: [],
         testTelemetry: { xmlDisabledTasks: [":app:testDebugUnitTest"] },
+    },
+    // Machine specs + resource usage (plan 105), each case its own fixture — several of the builds
+    // above are shared references reused across paths and mutated mid-harness. The numbers come from
+    // golden/build-payload-v1-machine.json so this harness and report-smoke.js assert the same
+    // arithmetic; workersMax, runnerVersion and the hostile runnerClass mirror ReportScriptTest's
+    // rich payload. runnerEnvironment carries a multi-KB tail: RunnerAttributes.MAX_VALUE_LENGTH is
+    // a plugin-side cap and PayloadCapper excludes ci.attributes, so an ingest POST can send this.
+    "/v1/builds/mach-1": {
+        buildId: "mach-1", projectKey: "pilot", startedAt: 1754700000000, finishedAt: 1754700061000,
+        outcome: "SUCCESS", mode: "CI",
+        tasks: [{ path: ":app:compileReleaseKotlin", module: ":app", outcome: "EXECUTED", durationMs: 41000 }],
+        environment: {
+            os: "Linux", arch: "amd64", cores: 8, ramMb: 32768, workersMax: 6,
+            machine: { diskTotalMb: 486400, diskFreeMb: 204800, diskMedia: "NVME" },
+        },
+        resourceUsage: {
+            windowMs: 59000, daemonCpuMs: 141600, systemCpuLoadPct: 63,
+            systemLoadAverage: 4.75, systemMemTotalMb: 32768, systemMemFreeMb: 9216,
+        },
+        ci: {
+            provider: "github-actions",
+            attributes: {
+                runnerEnvironment: "github-hosted" + "x".repeat(4000),
+                runnerOs: "Linux", runnerArch: "X64",
+                runnerImageOs: "ubuntu24", runnerImageVersion: "20250801.1.0",
+                runnerVersion: "17.3.0",
+                runnerClass: "ubuntu</script><script>evil()//-8-core",
+            },
+        },
+        processes: [
+            { role: "GRADLE_DAEMON", heapUsedMb: 1462, configuredXmxMb: 4096, gcTimeMs: 3120, rssMb: 2711, uptimeS: 812, cpuTimeMs: 214000 },
+        ],
+    },
+    // An explicit JS null daemonCpuMs with BOTH the window and the cores present. The wire can never
+    // carry this (the payload serializes with explicitNulls = false), so this hand-written fixture is
+    // the only thing that can prove the `!= null` guard: `null >= 0` is TRUE in JS, so a bare range
+    // check would fabricate the 0% utilization plan 104 forbids.
+    "/v1/builds/mach-null-cpu": {
+        buildId: "mach-null-cpu", startedAt: 1751450000000, finishedAt: 1751450005000,
+        outcome: "SUCCESS", mode: "CI", tasks: [],
+        environment: { os: "Linux", cores: 8 },
+        // systemMemTotalMb without its free half, so the both-halves gate is exercised too: the
+        // subtraction would otherwise render "NaN MB used of 32.0 GB".
+        resourceUsage: { windowMs: 59000, daemonCpuMs: null, systemCpuLoadPct: 63, systemLoadAverage: 4.75, systemMemTotalMb: 32768 },
+    },
+    // A negative CPU delta — impossible from the plugin, which guards it, but the dashboard renders
+    // whatever the payload hands it, and an unclamped ratio printed "-0.3% of 8 cores".
+    "/v1/builds/mach-negative": {
+        buildId: "mach-negative", startedAt: 1751450000000, finishedAt: 1751450005000,
+        outcome: "SUCCESS", mode: "CI", tasks: [],
+        environment: { cores: 8 },
+        // 4.5, not the rich fixture's 4.75, so the two-decimal formatting is actually observable —
+        // String(4.75) already reads "4.75", which makes the shared assertion blind to a dropped
+        // toFixed(2).
+        resourceUsage: { windowMs: 5000, daemonCpuMs: -100, systemLoadAverage: 4.5 },
+    },
+    // An overshoot: two samples read at slightly different instants can exceed window × cores.
+    "/v1/builds/mach-clamped": {
+        buildId: "mach-clamped", startedAt: 1751450000000, finishedAt: 1751450005000,
+        outcome: "SUCCESS", mode: "CI", tasks: [],
+        environment: { cores: 4 },
+        resourceUsage: { windowMs: 100, daemonCpuMs: 900 },
+    },
+    // No core count → nothing to divide by, so the chip must switch to an absolute duration under a
+    // distinct label.
+    "/v1/builds/mach-no-cores": {
+        buildId: "mach-no-cores", startedAt: 1751450000000, finishedAt: 1751450005000,
+        outcome: "SUCCESS", mode: "CI", tasks: [],
+        environment: { os: "Linux", ramMb: 32768 },
+        resourceUsage: { windowMs: 5000, daemonCpuMs: 2400 },
+    },
+    // The canonical pre-104 payload shape (golden/build-payload-v1.json): an `environment` block of
+    // fields that have existed since schema v1, with no `machine` and no `resourceUsage`. Plan 104's
+    // Tier 0 was rendering exactly these, so the section MUST appear with the hardware row alone —
+    // pinning that "hidden for a pre-104 payload" is false and only b2's shape hides it.
+    "/v1/builds/pre104": {
+        buildId: "pre104", startedAt: 1751450000000, finishedAt: 1751450005000,
+        outcome: "SUCCESS", mode: "CI", tasks: [],
+        environment: { os: "Linux", arch: "amd64", cores: 8, ramMb: 32768, configurationCache: "MISS" },
+    },
+    // A disk media value colliding with an Object.prototype key: with a normal object literal the
+    // lookup would resolve to the inherited constructor and render as JS source.
+    "/v1/builds/mach-media": {
+        buildId: "mach-media", startedAt: 1751450000000, finishedAt: 1751450005000,
+        outcome: "SUCCESS", mode: "CI", tasks: [],
+        environment: { machine: { diskMedia: "constructor" } },
     },
     "/v1/trends?days=30": [
         { day: "2026-06-30", builds: 3, failures: 1, avgDurationMs: 60000, avgHitRate: 0.5 },
@@ -547,6 +651,122 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "The Kotlin daemon runs G1 with high GC time — a ParallelGC trial")) throw new Error("ParallelGC-trial candidate missing for the high-GC Kotlin daemon");
     if (!hasText(byId["app"], "The Kotlin daemon uses 3072 MB RSS on JDK 24 without compact object headers")) throw new Error("compact-object-headers candidate missing for the high-GC Kotlin daemon");
 
+    // Machine specs + resource usage (plan 105): the dashboard mirror of the report's plan-104
+    // section. Assertion strings are byte-identical to report-smoke.js — that string equality is the
+    // only drift guard between the two renderers, so a divergence must fail one of the harnesses.
+    // Every message names its case: the harness is one @Test whose Kotlin failure is only
+    // "dashboard smoke harness failed".
+    context.location.hash = "#/build/mach-1"; context._onhashchange(); await tick(); await tick();
+    if (!fetched.includes("/v1/builds/mach-1")) throw new Error("rich machine case: detail view did not fetch");
+    const rich = machineSection(byId["app"]);
+    if (!rich) throw new Error("rich machine case: Machine section missing on a payload with specs and usage");
+    if (!hasText(rich.panel, "Linux · amd64")) throw new Error("rich machine case: os/arch spec missing");
+    // Exact match: a substring "8" would also hit the runner class.
+    if (!hasExact(rich.panel, "8")) throw new Error("rich machine case: cpu count spec missing");
+    // The spec chip itself, not a panel-wide substring: the usage row's "23.0 GB used of 32.0 GB"
+    // carries the same "32.0 GB" text and both <ul>s live in this one fragment, so a hasText here
+    // stayed green with the memory chip deleted. The report's equivalent assertion is scoped to its
+    // separate `machine-specs` element; the port collapsed the two scopes into one.
+    const memory = rich.chip("memory");
+    if (!memory || memory.value !== "32.0 GB") throw new Error("rich machine case: memory spec missing, got: " + (memory && memory.value));
+    // Media label + free-of-total, both from the same chip.
+    if (!hasText(rich.panel, "NVMe · 200.0 GB free of 475.0 GB")) throw new Error("rich machine case: disk spec missing or mis-formatted");
+    // Deliberately 6, not the fixture's 8 cores, so this can't accidentally match the cpus chip.
+    if (!hasExact(rich.panel, "6")) throw new Error("rich machine case: max-workers spec missing");
+    if (!hasText(rich.panel, "github-hosted")) throw new Error("rich machine case: runner environment spec missing");
+    if (!hasText(rich.panel, "ubuntu24 20250801.1.0")) throw new Error("rich machine case: runner image spec missing");
+    if (!hasText(rich.panel, "17.3.0")) throw new Error("rich machine case: runner version spec missing");
+    // The hostile operator-set runner class must land as inert text on the one plan-104 field an
+    // operator controls — and produce no script node anywhere on the page.
+    if (!hasText(rich.panel, "ubuntu</script><script>evil()//-8-core")) throw new Error("rich machine case: runner class missing or mangled");
+    if (countTag(byId["app"], "script") !== 0) throw new Error("rich machine case: a payload string became a script node");
+    // runnerOs/runnerArch are collected but deliberately unrendered — they restate the os chip.
+    if (rich.chip("runner os") || rich.chip("runner arch")) throw new Error("rich machine case: runnerOs/runnerArch must stay unrendered");
+    // The render-time 64-char clamp (RunnerAttributes.MAX_VALUE_LENGTH): the fixture's
+    // runnerEnvironment carries a multi-KB tail no plugin-side cap can stop on an ingest POST.
+    const runnerEnv = rich.chip("runner env");
+    if (!runnerEnv || runnerEnv.value.length !== 64) throw new Error("rich machine case: a multi-KB ci.attributes value must clamp to 64 chars, got length " + (runnerEnv && runnerEnv.value.length));
+    if (runnerEnv.value.indexOf("github-hosted") !== 0) throw new Error("rich machine case: the clamp must keep the value's head, got: " + runnerEnv.value);
+    // 141600 ms of daemon CPU over a 59 s window on 8 cores = 30% — computed here from the raw
+    // numerator/denominator, never shipped pre-divided.
+    if (!hasText(rich.panel, "30% of 8 cores")) throw new Error("rich machine case: daemon cpu utilization missing or mis-computed");
+    if (!hasText(rich.panel, "59.0 s")) throw new Error("rich machine case: measurement window missing");
+    if (!hasText(rich.panel, "63%")) throw new Error("rich machine case: system cpu load missing");
+    if (!hasText(rich.panel, "4.75")) throw new Error("rich machine case: load average missing");
+    if (!hasText(rich.panel, "23.0 GB used of 32.0 GB")) throw new Error("rich machine case: system memory used/total missing");
+    // The caveat is load-bearing: without it the number reads as whole-machine build CPU.
+    if (!hasText(rich.panel, "Gradle daemon process only, over the execution phase")) throw new Error("rich machine case: resource-usage caveat note missing");
+    // Per-process CPU rides in the existing process table (plan 104's merged `ps`).
+    if (!hasText(byId["app"], "3.6 min")) throw new Error("rich machine case: per-process CPU column missing (214000 ms → 3.6 min)");
+
+    // An explicit null daemonCpuMs beside a known window and core count must drop the chip whole.
+    context.location.hash = "#/build/mach-null-cpu"; context._onhashchange(); await tick(); await tick();
+    const nullCpu = machineSection(byId["app"]);
+    if (!nullCpu) throw new Error("null-daemon-cpu case: Machine section missing, so the guard was never reached");
+    if (nullCpu.chip("daemon cpu") || nullCpu.chip("daemon cpu time")) throw new Error("null-daemon-cpu case: an explicit null must render no utilization chip at all");
+    const zeroed = nullCpu.chips.filter(c => c.value.indexOf("0%") >= 0);
+    if (zeroed.length) throw new Error("null-daemon-cpu case: an unknown utilization must never render as 0%: " + JSON.stringify(zeroed));
+    if (!nullCpu.chip("measured over")) throw new Error("null-daemon-cpu case: the window chip must survive a dropped cpu delta");
+    // Half a memory reading is not a reading: used = total - free needs both, or it renders "NaN MB".
+    if (nullCpu.chip("system memory")) throw new Error("null-daemon-cpu case: system memory must need both halves, got: " + nullCpu.chip("system memory").value);
+
+    // A negative delta is not data. It must vanish, not render as "-0.3% of 8 cores".
+    context.location.hash = "#/build/mach-negative"; context._onhashchange(); await tick(); await tick();
+    const negative = machineSection(byId["app"]);
+    if (!negative) throw new Error("negative-cpu case: Machine section missing, so the guard was never reached");
+    if (negative.chip("daemon cpu") || negative.chip("daemon cpu time")) throw new Error("negative-cpu case: a negative cpu delta must render no utilization chip at all");
+    const negativeValues = negative.chips.filter(c => c.value.indexOf("-") >= 0);
+    if (negativeValues.length) throw new Error("negative-cpu case: no negative value may reach a usage chip: " + JSON.stringify(negativeValues));
+    // The rest of the block still renders — one bad field drops one chip, not the section.
+    if (!negative.chip("measured over")) throw new Error("negative-cpu case: the window chip must survive a dropped cpu delta");
+    const loadAvg = negative.chip("load avg");
+    if (!loadAvg || loadAvg.value !== "4.50") throw new Error("negative-cpu case: load average must render to two decimals, got: " + (loadAvg && loadAvg.value));
+
+    // 900 ms of CPU over a 100 ms window on 4 cores overshoots, and must read as 100%, never 225%.
+    context.location.hash = "#/build/mach-clamped"; context._onhashchange(); await tick(); await tick();
+    const clamped = machineSection(byId["app"]);
+    if (!clamped) throw new Error("overshoot case: Machine section missing, so the clamp was never reached");
+    const overshoot = clamped.chip("daemon cpu");
+    if (!overshoot || overshoot.value !== "100% of 4 cores") throw new Error("overshoot case: an overshoot must clamp to 100%, got: " + (overshoot && overshoot.value));
+
+    // No core count → nothing to divide by, so the chip must switch to an absolute duration AND to a
+    // distinct label. Reusing "daemon cpu" for both units invited reading a duration as a share of
+    // capacity — the exact misreading this feature exists to avoid.
+    context.location.hash = "#/build/mach-no-cores"; context._onhashchange(); await tick(); await tick();
+    const noCores = machineSection(byId["app"]);
+    if (!noCores) throw new Error("missing-cores case: Machine section missing, so the fallback was never reached");
+    if (noCores.chip("daemon cpu")) throw new Error("missing-cores case: a percentage chip rendered with no core count to divide by");
+    const fallback = noCores.chip("daemon cpu time");
+    if (!fallback) throw new Error("missing-cores case: no fallback duration chip rendered when utilization was undivideable");
+    if (fallback.value !== "2.4 s") throw new Error("missing-cores case: fallback chip must show the absolute duration, got: " + fallback.value);
+
+    // A media value colliding with an Object.prototype key renders as its own literal text.
+    context.location.hash = "#/build/mach-media"; context._onhashchange(); await tick(); await tick();
+    const media = machineSection(byId["app"]);
+    if (!media) throw new Error("inherited-media case: Machine section missing, so the media lookup was never reached");
+    const disk = media.chip("disk");
+    if (!disk || disk.value !== "constructor") throw new Error("inherited-media case: an Object.prototype key must render as literal text, got: " + (disk && disk.value));
+
+    // A pre-104 payload: `environment` only, no `machine` and no `resourceUsage`. The section
+    // renders with the hardware row (plan 104's Tier 0 fields) and nothing that needs plan-104
+    // collection — no usage chips, no caveat, no disk chip.
+    context.location.hash = "#/build/pre104"; context._onhashchange(); await tick(); await tick();
+    const pre104 = machineSection(byId["app"]);
+    if (!pre104) throw new Error("pre-104 case: Machine section must render for a payload with only an environment block");
+    const pre104Os = pre104.chip("os");
+    if (!pre104Os || pre104Os.value !== "Linux · amd64") throw new Error("pre-104 case: os chip missing, got: " + (pre104Os && pre104Os.value));
+    const pre104Cpus = pre104.chip("cpus");
+    if (!pre104Cpus || pre104Cpus.value !== "8") throw new Error("pre-104 case: cpus chip missing, got: " + (pre104Cpus && pre104Cpus.value));
+    const pre104Memory = pre104.chip("memory");
+    if (!pre104Memory || pre104Memory.value !== "32.0 GB") throw new Error("pre-104 case: memory chip missing, got: " + (pre104Memory && pre104Memory.value));
+    if (pre104.chip("disk")) throw new Error("pre-104 case: no disk chip may render without a machine block");
+    if (pre104.chip("daemon cpu") || pre104.chip("daemon cpu time") || pre104.chip("measured over")) {
+        throw new Error("pre-104 case: no usage chip may render without a resourceUsage block");
+    }
+    if (hasText(pre104.panel, "Gradle daemon process only, over the execution phase")) {
+        throw new Error("pre-104 case: usage caveat must be absent without a resourceUsage block");
+    }
+
     // Minimal build (no tasks): ledger renders all-zero rows without dividing by zero.
     context.location.hash = "#/build/b2"; context._onhashchange(); await tick(); await tick();
     if (!fetched.includes("/v1/builds/b2")) throw new Error("minimal detail view did not fetch");
@@ -566,6 +786,12 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (findAll(byId["app"], n => (n.className || "").indexOf("failure-summary") >= 0).length !== 0) throw new Error("failure section must be absent when the payload has no failure object");
     if (hasText(byId["app"], "Warnings")) throw new Error("warnings section must be absent without an internal-adapters block");
     if (hasText(byId["app"], "Test telemetry unavailable")) throw new Error("degraded-test note must be absent without a testTelemetry block");
+    // b2 carries no environment, machine or resourceUsage block — the plan-105 Machine section must
+    // be absent entirely. This is the ONLY shape that hides it: a pre-104 payload carrying an
+    // environment block renders the hardware row, which the `pre104` case below pins.
+    if (hasText(byId["app"], "Machine")) throw new Error("machine section must be absent without specs or resource usage");
+    if (hasText(byId["app"], "daemon cpu")) throw new Error("no utilization chip may render without a resourceUsage block");
+    if (hasText(byId["app"], "Gradle daemon process only, over the execution phase")) throw new Error("usage caveat must be absent without a resourceUsage block");
 
     // Honest degraded test telemetry (plan 053, research F3): t1 has an empty `tests` array but a
     // populated `testTelemetry` — the Tests section must still render, with the note naming the

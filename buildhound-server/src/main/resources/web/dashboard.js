@@ -618,7 +618,7 @@
         box.append(el("h3", "Process snapshot"));
         const table = el("table");
         const head = el("tr");
-        for (const columnName of ["Process", "Heap used", "Configured -Xmx", "Used vs -Xmx", "GC time", "RSS", "Uptime"]) {
+        for (const columnName of ["Process", "Heap used", "Configured -Xmx", "Used vs -Xmx", "GC time", "RSS", "CPU", "Uptime"]) {
             head.append(el("th", columnName));
         }
         table.append(head);
@@ -630,6 +630,7 @@
             row.append(usedVsXmxCell(p.heapUsedMb, p.configuredXmxMb));
             row.append(el("td", p.gcTimeMs == null ? "" : ms(p.gcTimeMs), "num"));
             row.append(el("td", memMb(p.rssMb), "num"));
+            row.append(el("td", p.cpuTimeMs == null ? "" : ms(p.cpuTimeMs), "num"));
             row.append(el("td", p.uptimeS == null ? "" : ms(p.uptimeS * 1000), "num"));
             table.append(row);
         }
@@ -646,6 +647,105 @@
         cell.append(bar);
         cell.append(el("span", " " + Math.round(Math.max(0, Math.min(1, usedMb / xmxMb)) * 100) + "%", "muted"));
         return cell;
+    }
+
+    // Machine specs + build resource usage (plan 105): the dashboard half of plan 104, ported from
+    // the HTML artifact's machineSection. Two chip rows — what the build ran ON (static hardware)
+    // and what it USED (execution-window measurements) — or null when the payload carries neither.
+    // Null is narrower than "pre-104": the hardware chips read environment.os/arch/cores/ramMb/
+    // workersMax, which have existed since schema v1, so a pre-104 payload with an environment block
+    // renders the hardware row and no usage row. Only a payload with no machine-relevant environment
+    // data AND no resourceUsage hides the section outright. Every value reaches the DOM through
+    // el()/chipItem, i.e. textContent, never innerHTML.
+    function machinePanel(build) {
+        const env = build.environment || {};
+        const machine = env.machine || {};
+        const usage = build.resourceUsage || {};
+        // Null-prototype so a payload value like "constructor" cannot resolve to an inherited
+        // property and render as JS source (harmless via textContent, but nonsense to a reader).
+        const MEDIA_LABELS = Object.assign(Object.create(null), {
+            NVME: "NVMe", SSD: "SSD", ROTATIONAL: "HDD", NETWORK: "network", UNKNOWN: "unknown",
+        });
+
+        const specs = el("ul", null, "chips");
+        const spec = (label, value) => {
+            if (value == null || value === "") return;
+            specs.append(chipItem(label, value));
+        };
+        spec("os", env.os && env.arch ? env.os + " · " + env.arch : env.os || env.arch);
+        spec("cpus", env.cores);
+        spec("memory", memMb(env.ramMb));
+        // Media and capacity are independent probes: a filesystem whose media could not be
+        // established (every non-Linux host, and container/LVM layouts) still reports its size.
+        if (machine.diskTotalMb != null || machine.diskMedia) {
+            const media = MEDIA_LABELS[machine.diskMedia] || machine.diskMedia;
+            const size = machine.diskTotalMb != null
+                ? (machine.diskFreeMb != null ? memMb(machine.diskFreeMb) + " free of " + memMb(machine.diskTotalMb) : memMb(machine.diskTotalMb))
+                : null;
+            spec("disk", [media, size].filter(Boolean).join(" · "));
+        }
+        if (env.workersMax != null) spec("max workers", env.workersMax);
+        // `ciAttributes`, never a local `ci`: detailView binds `ci` to the /ci-run connector
+        // response, which is a different object from the payload's own CI block.
+        const ciAttributes = (build.ci && build.ci.attributes) || {};
+        // RunnerAttributes.MAX_VALUE_LENGTH is enforced plugin-side only — PayloadCapper excludes
+        // ci.attributes and spec §3.7 puts ci.* outside the ingest scrub — so an ingest-scoped token
+        // can POST a multi-KB value straight into a `.chips li`, which has no max-width. Not an XSS
+        // (every value goes through el()/textContent); a layout bound.
+        const runner = key => (ciAttributes[key] == null ? null : String(ciAttributes[key]).slice(0, 64));
+        spec("runner", runner("runnerClass"));
+        const imageOs = runner("runnerImageOs");
+        const imageVersion = runner("runnerImageVersion");
+        spec("runner image", imageOs && imageVersion ? imageOs + " " + imageVersion : imageOs || imageVersion);
+        spec("runner env", runner("runnerEnvironment"));
+        // The GitLab runner binary's own version. runnerOs/runnerArch are collected too but
+        // deliberately NOT shown: they restate the "os" chip above, measured from inside the same
+        // machine. runnerVersion has no such equivalent, so dropping it would lose signal.
+        spec("runner version", runner("runnerVersion"));
+
+        const usageChips = el("ul", null, "chips");
+        const use = (label, value) => {
+            if (value == null || value === "") return;
+            usageChips.append(chipItem(label, value));
+        };
+        // Utilization is computed here rather than shipped, and only when BOTH the window and the
+        // core count are known — an unknown utilization must never render as 0%. The clamp mirrors
+        // DerivedMetricsCalculator.daemonCpuUtilization's coerceIn(0.0, 1.0) on BOTH sides: the
+        // upper bound because two samples read at slightly different instants can overshoot, the
+        // lower because a negative delta must not surface as "-0.3% of 8 cores". The fallback keeps
+        // a DIFFERENT label — it is an absolute duration, not a share of capacity, and reusing
+        // "daemon cpu" for both invites exactly the misreading this section exists to avoid.
+        // (the `daemonCpuMs != null` in the `if` below is load-bearing: `null >= 0` is TRUE in JS,
+        // so a null-valued field would sail through a bare range check and render as 0.)
+        const daemonCpuMs = usage.daemonCpuMs != null && usage.daemonCpuMs >= 0 ? usage.daemonCpuMs : null;
+        if (daemonCpuMs != null && usage.windowMs > 0 && env.cores > 0) {
+            const pct = Math.min(1, Math.max(0, daemonCpuMs / (usage.windowMs * env.cores))) * 100;
+            use("daemon cpu", pct.toFixed(pct < 10 ? 1 : 0) + "% of " + env.cores + " cores");
+        } else if (daemonCpuMs != null) {
+            use("daemon cpu time", ms(daemonCpuMs));
+        }
+        if (usage.windowMs != null) use("measured over", ms(usage.windowMs));
+        if (usage.systemCpuLoadPct != null) use("system cpu", usage.systemCpuLoadPct + "%");
+        if (usage.systemLoadAverage != null) use("load avg", usage.systemLoadAverage.toFixed(2));
+        if (usage.systemMemTotalMb != null && usage.systemMemFreeMb != null) {
+            use("system memory", memMb(usage.systemMemTotalMb - usage.systemMemFreeMb) + " used of " + memMb(usage.systemMemTotalMb));
+        }
+
+        if (!specs.children.length && !usageChips.children.length) return null;
+        const fragment = document.createDocumentFragment();
+        fragment.append(el("h3", "Machine"));
+        // Each list is appended only once populated. The report's two <ul>s sit in markup inside a
+        // hidden section wrapper; this port has no wrapper, and an empty `.chips` still costs its
+        // vertical margin.
+        if (specs.children.length) fragment.append(specs);
+        if (usageChips.children.length) {
+            fragment.append(usageChips);
+            // The honest caveat: this is one process over part of the build, not a machine total.
+            fragment.append(el("p", "Gradle daemon process only, over the execution phase — configuration"
+                + " time and work done in Kotlin/worker/test JVMs are not included. System load and"
+                + " memory are single readings taken at the end of the build.", "muted"));
+        }
+        return fragment;
     }
 
     // Daemon-tuning candidates (plan 065): client-side mirror of the server's DaemonTuningCandidates
@@ -752,6 +852,13 @@
         // explicit zeros, share-of-all-tasks percentages, summed task time.
         app.append(el("h3", "Work avoidance"));
         app.append(ledgerTable(tasks));
+
+        // Machine specs + build resource usage (plan 105): what the build ran on and what it used,
+        // mirroring the HTML artifact's plan-104 section. Null — so nothing is appended — only for a
+        // payload with no machine-relevant environment data and no resourceUsage; a pre-104 payload
+        // that carries an environment block still gets the hardware row.
+        const machine = machinePanel(build);
+        if (machine) app.append(machine);
 
         // Process snapshot (plan 029): daemon/Kotlin/worker JVM memory. Hidden when the probe
         // collected nothing (disabled or JDK tools absent) — the panel renders only with data.
