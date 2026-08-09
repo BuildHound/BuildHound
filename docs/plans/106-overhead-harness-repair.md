@@ -185,6 +185,29 @@ self-test green in both directions, and a real table:
 | upload        |        1592.6 |      1595.0 |     2.4 |     0.1 |          250.0 |    no     | ✅ ok     |
 ```
 
+### Confirmed on the CI reference runner
+
+Actions run 31337018812 (PR #116, `blacksmith-4vcpu-ubuntu-2404`) — the first `overhead-budget` run
+in the job's history that actually benchmarked anything. **4m25s**, well inside the new 45-minute
+ceiling, and it failed for the right reason: the verdict exited non-zero on a breach, with the table
+in the artifact — not exit 3 (no profiler), exit 4 (toggle self-test) or exit 5 (sink).
+
+```
+| Axis          | Baseline (ms) | Plugin (ms) | Δ (ms) | Allowance (ms) | Separated | Verdict   |
+| configuration |          71.8 |       408.5 |  336.7 |           40.0 |    yes    | ❌ BREACH |
+| per-task      |         487.5 |       998.0 |  510.5 |           24.4 |    yes    | ❌ BREACH |
+| finalizer     |          74.6 |       666.1 |  591.5 |          150.0 |    yes    | ❌ BREACH |
+| upload        |         413.4 |       409.1 |   −4.3 |          250.0 |    no     | ✅ ok     |
+```
+
+The breach reproduces on a clean Linux runner, and it is **milder there than locally** (finalizer
+591 ms vs 1825 ms) — the direction predicted by the JVM-count scaling below, since a fresh runner has
+few live JVMs. That makes a developer's machine the worse case, not the better one, and it means the
+CI number is a floor on what users would feel rather than a representative figure.
+
+This settles plan 104's exit criterion 5 negatively: the finalizer axis is ~4× its cap on the
+reference runner. Criterion 5 is now *failed*, not *pending* — see the status block in that plan.
+
 **These are not three independent regressions — they are one fixed cost seen three times.** The
 deltas are near-identical (1508 / 1862 / 1825 ms) because within a single run the plugin's per-build
 cost is effectively constant across scenarios, and every axis subtracts a plugin-off baseline from a
