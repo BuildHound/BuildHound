@@ -413,6 +413,12 @@ jobs:
     # stays green-optional until runner-to-runner variance is characterised — the promote-to-blocking
     # criterion lives in docs/overhead-budget.md. It runs gradle-profiler on a synthetic fixture with
     # the plugin toggled on/off and fails on a budget breach (OverheadCalculator, buildhound-commons).
+    #
+    # EXPECT THIS JOB TO BE RED (plan 106). It was inert until then — green in ~17 s without running
+    # the benchmark — and the first real run breaches three axes for a known, disclosed reason (the
+    # process probe's per-JVM subprocess cost, plan 106 §7), not because of runner noise. A red run
+    # here currently means "the known cost is still there"; read overhead-table.md in the artifact
+    # before assuming a new regression. Promotion to blocking cannot be assessed until that is fixed.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     # A real run is 160 fixture builds (5 scenarios × 16 × 2 variants) plus a cold Gradle
@@ -441,6 +447,10 @@ jobs:
       # the GitHub release carries no zip). The checksum makes a re-pointed tag or swapped asset a
       # loud failure, not a silent binary swap — a bump is a deliberate, reviewed change of both.
       - name: Install gradle-profiler
+        # `shell: bash` for pipefail here too. The checksum check is currently the rightmost element
+        # of its pipeline, so `-e` alone would catch a mismatch — but that is a property of the
+        # current line order, not of the step, and this job already shipped one pipefail bug.
+        shell: bash
         env:
           PROFILER_VERSION: "0.24.0"
           PROFILER_SHA256: "74f39882a444d6d5616d35b3e9197f7423cd252f63f339bd3e01f662573b319c"

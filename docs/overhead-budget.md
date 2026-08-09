@@ -79,6 +79,17 @@ regressions caught by a deliberately-tightened-budget check), drop `continue-on-
 promotion in the decision log — the same promote-or-defer discipline as the macOS/Windows/IP jobs
 (plan 021).
 
+> **The promotion clock has not started.** That criterion asks for runs with no *false* breaches,
+> which cannot be assessed while every run carries a *true* one: the repaired harness (plan 106)
+> reports a real breach on three axes, caused by the process probe's per-JVM subprocess cost — see
+> plan 106 §7 for the numbers and the isolation. Until that cost is addressed, a red
+> `overhead-budget` is the expected state and carries no information about runner noise. Read
+> `overhead-table.md` from the artifact before treating a red run as a new regression.
+>
+> Note also that the harness only began producing measurements at all with plan 106; every run
+> before that reported success in ~17 s **without running the benchmark**, so no historical green
+> on this job is evidence of anything.
+
 ## Reading the artifact
 
 Each CI run publishes `overhead-table.md` (the verdict table) and both `benchmark.csv` files. A
