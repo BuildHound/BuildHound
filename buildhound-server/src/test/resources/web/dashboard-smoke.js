@@ -5,7 +5,13 @@
 const fs = require("fs");
 const vm = require("vm");
 
+// The stub models parent links and `isConnected` (plan 105). Without them, code that reaps
+// detached nodes — the chart lifecycle — cannot be tested at all: `undefined !== false` reads
+// as "still attached", so a no-op reaper passes every assertion. Attachment is defined as
+// reachability from the #app root, which is what the real property means for this page.
 function makeNode(tag) {
+    const detach = kids => { for (const kid of kids) { if (kid && typeof kid === "object") kid.parent = null; } };
+    const attach = kids => { for (const kid of kids) { if (kid && typeof kid === "object") kid.parent = node; } };
     const node = {
         tag,
         children: [],
@@ -13,12 +19,18 @@ function makeNode(tag) {
         attrs: {},
         hidden: false,
         value: "",
-        set textContent(v) { node._text = String(v); node.children = []; },
+        parent: null,
+        get isConnected() {
+            let cursor = node;
+            while (cursor.parent) cursor = cursor.parent;
+            return cursor === byId["app"];
+        },
+        set textContent(v) { node._text = String(v); detach(node.children); node.children = []; },
         get textContent() { return node._text || ""; },
         set className(v) { node._class = v; },
         get className() { return node._class || ""; },
-        append(...kids) { node.children.push(...kids); },
-        appendChild(kid) { node.children.push(kid); return kid; },
+        append(...kids) { attach(kids); node.children.push(...kids); },
+        appendChild(kid) { attach([kid]); node.children.push(kid); return kid; },
         setAttribute(k, v) { node.attrs[k] = v; },
         getAttribute(k) { return k in node.attrs ? node.attrs[k] : null; },
         addEventListener(type, fn) { (node.listeners[type] = node.listeners[type] || []).push(fn); },
@@ -555,7 +567,15 @@ async function fetchStub(path, opts) {
 
 const context = {
     document: documentStub,
-    window: { addEventListener: (t, fn) => { context._onhashchange = fn; } },
+    // Keyed by event type, and every handler kept. The single-slot stub this replaces silently
+    // dropped any listener registered before "hashchange" — including the chart resize handler,
+    // which meant deleting that handler outright still passed the suite (plan 105).
+    window: {
+        addEventListener: (type, fn) => {
+            (context._windowListeners[type] = context._windowListeners[type] || []).push(fn);
+            if (type === "hashchange") context._onhashchange = fn;
+        },
+    },
     location: { hash: "", origin: "http://localhost:8080" },
     sessionStorage: {
         getItem: k => (k in store ? store[k] : null),
@@ -576,6 +596,7 @@ const context = {
     setTimeout, // not used, but harmless
 };
 context.globalThis = context;
+context._windowListeners = {};
 
 vm.createContext(context);
 // Load the shared timeline renderer (argv[3]) first so buildhoundTimeline is a global for
@@ -911,17 +932,23 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     await tick(); await tick(); await tick(); await tick();
     if (chartFigures().length < 3) throw new Error("a throwing chart library must not cost the trends page its figures");
     if (!hasText(byId["app"], "Show values")) throw new Error("a throwing chart library must leave the value table standing");
-    for (const plot of chartPlots()) {
-        if (plot.children.length || plot.textContent) throw new Error("a throwing chart library must leave no partial chart node");
-    }
+    // Count-based, like pass 1: inspecting the contents of whatever chartPlots() returns cannot
+    // fail, because a mount that wrongly reported success still leaves an EMPTY plot node — the
+    // node must not be attached at all.
+    if (chartPlots().length !== 0) throw new Error("a throwing chart library must leave no partial chart node");
 
     // Pass 3: a recording stub — assert what dashboard.js hands the library. No browser API is
     // involved, so this is the automated check that survives the canvas being invisible here.
     const uplotCalls = [];
+    const destroyed = [];
     context.uPlot = function (opts, data, target) {
-        uplotCalls.push({ opts, data, target });
+        const call = { opts, data, target, chart: this };
+        uplotCalls.push(call);
+        // The real library appends its own root into the target, which is what makes a chart
+        // transitively detach when the view clears #app — the whole basis of the reaping logic.
         this.root = makeNode("div");
-        this.destroy = () => {};
+        target.append(this.root);
+        this.destroy = () => destroyed.push(call);
         this.setSize = () => {};
         this.setSeries = () => {};
     };
@@ -980,6 +1007,30 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (toggle.getAttribute("aria-pressed") !== "true") throw new Error("series toggle must expose its state");
     toggle.listeners.click[0]();
     if (toggle.getAttribute("aria-pressed") !== "false") throw new Error("series toggle must flip its state on activation");
+
+    // Chart lifecycle. uPlot attaches document-level listeners, so a chart whose DOM the next
+    // view threw away must be destroyed rather than left holding them. Both halves are checked:
+    // a view that renders charts resets them itself, and a view that renders none must not
+    // strand them (the reaping runs on the following navigation, by design).
+    const mountedOnTrends = uplotCalls.length;
+    if (!uplotCalls.every(c => c.chart.root.isConnected)) throw new Error("a mounted chart must be attached to the page");
+    context.location.hash = "#/trends"; context._onhashchange();
+    await tick(); await tick(); await tick(); await tick();
+    if (destroyed.length < mountedOnTrends) {
+        throw new Error("re-rendering the trends view must destroy the charts it replaces: " + destroyed.length + " of " + mountedOnTrends);
+    }
+    const afterRerender = destroyed.length;
+    // A chart-less view detaches the charts without destroying them...
+    context.location.hash = "#/tests"; context._onhashchange(); await tick(); await tick();
+    if (uplotCalls[uplotCalls.length - 1].chart.root.isConnected) throw new Error("leaving the trends view must detach its charts");
+    // ...so the next navigation must reap them. Without this, a chart stranded by a view that
+    // renders none would keep its listeners until another chart happened to mount — possibly never.
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    if (destroyed.length <= afterRerender) throw new Error("charts detached by a chart-less view must be reaped on the next navigation");
+
+    // The resize handler must actually be registered (a single-slot window stub used to swallow it).
+    if (!(context._windowListeners.resize || []).length) throw new Error("charts must register a window resize handler");
+    context._windowListeners.resize.forEach(fn => fn());
 
     context.uPlot = undefined;
 

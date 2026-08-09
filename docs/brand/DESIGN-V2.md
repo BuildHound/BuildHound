@@ -412,25 +412,42 @@ file exists and has been visually verified.
 
 ### Runtime adoption status
 
-Neither production surface has been converted to V2. The standalone HTML report, generated
-from buildhound-report/src/main/resources/dev/buildhound/report/report-template.html, and
-the server dashboard, served from buildhound-server/src/main/resources/web/index.html and
-its dashboard.js, both still carry their original pre-V2 styling: literal hex colors, system
-font stacks, and none of the V2 token layer. This is a deliberate deferral under item 8
-above, not an oversight.
+Rule 8 above is satisfied per surface, not once for the product. This subsection records where
+each production surface stands, so a later plan can cite it instead of rediscovering it. It is a
+status record, not a rule, and it exempts no work from V2.
 
-Plan 104 added a machine-specs and resource-usage section to the report, and plan 107 added
-the same section to the dashboard. Each was written in its own surface's existing pre-V2
-idiom rather than half-converting one section of an otherwise pre-V2 page, because a partial
-conversion leaves a page that follows neither system. Neither plan introduced an external
-stylesheet link, an image element, a CSS url() reference, an @import, a webfont, or a
-relative asset reference, and neither weakened the report's asset test or the dashboard's
-content security policy style-hash tests.
+| Surface | State |
+|---|---|
+| Standalone HTML report (`buildhound-report/src/main/resources/dev/buildhound/report/report-template.html`) | Pre-V2 |
+| Server dashboard — **chart surfaces** (trends, benchmark) | **V2**, plan 105 |
+| Server dashboard — everything else | Pre-V2 |
 
-Converting either surface still requires exactly what item 8 requires: a separate
-implementation plan with regression tests. This subsection records where the two surfaces
-stand so a later plan can cite it instead of rediscovering it. It is a status record, not a
-rule, and it exempts no work from V2.
+The report and the non-chart parts of the dashboard still carry their original pre-V2 styling:
+literal hex colors, system font stacks, and none of the V2 token layer — badge palette, delta
+chips, muted text, page width, type scale and ThemeControl among them. This is a deliberate
+deferral under item 8 above, not an oversight.
+
+Plan 104 added a machine-specs and resource-usage section to the report, and plan 107 added the
+same section to the dashboard. Each was written in its own surface's existing pre-V2 idiom rather
+than half-converting one section of an otherwise pre-V2 page, because a partial conversion leaves
+a page that follows neither system. No plan has introduced an external stylesheet link, an image
+element, a CSS url() reference, an @import, a webfont, or a relative asset reference, and none has
+weakened the report's asset test or the dashboard's content security policy style-hash tests.
+
+Plan 105 converted the dashboard's **chart surfaces only**, with regression tests, per item 8:
+series/grid/axis solids, the measurement grid inside the plot area, system-font roles, chart
+command-target sizes, the focus ring and reduced-motion. Charts were a defensible unit to convert
+on their own — unlike the sections above, their colors carry *status semantics* (§3) that the
+literal hexes contradicted outright, drawing cache hit rate in success green when cache state maps
+to Cache-or-information. Converting any other surface still requires its own plan.
+
+**Gap this adoption surfaced: there is no qualitative (categorical) series palette.** §3 defines
+seven *semantic* solids, and §3's status mapping means a green series reads as "success" and a
+violet one as "flaky" — wrong for data that is not a status, such as tag cohorts or per-artifact
+variants. Plan 105 therefore renders multi-series charts in one neutral solid, distinguished by
+line style and direct labels, which §3's "never rely on colour alone" prefers anyway. A proper
+categorical palette is an open addition to this document; until it lands, do not invent series
+hexes and call them V2 tokens.
 
 ### Known risks
 
