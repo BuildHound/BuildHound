@@ -24,6 +24,9 @@ fun main(args: Array<String>) {
     println()
     println(OverheadCalculator.markdownTable(report))
     if (report.anyBreached) {
+        // Flush the table before the stderr verdict, or an interleaved CI log prints "BREACHED"
+        // above the table it refers to.
+        System.out.flush()
         System.err.println()
         System.err.println("OVERHEAD BUDGET BREACHED — see the table above.")
         exitProcess(1)
@@ -37,18 +40,16 @@ private fun parseOrExit(path: String, label: String): Map<String, ScenarioStats>
         System.err.println("failed to read $label benchmark.csv '$path': ${it.message}")
         exitProcess(2)
     }
-    // A missing stddev row degrades to zero spread → the noise-separation guard is disabled (a % wobble
-    // could then mint a false breach). Surface it loudly so a reviewer knows the guard was toothless.
-    if (!hasStddevRow(text)) {
-        System.err.println("warning: $label benchmark.csv has no stddev row — the noise-separation guard is disabled for its axes")
-    }
-    return runCatching { ProfilerCsv.parse(text) }.getOrElse {
+    val stats = runCatching { ProfilerCsv.parse(text) }.getOrElse {
         System.err.println("failed to parse $label benchmark.csv '$path': ${it.message}")
         exitProcess(2)
     }
-}
-
-private fun hasStddevRow(csv: String): Boolean =
-    csv.lineSequence().any { line ->
-        line.substringBefore(',').trim().lowercase() in setOf("stddev", "std dev", "standard deviation")
+    // Zero spread everywhere means single-sample scenarios (or a format we could not read a spread
+    // from) → the noise-separation guard is disabled and a % wobble could mint a false breach.
+    // Checked on the parsed stats, not by scanning for a 'stddev' row: gradle-profiler writes no
+    // summary rows at all, so the old text scan warned on every real run (plan 106).
+    if (stats.isNotEmpty() && stats.values.all { it.stddevMs == 0.0 }) {
+        System.err.println("warning: $label benchmark.csv yielded no spread — the noise-separation guard is disabled for its axes")
     }
+    return stats
+}

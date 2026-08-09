@@ -1,13 +1,20 @@
-scenario,no_op,incremental,cc_hit,no_op_upload,no_op_ci
-version,current,current,current,current,current
-tasks,help,assemble,help,help,help
-value,total execution time,total execution time,total execution time,total execution time,total execution time
-warm up build #1,610,3200,510,615,612
-measured build #1,600,3000,500,602,601
-measured build #2,602,3010,501,604,603
-measured build #3,601,3005,500,603,602
-mean,601.0,3005.0,500.3,603.0,602.0
-min,600,3000,500,602,601
-median,601,3005,500,603,602
-max,602,3010,501,604,603
-stddev,1.0,5.0,0.5,1.5,1.1
+scenario,no_op,no_op,incremental,incremental,cc_hit,cc_hit,no_op_upload,no_op_upload,no_op_ci,no_op_ci
+version,Gradle 9.6.1,Gradle 9.6.1,Gradle 9.6.1,Gradle 9.6.1,Gradle 9.6.1,Gradle 9.6.1,Gradle 9.6.1,Gradle 9.6.1,Gradle 9.6.1,Gradle 9.6.1
+tasks,build,build,build,build,build,build,build,build,build,build
+value,total execution time,task start,total execution time,task start,total execution time,task start,total execution time,task start,total execution time,task start
+warm-up build #1,13142.70,10627.00,10845.95,7301.00,10484.59,7246.00,7346.85,7217.00,7386.13,7257.00
+warm-up build #2,160.27,13257.00,790.66,10935.00,148.50,10582.00,137.85,7440.00,139.41,7483.00
+warm-up build #3,109.83,13365.00,840.70,11694.00,100.26,10689.00,116.97,7544.00,107.01,7585.00
+warm-up build #4,129.37,13483.00,717.82,12530.00,116.31,10811.00,116.45,7661.00,112.06,7687.00
+warm-up build #5,93.03,13599.00,684.06,13245.00,97.30,10902.00,90.93,7767.00,98.25,7798.00
+warm-up build #6,125.35,13688.00,674.29,13929.00,90.04,10994.00,97.55,7860.00,104.83,7895.00
+measured build #1,81.83,13815.00,681.14,14613.00,78.26,11083.00,116.37,7959.00,96.25,7998.00
+measured build #2,107.60,13902.00,665.20,15286.00,100.90,11170.00,101.59,8085.00,93.50,8093.00
+measured build #3,89.13,14006.00,653.51,15950.00,83.11,11264.00,86.74,8171.00,95.90,8203.00
+measured build #4,77.61,14089.00,646.51,16604.00,96.28,11346.00,92.64,8257.00,89.03,8280.00
+measured build #5,92.38,14170.00,642.57,17251.00,76.64,11442.00,91.75,8352.00,87.22,8369.00
+measured build #6,81.14,14270.00,633.54,17901.00,101.47,11527.00,77.21,8446.00,87.07,8455.00
+measured build #7,79.66,14340.00,621.49,18526.00,90.34,11622.00,85.41,8518.00,92.53,8544.00
+measured build #8,84.63,14417.00,651.04,19147.00,88.07,11710.00,77.55,8602.00,90.49,8632.00
+measured build #9,81.26,14506.00,663.95,19799.00,86.13,11796.00,67.61,8682.00,76.66,8726.00
+measured build #10,102.71,14594.00,624.24,20467.00,108.19,11891.00,87.22,8755.00,88.56,8799.00

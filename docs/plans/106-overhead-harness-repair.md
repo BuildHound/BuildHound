@@ -26,10 +26,27 @@ in CI assets:
    quoted string, so the literal text `${BUILDHOUND_OVERHEAD_SINK}` reaches the build.
    `--dump-scenarios` confirms it. The upload axis was measuring a bogus URL, not an upload.
 
+Two further defects surfaced only once the harness actually ran — both make the verdict step
+report `⚠ MISSING` for every axis, which is the same class of untruth as the inert job:
+
+4. `ProfilerCsv` keys scenarios by the `scenario` row's cells, but gradle-profiler names a CSV
+   column after the scenario's **`title`** when one is set (empirically confirmed: a scenario with
+   no title is named by its id). `OverheadBudget` references ids (`no_op`, `cc_hit`, …), so no axis
+   could ever find its data.
+5. `--measure-config-time` emits **two** columns per scenario — `total execution time` and
+   `task start`. `ProfilerCsv` indexes by column position with "last column wins", so it would
+   silently read `task start` as the axis mean.
+
+**Scope amendment (divergence from this plan's first commit, which put commons out of scope):**
+fixing 4 and 5 requires a `buildhound-commons` change (`ProfilerCsv`) plus its unit tests. Taken in
+because exit criterion 1 — a real four-axis table with verdicts — is unreachable without it: the
+harness would run correctly and still report nothing. Scope stays limited to the parser; no schema,
+payload, plugin or server code is touched.
+
 **Out:** calibrating `OverheadBudget.DEFAULT` (docs/overhead-budget.md §"The budget" reserves that
 for the first green *CI reference-runner* run + a decision-log row — an owner call, not a
 side effect of this repair); promoting the job to blocking; bumping the pinned gradle-profiler
-version/SHA; any plugin, commons or server code change.
+version/SHA; per-axis metric selection (see §5); any plugin, server or schema change.
 
 ## 3. Design
 
@@ -47,10 +64,25 @@ version/SHA; any plugin, commons or server code change.
   `bash --noprofile --norc -eo pipefail {0}`) and replace the wrong comment with what is actually
   load-bearing. Add `timeout-minutes` to the job: a real benchmark run is minutes-to-hours, not
   17 s, and the job currently rides the 360-minute platform default.
+- `overhead.scenarios` — drop each scenario's `title`, so the CSV column carries the scenario **id**
+  the budget references. The prose survives as a comment; the machine-readable key wins over the
+  prettier `benchmark.html` label.
+- `ProfilerCsv` (commons) — pick each scenario's column by the **`value` row** (`total execution
+  time`) instead of by position, and name the metric in the failure message so a future profiler
+  rename is diagnosable at a glance. Keep the existing drift tolerance: a CSV with no `value` row at
+  all still parses positionally.
+- `run-overhead.sh` — pre-clean `fixture/build/buildhound` before the first variant, so a stale
+  directory from an earlier run cannot make the plugin-on self-test pass on someone else's output.
 
 ## 4. Test strategy
 
-No product code changes, so no unit/TestKit/golden work. The harness is verified by *running* it:
+`ProfilerCsvTest` covers the parser change, and its two sample CSVs
+(`jvmTest/resources/overhead/benchmark-{on,off}.csv`) are **replaced with output captured from a
+real gradle-profiler run**. These are test fixtures, not payload goldens — the additive-only,
+never-edit rule does not apply to them. The old ones were hand-authored and unfaithful in exactly
+the two ways that hid defects 4 and 5 (ids where the real file has titles; one column per scenario
+where `--measure-config-time` emits two), so keeping them would keep the tests green on a shape
+that never occurs. The rest of the harness is verified by *running* it:
 
 - `--dump-scenarios` shows the resolved `gradle-args` per variant (proves 1 and 3 by inspection).
 - Full local harness run producing a real four-axis table with verdicts, plus the toggle self-test
@@ -71,6 +103,14 @@ No product code changes, so no unit/TestKit/golden work. The harness is verified
 - **Local ≠ CI.** A green macOS table proves the harness works; plan 104 criterion 5 says the *CI
   job* passes. The note added to plan 104 records "harness repaired + local measurements"; the
   criterion only closes on a green CI run with a real table.
+- **The configuration axis measures total build time, not config-phase time.** `docs/overhead-budget.md`
+  is internally inconsistent here: its formula (line 10) is `mean(on) − mean(off)` of *total* build
+  time, while its axis table (line 15) describes `cc_hit` as isolating config-phase cost via
+  `--measure-config-time` — which is the `task start` column. `AxisSample` carries no metric, so
+  honouring the second reading means adding one and rewiring the budget. This plan selects
+  `total execution time` **uniformly for all five scenarios**, consistent with the formula and the
+  single-table shape; per-axis metric selection is a deliberate follow-up, not an oversight. Stated
+  here so the config axis is not silently measuring something the docs table does not describe.
 - No security/privacy surface: no payload, schema, token or endpoint change. The loopback sink
   stays a do-nothing local `127.0.0.1` server.
 
@@ -82,7 +122,49 @@ No product code changes, so no unit/TestKit/golden work. The harness is verified
 3. `--dump-scenarios` shows a literal-free, correctly interpolated `gradle-args` for both variants.
 4. The CI step fails when the harness fails (pipefail in place; `set -e`-only semantics proven to
    swallow it).
-5. Plan 104's criterion-5 note updated with what was measured and what still needs a CI run.
+5. `ProfilerCsv` parses a **real** `benchmark.csv` into the five scenario ids with the
+   `total execution time` mean; `./gradlew build` green.
+6. Plan 104's criterion-5 note updated with what was measured and what still needs a CI run.
 
 > Numbering: 105 is taken by an unmerged sibling branch
 > (`plan: composite action in CI + nightly sample benchmark to prod`), so this plan is 106.
+
+## 7. Result of the first real run (2026-08-09)
+
+A sixth defect surfaced when the verdict step finally ran: gradle-profiler writes **no summary rows
+at all**, so `ProfilerCsv`'s required `mean` row never existed and the run aborted with
+`benchmark.csv has no 'mean' row`. Mean and sample stddev are now computed from the `measured build
+#N` rows. The harness then completed: 160 builds, ~7 min wall clock on a 10-core M-series, toggle
+self-test green in both directions, and a real table:
+
+```
+| Axis          | Baseline (ms) | Plugin (ms) |  Δ (ms) |   Δ (%) | Allowance (ms) | Separated | Verdict   |
+| configuration |          90.9 |      1599.4 |  1508.4 |  1658.7 |           40.0 |    yes    | ❌ BREACH |
+| per-task      |         648.3 |      2510.8 |  1862.5 |   287.3 |           32.4 |    yes    | ❌ BREACH |
+| finalizer     |          87.8 |      1912.4 |  1824.6 |  2078.2 |          150.0 |    yes    | ❌ BREACH |
+| upload        |        1592.6 |      1595.0 |     2.4 |     0.1 |          250.0 |    no     | ✅ ok     |
+```
+
+**The breach is real, not a harness artifact**, and it is not plan 104's doing. Isolated on the same
+fixture at steady state (fully up-to-date, configuration-cache hit):
+
+| Variant | Wall clock |
+|---|---|
+| plugin not applied | ~0.53 s |
+| plugin applied, `buildhound.enabled=false` | ~0.57 s |
+| plugin on, `buildhound.processProbe.enabled=false` | ~0.70 s |
+| plugin on, full | ~5.0–6.0 s |
+
+So the composite `includeBuild` costs ~35 ms (it is not the explanation), the plugin's non-probe work
+costs ~130–170 ms, and **the process probe accounts for the rest**. The probe spawns four JVM-based
+tools per detected JVM (`jps` once, then `jstat -gc`, `jstat -capacity`, `jinfo` per PID, plus one
+`ps`) at ~130 ms of JVM startup each; this machine had 15 live JVMs, hence ~60 subprocesses. The cost
+therefore **scales with the number of JVMs on the machine**, which is why the profiler run (fewer
+daemons alive) shows ~1.8 s while a laptop with several worktrees' daemons shows ~5 s.
+
+Plan 104 is exonerated by its own diff: it *removed* one `ps` exec per PID (two collapsed into one).
+The per-PID subprocess design predates it (plan 029).
+
+Fixing the probe is out of scope here — this plan repairs the instrument, and the instrument's first
+reading is a finding for its own plan. What must not happen is widening `OverheadBudget.DEFAULT` to
+make the table green.

@@ -37,6 +37,13 @@ can't mint a false breach.
 > run and updated with headroom (recorded in the architecture decision log). The shapes above are the
 > starting point; the budget is a *guardrail against regressions*, not a microbenchmark.
 
+**Every axis is measured on `total execution time`**, including the configuration axis. The axis
+table above describes `cc_hit` as isolating config-phase cost, which would be gradle-profiler's
+`task start` column; `AxisSample` carries no metric selector, so honouring that reading means adding
+one and rewiring the budget. Recorded as a known follow-up in plan 106 §5 rather than left implicit —
+until it lands, "configuration" means *total build time on a configuration-cache hit*, which is the
+quantity the `mean(on) − mean(off)` formula above actually computes.
+
 ## Running it locally
 
 ```sh
@@ -77,3 +84,21 @@ promotion in the decision log — the same promote-or-defer discipline as the ma
 Each CI run publishes `overhead-table.md` (the verdict table) and both `benchmark.csv` files. A
 `⚠ MISSING` verdict means a required scenario was absent from a CSV (a garbled profiler run) — it is
 counted as a breach so a broken measurement never reports a false pass.
+
+## What `benchmark.csv` actually looks like
+
+Three facts about gradle-profiler 0.24.0's output, each of which was assumed wrong when the harness
+was written and each of which alone made the budget unverifiable (plan 106). Re-check them against
+`--dump-scenarios` and a real CSV before bumping the pinned profiler version:
+
+1. **No summary rows.** No `mean`, `median`, `min`, `max` or `stddev` — only `warm-up build #N` and
+   `measured build #N`. `ProfilerCsv` computes the mean and the sample stddev from the measured rows.
+2. **One column per scenario per metric.** `--measure-config-time` adds a second column,
+   `task start`, under the same scenario name — and it is a *cumulative timestamp*, not a duration.
+   Columns are selected by the `value` row, never by position.
+3. **Column names come from the scenario `title`, falling back to the scenario id.**
+   `overhead.scenarios` therefore sets no titles: the ids are what `OverheadBudget`'s axes reference.
+
+Also: gradle-profiler has no `-P` (or `--gradle-argument`) option. A Gradle project property reaches
+the build only through a scenario's `gradle-args`, and a `${VAR}` inside a **quoted** HOCON string is
+not substituted — concatenate (`"-Pflag="${VAR}`) or the literal text reaches Gradle.

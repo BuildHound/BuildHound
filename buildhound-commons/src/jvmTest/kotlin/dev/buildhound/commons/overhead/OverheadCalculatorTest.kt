@@ -13,13 +13,28 @@ class OverheadCalculatorTest {
     private fun stats(name: String, mean: Double, stddev: Double) = mapOf(name to ScenarioStats(name, mean, stddev))
 
     @Test
-    fun `the default budget passes on the sample fixtures`() {
-        val on = ProfilerCsv.parse(resource("benchmark-on.csv"))
-        val off = ProfilerCsv.parse(resource("benchmark-off.csv"))
+    fun `the default budget passes on within-budget fixtures`() {
+        val on = ProfilerCsv.parse(resource("benchmark-within-budget-on.csv"))
+        val off = ProfilerCsv.parse(resource("benchmark-within-budget-off.csv"))
         val report = OverheadCalculator.evaluate(on, off, OverheadBudget.DEFAULT)
         assertEquals(4, report.verdicts.size)
         assertFalse(report.anyBreached, OverheadCalculator.markdownTable(report))
         assertTrue(report.verdicts.none { it.dataMissing })
+    }
+
+    @Test
+    fun `every axis resolves against real gradle-profiler output`() {
+        // benchmark-{on,off}.csv are captured from an actual harness run (plan 106), so this is the
+        // regression guard for the defect class that made the CI job inert: with titled scenarios, a
+        // position-indexed parser, or missing summary-row handling, every axis reports ⚠ MISSING and
+        // the budget verifies nothing. Asserting only "no data missing" here — the measured numbers
+        // themselves are a machine-dependent finding, not a fact to pin in a unit test.
+        val on = ProfilerCsv.parse(resource("benchmark-on.csv"))
+        val off = ProfilerCsv.parse(resource("benchmark-off.csv"))
+        val report = OverheadCalculator.evaluate(on, off, OverheadBudget.DEFAULT)
+        assertEquals(4, report.verdicts.size)
+        assertTrue(report.verdicts.none { it.dataMissing }, OverheadCalculator.markdownTable(report))
+        assertTrue(report.verdicts.all { it.baselineMeanMs > 0.0 && it.treatmentMeanMs > 0.0 })
     }
 
     // A single-axis budget with an absolute floor of 150 ms OR 8 %, separation off for clarity.

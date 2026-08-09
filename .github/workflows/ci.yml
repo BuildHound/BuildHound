@@ -415,6 +415,12 @@ jobs:
     # the plugin toggled on/off and fails on a budget breach (OverheadCalculator, buildhound-commons).
     runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
+    # A real run is 160 fixture builds (5 scenarios × 16 × 2 variants) plus a cold Gradle
+    # distribution download per variant — the harness's own `--gradle-user-home` is outside
+    # setup-gradle's cache, so that cost is paid twice. Measured at ~7 min on a 10-core M-series;
+    # this ceiling is generous for 4 vCPU. Explicit because the job used to finish in 17 s without
+    # benchmarking anything (plan 106) and the platform default would let a hang run for 6 hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -445,8 +451,13 @@ jobs:
           unzip -q gradle-profiler.zip
           echo "$PWD/gradle-profiler-${PROFILER_VERSION}/bin" >> "$GITHUB_PATH"
 
-      # GitHub's default bash sets `-o pipefail`, so a budget breach (non-zero) propagates through tee.
+      # `shell: bash` is load-bearing, not cosmetic (plan 106). The Actions DEFAULT shell is
+      # `/usr/bin/bash -e {0}` — no pipefail — so `harness | tee` would exit with tee's 0 and a
+      # broken benchmark would render as a green check (it did, for the job's whole lifetime).
+      # Naming bash explicitly maps the step to `bash --noprofile --norc -eo pipefail {0}`, so a
+      # budget breach (or a harness failure) propagates through the pipe.
       - name: Run overhead harness
+        shell: bash
         run: buildhound-ci-assets/overhead/run-overhead.sh | tee overhead-table.md
 
       - name: Upload overhead table
