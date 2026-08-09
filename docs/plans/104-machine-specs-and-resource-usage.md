@@ -1,0 +1,279 @@
+# 104 — Machine hardware specs and build resource usage in the report
+
+## 1. Source
+
+Feature request (owner, 2026-08-09): *"When creating the build report also include the hardware
+specs of the machine the build was executed on — number of CPUs / memory / disk (SSD/NVMe) — and if
+possible the CPU/memory usage during the build. No additional permissions; best-effort only. The
+biggest must-have: it must not impact build performance whatsoever."* Follow-up: *"if some data can
+only be collected via dedicated CI integrations, also add it to those in `buildhound-ci-assets`."*
+
+Anchors: spec §3.2 (EnvironmentCollector — OS/arch/cores/RAM), §3.6 (process snapshot), §3.7
+(pseudonymization), §3.8 (standalone HTML report), `docs/overhead-budget.md` (the measured
+"never slow the build noticeably" guardrail).
+
+## 2. Scope
+
+The work is tiered by **perf risk, ascending**. Every tier is independently shippable and every
+field degrades to `null`, never to a fabricated zero.
+
+**In scope**
+
+- **Tier 0 — render what is already collected (zero collection cost).** `environment.os`,
+  `arch`, `cores`, `ramMb` already reach the payload and the report renders *none* of them. A pure
+  rendering change delivers the "number of CPUs / memory" ask with no new probe at all.
+- **Tier 1 — new static machine facts, in-JVM only, no subprocess.** Disk capacity/free for the
+  build root's filesystem via `java.nio.file.Files.getFileStore` (pure NIO), plus a best-effort
+  disk-media classification (`NVME | SSD | ROTATIONAL | NETWORK | UNKNOWN`).
+- **Tier 2 — build resource usage from MXBeans (two point samples, no thread).** Daemon process CPU
+  time consumed over the execution window, system CPU load, system load average, and system memory
+  used — all read from `com.sun.management.OperatingSystemMXBean` at two instants that the plugin
+  already owns.
+- **Tier 3 — per-process CPU, at a net *reduction* in subprocess count.** The plan-029 probe already
+  spawns `ps` **twice** per probed PID (`-o rss=`, `-o etime=`). Merge them into one
+  `ps -o rss=,etime=,time= -p <pid>` and gain cumulative per-process CPU time — 2 execs → 1 exec per
+  PID, so the highest-value usage metric arrives while making the probe *cheaper*.
+- **Tier 4 — CI runner class, categorical only.** Allowlisted categorical env reads in the built-in
+  CI providers, plus the genuinely CI-only datum (the runner label / VM image the job requested,
+  which is not in any env var) exported by `buildhound-ci-assets` GitHub/Azure/GitLab assets.
+- Report rendering for all of the above; commons golden files; server needs no change (payloads are
+  stored whole — additive fields ride for free).
+
+**Explicitly out of scope**
+
+- **Any sampling thread or periodic poller.** A background sampler is the only way to get a true
+  *peak* or a usage *timeline*, and it is exactly what the must-have forbids. v1 ships two-point
+  deltas and point samples, and labels them as such. Deferred to a follow-up plan.
+- **`MemoryPoolMXBean.resetPeakUsage()`** — mutates JVM-global state inside a long-lived shared
+  daemon that other tooling also observes. Nothing in this plan is called "peak".
+- **Disk media detection outside Linux.** macOS needs a `diskutil` subprocess and Windows needs
+  WMI/PowerShell; both cost more than the datum is worth on the always-on path. Both report
+  `UNKNOWN`. Even on Linux the sysfs mapping is best-effort: LVM, dm-crypt, btrfs subvolumes and
+  container overlayfs commonly have no resolvable block device — `UNKNOWN` is the honest default,
+  not a guess. Disk *capacity* (NIO) works everywhere and is the reliable part.
+- **CPU model / brand string.** Needs a subprocess on macOS and introduces new free-form text into
+  the privacy surface. Deferred.
+- **Free-text CI runner fields** — `CI_RUNNER_DESCRIPTION`, `CI_RUNNER_TAGS`,
+  `AGENT_MACHINENAME`, self-hosted `RUNNER_NAME`: operator-set text that routinely carries
+  hostnames. Never collected by this plan.
+- **DESIGN-V2 runtime adoption for the report.** `report-template.html` is still on its original
+  pre-V2 styling (as are the existing Tests/Processes/Artifacts sections). CLAUDE.md states runtime
+  V2 adoption *requires a separate implementation plan*; this plan therefore adds its section in the
+  template's existing idiom (`.chips`, `table`, `td.num`, `.muted`) rather than half-converting one
+  section. No new `<link>`/`<img>`/`url()`/`@import`/webfont/relative asset reference is introduced,
+  and `ReportAssetsTest` is not weakened. Flagged here so review sees it as a deliberate,
+  reconciled divergence and not an oversight.
+- Dashboard and `buildhound-mcp` surfaces.
+
+## 3. Design
+
+### 3.1 Schema (commons — additive only)
+
+New nested block on `EnvironmentInfo` (all fields nullable, all defaulted):
+
+```kotlin
+@Serializable
+data class MachineInfo(
+    val diskTotalMb: Long? = null,
+    val diskFreeMb: Long? = null,
+    val diskMedia: DiskMedia? = null,
+)
+
+@Serializable
+enum class DiskMedia { NVME, SSD, ROTATIONAL, NETWORK, UNKNOWN }
+```
+
+`cores`/`ramMb`/`os`/`arch` stay where they are — no duplication. `MachineInfo` carries only what is
+new, and hangs off `EnvironmentInfo.machine`.
+
+New top-level block on `BuildPayload`:
+
+```kotlin
+@Serializable
+data class ResourceUsageInfo(
+    /** Wall length of the measurement window (execution-phase anchor → finalizer). */
+    val windowMs: Long? = null,
+    /** Gradle-daemon process CPU time consumed *within* [windowMs]. */
+    val daemonCpuMs: Long? = null,
+    /** Point sample at finalizer: system-wide CPU load, 0..100. Null when unavailable/NaN. */
+    val systemCpuLoadPct: Int? = null,
+    /** Point sample: OS load average. Null when the platform returns a negative (Windows). */
+    val systemLoadAverage: Double? = null,
+    val systemMemTotalMb: Long? = null,
+    val systemMemFreeMb: Long? = null,
+)
+```
+
+And one field on the existing `ProcessInfo`:
+
+```kotlin
+/** Cumulative process CPU time (ps `time=`), lifetime-to-date — not window-scoped. */
+val cpuTimeMs: Long? = null,
+```
+
+Derivation (`DerivedMetricsCalculator` in commons, so it is unit-tested once and shared by the report
+and any later dashboard): `daemonCpuUtilizationPct = daemonCpuMs / (windowMs * cores) * 100`, null
+unless all three inputs are present and `windowMs > 0`. Clamped for reporting, never fabricated.
+
+Golden files (added, never edited — CLAUDE.md): `build-payload-v1-machine.json` covering
+`environment.machine` + `resourceUsage` + `processes[].cpuTimeMs` + the new `ci.attributes` keys.
+
+### 3.2 Tier 1 collection — `EnvironmentValueSource`
+
+Extends the existing execution-time value source (already CC-safe, already has the per-probe
+`guarded()` degradation and the class-name-only logging rule). Two additions, both behind `guarded`:
+
+- `Files.getFileStore(Path.of(buildRoot))` → `totalSpace` / `usableSpace`, converted to MB.
+- `DiskMediaDetection.classify(...)` — a **pure** function over `(osName, fileStoreName,
+  fileStoreType, sysfsReader)` so every branch is unit-testable with no real filesystem:
+  1. `fileStoreType` in the network set (`nfs`, `nfs4`, `cifs`, `smbfs`, `fuse.sshfs`, `9p`) → `NETWORK`
+  2. non-Linux → `UNKNOWN` (stated, not guessed)
+  3. device name starts with `nvme` → `NVME`
+  4. `/sys/block/<dev>/queue/rotational` (device name, then digit-trimmed base) → `0` = `SSD`,
+     `1` = `ROTATIONAL`
+  5. otherwise → `UNKNOWN`
+
+**Privacy:** the FileStore's `name()` is a device path (`/dev/nvme0n1p2`, `/dev/mapper/vg-root`) and
+its `type()` is a filesystem identifier. Both are read **only** as classifier input and are
+**discarded** — the extraction returns an enum, so, exactly like the plan-065 jinfo allowlist reads,
+there is no string to scrub. Only the enum and two rounded MB counts ship.
+
+### 3.3 Tier 2 collection — two point samples, zero added machinery
+
+The anchor already exists. `TaskEventCollector.init {}` calls `DaemonState.executionStarted()` — "the
+first plugin-controlled instant of execution, which on a CC **hit** is the moment right after the CC
+entry is deserialized". `DaemonState` gains a CPU/wall baseline stamped in that same call and
+read+reset in `executionRan()`, alongside `executionStartedMs`.
+
+- Baseline: `System.nanoTime()` + `OperatingSystemMXBean.processCpuTime` (one JNI read each).
+- End sample: taken in the finalizer, where the plugin already runs.
+- `windowMs` = monotonic nanos delta; `daemonCpuMs` = CPU-nanos delta.
+
+**Why this placement is the CC-correct one:** the baseline lives in the build service's *runtime*
+state, which is recreated per build and therefore fresh on a CC hit. It is never a value-source
+parameter and never a config-time read — `StartMarker`'s own doc records why that distinction
+matters ("a build-service parameter value source bakes into the config-cache entry and replays stale
+on a hit"). A TestKit test runs the same build twice and asserts the second (CC-hit) run reports a
+*different, fresh* `resourceUsage`, not a replayed one.
+
+**Honest labelling, written into the KDoc and rendered in the report:** the window is the
+**execution phase** of the **Gradle daemon process**. It excludes configuration, and it excludes CPU
+burned in the Kotlin daemon, workers and forked test JVMs — those are Tier 3's job. `windowMs` ships
+alongside `daemonCpuMs` precisely so a consumer can see the denominator rather than trust a
+pre-divided percentage.
+
+**Degradation:** a zero-task or `--dry-run` build may never instantiate the collector → no baseline →
+`resourceUsage` is `null`. `getSystemLoadAverage()` returns a negative on Windows → `null`.
+`getCpuLoad()` returns `NaN` before its first interval → `null`. Never `0`.
+
+### 3.4 Tier 3 collection — merged `ps`, one exec instead of two
+
+`ProcessTools.psRss(pid)` + `psEtime(pid)` collapse into `psSnapshot(pid)` running
+`ps -o rss=,etime=,time= -p <pid>`. All three are POSIX-standard `ps` format keywords. Parsing adds
+`ProcessParsing.parsePsSnapshot(line)` → `(rssKb, etime, time)` by whitespace split, and
+`cpuTimeMs(text)` for the `time=` column.
+
+`time=` is the same `[[dd-]hh:]mm:ss` family the existing `uptimeSeconds` parses, **except** macOS
+emits fractional seconds (`MM:SS.ss`). The new parser therefore shares the clock-splitting logic and
+tolerates a fractional seconds field; `uptimeSeconds` keeps its current strictness so its pinned
+behaviour does not move. Malformed → `null` for that one field, per the existing per-field
+degradation contract.
+
+Existing failure semantics are unchanged: bounded exec, first timeout latches and short-circuits,
+non-zero exit drops fields, no command line is ever captured or logged.
+
+**Honest caveat (KDoc + report footnote):** `jps` runs at end of build, so worker/test JVMs that
+already exited are not in the listing. This is a partial, end-of-build view — not a build total.
+
+### 3.5 Tier 4 — CI runner class
+
+**In the plugin/commons providers** (zero cost — the env map is already snapshotted): a fixed
+**categorical allowlist** added to each built-in provider's `attributes`:
+
+| Provider | Keys added |
+|---|---|
+| GitHub Actions | `RUNNER_ENVIRONMENT`, `RUNNER_ARCH`, `RUNNER_OS`, `ImageOS`, `ImageVersion` |
+| Azure Pipelines | `AGENT_OS`, `AGENT_OSARCHITECTURE`, `ImageVersion` |
+| GitLab CI | `CI_RUNNER_EXECUTABLE_ARCH`, `CI_RUNNER_VERSION` |
+
+Plus a provider-neutral `BUILDHOUND_CI_RUNNER_CLASS` read (see below). Values are length-capped;
+keys are a compile-time constant list, so widening it is a follow-up plan's decision, not a build's
+— the plan-051/065 allowlist discipline.
+
+**In `buildhound-ci-assets`** — the genuinely CI-only datum. The *measured* specs (cores, RAM, disk)
+are already correct from inside the runner, because `Runtime.availableProcessors()` and
+`totalMemorySize` are cgroup-aware. What the JVM **cannot** see is which runner *class* the job
+asked for — GitHub's `runs-on` labels and Azure's pool/`vmImage` are pipeline-definition values that
+reach no environment variable. So:
+
+- `github/action.yml`: a new optional `runner-class` input (consumer passes e.g.
+  `${{ matrix.os }}` or `ubuntu-latest-8-core`), exported as `BUILDHOUND_CI_RUNNER_CLASS` on the
+  Gradle step. Bound via `env:`, never interpolated into a `run:` script — the existing
+  `GRADLE_TASKS` injection rule in that file.
+- `azure-pipelines/buildhound-gradle-steps.yml`: a `runnerClass` template parameter, same export.
+- `gitlab/buildhound-gradle.gitlab-ci.yml`: documented variable, same export.
+
+Default empty everywhere → nothing is collected unless the operator opts in.
+
+### 3.6 Report rendering (`buildhound-report`)
+
+- A new **Machine** section: OS/arch, cores, RAM, disk media + free/total. Rendered with the
+  template's existing `el()`/`textContent` helper — payload strings never reach `innerHTML`.
+- A **Resource usage** block in the same section: daemon CPU utilization over the execution window
+  (with the window length shown, and the "daemon process, execution phase only" caveat as `.muted`
+  text), system CPU load, load average, system memory used/total.
+- A **CPU** column appended to the existing Process snapshot table, with the "processes that exited
+  before the end-of-build probe are not listed" footnote.
+- CI runner-class chip when present.
+- Every field is individually conditional — a payload with none of them renders the section hidden,
+  exactly like the existing Tests/Processes sections.
+
+## 4. Test strategy
+
+- **commons (unit):** `DiskMediaDetection` truth table across all five branches incl. network FS,
+  non-Linux, `nvme`, digit-trimmed sysfs base, and unresolvable device; `DerivedMetricsCalculator`
+  utilization math incl. every null-input path and `windowMs == 0`.
+- **commons (golden):** `build-payload-v1-machine.json` added; `GoldenPayloadTest` asserts the new
+  blocks deserialize. Existing goldens untouched — additive rule.
+- **plugin (unit):** `ProcessParsing.cpuTimeMs` across Linux `[dd-]hh:mm:ss` and macOS `mm:ss.ff`
+  plus malformed input; `parsePsSnapshot` field split incl. short/ragged lines. Merged-`ps`
+  collection driven through a fake `ProcessTools` and through the existing fake-POSIX-script seam.
+- **plugin (TestKit):** a build run **twice** asserting run 2 (CC hit) reports a fresh, non-replayed
+  `resourceUsage`; a build asserting `environment.machine.diskTotalMb` is populated and that no
+  device path or filesystem name appears anywhere in the payload.
+- **report:** `ReportScriptTest` (node) fixture extended with the new blocks — asserts the Machine
+  section renders, that a build *without* them stays hidden, and that a hostile string in a new
+  field lands as text. `ReportAssetsTest` zero-network invariant unchanged and not weakened.
+- **ci-assets:** the existing shell test harness pattern covers the new input plumbing; assert a
+  final completion marker rather than an exit code (the `set -u`/`|| fail` trap).
+
+## 5. Risks
+
+- **Perf (the stated must-have).** Tier 0 is rendering only. Tier 1 is NIO + at most two small
+  sysfs reads. Tier 2 is two JNI MXBean reads per build. Tier 3 **removes** one subprocess per
+  probed PID. Net expectation: the finalizer axis gets *cheaper*. This is an assertion until
+  measured — see exit criteria.
+- **CC replay** — mitigated by design §3.3 and pinned by the twice-run TestKit test.
+- **Privacy** — device paths and filesystem names are classifier input only and never ship; CI
+  attributes are a categorical compile-time allowlist; `runner-class` is opt-in and capped. Goes to
+  the mandatory §3.2 security & privacy review.
+- **`ps` portability** — a platform whose `ps` rejects the merged format string loses three fields
+  rather than two. Accepted: all three keywords are POSIX-standard, and the fields were already
+  best-effort nullable. Windows has no `ps` and reports null today and after.
+- **Honest-labelling risk** — the biggest failure mode here is a number that *looks* like whole-machine
+  build CPU but is one process over a partial window. Mitigated by shipping `windowMs` next to
+  `daemonCpuMs`, by the report caveats, and by never naming anything "peak" or "total".
+
+## 6. Exit criteria
+
+1. Report renders machine specs (cores, RAM, OS/arch, disk media + capacity) and resource usage for
+   a real local build, and hides the section cleanly for a payload without them.
+2. `environment.machine`, `resourceUsage`, `processes[].cpuTimeMs` and the CI runner attributes are
+   populated end-to-end; new golden file added, no existing golden edited.
+3. TestKit proves the CC-hit run reports fresh (non-replayed) resource usage.
+4. No device path, filesystem name, hostname or free-text runner description appears in any payload.
+5. **`./gradlew build` green, and the `overhead-budget` CI job passes** — the finalizer axis stays
+   within its ≤150 ms / ≤8 % cap (`docs/overhead-budget.md`). This is the plan's answer to "must not
+   impact build performance whatsoever": measured, not asserted.
+6. `docs/build-telemetry-spec.md` §3.2/§3.6 updated with the new fields; `docs/architecture.md`
+   updated only if a review invalidates an assumption here.
