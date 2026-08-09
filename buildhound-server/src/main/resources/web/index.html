@@ -63,6 +63,93 @@
         .failure-trace { background: #8881; border: 1px solid #8883; border-radius: .25rem; padding: .75rem; overflow: auto; max-height: 32rem; font-size: .8rem; white-space: pre-wrap; word-break: break-word; }
         ul.warnings { margin: .25rem 0 .75rem; }
         ul.warnings li { font-size: .85rem; word-break: break-word; }
+
+        /* ---------------------------------------------------------------------------
+           Charts (plan 105). DESIGN-V2 tokens, scoped to chart surfaces — the rest of
+           this stylesheet is pre-V2 and is retokenized by its own plan. Everything here
+           lives inline because the CSP's style-src carries hashes and no 'self', so an
+           external stylesheet (including uPlot's own) cannot be linked; styleHashCsp
+           rehashes this block from the served bytes on boot.
+           --------------------------------------------------------------------------- */
+        :root {
+            --bh-surface: #FFFDF9; --bh-grid: #E7DED3;
+            --bh-border: #D8CDBF; --bh-control-border: #96897B;
+            --bh-text-secondary: #594F45; --bh-text-muted: #6F655A;
+            --bh-focus: #2A6FD1;
+            --bh-success-solid: #1F8055; --bh-failure-solid: #C22E33;
+            --bh-info-solid: #2A6FD1; --bh-neutral-solid: #6F655A;
+            --bh-select-tint: #21201C1f;
+            --bh-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            --bh-font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bh-surface: #1D1A16; --bh-grid: #2B261F;
+                --bh-border: #40382F; --bh-control-border: #7D705F;
+                --bh-text-secondary: #C9BFAF; --bh-text-muted: #A89D8E;
+                --bh-focus: #6FA8FF;
+                --bh-success-solid: #4ABD8C; --bh-failure-solid: #E5646A;
+                --bh-info-solid: #6FA8FF; --bh-neutral-solid: #A89D8E;
+                --bh-select-tint: #F2EBDF26;
+            }
+        }
+
+        /* uPlot 1.6.32 stylesheet (dist/uPlot.min.css), reformatted and retokenized:
+           the upstream font stack, cursor color and selection tint are replaced by
+           DESIGN-V2 tokens so both themes track. No url()/@import/@font-face — the CSP
+           allows neither, and the page loads no webfont. */
+        .uplot, .uplot *, .uplot *::before, .uplot *::after { box-sizing: border-box; }
+        .uplot { font-family: var(--bh-font-ui); line-height: 1.5; width: min-content; }
+        .u-title { text-align: center; font-size: 18px; font-weight: bold; }
+        .u-wrap { position: relative; user-select: none; }
+        .u-over, .u-under { position: absolute; }
+        .u-under { overflow: hidden; }
+        .uplot canvas { display: block; position: relative; width: 100%; height: 100%; }
+        .u-axis { position: absolute; }
+        .u-legend { font-size: 13px; margin: auto; text-align: center; color: var(--bh-text-secondary); }
+        .u-inline { display: block; }
+        .u-inline * { display: inline-block; }
+        .u-inline tr { margin-right: 16px; }
+        .u-legend th { font-weight: 600; }
+        .u-legend th > * { vertical-align: middle; display: inline-block; }
+        .u-legend .u-marker { width: 1em; height: 1em; margin-right: 4px; background-clip: padding-box !important; }
+        .u-inline.u-live th::after { content: ":"; vertical-align: middle; }
+        .u-inline:not(.u-live) .u-value { display: none; }
+        .u-series > * { padding: 4px; }
+        .u-series th { cursor: pointer; }
+        .u-legend .u-off > * { opacity: .3; }
+        .u-legend .u-value { font-family: var(--bh-font-mono); font-variant-numeric: tabular-nums; }
+        .u-select { background: var(--bh-select-tint); position: absolute; pointer-events: none; }
+        .u-cursor-x, .u-cursor-y { position: absolute; left: 0; top: 0; pointer-events: none; will-change: transform; }
+        .u-hz .u-cursor-x, .u-vt .u-cursor-y { height: 100%; border-right: 1px dashed var(--bh-control-border); }
+        .u-hz .u-cursor-y, .u-vt .u-cursor-x { width: 100%; border-bottom: 1px dashed var(--bh-control-border); }
+        .u-cursor-pt { position: absolute; top: 0; left: 0; border-radius: 50%; border: 0 solid; pointer-events: none; will-change: transform; background-clip: padding-box !important; }
+        .u-axis.u-off, .u-select.u-off, .u-cursor-x.u-off, .u-cursor-y.u-off, .u-cursor-pt.u-off { display: none; }
+
+        /* One boundary per chart group (DESIGN-V2 §5) — a figure, never a card in a card. */
+        .chart-card { border: 1px solid var(--bh-border); border-radius: 8px; padding: 16px; margin: 24px 0; background: var(--bh-surface); }
+        .chart-card > figcaption { color: var(--bh-text-secondary); font-size: 13px; margin-bottom: 12px; }
+        .chart-card > figcaption > b { color: inherit; font-weight: 650; }
+        /* The 32px measurement grid belongs to the chart canvas only (§5), never behind
+           dense surfaces. Decorative: the plot itself is aria-hidden. */
+        .chart-plot {
+            background-image:
+                linear-gradient(90deg, transparent 31px, var(--bh-grid) 32px),
+                linear-gradient(180deg, transparent 31px, var(--bh-grid) 32px);
+            background-size: 32px 32px;
+            overflow-x: auto;
+        }
+        .chart-empty { color: var(--bh-text-muted); font-size: .85rem; margin: .5rem 0; }
+        .chart-values { margin-top: 12px; }
+        .chart-values > summary { cursor: pointer; font-size: .85rem; color: var(--bh-text-secondary); padding: .35rem 0; }
+        .chart-values table { margin-top: .5rem; }
+        .chart-values td.num { font-family: var(--bh-font-mono); }
+        .chart-swatch { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-right: .35em; vertical-align: baseline; }
+        .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+        :where(a, button, select, input, summary, [tabindex]):focus-visible { outline: 2px solid var(--bh-focus); outline-offset: 2px; }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+        }
     </style>
 </head>
 <body>
@@ -93,6 +180,7 @@
 <p id="token-note" class="muted" hidden></p>
 <main id="app"><p class="muted">Loading…</p></main>
 <script src="/timeline.js"></script>
+<script src="/uplot.js"></script>
 <script src="/dashboard.js"></script>
 </body>
 </html>

@@ -20,6 +20,7 @@ function makeNode(tag) {
         append(...kids) { node.children.push(...kids); },
         appendChild(kid) { node.children.push(kid); return kid; },
         setAttribute(k, v) { node.attrs[k] = v; },
+        getAttribute(k) { return k in node.attrs ? node.attrs[k] : null; },
         addEventListener(type, fn) { (node.listeners[type] = node.listeners[type] || []).push(fn); },
     };
     return node;
@@ -256,9 +257,13 @@ const responses = {
         outcome: "SUCCESS", mode: "CI", tasks: [],
         environment: { machine: { diskMedia: "constructor" } },
     },
+    // 2026-07-02 and 2026-07-03 are deliberately absent: the server only emits days that had
+    // builds, so the chart has to place 07-01 and 07-04 three days apart. The index-based axis
+    // this fixture used to be enough for drew them adjacent (plan 105).
     "/v1/trends?days=30": [
         { day: "2026-06-30", builds: 3, failures: 1, avgDurationMs: 60000, avgHitRate: 0.5 },
         { day: "2026-07-01", builds: 2, failures: 0, avgDurationMs: null, avgHitRate: null },
+        { day: "2026-07-04", builds: 4, failures: 2, avgDurationMs: 45000, avgHitRate: 0.7 },
     ],
     // Artifact-size trends (plan 031): one series for :app release APK.
     "/v1/artifacts/trends?days=30": [
@@ -281,10 +286,14 @@ const responses = {
                 ],
             },
             {
+                // Deliberately a different day set from the "true" cohort above: cohorts are
+                // sampled independently, and each used to be stretched across the full chart
+                // width by its own point count, so unequal cohorts were overlaid on different
+                // time scales and read as directly comparable (plan 105).
                 value: "false", sampleCount: 4, medianDurationMs: 70000,
                 points: [
                     { day: "2026-06-30", builds: 2, failures: 0, avgDurationMs: 70000, maxDurationMs: 72000, avgHitRate: 0.5, interrupted: 0 },
-                    { day: "2026-07-01", builds: 2, failures: 0, avgDurationMs: 71000, maxDurationMs: 73000, avgHitRate: 0.5, interrupted: 0 },
+                    { day: "2026-07-04", builds: 2, failures: 0, avgDurationMs: 71000, maxDurationMs: 73000, avgHitRate: 0.5, interrupted: 0 },
                 ],
             },
         ],
@@ -872,9 +881,106 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "false (n=4)")) throw new Error("cohort legend missing the second cohort");
     if (!hasText(byId["app"], "true (reference)")) throw new Error("cohort delta table reference row missing");
     if (!hasClass(byId["app"], "delta-bad")) throw new Error("cohort delta table missing the semantic-colouring chip");
-    // Baseline is 4 svgs (duration, hit-rate, builds-per-day bars, one artifact-size series); the
-    // cohort multi-series chart must add a 5th.
-    if (countTag(byId["app"], "svg") < 5) throw new Error("cohort chart svg missing (in addition to the duration/hit-rate/artifact charts)");
+
+    // Charts (plan 105). uPlot renders to canvas, which this stub cannot host and assistive
+    // technology cannot read, so the accessible layer is what is asserted here: every chart is
+    // a figure carrying a caption, an sr-only summary and a value table. That layer is also the
+    // rendering when the global is missing or throws, so pass 1 and 2 below exercise a path real
+    // users can hit — the same contract /timeline.js has. Pass 3 then pins the data handed to
+    // the library, which is where a charting bug actually lives.
+    const chartFigures = () => findAll(byId["app"], n => (n.className || "").indexOf("chart-card") >= 0);
+    const chartPlots = () => findAll(byId["app"], n => (n.className || "").indexOf("chart-plot") >= 0);
+
+    // Pass 1: global absent (this context never defines uPlot) → accessible layer only.
+    if (chartFigures().length < 4) {
+        throw new Error("trends must render a figure per chart (duration, hit-rate, builds/day, cohorts, artifacts)");
+    }
+    if (chartPlots().length !== 0) throw new Error("no plot node may be mounted when the uPlot global is absent");
+    if (!hasText(byId["app"], "Show values")) throw new Error("chart value table (keyboard-reachable detail) missing");
+    if (!hasClass(byId["app"], "sr-only")) throw new Error("chart text summary missing");
+    if (!hasText(byId["app"], "Average build duration, ")) throw new Error("chart summary must state the plotted range in words");
+    // The value table is the only place a reader without the canvas can read a number, so a
+    // day the series has no value for must show as a gap, never as a fabricated zero.
+    if (!hasText(byId["app"], "—")) throw new Error("value table must render a missing day as a gap");
+
+    // Pass 2: the global exists but throws → still no plot node, still the accessible layer.
+    context.uPlot = function () { throw new Error("uPlot boom"); };
+    context.uPlot.paths = { bars: () => null };
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/trends"; context._onhashchange();
+    await tick(); await tick(); await tick(); await tick();
+    if (chartFigures().length < 3) throw new Error("a throwing chart library must not cost the trends page its figures");
+    if (!hasText(byId["app"], "Show values")) throw new Error("a throwing chart library must leave the value table standing");
+    for (const plot of chartPlots()) {
+        if (plot.children.length || plot.textContent) throw new Error("a throwing chart library must leave no partial chart node");
+    }
+
+    // Pass 3: a recording stub — assert what dashboard.js hands the library. No browser API is
+    // involved, so this is the automated check that survives the canvas being invisible here.
+    const uplotCalls = [];
+    context.uPlot = function (opts, data, target) {
+        uplotCalls.push({ opts, data, target });
+        this.root = makeNode("div");
+        this.destroy = () => {};
+        this.setSize = () => {};
+        this.setSeries = () => {};
+    };
+    context.uPlot.paths = { bars: () => "bars-path" };
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/trends"; context._onhashchange();
+    await tick(); await tick(); await tick(); await tick();
+    if (uplotCalls.length < 3) throw new Error("trends did not mount its charts on the chart library: " + uplotCalls.length);
+
+    const duration = uplotCalls[0];
+    if (!duration.opts.scales || !duration.opts.scales.x || duration.opts.scales.x.time !== true) {
+        throw new Error("the x scale must be a time scale, not an array index");
+    }
+    if (duration.opts.legend.show !== false) throw new Error("uPlot's own legend must stay off — its toggles take no keyboard focus");
+    // 2026-01-02 and 2026-01-04 are consecutive entries in the canned trends response with
+    // 2026-01-03 missing; a calendar axis must place them two days apart, which an index-based
+    // axis (the bug this rewrite exists to fix) cannot express.
+    const xs = duration.data[0];
+    const gaps = [];
+    for (let i = 1; i < xs.length; i++) gaps.push(xs[i] - xs[i - 1]);
+    if (!gaps.length || !gaps.every(g => g > 0)) throw new Error("x values must be increasing epoch seconds");
+    if (!gaps.some(g => g === 86400)) throw new Error("consecutive days must be one day apart on the x axis");
+    if (!gaps.some(g => g > 86400)) throw new Error("a day with no builds must widen the x gap, not collapse it");
+
+    // Honest nulls: the canned response carries avgHitRate: null on one day. The server
+    // distinguishes "no cache data" from "a measured zero", and the chart must not flatten it.
+    const hitRate = uplotCalls[1];
+    if (!hitRate.data[1].some(v => v === null)) throw new Error("a null hit rate must reach the chart as null, not 0");
+    if (hitRate.data[1].some(v => v === 0)) throw new Error("a missing hit rate must never be coerced to 0");
+
+    // Builds/day is two labelled series rather than one bar recoloured on failure, so the
+    // failure count is readable and no meaning rests on hue alone.
+    const buildsPerDay = uplotCalls[2];
+    if (buildsPerDay.opts.series.length !== 3) throw new Error("builds-per-day must plot builds and failures as two labelled series");
+    if (buildsPerDay.opts.series[1].label !== "Builds" || buildsPerDay.opts.series[2].label !== "Failures") {
+        throw new Error("builds-per-day series must be labelled, not distinguished by colour alone");
+    }
+
+    // Cohorts share one x domain — each cohort used to be stretched to the full width by its
+    // own point count, so cohorts with different active days were compared on different scales.
+    const cohortCall = uplotCalls.find(c => c.opts.series.length === 3 && String(c.opts.series[1].label).indexOf("(n=") >= 0);
+    if (!cohortCall) throw new Error("the cohort comparison did not reach the chart library");
+    const cohortLength = cohortCall.data[0].length;
+    for (const series of cohortCall.data.slice(1)) {
+        if (series.length !== cohortLength) throw new Error("every cohort series must be aligned onto the shared x domain");
+    }
+    if (!cohortCall.data.slice(1).some(s => s.some(v => v === null))) {
+        throw new Error("a cohort with no build on a shared day must hold null there, not be re-indexed");
+    }
+
+    // Keyboard parity for the pointer-driven series toggle (DESIGN-V2 §8).
+    const toggle = findTag(byId["app"], "button").find(b => (b.textContent || "").indexOf("(n=") >= 0
+        || findAll(b, n => (n.textContent || "").indexOf("(n=") >= 0).length > 0);
+    if (!toggle || !toggle.listeners.click) throw new Error("cohort series must have a focusable toggle button");
+    if (toggle.getAttribute("aria-pressed") !== "true") throw new Error("series toggle must expose its state");
+    toggle.listeners.click[0]();
+    if (toggle.getAttribute("aria-pressed") !== "false") throw new Error("series toggle must flip its state on activation");
+
+    context.uPlot = undefined;
 
     // The error view must render, not throw, on API failure.
     context.location.hash = "#/build/missing"; context._onhashchange(); await tick(); await tick();
@@ -963,7 +1069,13 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "Benchmark series")) throw new Error("benchmark header missing");
     if (!hasText(byId["app"], "Scenario: clean")) throw new Error("benchmark scenario section missing");
     if (!hasText(byId["app"], "p50")) throw new Error("benchmark percentile chips missing");
-    if (countTag(byId["app"], "svg") === 0) throw new Error("benchmark duration chart missing");
+    // The benchmark chart moved onto the shared chart machinery (plan 105), so it is asserted
+    // the same way the trends charts are: the accessible layer is always present, with or
+    // without the library. Its x key is the run instant, not a UTC day — these are individual
+    // runs, and the old {day, durationMs} shim only ever existed to feed a tooltip.
+    if (!hasClass(byId["app"], "chart-card")) throw new Error("benchmark duration chart missing");
+    if (!hasText(byId["app"], "Benchmark duration, ")) throw new Error("benchmark chart summary missing");
+    if (!hasText(byId["app"], "Show values")) throw new Error("benchmark chart value table missing");
     if (countTag(byId["app"], "select") < 1) throw new Error("benchmark isolation selector missing (two modes present)");
     // Empty series → the honest empty state, not a blank page.
     responses["/v1/benchmark/series?days=90"] = [];

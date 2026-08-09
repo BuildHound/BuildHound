@@ -29,6 +29,16 @@ internal object DashboardAssets {
     val timelineJs: ByteArray = resource("dev/buildhound/report/timeline.js")
 
     /**
+     * uPlot, vendored verbatim (plan 105) and served under the same `script-src 'self'`
+     * as the other two scripts — the CSP admits no CDN, so a charting library can only
+     * arrive this way. Its stylesheet is deliberately *not* a second route: `style-src`
+     * carries hashes and no `'self'`, so the CSS is retokenized into index.html's inline
+     * `<style>` block instead, which [styleHashCsp] rehashes from the served bytes.
+     * `VendoredAssetsTest` pins the properties that made it CSP-safe.
+     */
+    val uplotJs: ByteArray = resource("web/uplot.js")
+
+    /**
      * The single inline `<style>` block is pinned by hash instead of
      * `style-src 'unsafe-inline'` (review hardening) — computed from the served
      * bytes so a style edit can never silently un-style the page.
@@ -136,6 +146,13 @@ fun Route.dashboardRoutes() {
         call.dashboardHeaders()
         call.respondBytes(
             DashboardAssets.timelineJs,
+            ContentType.Text.JavaScript.withCharset(Charsets.UTF_8)
+        )
+    }
+    get("/uplot.js") {
+        call.dashboardHeaders()
+        call.respondBytes(
+            DashboardAssets.uplotJs,
             ContentType.Text.JavaScript.withCharset(Charsets.UTF_8)
         )
     }

@@ -295,7 +295,7 @@ jobs:
           # Runtime-resource smoke: the dashboard + docs load resources from the classpath at class
           # init, so a resource missing from the image only surfaces on these routes, never on /health
           # (this is exactly the bundling regression that shipped once — guard it here). -f fails on 5xx.
-          for path in / /timeline.js /dashboard.js /openapi.yaml /docs; do
+          for path in / /timeline.js /dashboard.js /uplot.js /openapi.yaml /docs; do
             if ! curl -fsS "http://localhost:8080$path" >/dev/null; then
               echo "resource endpoint $path did not return 2xx (a bundled resource is likely missing)" >&2
               docker logs buildhound-server >&2
