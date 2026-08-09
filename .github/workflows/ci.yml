@@ -30,7 +30,7 @@ permissions:
 jobs:
   build:
     name: Build & test
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v7
 
@@ -130,7 +130,7 @@ jobs:
     # a second real telemetry payload per PR. The sample's demo server.url points at
     # localhost, so the in-CI upload attempt fails soft (warn + spool) — collection and the
     # payload artifact are unaffected, and no credential exists in this job.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # First CI outing for a 52-module build that deliberately runs with -Xmx1g, no build
     # cache, and no parallelism — don't let a pathological run ride the 360-min platform
     # default (same rationale as build-windows below).
@@ -189,7 +189,7 @@ jobs:
     if: >-
       github.event_name == 'push' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     timeout-minutes: 10
     steps:
@@ -224,7 +224,7 @@ jobs:
   build-floor:
     name: Build & test (Gradle 8.14 floor)
     # 8.14.4+: KGP requires it when compiling with a JDK 26 toolchain (plan 011).
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v7
 
@@ -249,25 +249,24 @@ jobs:
 
   server-image:
     name: Server OCI image
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v4
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       # BuildKit layer cache persisted in the GitHub Actions cache: the dependency
       # layers (wrapper + build scripts, Dockerfile lines up to the priming RUN)
       # only rebuild when the build configuration changes. load: true keeps the
       # image in the local daemon for the smoke test below.
       - name: Build image
-        uses: docker/build-push-action@v7
+        uses: useblacksmith/build-push-action@v2
         with:
           context: .
           file: buildhound-server/Dockerfile
           tags: buildhound-server:${{ github.sha }}
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Smoke test image
         run: |
@@ -301,22 +300,22 @@ jobs:
     # continue-on-error keeps the workflow green while the scan matures; a real release pipeline
     # promotes this to blocking + adds cosign signing. Action tags are refreshed alongside the bases.
     needs: server-image
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v4
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       # Rebuild from the gha layer cache the server-image job populated (fast; no source rebuild).
       - name: Build image (from cache)
-        uses: docker/build-push-action@v7
+        uses: useblacksmith/build-push-action@v2
         with:
           context: .
           file: buildhound-server/Dockerfile
           tags: buildhound-server:scan
           load: true
-          cache-from: type=gha
 
       - name: Vulnerability scan (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
@@ -346,7 +345,7 @@ jobs:
     name: Functional tests (config cache off)
     # Blocking CC-off axis (plan 021): the whole functional suite re-runs with inner-build
     # CC off. CC-off failure modes don't vary by OS/floor, so one leg, not a cross-product.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v7
 
@@ -368,7 +367,7 @@ jobs:
     # Watched, non-blocking (roadmap guardrail): the workflow stays green; this job may show
     # red while the incubating org.gradle.unsafe.isolated-projects flag settles. Per-collector
     # degradation is enforced by blocking tests in the default suite, not here.
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -391,7 +390,7 @@ jobs:
     # Blocking (plan 021): plan 007's only field bug was macOS-only (scrubber path handling),
     # covered by these unit + functional tests. Testcontainers self-skips without Docker, so
     # `gradle build` is viable on the Docker-less macOS runner. One leg, no floor cross-product.
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-15
     steps:
       - uses: actions/checkout@v7
 
@@ -414,7 +413,7 @@ jobs:
     # stays green-optional until runner-to-runner variance is characterised — the promote-to-blocking
     # criterion lives in docs/overhead-budget.md. It runs gradle-profiler on a synthetic fixture with
     # the plugin toggled on/off and fails on a budget breach (OverheadCalculator, buildhound-commons).
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -470,7 +469,7 @@ jobs:
     # scrubber, spool paths, VCS exec. Known accepted gaps: the hung-git and GitExec
     # fixtures are @DisabledOnOs(WINDOWS) (plan 015). Re-demotable with a one-line revert
     # if unrelated Windows flakiness surfaces.
-    runs-on: windows-latest
+    runs-on: blacksmith-4vcpu-windows-2025
     # Green runs take ~36 min; the leg's known failure mode is a lingering TestKit daemon,
     # so don't let a hang ride the 360-min platform default now that the job is blocking.
     timeout-minutes: 60
