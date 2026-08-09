@@ -114,6 +114,9 @@ object ProfilerCsv {
                 val metrics = names.withIndex()
                     .filter { (_, n) -> n.trim() == name }
                     .mapNotNull { (i, _) -> valueRow?.getOrNull(i + 1)?.trim() }
+                    // A blank cell is a real state here (it is why the column was skipped), so name
+                    // it rather than rendering an empty gap in the middle of the list.
+                    .map { it.ifEmpty { "(blank)" } }
                 "'$name' carries [${metrics.joinToString()}]"
             }
             "benchmark.csv has no '$TOTAL_EXECUTION_TIME' column for: $carried " +
