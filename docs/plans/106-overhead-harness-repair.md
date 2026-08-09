@@ -102,7 +102,8 @@ that never occurs. The rest of the harness is verified by *running* it:
   `DEFAULT` — that is out of scope per §2.
 - **The noise-separation guard goes live with this change, uncalibrated.** `OverheadCalculator`
   suppresses a breach unless `delta > treatment.stddev + baseline.stddev`, and `requireSeparation`
-  is on for three of the four axes. Until now `stddevMs` was always `0.0` on real input — the
+  is on for **all four** axes (it defaults to `true` and no axis overrides it) — though it only
+  becomes consequential where the delta clears its allowance in the first place. Until now `stddevMs` was always `0.0` on real input — the
   `stddev` row it read never existed — so the guard could never suppress anything. Computing a real
   spread makes it consequential for the first time, and its threshold has had no more calibration
   than the caps: a genuine regression smaller than the combined spread will now pass silently. The
@@ -177,8 +178,10 @@ self-test green in both directions, and a real table:
 ```
 
 **These are not three independent regressions — they are one fixed cost seen three times.** The
-deltas are near-identical (1508 / 1862 / 1825 ms) because the plugin's per-build cost is essentially
-constant and every axis subtracts a plugin-off baseline from a plugin-on one. A corollary for the
+deltas are near-identical (1508 / 1862 / 1825 ms) because within a single run the plugin's per-build
+cost is effectively constant across scenarios, and every axis subtracts a plugin-off baseline from a
+plugin-on one. (Constant *within* a run only — across runs and machines it varies with live JVM
+count, as below.) A corollary for the
 follow-up: while a fixed cost of this size dominates, the per-task axis cannot measure anything
 per-task, so fixing the cost has to come before trusting that axis's shape. The axes are also less
 distinct than they look — the fixture sets `org.gradle.configuration-cache=true`, so `no_op` is

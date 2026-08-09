@@ -13,9 +13,11 @@ Plans 000–080 are implemented and live there, except [035](035-cc-miss-reason-
 [075](075-internal-adapters-cc-hit-toggle-rehydration.md) below — including
 [045](implemented/045-composite-task-dictionary.md), which was
 superseded/closed by [056](implemented/056-composite-build-logic-dictionary-priority.md) rather
-than shipping standalone, but whose own exit criteria were met by that work. Five plans remain
-active in this directory (this list also omitted [104](104-machine-specs-and-resource-usage.md),
-whose exit criterion 5 is still open — pre-existing staleness, noted rather than swept):
+than shipping standalone, but whose own exit criteria were met by that work. The five plans called
+out below are **not** an exhaustive list of what is active here — a pre-existing drift this plan
+notes rather than sweeps: [104](104-machine-specs-and-resource-usage.md) is also open (exit
+criterion 5), several numbered plans in this directory are unlisted entirely, and two different
+files both claim number 092. Reconciling the index is its own chore:
 
 - [035](035-cc-miss-reason-capture.md) — CC miss-reason capture — **blocked**, not implementable
   as specified.

@@ -9,11 +9,23 @@ fixture="$here/fixture"
 out="${OVERHEAD_OUT:-$here/build}"
 port="${BUILDHOUND_OVERHEAD_PORT:-8099}"
 export BUILDHOUND_OVERHEAD_SINK="http://127.0.0.1:$port"
-# Measure the plugin, not the developer's live configuration. `no_op_ci` deliberately runs in CI
-# mode with NO server so it can be the upload axis's baseline — but the plugin falls back to
-# BUILDHOUND_SERVER_URL/BUILDHOUND_TOKEN from the environment, so a dogfooding shell would both
-# distort that baseline and POST 16 synthetic fixture builds at a real ingest.
-unset BUILDHOUND_SERVER_URL BUILDHOUND_TOKEN
+# Measure the plugin, not the developer's live configuration. Every `buildhound.*` setting has a
+# BUILDHOUND_<KEY> environment fallback, so an exported value silently changes what is measured:
+#   * BUILDHOUND_SERVER_URL gives `no_op_ci` — the upload axis's deliberately server-less baseline —
+#     a server too. Both cells then upload, the delta collapses to ~0 against a 250 ms allowance,
+#     and the axis reports ✅ while measuring nothing. (It would also POST synthetic fixture builds
+#     at a real ingest, which the server rejects unauthenticated; the false pass is the real harm.)
+#   * BUILDHOUND_PROCESSPROBE_ENABLED=false deletes the dominant cost outright, turning the table
+#     green and inviting the conclusion that a regression was fixed.
+# So scrub the whole namespace rather than the two names we happen to have thought of, keeping only
+# this harness's own BUILDHOUND_OVERHEAD_* variables.
+for _bh_name in $(env | sed -n 's/^\(BUILDHOUND_[A-Za-z0-9_]*\)=.*/\1/p'); do
+    case "$_bh_name" in
+        BUILDHOUND_OVERHEAD_*) ;;
+        *) unset "$_bh_name" ;;
+    esac
+done
+unset _bh_name
 # The Gradle version gradle-profiler drives the fixture with — pinned (and matched to the CI
 # setup-gradle version) so the driving Gradle is explicit, not an implicit PATH/no-wrapper fallback.
 gradle_version="${BUILDHOUND_OVERHEAD_GRADLE:-9.6.1}"
@@ -99,8 +111,10 @@ if [ -d "$fixture/build/buildhound" ]; then
     exit 4
 fi
 
-# Verdict (math in buildhound-commons); its non-zero exit on a breach propagates out of this script
-# via `set -e`. Deliberately NOT `exec`: exec replaces this shell, so the EXIT trap above never runs
-# and the sink is orphaned — it then keeps the port bound, and the next run's readiness probe
-# succeeds against that stale sink while its own fails to bind, hiding the failure (plan 106).
+# Verdict (math in buildhound-commons). Its non-zero exit on a breach is this script's exit status —
+# it is the last command — with `set -e` as belt-and-braces if a line is ever added after it.
+# Deliberately NOT `exec`: exec replaces this shell, so the EXIT trap above never runs and the sink
+# is orphaned — it then keeps the port bound, and the next run's readiness probe succeeds against
+# that stale sink while its own fails to bind, hiding the failure (plan 106). The trap's `|| true`
+# does not clobber the exit status (verified in sh, bash and dash): a trap's own result is discarded.
 "$here/bin/buildhound-overhead" "$out/on/benchmark.csv" "$out/off/benchmark.csv"
