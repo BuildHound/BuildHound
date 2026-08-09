@@ -17,7 +17,7 @@ jobs:
       (github.event.action == 'labeled' && github.event.label.name == 'deploy-review') ||
       ((github.event.action == 'synchronize' || github.event.action == 'reopened') &&
        contains(github.event.pull_request.labels.*.name, 'deploy-review'))
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: ${{ (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')) && 'review-cleanup' || 'review' }}
     concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
     permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write, statuses: write}
@@ -137,11 +137,11 @@ jobs:
           ref: "${{ env.REVIEW_SHA }}"
           path: review-source
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v4
-        if: env.REVIEW_ACTION == 'deploy'
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
       - name: Build review server without registry credentials
         if: env.REVIEW_ACTION == 'deploy'
-        uses: docker/build-push-action@v7
+        uses: useblacksmith/build-push-action@v2
         with:
           context: review-source
           file: review-source/buildhound-server/Dockerfile
@@ -152,7 +152,7 @@ jobs:
           tags: ${{ env.IMAGE_REGISTRY_PREFIX }}/buildhound-server:pr-${{ env.REVIEW_PR }}-${{ env.REVIEW_SHA }}
       - name: Build review site without registry credentials
         if: env.REVIEW_ACTION == 'deploy'
-        uses: docker/build-push-action@v7
+        uses: useblacksmith/build-push-action@v2
         with:
           context: review-source
           file: review-source/site/Dockerfile
@@ -487,7 +487,7 @@ jobs:
            needs.review.outputs.publish_outcome == 'failure' ||
            (needs.review.result == 'failure' &&
             needs.review.outputs.deploy_outcome == 'success')) }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: review-cleanup
     concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
     permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write}
@@ -513,7 +513,7 @@ jobs:
   record_review_status:
     needs: review
     if: ${{ always() && needs.review.result == 'success' && needs.review.outputs.deploy_outcome == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {actions: read, contents: read, statuses: write}
     steps:
       - uses: actions/download-artifact@v8
@@ -559,7 +559,7 @@ jobs:
        (github.event.action == 'synchronize' || github.event.action == 'reopened') &&
        contains(github.event.pull_request.labels.*.name, 'deploy-review')) &&
       (needs.review.result != 'success' || needs.record_review_status.result != 'success')
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions: {contents: read, statuses: write}
     steps:
       - name: Record failed exact-SHA review deployment
