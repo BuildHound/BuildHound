@@ -141,12 +141,20 @@
         }
         .chart-empty { color: var(--bh-text-muted); font-size: .85rem; margin: .5rem 0; }
         .chart-values { margin-top: 12px; }
-        .chart-values > summary { cursor: pointer; font-size: .85rem; color: var(--bh-text-secondary); padding: .35rem 0; }
+        .chart-values > summary { cursor: pointer; font-size: .85rem; color: var(--bh-text-secondary); padding: .5rem 0; min-height: 36px; display: flex; align-items: center; }
         .chart-values table { margin-top: .5rem; }
         .chart-values td.num { font-family: var(--bh-font-mono); }
-        .chart-swatch { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-right: .35em; vertical-align: baseline; }
+        /* The page-wide `svg { width: 100% }` rule above is meant for full-width charts and
+           would blow a 16x10 legend swatch up to the button's width — pin it back. */
+        /* Minimum command-target height (DESIGN-V2 §5): 36px desktop, 44px on mobile. */
+        .chart-legend button { display: inline-flex; align-items: center; gap: .4em; min-height: 36px; }
+        .chart-legend .chart-swatch { width: 16px; height: 10px; flex: none; }
+        .chart-legend button[aria-pressed="false"] { opacity: .55; text-decoration: line-through; }
         .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
         :where(a, button, select, input, summary, [tabindex]):focus-visible { outline: 2px solid var(--bh-focus); outline-offset: 2px; }
+        @media (max-width: 580px) {
+            .chart-legend button, .chart-values > summary { min-height: 44px; }
+        }
         @media (prefers-reduced-motion: reduce) {
             *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
         }

@@ -1146,7 +1146,7 @@
     // series is distinguished by dash rather than by hue (see the cohort chart, where
     // DESIGN-V2 has no qualitative palette to draw six hues from).
     function legendSwatch(color, dash) {
-        const svg = svgEl("svg", { viewBox: "0 0 16 10", width: "16", height: "10", "aria-hidden": "true" });
+        const svg = svgEl("svg", { viewBox: "0 0 16 10", width: "16", height: "10", "aria-hidden": "true", class: "chart-swatch" });
         if (dash && dash.length) {
             svg.append(svgEl("line", {
                 x1: 0, y1: 5, x2: 16, y2: 5, stroke: color, "stroke-width": 2,
@@ -1225,7 +1225,7 @@
     // series toggle is reachable and focusable. uPlot's own legend is switched off — its
     // header cells respond to a click but take no focus.
     function seriesToggles(aligned) {
-        const bar = el("div", null, "filters");
+        const bar = el("div", null, "filters chart-legend");
         aligned.series.forEach((series, index) => {
             const button = el("button");
             button.append(legendSwatch(series.color, series.dash));
