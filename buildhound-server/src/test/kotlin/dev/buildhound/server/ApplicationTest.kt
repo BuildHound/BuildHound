@@ -2,6 +2,10 @@ package dev.buildhound.server
 
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildPayload
+import dev.buildhound.commons.payload.DiskMedia
+import dev.buildhound.commons.payload.MachineInfo
+import dev.buildhound.commons.payload.ProcessRole
+import dev.buildhound.commons.payload.ResourceUsageInfo
 import io.ktor.client.request.get
 import io.ktor.client.request.head
 import io.ktor.client.request.header
@@ -61,6 +65,54 @@ class ApplicationTest {
               "logWarnings": ["warning: bar() in Baz has been deprecated"],
               "droppedWarnings": 3
             }
+          }
+        }
+    """.trimIndent()
+
+    // A plan-104 build: static machine hardware (`environment.machine`), the execution-window
+    // `resourceUsage` block, per-process CPU time, and the CI runner attributes plan 105 renders as
+    // chips. Numbers are copied from `golden/build-payload-v1-machine.json` so this test and both
+    // render harnesses divide the same numerator by the same denominator.
+    private fun machinePayloadJson(buildId: String = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff") = """
+        {
+          "schemaVersion": 1,
+          "buildId": "$buildId",
+          "startedAt": 1754700000000,
+          "finishedAt": 1754700061000,
+          "outcome": "SUCCESS",
+          "requestedTasks": ["assembleRelease"],
+          "mode": "ci",
+          "environment": {
+            "os": "Linux",
+            "arch": "amd64",
+            "cores": 8,
+            "ramMb": 32768,
+            "machine": {
+              "diskTotalMb": 486400,
+              "diskFreeMb": 204800,
+              "diskMedia": "NVME"
+            }
+          },
+          "ci": {
+            "provider": "github-actions",
+            "runId": "17209384756",
+            "attributes": {
+              "runnerEnvironment": "github-hosted",
+              "runnerImageVersion": "20250801.1.0",
+              "runnerClass": "ubuntu-latest-8-core"
+            }
+          },
+          "processes": [
+            { "role": "GRADLE_DAEMON", "rssMb": 2711, "uptimeS": 812, "cpuTimeMs": 214000 },
+            { "role": "KOTLIN_DAEMON", "rssMb": 1180, "uptimeS": 205, "cpuTimeMs": 96500 }
+          ],
+          "resourceUsage": {
+            "windowMs": 59000,
+            "daemonCpuMs": 141600,
+            "systemCpuLoadPct": 63,
+            "systemLoadAverage": 4.75,
+            "systemMemTotalMb": 32768,
+            "systemMemFreeMb": 9216
           }
         }
     """.trimIndent()
@@ -237,6 +289,69 @@ class ApplicationTest {
             decoded.failure?.stackTrace,
         )
         assertTrue(decoded.extensions.containsKey("internalAdapters"), "internalAdapters extension dropped")
+    }
+
+    @Test
+    fun `build detail response carries machine specs and build resource usage`() = testApplication {
+        appWith(fixture())
+        val buildId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+
+        val ingest = client.post("/v1/builds") {
+            header("Authorization", "Bearer test-token")
+            contentType(ContentType.Application.Json)
+            setBody(machinePayloadJson(buildId))
+        }
+        assertEquals(HttpStatusCode.Accepted, ingest.status)
+
+        val detail = client.get("/v1/builds/$buildId") {
+            header("Authorization", "Bearer test-token")
+        }
+        assertEquals(HttpStatusCode.OK, detail.status)
+
+        // Plan 105's dashboard Machine section reads these off the detail response with no endpoint
+        // of its own, so the hop that must not regress is ingest → GET: swap the response for a
+        // projection DTO and the section silently empties. The JS smoke harness stubs fetch with
+        // canned bodies, so it cannot see this hop — the same gap the plan-044 test above covers.
+        // Honest scope: this runs on InMemoryBuildStore, whose save/findById hand back the same
+        // object without ever serializing, so it pins the RESPONSE hop — not the `payload jsonb`
+        // round trip, which only the Postgres store exercises.
+        val body = detail.bodyAsText()
+        assertTrue(body.contains("\"diskTotalMb\":486400"), body)
+        assertTrue(body.contains("\"diskFreeMb\":204800"), body)
+        assertTrue(body.contains("\"diskMedia\":\"NVME\""), body)
+        assertTrue(body.contains("\"windowMs\":59000"), body)
+        assertTrue(body.contains("\"daemonCpuMs\":141600"), body)
+        assertTrue(body.contains("\"cpuTimeMs\":214000"), body)
+        assertTrue(body.contains("\"runnerClass\":\"ubuntu-latest-8-core\""), body)
+
+        // And it decodes back typed — a chip reads `machine.diskMedia` as an enum, not a substring.
+        val decoded = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), body)
+        // Whole-block equality on both plan-104 blocks: a *dropped* field is the failure mode here,
+        // and only comparing the whole block catches one that was never asserted individually.
+        assertEquals(
+            MachineInfo(diskTotalMb = 486_400L, diskFreeMb = 204_800L, diskMedia = DiskMedia.NVME),
+            decoded.environment?.machine,
+        )
+        assertEquals(
+            ResourceUsageInfo(
+                windowMs = 59_000L,
+                daemonCpuMs = 141_600L,
+                systemCpuLoadPct = 63,
+                systemLoadAverage = 4.75,
+                systemMemTotalMb = 32_768L,
+                systemMemFreeMb = 9_216L,
+            ),
+            decoded.resourceUsage,
+        )
+        // `cores` predates 104 but rides in the same section: it is the denominator the utilization
+        // chip divides `daemonCpuMs` by, so losing it turns the figure into an unlabelled duration.
+        assertEquals(8, decoded.environment?.cores)
+        assertEquals(214_000L, decoded.processes.single { it.role == ProcessRole.GRADLE_DAEMON }.cpuTimeMs)
+        assertEquals(96_500L, decoded.processes.single { it.role == ProcessRole.KOTLIN_DAEMON }.cpuTimeMs)
+        // `ci.attributes` is an untyped map — neither the scrubber nor the capper names it, so the
+        // runner chips depend on it surviving ingest verbatim.
+        assertEquals("github-hosted", decoded.ci?.attributes?.get("runnerEnvironment"))
+        assertEquals("ubuntu-latest-8-core", decoded.ci?.attributes?.get("runnerClass"))
     }
 
     @Test
