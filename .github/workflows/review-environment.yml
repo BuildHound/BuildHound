@@ -138,7 +138,7 @@ jobs:
           path: review-source
           persist-credentials: false
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@v2
       - name: Build review server without registry credentials
         if: env.REVIEW_ACTION == 'deploy'
         uses: useblacksmith/build-push-action@v2
