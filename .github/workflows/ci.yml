@@ -33,7 +33,7 @@ permissions:
 jobs:
   build:
     name: Build & test
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v7
 
@@ -56,7 +56,7 @@ jobs:
       # on main, so the default main-only policy would leave the cache empty.
       - uses: gradle/actions/setup-gradle@v6.3.0
         with:
-          gradle-version: "9.6.1"
+          gradle-version: "9.7.0"
           cache-read-only: false
 
       # Dogfooding bootstrap (plan 093): the root build cannot includeBuild itself, so the
@@ -153,7 +153,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6.3.0
         with:
-          gradle-version: "9.6.1"
+          gradle-version: "9.7.0"
           cache-read-only: false
 
       - name: Build sample
@@ -263,6 +263,8 @@ jobs:
 
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v2
+        with:
+          cache-key: buildhound/buildhound-server
 
       # BuildKit layer cache persisted in the GitHub Actions cache: the dependency
       # layers (wrapper + build scripts, Dockerfile lines up to the priming RUN)
@@ -315,6 +317,8 @@ jobs:
 
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v2
+        with:
+          cache-key: buildhound/buildhound-server
 
       # Rebuild from the gha layer cache the server-image job populated (fast; no source rebuild).
       - name: Build image (from cache)
@@ -364,7 +368,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6.3.0
         with:
-          gradle-version: "9.6.1"
+          gradle-version: "9.7.0"
           cache-read-only: false
 
       - name: Functional tests with inner-build configuration cache off
@@ -387,7 +391,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6.3.0
         with:
-          gradle-version: "9.6.1"
+          gradle-version: "9.7.0"
           cache-read-only: false
 
       - name: Isolated-projects TestKit suite
@@ -398,7 +402,7 @@ jobs:
     # Blocking (plan 021): plan 007's only field bug was macOS-only (scrubber path handling),
     # covered by these unit + functional tests. Testcontainers self-skips without Docker, so
     # `gradle build` is viable on the Docker-less macOS runner. One leg, no floor cross-product.
-    runs-on: blacksmith-6vcpu-macos-15
+    runs-on: blacksmith-12vcpu-macos-26
     steps:
       - uses: actions/checkout@v7
 
@@ -409,7 +413,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6.3.0
         with:
-          gradle-version: "9.6.1"
+          gradle-version: "9.7.0"
           cache-read-only: false
 
       - name: Build
@@ -461,7 +465,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6.3.0
         with:
-          gradle-version: "9.6.1"
+          gradle-version: "9.7.0"
           cache-read-only: false
 
       # Version + SHA-256 pinned at authoring time (Maven Central is gradle-profiler's distribution;
@@ -511,7 +515,7 @@ jobs:
     # scrubber, spool paths, VCS exec. Known accepted gaps: the hung-git and GitExec
     # fixtures are @DisabledOnOs(WINDOWS) (plan 015). Re-demotable with a one-line revert
     # if unrelated Windows flakiness surfaces.
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: blacksmith-8vcpu-windows-2025
     # Green runs take ~36 min; the leg's known failure mode is a lingering TestKit daemon,
     # so don't let a hang ride the 360-min platform default now that the job is blocking.
     timeout-minutes: 60
@@ -525,7 +529,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6.3.0
         with:
-          gradle-version: "9.6.1"
+          gradle-version: "9.7.0"
           cache-read-only: false
 
       - name: Build
