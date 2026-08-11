@@ -13,8 +13,11 @@ Plans 000–080 are implemented and live there, except [035](035-cc-miss-reason-
 [075](075-internal-adapters-cc-hit-toggle-rehydration.md) below — including
 [045](implemented/045-composite-task-dictionary.md), which was
 superseded/closed by [056](implemented/056-composite-build-logic-dictionary-priority.md) rather
-than shipping standalone, but whose own exit criteria were met by that work. Four plans remain
-active in this directory:
+than shipping standalone, but whose own exit criteria were met by that work. The five plans called
+out below are **not** an exhaustive list of what is active here — a pre-existing drift this plan
+notes rather than sweeps: [104](104-machine-specs-and-resource-usage.md) is also open (exit
+criterion 5), several numbered plans in this directory are unlisted entirely, and two different
+files both claim number 092. Reconciling the index is its own chore:
 
 - [035](035-cc-miss-reason-capture.md) — CC miss-reason capture — **blocked**, not implementable
   as specified.
@@ -24,6 +27,9 @@ active in this directory:
   rehydration — **open**; a warm-daemon configuration-cache hit can still replay a
   previously-enabled capture toggle even when the current build's config has it off. Design and
   a `@Disabled` acceptance test exist; the fix hasn't landed.
+- [106](106-overhead-harness-repair.md) — overhead-harness repair — **open**; the harness itself is
+  fixed and producing real measurements, but its first run reports a genuine budget breach
+  (§7) that needs its own plan, and the numbers are local-macOS only until a CI run lands.
 - [092](092-gradle-plugin-portal-release.md) — Gradle Plugin Portal release — **open**; prepares
   `dev.buildhound` for a protected, reproducible Portal publication. Its dependency-verification
   scope was later dropped repo-wide (2026-07-21 architecture decision log; see the plan's own

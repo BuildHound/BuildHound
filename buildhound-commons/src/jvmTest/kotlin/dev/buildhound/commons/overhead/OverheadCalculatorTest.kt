@@ -13,13 +13,31 @@ class OverheadCalculatorTest {
     private fun stats(name: String, mean: Double, stddev: Double) = mapOf(name to ScenarioStats(name, mean, stddev))
 
     @Test
-    fun `the default budget passes on the sample fixtures`() {
-        val on = ProfilerCsv.parse(resource("benchmark-on.csv"))
-        val off = ProfilerCsv.parse(resource("benchmark-off.csv"))
+    fun `the default budget passes on within-budget fixtures`() {
+        val on = ProfilerCsv.parse(resource("benchmark-within-budget-on.csv"))
+        val off = ProfilerCsv.parse(resource("benchmark-within-budget-off.csv"))
         val report = OverheadCalculator.evaluate(on, off, OverheadBudget.DEFAULT)
         assertEquals(4, report.verdicts.size)
         assertFalse(report.anyBreached, OverheadCalculator.markdownTable(report))
         assertTrue(report.verdicts.none { it.dataMissing })
+    }
+
+    @Test
+    fun `every axis resolves against real gradle-profiler output`() {
+        // benchmark-{on,off}.csv are captured from an actual harness run (plan 106). This guards the
+        // two defects that make an axis unresolvable — scenario columns named by title instead of id,
+        // and the absence of summary rows — either of which reports ⚠ MISSING for every axis while
+        // the job claims to have verified a budget. It does NOT guard the column-selection defect:
+        // reading `task start` instead of `total execution time` still yields positive, present
+        // values, so this test would pass. That one is pinned by ProfilerCsvTest's exact means.
+        // Only "no data missing" is asserted here — the measured numbers are a machine-dependent
+        // finding, not a fact to freeze in a unit test.
+        val on = ProfilerCsv.parse(resource("benchmark-on.csv"))
+        val off = ProfilerCsv.parse(resource("benchmark-off.csv"))
+        val report = OverheadCalculator.evaluate(on, off, OverheadBudget.DEFAULT)
+        assertEquals(4, report.verdicts.size)
+        assertTrue(report.verdicts.none { it.dataMissing }, OverheadCalculator.markdownTable(report))
+        assertTrue(report.verdicts.all { it.baselineMeanMs > 0.0 && it.treatmentMeanMs > 0.0 })
     }
 
     // A single-axis budget with an absolute floor of 150 ms OR 8 %, separation off for clarity.

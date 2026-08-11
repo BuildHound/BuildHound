@@ -328,6 +328,16 @@ val functionalTestTask = tasks.register<Test>("functionalTest") {
     )
     inputs.files(rootProject.layout.projectDirectory.file(".github/buildhound-dogfood.init.gradle.kts"))
         .withPathSensitivity(PathSensitivity.RELATIVE)
+    // Same contract for the sample-pilot injection script (plan 105), exercised by
+    // SampleBenchmarkInitScriptFunctionalTest: its reflection into the extension degrades to a warn,
+    // so only a test that applies the real script catches shape drift.
+    systemProperty(
+        "buildhound.sample.init-script",
+        rootProject.layout.projectDirectory.file(".github/buildhound-sample-benchmark.init.gradle.kts")
+            .asFile.absolutePath,
+    )
+    inputs.files(rootProject.layout.projectDirectory.file(".github/buildhound-sample-benchmark.init.gradle.kts"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
     // Fingerprint the deterministic publication sources, not the generated repository: SNAPSHOT
     // Maven metadata and filenames change on every publish even when the artifact is identical.
     // These are the files the fixture resolves and validates, including the plugin marker POM.
@@ -356,6 +366,14 @@ tasks.check {
 
 tasks.named<Test>("test") {
     useJUnitPlatform()
+    // CiAssetsContractTest reads buildhound-ci-assets/ straight off disk — files this module does
+    // not otherwise depend on, so without declaring them the task stays up-to-date (or gets a build
+    // cache hit) across an asset edit and reports a stale PASS. That is not hypothetical: the
+    // plan-105 setup-gradle bump was cached-green on Linux while the cold-cache macOS and Windows
+    // legs caught the drift.
+    inputs.dir(rootProject.layout.projectDirectory.dir("buildhound-ci-assets"))
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+        .withPropertyName("ciAssets")
 }
 
 tasks.withType<Test>().configureEach {

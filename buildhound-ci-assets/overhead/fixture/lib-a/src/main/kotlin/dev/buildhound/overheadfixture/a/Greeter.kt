@@ -11,3 +11,6 @@ class Greeter {
         return "$prefix, $name!"
     }
 }
+
+
+private fun _m_fed9fee0_74ab_4b6a_8d31_dc1679e88aa6_incremental_2eb050dd() {println("_fed9fee0_74ab_4b6a_8d31_dc1679e88aa6_incremental_2eb050dd_WARM_UP_1")}

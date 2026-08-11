@@ -52,6 +52,15 @@ kotlin {
 
 tasks.named<Test>("jvmTest") {
     useJUnitPlatform()
+    // OverheadScenarioContractTest reads the harness's scenario file directly — it is the only thing
+    // that can catch a `title` being added there, which would rename every benchmark.csv column and
+    // silently make the whole overhead budget unverifiable (plan 106). Gradle cannot infer that
+    // dependency from a file read inside a test, so declare it: without this the task stays
+    // UP-TO-DATE when only that file changes and the guard never runs. Verified by adding a title
+    // and watching an unfiltered `:buildhound-commons:jvmTest` skip entirely.
+    inputs.file(layout.projectDirectory.file("../buildhound-ci-assets/overhead/overhead.scenarios"))
+        .withPropertyName("overheadScenarios")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // Plugin-overhead verdict tool (plan 034): a thin JavaExec over the pure OverheadCalculator, run by

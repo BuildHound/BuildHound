@@ -102,7 +102,9 @@ an environment that runs that same PR's code anyway (blast radius nil).
   decision, this plan); the staging token shares the exposure exactly, it is not a lesser
   case. The honest exposure class: (a) any **write-collaborator** can exfiltrate either
   token *before any review* by editing the workflow or the publish script on a branch — a
-  plain `pull_request` event runs the PR's own version of both; (b) any **compromised
+  plain `pull_request` event runs the PR's own version of both, and (since plan 105's
+  `nightly-benchmark.yml`) a `workflow_dispatch` workflow reusing this secret slot can be
+  dispatched against an arbitrary branch's version of itself, without a PR at all; (b) any **compromised
   build-time dependency** executing inside `gradle build` can read the step env (bounded
   by dependency verification, `gradle/verification-metadata.xml`, and step-scoped env
   mapping). Mitigations: ingest-only scope (worst case junk telemetry, bounded by payload

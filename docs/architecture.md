@@ -266,6 +266,16 @@ These are the rules every plugin change is reviewed against:
     discipline as the macOS/Windows/IP jobs. A change that breaches the budget must optimize the
     plugin or, with justification, recalibrate the budget in the same PR (decision-log row).
 
+15. **A test that reads repository files must declare them as task inputs (binding, plan 105).**
+    Contract tests that assert on files outside their own module — `CiAssetsContractTest` reading
+    `buildhound-ci-assets/`, the init-script suites reading `.github/*.init.gradle.kts` — are
+    invisible to Gradle's up-to-date and build-cache logic unless the files are declared with
+    `inputs.files(...)`/`inputs.dir(...)`. Undeclared, the suite reports a **stale PASS**: plan 105
+    bumped a pinned action SHA and CI went green on Linux (cached result from before the bump) while
+    only the cold-cache macOS and Windows legs caught the drift — the guard's whole purpose,
+    defeated silently on the leg most people look at first. Declare the files, and prefer
+    `withPathSensitivity(RELATIVE)` so the entry stays relocatable.
+
 ## 3. Kotlin Multiplatform best practices (binding)
 
 1. **`buildhound-commons` is the only shared-code channel.** Models are pure data + 

@@ -122,6 +122,11 @@ jobs:
           sh buildhound-ci-assets/test/wrapper-integrity-test.sh
           shellcheck .github/scripts/gradle-plugin-publication-digest.sh
           shellcheck .github/scripts/verify-gradle-plugin-publication-digest.sh
+          # The overhead harness carries measurement-integrity logic (sink guards, variant
+          # validation, env scrubbing), and nothing kept it shellcheck-clean before (plan 106).
+          # Linted in the fast `build` job, not in overhead-budget, so a lint break is loud
+          # rather than buried in a watched, continue-on-error job.
+          shellcheck buildhound-ci-assets/overhead/run-overhead.sh buildhound-ci-assets/overhead/bin/buildhound-overhead
 
   sample-springboot:
     name: Sample build (springboot-legacy)
@@ -254,7 +259,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@v2
 
       # BuildKit layer cache persisted in the GitHub Actions cache: the dependency
       # layers (wrapper + build scripts, Dockerfile lines up to the priming RUN)
@@ -306,7 +311,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+        uses: useblacksmith/setup-docker-builder@v2
 
       # Rebuild from the gha layer cache the server-image job populated (fast; no source rebuild).
       - name: Build image (from cache)
@@ -413,8 +418,24 @@ jobs:
     # stays green-optional until runner-to-runner variance is characterised — the promote-to-blocking
     # criterion lives in docs/overhead-budget.md. It runs gradle-profiler on a synthetic fixture with
     # the plugin toggled on/off and fails on a budget breach (OverheadCalculator, buildhound-commons).
+    #
+    # A RED RUN HERE IS UNINFORMATIVE ON ITS OWN (plan 106) — open the overhead-budget artifact and
+    # read overhead-table.md. Until plan 106 this job was inert: green in ~17 s without running the
+    # benchmark, so no historical green means anything. Local runs breach three axes for a known,
+    # disclosed reason (the process probe's per-JVM subprocess cost, plan 106 §7), and the first
+    # repaired run here confirmed it: run 31337018812, 4m25s, finalizer 591.5 ms over a 150 ms cap.
+    # Red also covers a
+    # missing gradle-profiler (exit 3), a failed toggle self-test (exit 4), the timeout, and a
+    # genuinely new regression — the table distinguishes them. Promotion to blocking cannot be
+    # assessed while a known true breach is present. Delete this note once that cost is fixed.
     runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
+    # A real run is 160 fixture builds (5 scenarios × 16 × 2 variants) plus a cold Gradle
+    # distribution download per variant — the harness's own `--gradle-user-home` is outside
+    # setup-gradle's cache, so that cost is paid twice. Measured at ~7 min on a 10-core M-series;
+    # this ceiling is generous for 4 vCPU. Explicit because the job used to finish in 17 s without
+    # benchmarking anything (plan 106) and the platform default would let a hang run for 6 hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -435,6 +456,10 @@ jobs:
       # the GitHub release carries no zip). The checksum makes a re-pointed tag or swapped asset a
       # loud failure, not a silent binary swap — a bump is a deliberate, reviewed change of both.
       - name: Install gradle-profiler
+        # `shell: bash` for pipefail here too. The checksum check is currently the rightmost element
+        # of its pipeline, so `-e` alone would catch a mismatch — but that is a property of the
+        # current line order, not of the step, and this job already shipped one pipefail bug.
+        shell: bash
         env:
           PROFILER_VERSION: "0.24.0"
           PROFILER_SHA256: "74f39882a444d6d5616d35b3e9197f7423cd252f63f339bd3e01f662573b319c"
@@ -445,8 +470,13 @@ jobs:
           unzip -q gradle-profiler.zip
           echo "$PWD/gradle-profiler-${PROFILER_VERSION}/bin" >> "$GITHUB_PATH"
 
-      # GitHub's default bash sets `-o pipefail`, so a budget breach (non-zero) propagates through tee.
+      # `shell: bash` is load-bearing, not cosmetic (plan 106). The Actions DEFAULT shell is
+      # `/usr/bin/bash -e {0}` — no pipefail — so `harness | tee` would exit with tee's 0 and a
+      # broken benchmark would render as a green check (it did, for the job's whole lifetime).
+      # Naming bash explicitly maps the step to `bash --noprofile --norc -eo pipefail {0}`, so a
+      # budget breach (or a harness failure) propagates through the pipe.
       - name: Run overhead harness
+        shell: bash
         run: buildhound-ci-assets/overhead/run-overhead.sh | tee overhead-table.md
 
       - name: Upload overhead table
@@ -488,3 +518,32 @@ jobs:
 
       - name: Build
         run: gradle build
+
+  composite-action:
+    name: Composite action self-test
+    # The shipped consumer asset (buildhound-ci-assets/github/action.yml, plan 041) is the one CI
+    # file nothing in this repo parses: actionlint lints .github/workflows/** only, never a
+    # composite action.yml. Running it from the checkout is what keeps it from rotting — it proves
+    # the action's YAML is valid, its input defaults resolve, its pinned setup-gradle SHA still
+    # exists, the input→env mapping works, and the verdict-gate step's `if:` plus the gate script's
+    # early exits behave. Deliberately credential-free: no server-url, no token, so this job holds
+    # no secret and the gate takes its "no payload written; skipping" path.
+    # `help` keeps it cheap — the point is the action's wiring, not another build of this repo.
+    # It is also the only job driving ./gradlew instead of the setup-gradle-provisioned `gradle`.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 26
+
+      # Local action reference: `./<path>` resolves against the checkout, so this exercises the
+      # action at the PR's commit — not a published ref.
+      - uses: ./buildhound-ci-assets/github
+        with:
+          gradle-tasks: "help"
+          verdict-gate: "warn"
+          runner-class: "blacksmith-4vcpu-ubuntu-2404"

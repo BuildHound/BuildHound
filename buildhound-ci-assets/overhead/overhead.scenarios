@@ -2,46 +2,71 @@
 //
 // Run the whole file once per plugin variant (on/off), passing the toggle as a Gradle arg, e.g.
 //
-//   gradle-profiler --benchmark --measure-config-time \
+//   BUILDHOUND_OVERHEAD_PLUGIN=on gradle-profiler --benchmark --measure-config-time \
 //     --project-dir fixture --scenario-file overhead.scenarios \
 //     --gradle-user-home /tmp/guh-on \
 //     -Dorg.gradle.jvmargs=-Xmx1g \
-//     no_op incremental cc_hit no_op_upload
+//     no_op incremental cc_hit no_op_upload no_op_ci
 //
-// with `-Pbuildhound.overhead.plugin=on` (or `off`) added via each scenario's gradle-args below —
-// run-overhead.sh injects it. Overhead per axis = mean(on) − mean(off) for the matching scenario;
-// the OverheadCalculator (buildhound-commons) turns the two benchmark.csv files into the verdict.
+// The toggle rides each scenario's gradle-args below, read from the environment —
+// gradle-profiler itself has NO -P (or --gradle-argument) option, so a project property can only
+// reach the build this way. run-overhead.sh sets the variable per variant. Overhead per axis =
+// mean(on) − mean(off) for the matching scenario; the OverheadCalculator (buildhound-commons)
+// turns the two benchmark.csv files into the verdict.
+//
+// Substitution rules (these files are HOCON, and getting this wrong is silent, not loud — plan 106):
+//   * A ${VAR} reference inside a QUOTED string is NOT substituted; it reaches Gradle as literal
+//     text. Concatenate instead — "-Pflag="${VAR} — which is what every line below does.
+//   * Always the mandatory ${VAR} form, never the optional ${?VAR}: an UNSET variable then aborts
+//     the run instead of silently dropping the argument, which would leave the fixture on its `off`
+//     default and let a nominal plugin-on run measure no plugin at all — a false pass.
+//     Note the limit of that guarantee: HOCON treats a variable set to the EMPTY STRING as defined,
+//     so `BUILDHOUND_OVERHEAD_PLUGIN=""` substitutes to `-Pbuildhound.overhead.plugin=` and reaches
+//     the same false-pass state. run-overhead.sh validates the value against on|off for that case,
+//     and the toggle self-test is the backstop that actually proves the plugin ran.
+//
+// Naming: no scenario sets `title`, deliberately. gradle-profiler names each benchmark.csv column
+// after the title when one is set and after the scenario **id** otherwise (verified against 0.24.0),
+// and the ids are what OverheadBudget's axes reference. A title would rename every column to prose
+// and leave every axis unable to find its data (⚠ MISSING for all four). The descriptive text lives
+// as a comment on each scenario instead — readable to humans, invisible to the parser.
 
 no_op {
-    title = "No-op (fully up-to-date) build — finalizer axis"
+    // "No-op (fully up-to-date) build — finalizer axis" — kept as prose only; see the naming note in the header.
     tasks = ["build"]
+    gradle-args = ["-Pbuildhound.overhead.plugin="${BUILDHOUND_OVERHEAD_PLUGIN}]
 }
 
 incremental {
-    title = "Incremental non-ABI change — per-task axis"
+    // "Incremental non-ABI change — per-task axis" — kept as prose only; see the naming note in the header.
     tasks = ["build"]
     // A method-body-only edit: lib-a recompiles, downstream ABI is unchanged.
     apply-non-abi-change-to = ["lib-a/src/main/kotlin/dev/buildhound/overheadfixture/a/Greeter.kt"]
+    gradle-args = ["-Pbuildhound.overhead.plugin="${BUILDHOUND_OVERHEAD_PLUGIN}]
 }
 
 cc_hit {
-    title = "Configuration-cache hit — configuration axis"
+    // "Configuration-cache hit — configuration axis" — kept as prose only; see the naming note in the header.
     tasks = ["build"]
-    gradle-args = ["--configuration-cache"]
+    gradle-args = ["--configuration-cache", "-Pbuildhound.overhead.plugin="${BUILDHOUND_OVERHEAD_PLUGIN}]
 }
 
 no_op_upload {
-    title = "No-op with a loopback upload sink — upload axis"
+    // "No-op with a loopback upload sink — upload axis" — kept as prose only; see the naming note in the header.
     tasks = ["build"]
     // Force CI mode + a loopback server URL so the finalizer takes the synchronous upload path
-    // against a do-nothing sink (run-overhead.sh starts it and substitutes BUILDHOUND_OVERHEAD_SINK).
-    gradle-args = ["-Pbuildhound.mode=ci", "-Pbuildhound.server.url=${BUILDHOUND_OVERHEAD_SINK}"]
+    // against a do-nothing sink (run-overhead.sh starts it and exports BUILDHOUND_OVERHEAD_SINK).
+    gradle-args = [
+        "-Pbuildhound.mode=ci",
+        "-Pbuildhound.server.url="${BUILDHOUND_OVERHEAD_SINK},
+        "-Pbuildhound.overhead.plugin="${BUILDHOUND_OVERHEAD_PLUGIN}
+    ]
 }
 
 no_op_ci {
     // The upload axis baseline: CI mode like no_op_upload but with NO server URL, so the
     // no_op_upload − no_op_ci delta isolates the upload path (not the local→ci mode switch's cost).
-    title = "No-op in CI mode, no server — upload-axis baseline"
+    // "No-op in CI mode, no server — upload-axis baseline" — kept as prose only; see the naming note in the header.
     tasks = ["build"]
-    gradle-args = ["-Pbuildhound.mode=ci"]
+    gradle-args = ["-Pbuildhound.mode=ci", "-Pbuildhound.overhead.plugin="${BUILDHOUND_OVERHEAD_PLUGIN}]
 }
