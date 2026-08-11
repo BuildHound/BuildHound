@@ -419,7 +419,7 @@ status record, not a rule, and it exempts no work from V2.
 | Surface | State |
 |---|---|
 | Standalone HTML report (`buildhound-report/src/main/resources/dev/buildhound/report/report-template.html`) | Pre-V2 |
-| Server dashboard — **chart surfaces** (trends, benchmark) | **V2**, plan 105 |
+| Server dashboard — **chart surfaces** (trends, benchmark) | **V2**, plan 108 |
 | Server dashboard — everything else | Pre-V2 |
 
 The report and the non-chart parts of the dashboard still carry their original pre-V2 styling:
@@ -434,7 +434,7 @@ a page that follows neither system. No plan has introduced an external styleshee
 element, a CSS url() reference, an @import, a webfont, or a relative asset reference, and none has
 weakened the report's asset test or the dashboard's content security policy style-hash tests.
 
-Plan 105 converted the dashboard's **chart surfaces only**, with regression tests, per item 8:
+Plan 108 converted the dashboard's **chart surfaces only**, with regression tests, per item 8:
 series/grid/axis solids, the measurement grid inside the plot area, system-font roles, chart
 command-target sizes, the focus ring and reduced-motion. Charts were a defensible unit to convert
 on their own — unlike the sections above, their colors carry *status semantics* (§3) that the
@@ -444,7 +444,7 @@ to Cache-or-information. Converting any other surface still requires its own pla
 **Gap this adoption surfaced: there is no qualitative (categorical) series palette.** §3 defines
 seven *semantic* solids, and §3's status mapping means a green series reads as "success" and a
 violet one as "flaky" — wrong for data that is not a status, such as tag cohorts or per-artifact
-variants. Plan 105 therefore renders multi-series charts in one neutral solid, distinguished by
+variants. Plan 108 therefore renders multi-series charts in one neutral solid, distinguished by
 line style and direct labels, which §3's "never rely on colour alone" prefers anyway. A proper
 categorical palette is an open addition to this document; until it lands, do not invent series
 hexes and call them V2 tokens.

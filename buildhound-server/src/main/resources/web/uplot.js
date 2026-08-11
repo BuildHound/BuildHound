@@ -7,7 +7,7 @@
 //            sha256 19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f
 //
 // Served at /uplot.js under the dashboard CSP (script-src 'self'), the same way
-// /timeline.js is (plan 105). It was selected because it sets no DOM attributes at all
+// /timeline.js is (plan 108). It was selected because it sets no DOM attributes at all
 // (an inline style ATTRIBUTE would be blocked by the hash-pinned style-src), creates no
 // <style> element, and reaches for no dynamic-code, network or worker API. It does set
 // inline styles through the CSSOM (el.style.width = …) — that is safe and is exactly why

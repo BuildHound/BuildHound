@@ -20,7 +20,7 @@ update the recorded hashes in the same commit.
 - Vendored file content: a BuildHound provenance header (including the full MIT license
   text) followed by the upstream bytes verbatim,
   sha256 `19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f`
-- Used by: the server dashboard's charts (plan 105). It is **not** used by
+- Used by: the server dashboard's charts (plan 108). It is **not** used by
   `buildhound-report` — the standalone artifact stays dependency-free and network-free
   (`ReportAssetsTest`).
 
