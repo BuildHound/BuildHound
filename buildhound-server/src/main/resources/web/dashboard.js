@@ -649,7 +649,7 @@
         return cell;
     }
 
-    // Machine specs + build resource usage (plan 105): the dashboard half of plan 104, ported from
+    // Machine specs + build resource usage (plan 107): the dashboard half of plan 104, ported from
     // the HTML artifact's machineSection. Two chip rows — what the build ran ON (static hardware)
     // and what it USED (execution-window measurements) — or null when the payload carries neither.
     // Null is narrower than "pre-104": the hardware chips read environment.os/arch/cores/ramMb/
@@ -853,7 +853,7 @@
         app.append(el("h3", "Work avoidance"));
         app.append(ledgerTable(tasks));
 
-        // Machine specs + build resource usage (plan 105): what the build ran on and what it used,
+        // Machine specs + build resource usage (plan 107): what the build ran on and what it used,
         // mirroring the HTML artifact's plan-104 section. Null — so nothing is appended — only for a
         // payload with no machine-relevant environment data and no resourceUsage; a pre-104 payload
         // that carries an environment block still gets the hardware row.
