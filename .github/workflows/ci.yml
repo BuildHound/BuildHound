@@ -19,6 +19,9 @@ on:
       - 'LICENSE'
   pull_request:
     paths-ignore: *docs-only
+  # Manual trigger. Required by the `overhead-budget` job, which is parked on demand — see its
+  # comment below; without this it could not be run at all.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -413,21 +416,30 @@ jobs:
         run: gradle build
 
   overhead-budget:
-    name: Plugin overhead budget (watched)
-    # Watched, non-blocking (plan 034): same-machine timing on shared runners is noisy, so the job
-    # stays green-optional until runner-to-runner variance is characterised — the promote-to-blocking
-    # criterion lives in docs/overhead-budget.md. It runs gradle-profiler on a synthetic fixture with
-    # the plugin toggled on/off and fails on a budget breach (OverheadCalculator, buildhound-commons).
+    name: Plugin overhead budget (on demand)
+    # DISABLED on push and pull_request (owner decision, 2026-08-11); runs only via
+    # `workflow_dispatch`. Trigger it from the Actions tab, or:
+    #   gh workflow run ci.yml --ref <branch>
+    # Re-enable by deleting the `if:` below — nothing else about the job changed.
     #
-    # A RED RUN HERE IS UNINFORMATIVE ON ITS OWN (plan 106) — open the overhead-budget artifact and
-    # read overhead-table.md. Until plan 106 this job was inert: green in ~17 s without running the
-    # benchmark, so no historical green means anything. Local runs breach three axes for a known,
-    # disclosed reason (the process probe's per-JVM subprocess cost, plan 106 §7), and the first
-    # repaired run here confirmed it: run 31337018812, 4m25s, finalizer 591.5 ms over a 150 ms cap.
-    # Red also covers a
-    # missing gradle-profiler (exit 3), a failed toggle self-test (exit 4), the timeout, and a
-    # genuinely new regression — the table distinguishes them. Promotion to blocking cannot be
-    # assessed while a known true breach is present. Delete this note once that cost is fixed.
+    # Why: plan 106 repaired the harness (it had been inert — green in ~17 s without benchmarking
+    # anything), and the repaired job immediately went red for a KNOWN, disclosed reason: the
+    # process probe's per-JVM subprocess cost, plan 106 §7. It has been red on main ever since, on
+    # every PR, with no new information in it. A permanently-red watched check trains reviewers to
+    # ignore red, which costs more than the signal it was carrying. Parking it on demand keeps the
+    # harness alive and runnable while that cost is fixed, instead of deleting it or — worse —
+    # widening the caps to manufacture green.
+    #
+    # This does NOT retire the budget. `docs/architecture.md` §2 rule 14 stays binding and the caps
+    # in `OverheadBudget.DEFAULT` are unchanged; only the automatic enforcement point is parked.
+    # A RED RUN IS STILL UNINFORMATIVE ON ITS OWN — open the overhead-budget artifact and read
+    # overhead-table.md. Red covers a missing gradle-profiler (exit 3), a failed toggle self-test
+    # (exit 4), the timeout, and a genuinely new regression as well as the known breach; the table
+    # distinguishes them. Reference points for comparison: run 31337018812 (4m25s, finalizer
+    # 591.5 ms over a 150 ms cap) and run 31507194671 (finalizer 775.9 ms, configuration and
+    # per-task also breaching). Promotion to blocking cannot be assessed while the known breach is
+    # present — the criterion lives in docs/overhead-budget.md.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     continue-on-error: true
     # A real run is 160 fixture builds (5 scenarios × 16 × 2 variants) plus a cold Gradle

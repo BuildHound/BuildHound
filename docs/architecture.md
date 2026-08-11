@@ -265,6 +265,12 @@ These are the rules every plugin change is reviewed against:
     runner variance is characterised, then promoted (criterion in `docs/overhead-budget.md`), same
     discipline as the macOS/Windows/IP jobs. A change that breaches the budget must optimize the
     plugin or, with justification, recalibrate the budget in the same PR (decision-log row).
+    **Enforcement is currently parked (2026-08-11):** the job no longer runs on push or
+    pull_request, only on `workflow_dispatch`, because it has been red on every run since plan 106
+    repaired it — for a known, disclosed cause (the process probe's per-JVM subprocess cost, plan
+    106 §7) rather than for anything a PR did. The rule and the caps are unchanged and still
+    binding; run the job on demand before merging anything that could plausibly move plugin cost,
+    and un-park it once the probe cost is fixed.
 
 15. **A test that reads repository files must declare them as task inputs (binding, plan 105).**
     Contract tests that assert on files outside their own module — `CiAssetsContractTest` reading

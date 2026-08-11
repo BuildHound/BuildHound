@@ -73,6 +73,14 @@ buildhound-ci-assets/overhead/bin/buildhound-overhead <plugin-on>/benchmark.csv 
 harness, uploads the Markdown table + raw CSVs as the `overhead-budget` artifact, and **fails on a
 breach**. It is **watched (non-blocking)** to start — same-machine timing on shared CI is noisy.
 
+**Parked on demand (2026-08-11).** The job no longer runs on push or pull_request; it runs only on
+`workflow_dispatch` — from the Actions tab, or `gh workflow run ci.yml --ref <branch>`. It had been
+red on every run since plan 106 repaired it, always for the known cause below rather than for
+anything the PR under test did, and a check that is always red stops being read. Nothing else about
+the job changed: the caps, the harness, the artifact and the failure semantics are identical, and
+re-enabling is deleting one `if:` line. Run it on demand before merging a change that could
+plausibly move plugin cost. Un-park it in the same PR that fixes the probe cost.
+
 **Promote-to-blocking criterion:** once ~2 weeks of runs show the plugin-on/off deltas are
 consistently separated from run-to-run variance on the reference runner (no false breaches, and real
 regressions caught by a deliberately-tightened-budget check), drop `continue-on-error` and record the
