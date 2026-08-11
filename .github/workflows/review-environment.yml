@@ -17,7 +17,7 @@ jobs:
       (github.event.action == 'labeled' && github.event.label.name == 'deploy-review') ||
       ((github.event.action == 'synchronize' || github.event.action == 'reopened') &&
        contains(github.event.pull_request.labels.*.name, 'deploy-review'))
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     environment: ${{ (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'deploy-review')) && 'review-cleanup' || 'review' }}
     concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
     permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write, statuses: write}
@@ -139,6 +139,8 @@ jobs:
           persist-credentials: false
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@v2
+        with:
+          cache-key: buildhound/buildhound-server
       - name: Build review server without registry credentials
         if: env.REVIEW_ACTION == 'deploy'
         uses: useblacksmith/build-push-action@v2
@@ -487,7 +489,7 @@ jobs:
            needs.review.outputs.publish_outcome == 'failure' ||
            (needs.review.result == 'failure' &&
             needs.review.outputs.deploy_outcome == 'success')) }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     environment: review-cleanup
     concurrency: {group: review-environment-global, queue: max, cancel-in-progress: false}
     permissions: {contents: read, pull-requests: read, issues: read, actions: read, packages: write}
@@ -513,7 +515,7 @@ jobs:
   record_review_status:
     needs: review
     if: ${{ always() && needs.review.result == 'success' && needs.review.outputs.deploy_outcome == 'success' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions: {actions: read, contents: read, statuses: write}
     steps:
       - uses: actions/download-artifact@v8
@@ -559,7 +561,7 @@ jobs:
        (github.event.action == 'synchronize' || github.event.action == 'reopened') &&
        contains(github.event.pull_request.labels.*.name, 'deploy-review')) &&
       (needs.review.result != 'success' || needs.record_review_status.result != 'success')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions: {contents: read, statuses: write}
     steps:
       - name: Record failed exact-SHA review deployment

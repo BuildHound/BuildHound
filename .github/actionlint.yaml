@@ -2,9 +2,19 @@
 # actionlint needs them declared explicitly to avoid `runner-label` errors.
 self-hosted-runner:
   labels:
+    - blacksmith-2vcpu-ubuntu-2404
     - blacksmith-4vcpu-ubuntu-2404
+    - blacksmith-8vcpu-ubuntu-2404
+    - blacksmith-16vcpu-ubuntu-2404
+    - blacksmith-32vcpu-ubuntu-2404
     - blacksmith-4vcpu-windows-2025
+    - blacksmith-8vcpu-windows-2025
+    - blacksmith-16vcpu-windows-2025
+    - blacksmith-32vcpu-windows-2025
     - blacksmith-6vcpu-macos-15
+    - blacksmith-12vcpu-macos-15
+    - blacksmith-6vcpu-macos-26
+    - blacksmith-12vcpu-macos-26
 
 # actionlint 1.7.12 predates GitHub's `concurrency.queue` schema (added in 2026).
 # Keep every other workflow check enabled; remove this narrow exception after the
