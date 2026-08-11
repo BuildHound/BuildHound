@@ -419,7 +419,7 @@ its dashboard.js, both still carry their original pre-V2 styling: literal hex co
 font stacks, and none of the V2 token layer. This is a deliberate deferral under item 8
 above, not an oversight.
 
-Plan 104 added a machine-specs and resource-usage section to the report, and plan 105 added
+Plan 104 added a machine-specs and resource-usage section to the report, and plan 107 added
 the same section to the dashboard. Each was written in its own surface's existing pre-V2
 idiom rather than half-converting one section of an otherwise pre-V2 page, because a partial
 conversion leaves a page that follows neither system. Neither plan introduced an external

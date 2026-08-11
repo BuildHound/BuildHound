@@ -70,7 +70,7 @@ class ApplicationTest {
     """.trimIndent()
 
     // A plan-104 build: static machine hardware (`environment.machine`), the execution-window
-    // `resourceUsage` block, per-process CPU time, and the CI runner attributes plan 105 renders as
+    // `resourceUsage` block, per-process CPU time, and the CI runner attributes plan 107 renders as
     // chips. Numbers are copied from `golden/build-payload-v1-machine.json` so this test and both
     // render harnesses divide the same numerator by the same denominator.
     private fun machinePayloadJson(buildId: String = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff") = """

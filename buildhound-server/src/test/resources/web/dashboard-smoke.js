@@ -48,7 +48,7 @@ const findTag = (node, tag) => findAll(node, n => n.tag === tag);
 const hasText = (node, sub) => findAll(node, n => (n.textContent || "").indexOf(sub) >= 0).length > 0;
 const hasExact = (node, text) => findAll(node, n => (n.textContent || "") === text).length > 0;
 const hasClass = (node, cls) => findAll(node, n => (n.className || "").indexOf(cls) >= 0).length > 0;
-// Chip parser (plan 105), ported from report-smoke.js: the stub's textContent getter returns a
+// Chip parser (plan 107), ported from report-smoke.js: the stub's textContent getter returns a
 // node's OWN text, and a chip is <b>label </b><span>value</span> — two separate children — so a
 // hasText for "daemon cpu 12% of 8 cores" can never match. Labels are compared exactly (hence the
 // trim of chipItem's trailing space), or "daemon cpu time" answers a lookup for "daemon cpu" and
@@ -170,7 +170,7 @@ const responses = {
         tests: [],
         testTelemetry: { xmlDisabledTasks: [":app:testDebugUnitTest"] },
     },
-    // Machine specs + resource usage (plan 105), each case its own fixture — several of the builds
+    // Machine specs + resource usage (plan 107), each case its own fixture — several of the builds
     // above are shared references reused across paths and mutated mid-harness. The numbers come from
     // golden/build-payload-v1-machine.json so this harness and report-smoke.js assert the same
     // arithmetic; workersMax, runnerVersion and the hostile runnerClass mirror ReportScriptTest's
@@ -651,7 +651,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "The Kotlin daemon runs G1 with high GC time — a ParallelGC trial")) throw new Error("ParallelGC-trial candidate missing for the high-GC Kotlin daemon");
     if (!hasText(byId["app"], "The Kotlin daemon uses 3072 MB RSS on JDK 24 without compact object headers")) throw new Error("compact-object-headers candidate missing for the high-GC Kotlin daemon");
 
-    // Machine specs + resource usage (plan 105): the dashboard mirror of the report's plan-104
+    // Machine specs + resource usage (plan 107): the dashboard mirror of the report's plan-104
     // section. Assertion strings are byte-identical to report-smoke.js — that string equality is the
     // only drift guard between the two renderers, so a divergence must fail one of the harnesses.
     // Every message names its case: the harness is one @Test whose Kotlin failure is only
@@ -786,7 +786,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (findAll(byId["app"], n => (n.className || "").indexOf("failure-summary") >= 0).length !== 0) throw new Error("failure section must be absent when the payload has no failure object");
     if (hasText(byId["app"], "Warnings")) throw new Error("warnings section must be absent without an internal-adapters block");
     if (hasText(byId["app"], "Test telemetry unavailable")) throw new Error("degraded-test note must be absent without a testTelemetry block");
-    // b2 carries no environment, machine or resourceUsage block — the plan-105 Machine section must
+    // b2 carries no environment, machine or resourceUsage block — the plan-107 Machine section must
     // be absent entirely. This is the ONLY shape that hides it: a pre-104 payload carrying an
     // environment block renders the hardware row, which the `pre104` case below pins.
     if (hasText(byId["app"], "Machine")) throw new Error("machine section must be absent without specs or resource usage");

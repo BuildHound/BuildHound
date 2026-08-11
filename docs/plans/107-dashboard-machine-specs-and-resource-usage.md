@@ -1,4 +1,4 @@
-# 105 — Machine specs and build resource usage on the dashboard build detail
+# 107 — Machine specs and build resource usage on the dashboard build detail
 
 ## 1. Source
 
@@ -145,7 +145,7 @@ XSS (everything goes through `el()`/`textContent`, the plan-012 no-innerHTML rul
    change.
 3. `./gradlew build` green on CI (node present, so the new harness assertions actually execute);
    CSP and no-inline-script tests unchanged.
-4. Spec §6 gains an "As built (plan 105)" sentence; `docs/brand/DESIGN-V2.md` gains the runtime
+4. Spec §6 gains an "As built (plan 107)" sentence; `docs/brand/DESIGN-V2.md` gains the runtime
    adoption-status note covering the report and the dashboard.
 5. §3.1 reviews (`frontend-reviewer` for the web assets, `kotlin-gradle-reviewer` for the test) and
    the mandatory §3.2 security & privacy review complete; findings fixed or accepted in the PR.
