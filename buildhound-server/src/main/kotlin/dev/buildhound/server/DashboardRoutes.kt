@@ -29,7 +29,7 @@ internal object DashboardAssets {
     val timelineJs: ByteArray = resource("dev/buildhound/report/timeline.js")
 
     /**
-     * uPlot, vendored verbatim (plan 105) and served under the same `script-src 'self'`
+     * uPlot, vendored verbatim (plan 108) and served under the same `script-src 'self'`
      * as the other two scripts — the CSP admits no CDN, so a charting library can only
      * arrive this way. Its stylesheet is deliberately *not* a second route: `style-src`
      * carries hashes and no `'self'`, so the CSS is retokenized into index.html's inline

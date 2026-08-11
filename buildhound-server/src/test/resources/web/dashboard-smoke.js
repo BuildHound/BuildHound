@@ -5,7 +5,7 @@
 const fs = require("fs");
 const vm = require("vm");
 
-// The stub models parent links and `isConnected` (plan 105). Without them, code that reaps
+// The stub models parent links and `isConnected` (plan 108). Without them, code that reaps
 // detached nodes — the chart lifecycle — cannot be tested at all: `undefined !== false` reads
 // as "still attached", so a no-op reaper passes every assertion. Attachment is defined as
 // reachability from the #app root, which is what the real property means for this page.
@@ -271,7 +271,7 @@ const responses = {
     },
     // 2026-07-02 and 2026-07-03 are deliberately absent: the server only emits days that had
     // builds, so the chart has to place 07-01 and 07-04 three days apart. The index-based axis
-    // this fixture used to be enough for drew them adjacent (plan 105).
+    // this fixture used to be enough for drew them adjacent (plan 108).
     "/v1/trends?days=30": [
         { day: "2026-06-30", builds: 3, failures: 1, avgDurationMs: 60000, avgHitRate: 0.5 },
         { day: "2026-07-01", builds: 2, failures: 0, avgDurationMs: null, avgHitRate: null },
@@ -301,7 +301,7 @@ const responses = {
                 // Deliberately a different day set from the "true" cohort above: cohorts are
                 // sampled independently, and each used to be stretched across the full chart
                 // width by its own point count, so unequal cohorts were overlaid on different
-                // time scales and read as directly comparable (plan 105).
+                // time scales and read as directly comparable (plan 108).
                 value: "false", sampleCount: 4, medianDurationMs: 70000,
                 points: [
                     { day: "2026-06-30", builds: 2, failures: 0, avgDurationMs: 70000, maxDurationMs: 72000, avgHitRate: 0.5, interrupted: 0 },
@@ -569,7 +569,7 @@ const context = {
     document: documentStub,
     // Keyed by event type, and every handler kept. The single-slot stub this replaces silently
     // dropped any listener registered before "hashchange" — including the chart resize handler,
-    // which meant deleting that handler outright still passed the suite (plan 105).
+    // which meant deleting that handler outright still passed the suite (plan 108).
     window: {
         addEventListener: (type, fn) => {
             (context._windowListeners[type] = context._windowListeners[type] || []).push(fn);
@@ -903,7 +903,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "true (reference)")) throw new Error("cohort delta table reference row missing");
     if (!hasClass(byId["app"], "delta-bad")) throw new Error("cohort delta table missing the semantic-colouring chip");
 
-    // Charts (plan 105). uPlot renders to canvas, which this stub cannot host and assistive
+    // Charts (plan 108). uPlot renders to canvas, which this stub cannot host and assistive
     // technology cannot read, so the accessible layer is what is asserted here: every chart is
     // a figure carrying a caption, an sr-only summary and a value table. That layer is also the
     // rendering when the global is missing or throws, so pass 1 and 2 below exercise a path real
@@ -1121,7 +1121,7 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     if (!hasText(byId["app"], "Benchmark series")) throw new Error("benchmark header missing");
     if (!hasText(byId["app"], "Scenario: clean")) throw new Error("benchmark scenario section missing");
     if (!hasText(byId["app"], "p50")) throw new Error("benchmark percentile chips missing");
-    // The benchmark chart moved onto the shared chart machinery (plan 105), so it is asserted
+    // The benchmark chart moved onto the shared chart machinery (plan 108), so it is asserted
     // the same way the trends charts are: the accessible layer is always present, with or
     // without the library. Its x key is the run instant, not a UTC day — these are individual
     // runs, and the old {day, durationMs} shim only ever existed to feed a tooltip.

@@ -1032,7 +1032,7 @@
     };
 
     // ---------------------------------------------------------------------------------
-    // Charts (plan 105) — built on the vendored uPlot at /uplot.js.
+    // Charts (plan 108) — built on the vendored uPlot at /uplot.js.
     //
     // The hand-rolled predecessors indexed the x-axis by array position, which silently
     // misrepresented calendar time (a day with no builds is simply absent from the
@@ -2466,7 +2466,7 @@
     }
 
     function route() {
-        // Reap charts the previous navigation detached (plan 105). Mounting a chart also prunes,
+        // Reap charts the previous navigation detached (plan 108). Mounting a chart also prunes,
         // but a view that renders none would otherwise strand the outgoing view's charts —
         // holding uPlot's document-level listeners until another chart happened to mount,
         // possibly never. Pruning here rather than destroying the outgoing charts up front keeps

@@ -8,7 +8,7 @@ import kotlin.test.assertTrue
 
 /**
  * Pins the properties that made a third-party charting library admissible here at all
- * (plan 105). The dashboard's CSP is `default-src 'none'` with `style-src` carrying
+ * (plan 108). The dashboard's CSP is `default-src 'none'` with `style-src` carrying
  * sha256 hashes and no `'unsafe-inline'`, `script-src 'self'`, and no `'unsafe-eval'`,
  * so a library that sets an inline `style` attribute, injects a `<style>` element, or
  * reaches for dynamic code, network or workers is silently broken in a browser — and
