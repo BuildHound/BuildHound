@@ -4,21 +4,21 @@
 
 ## 1. Source
 
-- [Roadmap phase 2b](../build-telemetry-roadmap.md), CI/environment-breadth bullet: the
+- [Roadmap phase 2b](../../build-telemetry-roadmap.md), CI/environment-breadth bullet: the
   10-provider CCUD detection matrix, IDE + AI-agent detection, redacted git remote URL +
   source/PR links + GHA run-attempt, `uploadInBackground` knob, `BUILDHOUND_*` /
   `buildhound.*` config overrides.
-- [Spec §3.3](../build-telemetry-spec.md) (CI SPI, generic fallback, first-match order),
-  [§3.2](../build-telemetry-spec.md) (env + VCS collectors), [§3.4](../build-telemetry-spec.md)
-  (DSL, `upload {}` sketch), [§3.9](../build-telemetry-spec.md) (upload semantics — **rewritten
+- [Spec §3.3](../../build-telemetry-spec.md) (CI SPI, generic fallback, first-match order),
+  [§3.2](../../build-telemetry-spec.md) (env + VCS collectors), [§3.4](../../build-telemetry-spec.md)
+  (DSL, `upload {}` sketch), [§3.9](../../build-telemetry-spec.md) (upload semantics — **rewritten
   in [plan 020](020-doc-repairs-spec-drift.md), prerequisite reading**: `uploadInBackground` is
   an opt-out from *blocking* local builds on the upload attempt, **not** a return of the
-  never-built background thread), [§4](../build-telemetry-spec.md) (schema).
-- Research: [plugin-ecosystem-gap-analysis.md](../research/plugin-ecosystem-gap-analysis.md)
+  never-built background thread), [§4](../../build-telemetry-spec.md) (schema).
+- Research: [plugin-ecosystem-gap-analysis.md](../../research/plugin-ecosystem-gap-analysis.md)
   §1 items 2/5/10/11/12, §4.1–§4.5 (source-verified CCUD 2.7.0 matrix, IDE/agent env vars,
-  redaction rules, `Overrides` pattern); [daemonitor.md](../research/repos/daemonitor.md)
+  redaction rules, `Overrides` pattern); [daemonitor.md](../../research/repos/daemonitor.md)
   (agent attribution from env-var names with **ambient subtraction**; IDE-beats-terminal);
-  [comparison-to-spec.md §2.4](../research/comparison-to-spec.md).
+  [comparison-to-spec.md §2.4](../../research/comparison-to-spec.md).
 - Builds on already-landed [plan 014](014-bare-ci-env-detection.md) (bare-`CI` → `mode=ci`,
   generic kill switch) and [plan 015](015-vcs-exec-timeout.md) (10 s bounded git). **Neither is
   re-planned here.**

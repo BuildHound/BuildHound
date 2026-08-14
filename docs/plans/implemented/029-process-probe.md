@@ -4,16 +4,16 @@
 
 ## 1. Source
 
-- Spec [§3.6 Process probe](../build-telemetry-spec.md) and the `processes` block of the
-  [§4 payload schema](../build-telemetry-spec.md); [§3.8 HTML artifact](../build-telemetry-spec.md)
-  ("process snapshot"); [§6 dashboard](../build-telemetry-spec.md) build-detail page.
-- Roadmap [Phase 3](../build-telemetry-roadmap.md) process-probe bullet and its exit
+- Spec [§3.6 Process probe](../../build-telemetry-spec.md) and the `processes` block of the
+  [§4 payload schema](../../build-telemetry-spec.md); [§3.8 HTML artifact](../../build-telemetry-spec.md)
+  ("process snapshot"); [§6 dashboard](../../build-telemetry-spec.md) build-detail page.
+- Roadmap [Phase 3](../../build-telemetry-roadmap.md) process-probe bullet and its exit
   criterion "process panel shows configured-vs-used memory".
-- Research: [InfoKotlinProcess](../research/repos/InfoKotlinProcess.md) (ValueSource-in-
+- Research: [InfoKotlinProcess](../../research/repos/InfoKotlinProcess.md) (ValueSource-in-
   BuildService recipe, store/reuse test template),
-  [build-process-watcher](../research/repos/build-process-watcher.md) (jstat header
+  [build-process-watcher](../../research/repos/build-process-watcher.md) (jstat header
   mapping, `ps -o rss=`, `jinfo -flags`, GC/heap math traps),
-  [comparison-to-spec §2.2 / §4.1](../research/comparison-to-spec.md) (measurement math).
+  [comparison-to-spec §2.2 / §4.1](../../research/comparison-to-spec.md) (measurement math).
 - Precedent: bounded subprocess exec ([plan 015](015-vcs-exec-timeout.md), architecture §2
   rule 11, [`GitExec`](../../buildhound-gradle-plugin/src/main/kotlin/dev/buildhound/gradle/GitExec.kt)).
 

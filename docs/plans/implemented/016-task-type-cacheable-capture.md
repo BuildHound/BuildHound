@@ -4,17 +4,17 @@
 
 ## 1. Source
 
-- [Roadmap phase 2a](../build-telemetry-roadmap.md), first bullet: type + cacheable via
+- [Roadmap phase 2a](../../build-telemetry-roadmap.md), first bullet: type + cacheable via
   Talaiot's configuration-time `taskGraph.allTasks` dictionary with `BuildFeatures`-gated
   isolated-projects degradation; cacheable-only hit-rate denominator; `configurationMs`
   from the existing configuration-phase observer.
-- [Spec §3.2](../build-telemetry-spec.md): "Task type/class captured at configuration
-  time into the service parameter map (provider-lazy, CC-safe)". [Spec §4](../build-telemetry-spec.md):
+- [Spec §3.2](../../build-telemetry-spec.md): "Task type/class captured at configuration
+  time into the service parameter map (provider-lazy, CC-safe)". [Spec §4](../../build-telemetry-spec.md):
   `tasks[].type`/`cacheable`/`nonCacheableReason`, `derived.configurationMs`.
-- Research: [Talaiot](../research/repos/Talaiot.md) (dictionary pattern, `_Decorated`
+- Research: [Talaiot](../../research/repos/Talaiot.md) (dictionary pattern, `_Decorated`
   strip, empty-map IP degradation; also its warning to use typed events, which we already
-  do), [comparison-to-spec §2.1/2.1a](../research/comparison-to-spec.md) (adopt verdict;
-  observer yields configuration duration), [gap analysis](../research/plugin-ecosystem-gap-analysis.md)
+  do), [comparison-to-spec §2.1/2.1a](../../research/comparison-to-spec.md) (adopt verdict;
+  observer yields configuration duration), [gap analysis](../../research/plugin-ecosystem-gap-analysis.md)
   (§3 by-type rollups need the field; §"risks": define the IP degradation contract).
 
 ## 2. Scope

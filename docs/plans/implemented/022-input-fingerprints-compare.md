@@ -4,15 +4,15 @@
 
 ## 1. Source
 
-- Roadmap [phase 2b, first bullet](../build-telemetry-roadmap.md): fingerprints tier (a) +
+- Roadmap [phase 2b, first bullet](../../build-telemetry-roadmap.md): fingerprints tier (a) +
   compare tier (c)-lite — "the feature the research rates the product's biggest near-term
   differentiator".
-- Research: [cache-miss-input-fingerprints.md](../research/cache-miss-input-fingerprints.md)
+- Research: [cache-miss-input-fingerprints.md](../../research/cache-miss-input-fingerprints.md)
   §5 (tiered design), §1 (key format), §3 (diff methodology);
-  [plugin-ecosystem-gap-analysis.md](../research/plugin-ecosystem-gap-analysis.md) §1 row 1.
-- Spec: [§3.4](../build-telemetry-spec.md) (DSL), [§3.7](../build-telemetry-spec.md)
-  (pseudonymization/salt), [§4](../build-telemetry-spec.md) (payload), [§5](../build-telemetry-spec.md)
-  (query API), [§6](../build-telemetry-spec.md) (Comparisons page).
+  [plugin-ecosystem-gap-analysis.md](../../research/plugin-ecosystem-gap-analysis.md) §1 row 1.
+- Spec: [§3.4](../../build-telemetry-spec.md) (DSL), [§3.7](../../build-telemetry-spec.md)
+  (pseudonymization/salt), [§4](../../build-telemetry-spec.md) (payload), [§5](../../build-telemetry-spec.md)
+  (query API), [§6](../../build-telemetry-spec.md) (Comparisons page).
 
 ## 2. Scope
 

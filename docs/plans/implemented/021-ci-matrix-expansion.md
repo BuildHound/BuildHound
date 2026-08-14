@@ -4,20 +4,20 @@
 
 ## 1. Source
 
-- [Roadmap phase 2a](../build-telemetry-roadmap.md): "CI: add the spec-promised non-blocking
+- [Roadmap phase 2a](../../build-telemetry-roadmap.md): "CI: add the spec-promised non-blocking
   isolated-projects job; add macOS (and evaluate Windows) legs — plan 007's only field bug was
   macOS-only; decide the CC-off matrix axis", plus the cross-phase guardrail "isolated-projects
   job blocking-optional until phase 2a lands it, then watched".
-- [Spec §3.1](../build-telemetry-spec.md): compatibility contract — "config cache on/off both
+- [Spec §3.1](../../build-telemetry-spec.md): compatibility contract — "config cache on/off both
   green, `isolated-projects` best-effort (CI job tracks it, non-blocking)".
-- [Architecture §2 rule 6](../architecture.md): the promised TestKit matrix
+- [Architecture §2 rule 6](../../architecture.md): the promised TestKit matrix
   {Gradle 8.14, 9.latest} × {CC on/off} and the isolated-projects CI job.
-- Research: [comparison-to-spec.md](../research/comparison-to-spec.md) findings 4 ("Isolated
+- Research: [comparison-to-spec.md](../../research/comparison-to-spec.md) findings 4 ("Isolated
   Projects is tested by the ecosystem, only tracked by BuildHound … define the degradation
   contract") and 5 ("No Windows or macOS leg in CI");
-  [Talaiot.md](../research/repos/Talaiot.md) (IP scenario via
+  [Talaiot.md](../../research/repos/Talaiot.md) (IP scenario via
   `-Dorg.gradle.unsafe.isolated-projects=true`, ubuntu/macOS/Windows sample canary);
-  [InfoKotlinProcess.md](../research/repos/InfoKotlinProcess.md) (two-build store/reuse test
+  [InfoKotlinProcess.md](../../research/repos/InfoKotlinProcess.md) (two-build store/reuse test
   template incl. the IP variant; {ubuntu, macos} test matrix).
 
 ## 2. Scope

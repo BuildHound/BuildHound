@@ -10,10 +10,10 @@ a real Boot build tracked as a follow-up, not store-blocking — see Exit criter
   `docs/research/processed/Gradle Build Optimization for Large Spring Boot Apps.md` (Boot on Gradle 9 +
   CC/Java 17–25); corroborated by `State of the Configuration Cache - On the Road to Gradle 9.md`.
 - Spec §3.2 (toolchain snapshot) and §4 (`artifacts`). Builds directly on plans
-  [046](implemented/046-toolchain-agp-kgp-ksp-collection.md) (reflection-at-`whenReady` detection → finalizer
-  param), [031](implemented/031-artifact-size-capture.md) (`artifacts` block + Flow-time `File.length`
-  read + server cap), [016](implemented/016-task-type-cacheable-capture.md) (the non-isolated
-  `whenReady` task dictionary, IP-gated), and the plan-[032](implemented/032-bottlenecks-landing-page.md)
+  [046](046-toolchain-agp-kgp-ksp-collection.md) (reflection-at-`whenReady` detection → finalizer
+  param), [031](031-artifact-size-capture.md) (`artifacts` block + Flow-time `File.length`
+  read + server cap), [016](016-task-type-cacheable-capture.md) (the non-isolated
+  `whenReady` task dictionary, IP-gated), and the plan-[032](032-bottlenecks-landing-page.md)
   toolchain-adoption view.
 
 ## Scope

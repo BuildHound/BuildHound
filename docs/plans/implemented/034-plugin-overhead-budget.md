@@ -4,19 +4,19 @@
 
 ## 1. Source
 
-- Roadmap [phase 3, "Plugin-overhead budget + self-benchmark harness" bullet](../build-telemetry-roadmap.md)
-  ("build-process-watcher precedent") and the [cross-phase guardrail](../build-telemetry-roadmap.md)
+- Roadmap [phase 3, "Plugin-overhead budget + self-benchmark harness" bullet](../../build-telemetry-roadmap.md)
+  ("build-process-watcher precedent") and the [cross-phase guardrail](../../build-telemetry-roadmap.md)
   "plugin overhead measured against the phase-3 budget from then on" — this plan defines that budget
   and the job that enforces it.
-- Research: [build-process-watcher.md](../research/repos/build-process-watcher.md) (its
+- Research: [build-process-watcher.md](../../research/repos/build-process-watcher.md) (its
   `scripts/benchmark-jstat-metrics.sh` measures per-sample sampler cost — "ready-made evidence for
   an overhead budget"; the "benchmark its own cost" precedent);
-  [comparison-to-spec.md §4 item 8](../research/comparison-to-spec.md) ("No overhead budget for the
+  [comparison-to-spec.md §4 item 8](../../research/comparison-to-spec.md) ("No overhead budget for the
   plugin itself … adopt a self-benchmark harness (the §7 gradle-profiler scenarios can compare
   with-plugin vs without-plugin) and a stated budget, since 'never fail the build' is necessary but
   not sufficient for adoption — 'never slow the build noticeably' is the real bar").
-- Spec: [§7 Benchmark mode](../build-telemetry-spec.md) (the gradle-profiler pipeline this harness
-  reuses), [§3.2 Finalizer](../build-telemetry-spec.md) and [§3.9 upload semantics](../build-telemetry-spec.md)
+- Spec: [§7 Benchmark mode](../../build-telemetry-spec.md) (the gradle-profiler pipeline this harness
+  reuses), [§3.2 Finalizer](../../build-telemetry-spec.md) and [§3.9 upload semantics](../../build-telemetry-spec.md)
   (the code paths whose cost is budgeted).
 - Precedent: [plan 030](030-benchmark-mode.md) ships `buildhound-ci-assets/profiler-scenarios/*.scenarios`
   and the scheduled gradle-profiler pipeline; this plan reuses that infrastructure when it exists and
@@ -116,7 +116,7 @@ JVM-free-consumable), with the verdict math as the one pure-Kotlin, unit-tested 
   off, budget)` returning per-axis `{deltaMs, deltaPct, separated, verdict}`. Pure and plain-unit-testable
   like `DerivedMetricsCalculator` — the single place plugin/CI/docs agree on what "breach" means. It
   parses the two gradle-profiler `benchmark.csv` files with name-keyed, unknown-column-tolerant column
-  lookup (the format-drift discipline from [comparison-to-spec §4 item 10](../research/comparison-to-spec.md)).
+  lookup (the format-drift discipline from [comparison-to-spec §4 item 10](../../research/comparison-to-spec.md)).
 - **`buildhound-ci-assets/overhead/bin/buildhound-overhead`** — a thin launcher calling
   `OverheadCalculator` on the two CSVs, exiting non-zero on any breach and printing a Markdown table.
   Glue only; the math is in commons.
@@ -191,7 +191,7 @@ budget breaches."
    bullet as landed.
 10. **Spec touch (if needed).** If §7 gains the overhead harness as a named companion to benchmark
     mode, amend §7 in the same PR (per the "any plan divergence patches the spec section" discipline,
-    [comparison-to-spec §4 item 12](../research/comparison-to-spec.md)).
+    [comparison-to-spec §4 item 12](../../research/comparison-to-spec.md)).
 
 ## 5. Test strategy
 
@@ -222,7 +222,7 @@ budget breaches."
 - **Fixture drift / cheating.** If the toggle silently applies nothing (or the fixture stops
   triggering tasks), overhead reads as ≈0 and the guardrail rots. The harness self-test (step 5 above,
   presence/absence of `build/buildhound/` output) is the anti-rot check — the same class of "did the
-  skippable suite actually run" concern from [comparison-to-spec §4 item 11](../research/comparison-to-spec.md).
+  skippable suite actually run" concern from [comparison-to-spec §4 item 11](../../research/comparison-to-spec.md).
 - **CC / isolated projects.** The harness runs the *shipped* plugin unchanged; it adds no CC input and
   no task-graph mutation. The `cc-hit` scenario deliberately exercises CC store/reuse (already green,
   architecture §2 rule 2); IP is out of scope for the overhead runner (plan 021 owns IP CI).

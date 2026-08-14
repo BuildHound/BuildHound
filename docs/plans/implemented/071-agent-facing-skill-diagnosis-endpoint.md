@@ -12,7 +12,7 @@ to upload customer build data to `scans.gradle.com`**. Spec §5 (tenant-scoped r
 (privacy/no-egress positioning); cross-cutting rec §7.5 (a positioning play on live controversy).
 This is the **agent surface** that plan [054](054-recommendations-rules-engine.md) (F4 rules engine)
 explicitly defers to a separate plan, and it extends the MCP surface shipped in
-plan [042](implemented/042-oss-launch-hardening.md).
+plan [042](042-oss-launch-hardening.md).
 
 ## Scope
 

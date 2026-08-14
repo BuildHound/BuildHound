@@ -15,13 +15,13 @@ Research finding **F8** (`docs/research/ingest-corpus-analysis.md`), **Layer 1 o
 server-side owning-plugin rollup derivable from already-collected task-type FQCN prefixes with
 *zero new collection*. Source article: Android Studio **Build Analyzer** ("plugins with tasks
 impacting build duration" as the primary triage dimension). Builds on plan
-[016](implemented/016-task-type-cacheable-capture.md) (`TaskExecution.type` capture + the
-`whenReady` dictionary), plan [026](implemented/026-server-rollups-project-cost.md)
+[016](016-task-type-cacheable-capture.md) (`TaskExecution.type` capture + the
+`whenReady` dictionary), plan [026](026-server-rollups-project-cost.md)
 (`RollupCalculator` + the two-store byte-for-byte parity discipline), plan
-[032](implemented/032-bottlenecks-landing-page.md) (`BottleneckCalculator`, the Bottlenecks
-landing page, spec §6), and plan [042](implemented/042-oss-launch-hardening.md)
+[032](032-bottlenecks-landing-page.md) (`BottleneckCalculator`, the Bottlenecks
+landing page, spec §6), and plan [042](042-oss-launch-hardening.md)
 (`OpenApiContractTest` route/spec drift guard). Layer 2 reuses the plan
-[039](implemented/039-addon-foundation.md) "plugin stays dumb, server rules carry the knowledge"
+[039](039-addon-foundation.md) "plugin stays dumb, server rules carry the knowledge"
 pattern — deferred (see Scope).
 
 ## Scope

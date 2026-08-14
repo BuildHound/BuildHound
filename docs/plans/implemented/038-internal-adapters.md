@@ -42,22 +42,22 @@
 
 ## 1. Source
 
-- [Roadmap phase 4, item 2](../build-telemetry-roadmap.md): internal-adapters module — cache
+- [Roadmap phase 4, item 2](../../build-telemetry-roadmap.md): internal-adapters module — cache
   origin local/remote + per-task cache keys + tier-(b) input fingerprints via
   `SnapshotTaskInputsBuildOperationType`, `ExecuteWorkBuildOperationType` (execution reasons,
   caching-disabled reason, origin cache key ≥8.7), and `BuildCache{Local,Remote}{Load,Store}` ops —
   feature-flagged per Gradle version, degrading to "unknown"; upgrades the comparison page to
   per-property cause ranking and unlocks `avoidedMs`/`criticalPathMs`.
-- Spec: [§3.1](../build-telemetry-spec.md) (the sanctioned "isolated `internal-adapters` module,
+- Spec: [§3.1](../../build-telemetry-spec.md) (the sanctioned "isolated `internal-adapters` module,
   feature-flagged per Gradle version, degrading to unknown origin gracefully" exception to the
-  no-internal-APIs rule), [§4](../build-telemetry-spec.md) (payload: `derived.avoidedMs`/
-  `criticalPathMs`), [§6](../build-telemetry-spec.md) (Comparisons page, "input-fingerprint diff
-  arrives v1.x with cache-origin work"), [§9](../build-telemetry-spec.md) locked decision #1.
-- Research: [cache-miss-input-fingerprints.md](../research/cache-miss-input-fingerprints.md) §2.3
+  no-internal-APIs rule), [§4](../../build-telemetry-spec.md) (payload: `derived.avoidedMs`/
+  `criticalPathMs`), [§6](../../build-telemetry-spec.md) (Comparisons page, "input-fingerprint diff
+  arrives v1.x with cache-origin work"), [§9](../../build-telemetry-spec.md) locked decision #1.
+- Research: [cache-miss-input-fingerprints.md](../../research/cache-miss-input-fingerprints.md) §2.3
   (verified internal type names + `@since` versions), §2.4 (gradle/gradle#9456 public-API refusal),
-  §5 tier (b) + tier (c)-full; [repos/ArtifactTransformReport.md](../research/repos/ArtifactTransformReport.md)
+  §5 tier (b) + tier (c)-full; [repos/ArtifactTransformReport.md](../../research/repos/ArtifactTransformReport.md)
   (transform executions are internal-adapters-only, and the avoidance-outcome/negative-savings
-  taxonomy this plan mirrors); [plugin-ecosystem-gap-analysis.md](../research/plugin-ecosystem-gap-analysis.md)
+  taxonomy this plan mirrors); [plugin-ecosystem-gap-analysis.md](../../research/plugin-ecosystem-gap-analysis.md)
   §2.1 (Tuist's identical internal-op usage is the independent confirmation there is no public route).
 
 ## 2. Scope

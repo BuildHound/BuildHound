@@ -4,17 +4,17 @@
 
 ## 1. Source
 
-- Roadmap [phase 2b, "eBay-style server rollups"](../build-telemetry-roadmap.md): per-module
+- Roadmap [phase 2b, "eBay-style server rollups"](../../build-telemetry-roadmap.md): per-module
   Project Cost family (`buildCostScalar`, `buildImpactedUsers` over hashed ids), task duration
   by name and by type (unblocked by plan 016), top-25 rankings, negative-avoidance-savings.
-- Research: [plugin-ecosystem-gap-analysis.md §3](../research/plugin-ecosystem-gap-analysis.md)
+- Research: [plugin-ecosystem-gap-analysis.md §3](../../research/plugin-ecosystem-gap-analysis.md)
   (the four eBay summarizers, the `buildCostScalar` int-truncation quirk, by-type blocked on
-  `TaskExecution.type`) and [repos/ArtifactTransformReport.md](../research/repos/ArtifactTransformReport.md)
+  `TaskExecution.type`) and [repos/ArtifactTransformReport.md](../../research/repos/ArtifactTransformReport.md)
   §"Techniques worth borrowing" 1/3/5 (library-computes/CLI-renders, negative avoidance,
   distribution measures) — the third independent surfacing of negative avoidance.
-- Spec: [§4](../build-telemetry-spec.md) (`derived` block, task shape), [§5](../build-telemetry-spec.md)
-  (query API, `tasks` hypertable + continuous aggregates), [§6](../build-telemetry-spec.md)
-  (Tasks explorer: "by type/module: duration, miss-rate×duration ranking"), [§3.7](../build-telemetry-spec.md)
+- Spec: [§4](../../build-telemetry-spec.md) (`derived` block, task shape), [§5](../../build-telemetry-spec.md)
+  (query API, `tasks` hypertable + continuous aggregates), [§6](../../build-telemetry-spec.md)
+  (Tasks explorer: "by type/module: duration, miss-rate×duration ranking"), [§3.7](../../build-telemetry-spec.md)
   (pseudonymized `userId`).
 
 ## 2. Scope

@@ -4,19 +4,19 @@
 
 ## 1. Source
 
-- [build-telemetry-roadmap.md](../build-telemetry-roadmap.md) Phase 3: "Lost-build
+- [build-telemetry-roadmap.md](../../build-telemetry-roadmap.md) Phase 3: "Lost-build
   accounting: daemonitor-style INTERRUPTED detection (start-marker reconciliation or
   connector-side expected-build check) so OOM-killed builds surface"; exit criterion "a
   daemon-killed build appears as INTERRUPTED instead of vanishing".
-- [build-telemetry-spec.md](../build-telemetry-spec.md) §3.2 (Finalizer, never-fail), §3.9
+- [build-telemetry-spec.md](../../build-telemetry-spec.md) §3.2 (Finalizer, never-fail), §3.9
   (upload/spool/idempotency), §4 (payload `outcome`), §5 (`POST /v1/builds`, buildId
   idempotency), §6 (Builds list / detail).
-- [architecture.md](../architecture.md) §2 (plugin rules — CC safety, never-fail-or-hang,
+- [architecture.md](../../architecture.md) §2 (plugin rules — CC safety, never-fail-or-hang,
   rule 9 "file access in `apply()` is a CC fingerprint input"), §5 (server `BuildStore`
   boundary, route testability, instance-local jobs), §6 (privacy).
-- Research: [research/repos/daemonitor.md](../research/repos/daemonitor.md) (daemon-PID
+- Research: [research/repos/daemonitor.md](../../research/repos/daemonitor.md) (daemon-PID
   disappearance → `INTERRUPTED`; the signal the in-process Flow finalizer can never see),
-  [research/comparison-to-spec.md §4 item 3](../research/comparison-to-spec.md) ("Builds
+  [research/comparison-to-spec.md §4 item 3](../../research/comparison-to-spec.md) ("Builds
   that die never report" — the two candidate mitigations this plan evaluates).
 
 ## 2. Scope

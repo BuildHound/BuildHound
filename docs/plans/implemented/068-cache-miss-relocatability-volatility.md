@@ -8,14 +8,14 @@ no dashboard panel, as scoped Out.
 
 ## Source
 
-- **Research finding F18** (`new-insight`), [docs/research/ingest-corpus-analysis.md](../research/ingest-corpus-analysis.md)
+- **Research finding F18** (`new-insight`), [docs/research/ingest-corpus-analysis.md](../../research/ingest-corpus-analysis.md)
   §5 F18 + cross-cutting rec §7.1 ("analysis over data already in the payload"; feeds the F4 rules
   engine and the F21 `/diagnosis` + MCP surface). Synthesized in the adversarial ingest-corpus pass —
   no single upstream article; the load-bearing **Verification recasts** in the finding shape this plan.
-- Underlying mechanisms: [cache-miss-input-fingerprints.md](../research/cache-miss-input-fingerprints.md)
-  (salted input fingerprints, plan [022](implemented/022-input-fingerprints-compare.md)); the
-  internal-adapters `CacheOrigin` taxonomy (plan [038](implemented/038-internal-adapters.md)).
-- Spec: [§3.7](../build-telemetry-spec.md) (pseudonymization / per-project salt), [§5](../build-telemetry-spec.md) (query API).
+- Underlying mechanisms: [cache-miss-input-fingerprints.md](../../research/cache-miss-input-fingerprints.md)
+  (salted input fingerprints, plan [022](022-input-fingerprints-compare.md)); the
+  internal-adapters `CacheOrigin` taxonomy (plan [038](038-internal-adapters.md)).
+- Spec: [§3.7](../../build-telemetry-spec.md) (pseudonymization / per-project salt), [§5](../../build-telemetry-spec.md) (query API).
 
 ## Scope
 

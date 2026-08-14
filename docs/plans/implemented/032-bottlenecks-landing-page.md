@@ -4,13 +4,13 @@
 
 ## 1. Source
 
-- Roadmap [phase 3](../build-telemetry-roadmap.md): "Bottlenecks/'what regressed' landing page;
+- Roadmap [phase 3](../../build-telemetry-roadmap.md): "Bottlenecks/'what regressed' landing page;
   toolchain-version adoption view", with the phase exit criterion "bottlenecks page answers
   'what got worse this week'".
-- Spec [§6 Dashboard](../build-telemetry-spec.md): the **Overview/Bottlenecks** page ("what
+- Spec [§6 Dashboard](../../build-telemetry-spec.md): the **Overview/Bottlenecks** page ("what
   regressed in 7d: duration, hit rate, flaky count, budget breaches") and the dimension-slice
-  framing; [§5](../build-telemetry-spec.md) query API + per-project settings (budgets).
-- Research: [dashboard-ux-research.md §4.2.2](../research/dashboard-ux-research.md) (Overview/
+  framing; [§5](../../build-telemetry-spec.md) query API + per-project settings (budgets).
+- Research: [dashboard-ux-research.md §4.2.2](../../research/dashboard-ux-research.md) (Overview/
   Bottlenecks as the Tuist-style fleet-first landing view — KPI cards with semantically-colored
   "since last period" delta chips, headline trend, "View more" drill-downs), §4.2.4 (dimension
   slicing / "Configuration Insights" by Gradle version, JDK, module), §2/§4.1.4-5 (plain-language

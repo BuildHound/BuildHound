@@ -6,16 +6,16 @@ below for divergences from the original design.
 
 ## Source
 
-- Research finding **F10**, [`docs/research/ingest-corpus-analysis.md`](../research/ingest-corpus-analysis.md)
+- Research finding **F10**, [`docs/research/ingest-corpus-analysis.md`](../../research/ingest-corpus-analysis.md)
   §4 — "Build Analyzer warning taxonomy as server rules." Source article(s):
   Android Studio **Build Analyzer** (its fixed warning taxonomy + remediation copy) and the
   Gradle/Android **Profile-your-build** docs (`docs/research/processed/` corpus, whence the
   "dynamic debug values" signal — *not* Build Analyzer's own taxonomy).
-- Spec [§6](../build-telemetry-spec.md) — the **Bottlenecks** landing page and its ranked families.
-- Builds on plan [032](implemented/032-bottlenecks-landing-page.md) (Bottlenecks page +
+- Spec [§6](../../build-telemetry-spec.md) — the **Bottlenecks** landing page and its ranked families.
+- Builds on plan [032](032-bottlenecks-landing-page.md) (Bottlenecks page +
   `BottleneckCalculator`/`BottlenecksRollup` + the two-store parity discipline), plan
-  [026](implemented/026-server-rollups-project-cost.md) (`TaskRow`/`RollupCalculator`, on-read
-  rollups), and reads the plan [016](implemented/016-task-type-cacheable-capture.md) task
+  [026](026-server-rollups-project-cost.md) (`TaskRow`/`RollupCalculator`, on-read
+  rollups), and reads the plan [016](016-task-type-cacheable-capture.md) task
   `type` dictionary. Sibling: **F11** (a full `executionReasons` taxonomy) is not planned yet;
   when it lands it should share this plan's reason-pattern module.
 

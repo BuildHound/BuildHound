@@ -10,7 +10,7 @@ Divergences follow-up.
 
 ## Source
 
-- **Plan [007](implemented/007-scrubber.md)'s own "Out" scope** deferred this explicitly:
+- **Plan [007](007-scrubber.md)'s own "Out" scope** deferred this explicitly:
   *"server-side scrubbing wiring"* was named and punted the day `PayloadScrubber` shipped —
   this plan closes that gap.
 - **`PayloadScrubber.kt:13` KDoc**: *"KMP-pure so the server can run it as a defensive second

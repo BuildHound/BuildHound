@@ -7,16 +7,16 @@ the original design.
 
 ## Source
 
-- Research finding **F13**, [`docs/research/ingest-corpus-analysis.md`](../research/ingest-corpus-analysis.md)
+- Research finding **F13**, [`docs/research/ingest-corpus-analysis.md`](../../research/ingest-corpus-analysis.md)
   (§4). Source article: the **Pocket Casts de-modularization / `gradle-profiler`** study — rebuild
   cost is a function of the changed module's downstream fan-out; the Gradle *Best Practices* guide's
   `api`→`implementation` advice.
-- Complements **plan [026](implemented/026-server-rollups-project-cost.md)** (Project Cost): 026 ranks
+- Complements **plan [026](026-server-rollups-project-cost.md)** (Project Cost): 026 ranks
   modules by *their own* cost; this ranks them by the cost they **inflict on others** — the number
   teams want before committing to modularization or `api`→`implementation`.
-- Builds on the VCS pipeline: plans [004](implemented/004-vcs-collector.md)/[015](implemented/015-vcs-exec-timeout.md)
-  (`GitExec`/`BoundedExec`), [050](implemented/050-git-info-from-subdirectory.md) (subdir discovery),
-  [027](implemented/041-ci-connectors-gha-gitlab.md) (CI `targetBranch`). Spec §3.7 (no paths/PII), §4
+- Builds on the VCS pipeline: plans [004](004-vcs-collector.md)/[015](015-vcs-exec-timeout.md)
+  (`GitExec`/`BoundedExec`), [050](050-git-info-from-subdirectory.md) (subdir discovery),
+  [027](041-ci-connectors-gha-gitlab.md) (CI `targetBranch`). Spec §3.7 (no paths/PII), §4
   (additive schema), §5 (rollups).
 
 ## Scope
@@ -36,7 +36,7 @@ the original design.
 **Out (deferred)**
 
 - **True dependency-graph / direct-dependents ("depth") analysis.** F13's "depth" = direct-dependents
-  count; the edge list is not serialized today (F12 / plan [038](implemented/038-internal-adapters.md)).
+  count; the edge list is not serialized today (F12 / plan [038](038-internal-adapters.md)).
   This slice ships the **executed-time proxy** over data already on hand, not structural depth.
 - Per-file granularity (privacy: module paths only), continuous aggregates, and the CI recipe that
   fetches the PR base ref (belongs in the plan-041 / F5 `setup-buildhound` composite action).

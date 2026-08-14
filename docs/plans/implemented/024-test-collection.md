@@ -4,24 +4,24 @@
 
 ## 1. Source
 
-- [Spec §3.5](../build-telemetry-spec.md) (locked test granularity: per-class rollup +
+- [Spec §3.5](../../build-telemetry-spec.md) (locked test granularity: per-class rollup +
   `TestCaseDetail[]` only for failed/retried cases; "Collector parses JUnit XML from test
-  tasks"; reserved `allCases` for additive expansion), [§4](../build-telemetry-spec.md)
-  (`tests` payload block), [§6](../build-telemetry-spec.md) (Tests dashboard page),
-  [§3.7](../build-telemetry-spec.md) (scrubbing new free text), [§9](../build-telemetry-spec.md)
+  tasks"; reserved `allCases` for additive expansion), [§4](../../build-telemetry-spec.md)
+  (`tests` payload block), [§6](../../build-telemetry-spec.md) (Tests dashboard page),
+  [§3.7](../../build-telemetry-spec.md) (scrubbing new free text), [§9](../../build-telemetry-spec.md)
   (locked decision #2 traceability).
-- [Roadmap phase 2b](../build-telemetry-roadmap.md): "Test collection per locked
+- [Roadmap phase 2b](../../build-telemetry-roadmap.md): "Test collection per locked
   granularity (per-class rollups + failure/retry detail) + tests page." Prerequisite for
   phase-4 flaky detection and the test-sharding addon.
-- Research: [test-distribution-addon.md §2.6](../research/test-distribution-addon.md)
+- Research: [test-distribution-addon.md §2.6](../../research/test-distribution-addon.md)
   (**pin the `modulePath + "/" + classFqcn` join key once in commons with a golden test** —
   Tuist's Gradle path sends bare FQCNs and silently degenerates its balancer; plans 036 and
   040 both join on this key), §2.7 (class names ride plaintext today — no scrubber conflict);
-  [plugin-ecosystem-gap-analysis.md §2.1/§2.3](../research/plugin-ecosystem-gap-analysis.md)
+  [plugin-ecosystem-gap-analysis.md §2.1/§2.3](../../research/plugin-ecosystem-gap-analysis.md)
   (per-class rollup + failure detail is enough to *detect* cross-run flakiness; the failing
   side always carries per-case detail — feasible public-API-only), §7 (test collection
   listed as spec'd-not-built);
-  [dashboard-ux-research.md §4.2 item 7](../research/dashboard-ux-research.md) (start the
+  [dashboard-ux-research.md §4.2 item 7](../../research/dashboard-ux-research.md) (start the
   Tests page with slowest classes + failures; ranked top-offenders; multi-line cells).
 
 ## 2. Scope

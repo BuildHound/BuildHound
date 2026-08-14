@@ -4,14 +4,14 @@
 
 ## 1. Source
 
-- [Roadmap phase 2a](../build-telemetry-roadmap.md), bullet "Dashboard v0 quick wins from the
+- [Roadmap phase 2a](../../build-telemetry-roadmap.md), bullet "Dashboard v0 quick wins from the
   UX research" (the timeline named in the same bullet is plan 017's).
-- [dashboard-ux-research.md](../research/dashboard-ux-research.md) §4.1.4 (empty/degraded
+- [dashboard-ux-research.md](../../research/dashboard-ux-research.md) §4.1.4 (empty/degraded
   states are MVP scope), §4.1.2+§4.1.5 (work-avoidance ledger with explicit zeros),
   §4.1.6 (count-summary sentences), §5 ("empty states are not mentioned" is the one
   by-omission gap in plan 012; token entry should read as first-run, not error).
-- [research/README.md](../research/README.md) §4 item 6.
-- Spec [§6 Dashboard](../build-telemetry-spec.md); extends
+- [research/README.md](../../research/README.md) §4 item 6.
+- Spec [§6 Dashboard](../../build-telemetry-spec.md); extends
   [implemented/012-dashboard.md](012-dashboard.md).
 
 ## 2. Scope

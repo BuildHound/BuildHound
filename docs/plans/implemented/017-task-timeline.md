@@ -4,15 +4,15 @@
 
 ## 1. Source
 
-- Roadmap [phase 2a](../build-telemetry-roadmap.md): "the **task timeline** (per-task
+- Roadmap [phase 2a](../../build-telemetry-roadmap.md): "the **task timeline** (per-task
   `startMs` already ships in schema v1; lanes computed greedily from start/end overlaps —
   no schema change; also reuse in the HTML artifact)".
-- Spec [§3.8](../build-telemetry-spec.md) ("task timeline by worker lane" in the standalone
-  artifact) and [§6](../build-telemetry-spec.md) (build detail mirrors the artifact).
-- Research: [dashboard-ux-research.md §4.2.1](../research/dashboard-ux-research.md) — the
+- Spec [§3.8](../../build-telemetry-spec.md) ("task timeline by worker lane" in the standalone
+  artifact) and [§6](../../build-telemetry-spec.md) (build detail mirrors the artifact).
+- Research: [dashboard-ux-research.md §4.2.1](../../research/dashboard-ux-research.md) — the
   worker-lane Gantt is the most legible "where did the time go" view in either incumbent;
   build the component once, share it across surfaces. Reconciliation verdict in
-  [research/README.md §5](../research/README.md): `startMs` exists and is populated; plan
+  [research/README.md §5](../../research/README.md): `startMs` exists and is populated; plan
   012's deferral note was a false premise; only `worker` is unpopulated.
 
 ## 2. Scope
@@ -122,7 +122,7 @@ analogue of the plugin's never-fail rule.
     caching headers, bytes identical to the report-module resource.
 11. Extend `BuildHoundSettingsPluginFunctionalTest`'s artifact test (`:336-346`): the
     rendered artifact contains the timeline section marker (ArtifactTransformReport's
-    grep-the-rendered-HTML smoke gate, [comparison-to-spec.md §2.7](../research/comparison-to-spec.md)).
+    grep-the-rendered-HTML smoke gate, [comparison-to-spec.md §2.7](../../research/comparison-to-spec.md)).
 12. Docs, same PR: `docs/architecture.md` §1 dependency rule amended (buildhound-report is
     the shared payload-rendering channel; plugin and server may both depend on it, it
     depends on nothing) + decision-log row; spec §3.8 one-line clarification (lanes

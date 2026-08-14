@@ -13,11 +13,11 @@ Research finding **F16** ("Wrapper & startup-phase telemetry", `docs/research/in
 download, first-use JAR generation, `gradlew` re-download inside a Gradle Docker image). Relates to
 spec §3.2 (environment snapshot), §3.7 (privacy), §4 (payload schema, additive-only), §7 (CI assets),
 and the roadmap's "startup phase is dark to BuildHound" gap. Builds on plans
-[022](implemented/022-input-fingerprints-compare.md) (execution-time ValueSource file reads + salt),
-[029](implemented/029-process-probe.md)/[031](implemented/031-artifact-size-capture.md) (dedicated
-nullable payload blocks; hash/size-only, no-path privacy), [016](implemented/016-task-type-cacheable-capture.md)
-(isolated-projects degrade), [027](implemented/027-ci-env-breadth.md) (override precedence), and
-[028](implemented/028-azure-devops-connector.md) (`gradleSharePct`, CI span tree).
+[022](022-input-fingerprints-compare.md) (execution-time ValueSource file reads + salt),
+[029](029-process-probe.md)/[031](031-artifact-size-capture.md) (dedicated
+nullable payload blocks; hash/size-only, no-path privacy), [016](016-task-type-cacheable-capture.md)
+(isolated-projects degrade), [027](027-ci-env-breadth.md) (override precedence), and
+[028](028-azure-devops-connector.md) (`gradleSharePct`, CI span tree).
 
 ## Scope
 

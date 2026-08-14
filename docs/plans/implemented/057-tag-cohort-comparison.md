@@ -15,10 +15,10 @@ decision log, 2026-07-08 row. No commons/payload/golden change, as scoped.
   chart mean task time grouped by the flag, conclude "R8 speeds builds N %". Related:
   `docs/research/dashboard-ux-research.md` rec-4 (dimension slicing over *fixed* dimensions —
   the new part here is **user-defined-tag** multi-series with delta stats).
-- Spec [§6](../build-telemetry-spec.md) — the **Trends** dashboard view (today: p50/p95
+- Spec [§6](../../build-telemetry-spec.md) — the **Trends** dashboard view (today: p50/p95
   duration, hit rate, filter pipeline/branch/mode/env). Tag contract: spec §3/§4 (`tags` is a
   low-cardinality `Map<String,String>`, cardinality-capped by plan 019).
-- Adapts (does **not** reuse) plan [025](implemented/025-regression-engine-v1.md)'s
+- Adapts (does **not** reuse) plan [025](025-regression-engine-v1.md)'s
   median+MAD robust-z. Builds on the on-read trend rollup (plan 010) and the raw-rows-→-pure-
   calculator store pattern (plan 032 `BottleneckCalculator`).
 

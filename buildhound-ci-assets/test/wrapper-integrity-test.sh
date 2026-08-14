@@ -5,7 +5,7 @@
 # repo — see the template's own comment), so `check_wrapper` below is a line-for-line mirror of
 # that step's shell logic with the `${{ parameters.validateWrapper }}` template expression replaced
 # by the `$mode` shell variable. Keep the two in sync on any future edit (no automated parity guard
-# exists yet — see docs/plans/066-*.md Implementation notes).
+# exists yet — see docs/plans/implemented/066-*.md Implementation notes).
 #
 # Run: sh buildhound-ci-assets/test/wrapper-integrity-test.sh
 set -eu

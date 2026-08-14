@@ -12,16 +12,16 @@ counts, `excludedTasks`) remain undelivered elsewhere, as scoped.
 ## Source
 
 - Research finding **F1** — "Invocation-switch & performance-flag posture"
-  ([docs/research/ingest-corpus-analysis.md](../research/ingest-corpus-analysis.md), §3).
+  ([docs/research/ingest-corpus-analysis.md](../../research/ingest-corpus-analysis.md), §3).
   Source articles: Talaiot deep-dives, the joint Gradle/Google/JetBrains *Best Practices* and
   *Performance* guides, the two "10 tips" lists, the 80%-reduction case study, Android + AGP-9
   docs. Nine of nine sweep agents flagged it — the corpus's strongest consensus gap.
-- Spec [§3.2](../build-telemetry-spec.md) (environment/toolchain snapshot), [§4](../build-telemetry-spec.md)
-  (additive payload schema), [§3.7](../build-telemetry-spec.md) (privacy). Builds on the
+- Spec [§3.2](../../build-telemetry-spec.md) (environment/toolchain snapshot), [§4](../../build-telemetry-spec.md)
+  (additive payload schema), [§3.7](../../build-telemetry-spec.md) (privacy). Builds on the
   `StartParameter` reads already wired for input fingerprints (plan
-  [022](implemented/022-input-fingerprints-compare.md)) and the median+MAD baseline of plan
-  [025](implemented/025-regression-engine-v1.md) / its INTERRUPTED-exclusion successor plan
-  [033](implemented/033-lost-build-accounting.md).
+  [022](022-input-fingerprints-compare.md)) and the median+MAD baseline of plan
+  [025](025-regression-engine-v1.md) / its INTERRUPTED-exclusion successor plan
+  [033](033-lost-build-accounting.md).
 
 ## Scope
 
@@ -45,7 +45,7 @@ counts, `excludedTasks`) remain undelivered elsewhere, as scoped.
 **Out (named owners)**
 
 - The **flags "who-is-behind" scorecard** (dashboard panel + `/v1/rollups/*` flag-posture
-  endpoint mirroring plan [032](implemented/032-bottlenecks-landing-page.md)'s toolchain view,
+  endpoint mirroring plan [032](032-bottlenecks-landing-page.md)'s toolchain view,
   AGP-9-aware staleness rules) — **deferred to a follow-up plan**: collect-now / surface-later,
   the inverse of the 032→046 sequencing. This plan makes the scorecard a pure server read.
 - `Test` `maxParallelForks`/`forkEvery` — deferred: they need the plan-016 `whenReady`

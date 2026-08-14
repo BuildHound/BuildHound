@@ -4,15 +4,15 @@
 
 ## 1. Source
 
-- Roadmap [phase 2a, "Doc repairs" bullet](../build-telemetry-roadmap.md): spec §3.9 rewritten to
+- Roadmap [phase 2a, "Doc repairs" bullet](../../build-telemetry-roadmap.md): spec §3.9 rewritten to
   synchronous-with-spool reality; §1/§8 Gradle-floor drift fixed to 8.14; plan 003's CC-detection
   wording aligned with the shipped `DaemonState` observer.
-- [research/README.md §5](../research/README.md) (2026-07-03 reconciliation): all three repairs
+- [research/README.md §5](../../research/README.md) (2026-07-03 reconciliation): all three repairs
   confirmed against source; only these doc texts remain to fix.
-- [research/comparison-to-spec.md](../research/comparison-to-spec.md) §4 item 6 (the §3.9
+- [research/comparison-to-spec.md](../../research/comparison-to-spec.md) §4 item 6 (the §3.9
   background-thread text is the documented Talaiot `publishOnNewThread` trap), item 12 (docs drift
   is the ecosystem's most universal defect), §2.1a and
-  [research/repos/Talaiot.md](../research/repos/Talaiot.md) item 2 (`ConfigurationPhaseObserver`
+  [research/repos/Talaiot.md](../../research/repos/Talaiot.md) item 2 (`ConfigurationPhaseObserver`
   pattern — which the shipped code already implements).
 - Divergences originally recorded in [plan 008](008-upload-spool.md) ("Divergences
   from spec, recorded up front") and [plan 003](003-environment-collector.md).
@@ -21,7 +21,7 @@
 
 **In — three documentation edits, no code, no schema:**
 
-1. Rewrite [spec §3.9 "Upload semantics"](../build-telemetry-spec.md) from the never-built local
+1. Rewrite [spec §3.9 "Upload semantics"](../../build-telemetry-spec.md) from the never-built local
    background-upload thread to the shipped synchronous-with-spool behavior, with explicit
    "planned, not shipped" markers for the forward-looking pieces.
 2. Fix the Gradle-floor drift: spec §1 says "Gradle 8.x+" and §8's TestKit matrix starts at
@@ -44,7 +44,7 @@ roadmap bullet.
 
 ### 3.1 What spec §3.9 says vs what shipped
 
-Current text ([build-telemetry-spec.md:123](../build-telemetry-spec.md)): CI uploads
+Current text ([build-telemetry-spec.md:123](../../build-telemetry-spec.md)): CI uploads
 synchronously, "Local: background thread with JVM-exit flush". The background thread was never
 built — plan 008 diverged deliberately, and the reconciliation confirmed the divergence is the
 *better* design (Talaiot's `publishOnNewThread` during `BuildService.close()` silently drops data;
@@ -76,7 +76,7 @@ rewrite also states that a background/deferred local upload returns only as plan
 
 `build-telemetry-spec.md:11` ("Gradle 8.x+ builds") and `:206` ("{Gradle 8.0, 8.14, 9.latest}")
 contradict `:53` (§3.1, correct: "Gradle 8.14+ and 9.x") and the two 2026-07-02 decision-log rows
-in [architecture.md §7](../architecture.md) (8.14 floor from the JVM-21 owner decision; the
+in [architecture.md §7](../../architecture.md) (8.14 floor from the JVM-21 owner decision; the
 decision log is the current truth). A grep confirms these are the only stale floor mentions.
 
 ### 3.3 Plan 003's CC wording vs the shipped observer

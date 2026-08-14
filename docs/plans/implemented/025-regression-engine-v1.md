@@ -4,20 +4,20 @@
 
 ## 1. Source
 
-- Roadmap [phase 2b](../build-telemetry-roadmap.md): "Regression engine v1: rolling
+- Roadmap [phase 2b](../../build-telemetry-roadmap.md): "Regression engine v1: rolling
   default-branch baselines, PR-vs-baseline verdict endpoint, budgets, Slack/Teams alerts.
   Metric CLI + `POST /v1/metrics`." Exit criterion: "a deliberately slowed PR gets flagged
   against baseline".
-- Spec [§5](../build-telemetry-spec.md) — regression engine (baseline key, median+MAD over
+- Spec [§5](../../build-telemetry-spec.md) — regression engine (baseline key, median+MAD over
   last N, PR-vs-baseline delta, budget checks, alert dispatch, `GET /v1/builds/{id}/verdict`);
   `POST /v1/metrics` (Datadog tag/measure model, caps: 100 measures/run, key+value ≤ 300 chars);
   per-project settings (baseline config, budgets, alert channels).
-- Spec [§7](../build-telemetry-spec.md) — metric CLI (curl-wrapper, correlation from provider
-  env vars, shared with the plugin SPI mappings); [§8](../build-telemetry-spec.md) verdict gate step.
-- Research: [comparison-to-spec.md §2.6/§5.6](../research/comparison-to-spec.md) — the guarded
+- Spec [§7](../../build-telemetry-spec.md) — metric CLI (curl-wrapper, correlation from provider
+  env vars, shared with the plugin SPI mappings); [§8](../../build-telemetry-spec.md) verdict gate step.
+- Research: [comparison-to-spec.md §2.6/§5.6](../../research/comparison-to-spec.md) — the guarded
   outlier rule (>2× median, min 3 builds, zero-baseline short-circuit) as the median+MAD
   precursor; the regression engine flagged as "the roadmap's least de-risked component".
-  [dashboard-ux-research.md §4.2.2](../research/dashboard-ux-research.md) — semantic
+  [dashboard-ux-research.md §4.2.2](../../research/dashboard-ux-research.md) — semantic
   regression coloring (delta color encodes goodness, not sign).
 
 ## 2. Scope

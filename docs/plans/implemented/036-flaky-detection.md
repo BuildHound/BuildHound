@@ -4,16 +4,16 @@
 
 ## 1. Source
 
-- Roadmap [phase 4 item 1](../build-telemetry-roadmap.md): "Flaky detection (Tuist's two
+- Roadmap [phase 4 item 1](../../build-telemetry-roadmap.md): "Flaky detection (Tuist's two
   signals: intra-run retry divergence + cross-run divergence keyed on (commit, module, test))
   → flaky page", gating the quarantine addon (plan 037).
-- Spec [§5 "Flaky detection (v1.x, gates quarantine)"](../build-telemetry-spec.md) and
-  [§6 dashboard "Tests (… flaky page v1.x)"](../build-telemetry-spec.md); locked decision #3
+- Spec [§5 "Flaky detection (v1.x, gates quarantine)"](../../build-telemetry-spec.md) and
+  [§6 dashboard "Tests (… flaky page v1.x)"](../../build-telemetry-spec.md); locked decision #3
   (quarantine gated on proven flaky-detection precision).
-- Research: [plugin-ecosystem-gap-analysis.md §2.3](../research/plugin-ecosystem-gap-analysis.md)
+- Research: [plugin-ecosystem-gap-analysis.md §2.3](../../research/plugin-ecosystem-gap-analysis.md)
   (the two Tuist signals, comparison key = `(commit sha, module path, test identity)`, "no
   schema change needed; the server-side algorithm is the new work") and
-  [test-distribution-addon.md §2.6](../research/test-distribution-addon.md) (the pinned
+  [test-distribution-addon.md §2.6](../../research/test-distribution-addon.md) (the pinned
   `modulePath + "/" + classFqcn` join key).
 
 ## 2. Scope
@@ -68,7 +68,7 @@ field/column names differ at implementation time, update §3/§4 here in the sam
 
 **Join key (single source of truth).** The comparison key is `"${module ?: ""}/$classFqcn"`, the
 same key pinned for sharding
-([test-distribution-addon.md §2.6](../research/test-distribution-addon.md)). To avoid Tuist's
+([test-distribution-addon.md §2.6](../../research/test-distribution-addon.md)). To avoid Tuist's
 degeneration bug (client and server keyed the string differently, silently breaking balancing), the
 key is defined **once** in `buildhound-commons` by **plan 024** as `TestUnitKey.of(module, classFqcn)`
 (null module → empty-string prefix), with `TestClassResult.unitKey()` delegating to it and the
