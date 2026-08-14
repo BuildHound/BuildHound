@@ -65,6 +65,18 @@ Two things that are **not** the cause, checked and excluded:
 - **Job failures.** 18 of 20 cells succeeded on 2026-08-14 and produced complete benchmark results.
   The two failures (`android-legacy-agp · cc_hit · no_build_cache`, `nowinandroid · clean ·
   full_cache`) are a separate matter, out of scope here (§2.1).
+- **A pilot-specific fault.** All three pilots were checked, not just the cheap one:
+  `nowinandroid · no_op · full_cache` (4 builds, `cc=MISS_STORED`) and `android-legacy-agp · no_op ·
+  full_cache` (5 builds, including `cc=HIT` builds) show the identical signature — plugin applied,
+  `mode=BENCHMARK`, payload written, `upload failed; payload spooled`, no redirect marker. One cause
+  across the whole matrix, so the repair covers all 20 cells rather than the one that was easy to
+  read.
+
+**Staging was never a target.** The report that prompted this plan mentions "production or staging".
+Plan 105 §3.2 wires this workflow to `vars.BUILDHOUND_PROD_SERVER_URL` /
+`secrets.BUILDHOUND_PROD_INGEST_TOKEN` only, deliberately — the absence of benchmark rows on staging
+is that design, not this defect. Publishing the series to staging as well would be a separate wiring
+change and is not in scope here.
 
 ### 2.1 Why four nights of this were invisible
 
@@ -174,9 +186,18 @@ just no longer the *only* signal, and it no longer claims that publication happe
 ### 4.3 Warm-up builds count
 
 `warm-ups = 1` per scenario, and warm-up builds upload too (plan 105 §3.3, accepted). So a passing
-cell publishes `warm-ups + iterations` = 4 payloads. The check asserts ≥1 `payload uploaded`, not an
-exact count: `iterations` differs per scenario file and pinning the arithmetic in a shell step would
-make an unrelated scenario edit fail the nightly for the wrong reason.
+cell publishes `warm-ups + iterations` payloads, plus one for gradle-profiler's own build-inspection
+invocation — 5, in the archived `springboot-legacy · no_op` log. The check asserts ≥1
+`payload uploaded`, not an exact count: `iterations` differs per scenario file and pinning the
+arithmetic in a shell step would make an unrelated scenario edit fail the nightly for the wrong
+reason.
+
+The redirect marker is deliberately *not* a per-build assertion, only a diagnostic printed when the
+upload check has already failed. `settingsEvaluated` does not run on a configuration-cache hit, so
+the marker is emitted on CC-miss builds only — visible in the archived `android-legacy-agp` log,
+which has `cc=HIT` builds among its five. Those hits still upload, because the CC entry stored on
+the cold-home first build carries the redirected Flow-action parameters. A future "improvement"
+requiring one marker per upload would redden every `cc_hit` cell; the comment in the step says so.
 
 ## 5. Test strategy
 

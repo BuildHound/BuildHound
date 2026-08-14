@@ -203,6 +203,12 @@ jobs:
       # those counts live in the per-pilot scenario file. Pinning the arithmetic here would make an
       # unrelated scenario edit fail the nightly for the wrong reason.
       #
+      # The redirect marker is a DIAGNOSTIC inside the failure branch, never a per-build assertion,
+      # and must stay one. `settingsEvaluated` does not run on a configuration-cache hit, so the
+      # marker appears only on CC-miss builds — in a cc_hit cell, the cold-home first build and no
+      # other (the CC entry replays the redirected target, which is why the uploads still happen).
+      # Requiring one marker per upload would redden every cc_hit cell.
+      #
       # Runs only on a successful benchmark (default success() condition), so a profiler crash still
       # surfaces as itself rather than as a publication failure.
       - name: Verify telemetry published
