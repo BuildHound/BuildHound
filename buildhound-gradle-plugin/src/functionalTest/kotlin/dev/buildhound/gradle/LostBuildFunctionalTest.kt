@@ -3,7 +3,13 @@ package dev.buildhound.gradle
 import dev.buildhound.commons.payload.BuildHoundJson
 import dev.buildhound.commons.payload.BuildOutcome
 import dev.buildhound.commons.payload.BuildPayload
+import com.sun.net.httpserver.HttpServer
 import java.io.File
+import java.net.InetSocketAddress
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.zip.GZIPInputStream
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -18,6 +24,29 @@ class LostBuildFunctionalTest {
     @field:TempDir
     lateinit var projectDir: File
 
+    private lateinit var server: HttpServer
+
+    /** Decompressed bodies of the payloads the stub ingest server received. */
+    private val received = CopyOnWriteArrayList<String>()
+
+    @BeforeTest
+    fun startServer() {
+        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/v1/builds") { exchange ->
+            received += GZIPInputStream(exchange.requestBody).readBytes().decodeToString()
+            exchange.sendResponseHeaders(202, -1)
+            exchange.close()
+        }
+        server.start()
+    }
+
+    @AfterTest
+    fun stopServer() {
+        server.stop(0)
+    }
+
+    private fun serverUrl() = "http://127.0.0.1:${server.address.port}"
+
     private fun runner(vararg arguments: String): GradleRunner =
         GradleRunner.create().withProjectDir(projectDir).withPluginClasspath().withArguments(*arguments, "--configuration-cache")
 
@@ -26,6 +55,25 @@ class LostBuildFunctionalTest {
             """
             plugins { id("dev.buildhound") }
             rootProject.name = "lost-build-fixture"
+            """.trimIndent(),
+        )
+        File(projectDir, "build.gradle.kts").writeText("""tasks.register("hello") { doLast { println("hello") } }""")
+    }
+
+    /**
+     * Same fixture, but able to publish: an ingest target plus the local-build opt-out the samples
+     * use. The seeded markers carry `"mode":"local"`, so without `requireOptInFile = false` the gate
+     * would skip on consent rather than on configuration and the retention path would never run.
+     */
+    private fun setUpPublishingProject() {
+        File(projectDir, "settings.gradle.kts").writeText(
+            """
+            plugins { id("dev.buildhound") }
+            rootProject.name = "lost-build-fixture"
+            buildhound {
+                server { url = "${serverUrl()}" }
+                localBuilds { requireOptInFile = false }
+            }
             """.trimIndent(),
         )
         File(projectDir, "build.gradle.kts").writeText("""tasks.register("hello") { doLast { println("hello") } }""")
@@ -52,21 +100,107 @@ class LostBuildFunctionalTest {
         assertTrue(leftover.isEmpty(), "a finalized build must leave no marker: ${leftover.map { it.name }}")
     }
 
+    /**
+     * Plan 110 changed this contract deliberately. It used to assert the marker was **deleted** here.
+     * With no server the payload could not be published, so the marker now survives to drive a retry
+     * on a later build that can — see [a retained marker is published by a later build that has a
+     * server]. The local mirror is still written on this first visit, so "a lost build is visible
+     * even with no server" is unchanged.
+     */
     @Test
-    fun `a stale marker is reconciled into an INTERRUPTED build and then removed`() {
+    fun `a stale marker is reconciled locally and kept when there is no server`() {
         setUpPlainProject()
         seedMarker("seeded-dead")
 
         val result = runner("hello").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
-        assertFalse(File(startedDir(), "seeded-dead.json").exists(), "the reconciled marker must be deleted")
+        assertTrue(
+            File(startedDir(), "seeded-dead.json").exists(),
+            "a marker that could not be published must survive for a later build",
+        )
         val interrupted = File(interruptedDir(), "seeded-dead.json")
         assertTrue(interrupted.isFile, "a local INTERRUPTED payload must be written for the lost build")
         val payload = BuildHoundJson.payload.decodeFromString(BuildPayload.serializer(), interrupted.readText())
         assertEquals(BuildOutcome.INTERRUPTED, payload.outcome)
         assertEquals("seeded-dead", payload.buildId)
         assertTrue(payload.tasks.isEmpty())
+    }
+
+    /** The whole point of the retention: the lost build reaches the server on a later build. */
+    @Test
+    fun `a retained marker is published by a later build that has a server`() {
+        setUpPlainProject()
+        seedMarker("seeded-dead")
+        runner("hello").build()
+        assertTrue(File(startedDir(), "seeded-dead.json").exists(), "precondition: the marker was retained")
+        assertTrue(received.isEmpty(), "precondition: nothing was published without a server")
+
+        setUpPublishingProject()
+        val result = runner("hello").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        assertFalse(
+            File(startedDir(), "seeded-dead.json").exists(),
+            "once published, the marker is deleted",
+        )
+        val interrupted = received.filter { it.contains("\"buildId\":\"seeded-dead\"") }
+        assertEquals(1, interrupted.size, "the lost build must be uploaded exactly once, got: $received")
+        assertTrue(interrupted.single().contains("INTERRUPTED"), interrupted.single())
+    }
+
+    /**
+     * The consent path is untouched. A `LOCAL` build with the opt-in marker required and absent is a
+     * decision not to publish, not a configuration gap: the marker is dropped as before, so creating
+     * `~/.buildhound/optin` later can never retroactively publish a build recorded before it
+     * (spec §3.7).
+     */
+    @Test
+    fun `a marker skipped for a missing local opt-in is still deleted`() {
+        File(projectDir, "settings.gradle.kts").writeText(
+            """
+            plugins { id("dev.buildhound") }
+            rootProject.name = "lost-build-fixture"
+            buildhound {
+                server { url = "${serverUrl()}" }
+                localBuilds { requireOptInFile = true }
+            }
+            """.trimIndent(),
+        )
+        File(projectDir, "build.gradle.kts").writeText("""tasks.register("hello") { doLast { println("hello") } }""")
+        seedMarker("no-consent")
+
+        val result = runner("hello").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        assertFalse(
+            File(startedDir(), "no-consent.json").exists(),
+            "a consent skip must still consume the marker",
+        )
+        assertTrue(received.isEmpty(), "nothing may be published without the opt-in marker, got: $received")
+    }
+
+    /**
+     * A retained marker is re-visited by every later build, so the mirror must not be re-synthesized
+     * and rewritten each time — that cost would land on the always-on finalizer path in the plugin's
+     * default (offline) configuration (plan 110 §4.3).
+     */
+    @Test
+    fun `a retained marker does not rewrite its local mirror on later builds`() {
+        setUpPlainProject()
+        seedMarker("seeded-dead")
+        runner("hello").build()
+        val mirror = File(interruptedDir(), "seeded-dead.json")
+        assertTrue(mirror.isFile, "precondition: the mirror was written")
+        // A sentinel rather than mtime: filesystem timestamp granularity makes mtime flaky, and this
+        // proves the exact property — the file is not written again.
+        mirror.writeText(mirror.readText() + "\n")
+        val sentinel = mirror.readText()
+
+        runner("hello").build()
+
+        assertTrue(File(startedDir(), "seeded-dead.json").exists(), "still retained")
+        assertEquals(sentinel, mirror.readText(), "the mirror must be reused, not rewritten")
     }
 
     @Test
