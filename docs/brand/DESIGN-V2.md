@@ -293,6 +293,13 @@ Data imagery represents real telemetry:
 - Body, table, and meaningful small text: at least 4.5:1 contrast.
 - Large display text and essential graphical objects: at least 3:1.
 - Control boundaries that communicate affordance: at least 3:1 against adjacent surfaces.
+- The measurement grid is decorative and exempt from the 3:1 floor. §2's token table defines it
+  as #E7DED3 / #2B261F — 1.31:1 and 1.16:1 against the adjacent surface, so the floor is not
+  reachable by construction and was never intended to apply. The exemption holds only while the
+  grid carries no datum of its own: a chart drawn on it must also print each value as an axis
+  label at 4.5:1 and in a keyboard-reachable value table. Raising the grid to 3:1 would turn a
+  background rule into a mark competing with the series. (Surfaced by plan 108, whose exit
+  criterion read "every mark clears 3:1" — unsatisfiable read literally against these tokens.)
 - Mobile command targets: at least 44 by 44 px.
 - Status includes text or an accessible name and never relies on hue alone.
 - Informative SVGs include a title and description; decorative SVGs are hidden from
