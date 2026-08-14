@@ -1045,19 +1045,34 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     // No getComputedStyle exists in this context, so dashboard.js resolves each token to its
     // literal fallback: comparing those against index.html's real declarations pins the wire and
     // catches the fallbacks drifting from the tokens in the same assertion.
-    const TOKENS = readThemeTokens(process.argv[4], ["bh-surface", "bh-grid", "bh-control-border", "bh-text-muted"]);
+    //
+    // Every token the charts paint with is held to its floor, series solids included — a series
+    // that fails 3:1 is exactly as unreadable as an axis that does, and checking only the two
+    // tokens this bug touched would leave the other four to regress silently.
+    const CHART_TOKENS = [
+        // token, floor, what it draws. --bh-grid is deliberately absent: DESIGN-V2:131 defines the
+        // measurement grid AS #E7DED3/#2B261F, values that cannot reach 3:1 on the adjacent surface
+        // by construction, and §9's 3:1 covers *essential* graphical objects. The grid carries no
+        // datum — every value it helps read is also an axis label and a value-table row. Asserting
+        // a floor it was never meant to meet would just encode a permanent failure.
+        ["bh-text-muted", 4.5, "axis tick text and the axis label"],
+        ["bh-control-border", 3, "tick marks and the cursor crosshair"],
+        ["bh-neutral-solid", 3, "the duration, artifact and benchmark series"],
+        ["bh-info-solid", 3, "the cache-hit-rate series"],
+        ["bh-failure-solid", 3, "the failures series"],
+        ["bh-success-solid", 3, "the success series"],
+    ];
+    const TOKENS = readThemeTokens(process.argv[4],
+        ["bh-surface", "bh-grid"].concat(CHART_TOKENS.map(t => t[0])));
     for (const theme of ["light", "dark"]) {
         const t = TOKENS[theme];
-        // .chart-card sits on --bh-surface, so that is what every chart colour is read against.
-        const textRatio = contrastRatio(t["bh-text-muted"], t["bh-surface"]);
-        if (textRatio < 4.5) {
-            throw new Error("axis tick text (" + theme + " --bh-text-muted " + t["bh-text-muted"] + ") is "
-                + textRatio.toFixed(2) + ":1 on --bh-surface, under the 4.5:1 floor for small text");
-        }
-        const markRatio = contrastRatio(t["bh-control-border"], t["bh-surface"]);
-        if (markRatio < 3) {
-            throw new Error("tick marks and the cursor crosshair (" + theme + " --bh-control-border "
-                + t["bh-control-border"] + ") are " + markRatio.toFixed(2) + ":1 on --bh-surface, under 3:1");
+        for (const [name, floor, drawn] of CHART_TOKENS) {
+            // .chart-card sits on --bh-surface, so that is what every chart colour is read against.
+            const ratio = contrastRatio(t[name], t["bh-surface"]);
+            if (ratio < floor) {
+                throw new Error(drawn + " (" + theme + " --" + name + " " + t[name] + ") is "
+                    + ratio.toFixed(2) + ":1 on --bh-surface, under the " + floor + ":1 floor");
+            }
         }
     }
     // Both sides are normalised: a future lowercase literal is the same colour, not a failure.
@@ -1109,6 +1124,48 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     // The resize handler must actually be registered (a single-slot window stub used to swallow it).
     if (!(context._windowListeners.resize || []).length) throw new Error("charts must register a window resize handler");
     context._windowListeners.resize.forEach(fn => fn());
+
+    // Which token, not which colour. Everything above compares resolved hex, and DESIGN-V2 pins
+    // --bh-neutral-solid and --bh-text-muted to the SAME value in both themes — so a wire to the
+    // wrong-but-equal token reads as correct. This pass gives tokenColor a getComputedStyle that
+    // echoes the requested property name back, making the semantic choice observable: what comes
+    // out of the chart config is the name dashboard.js asked for.
+    documentStub.documentElement = {};
+    context.getComputedStyle = () => ({ getPropertyValue: name => "token(" + name + ")" });
+    const beforeTokenPass = uplotCalls.length;
+    context.location.hash = "#/builds"; context._onhashchange(); await tick(); await tick();
+    context.location.hash = "#/trends"; context._onhashchange();
+    await tick(); await tick(); await tick(); await tick();
+    const tokenCalls = uplotCalls.slice(beforeTokenPass);
+    if (tokenCalls.length < 3) throw new Error("the token-identity pass did not re-mount the charts");
+    for (const call of tokenCalls) {
+        for (const [name, axisOpts] of [["x", call.opts.axes[0]], ["y", call.opts.axes[1]]]) {
+            if (axisOpts.stroke !== "token(--bh-text-muted)") {
+                throw new Error("the " + name + " axis's tick text must read --bh-text-muted, got " + axisOpts.stroke);
+            }
+            if (axisOpts.ticks.stroke !== "token(--bh-control-border)") {
+                throw new Error("the " + name + " axis's tick marks must read --bh-control-border, got " + axisOpts.ticks.stroke);
+            }
+            if (axisOpts.grid.stroke !== "token(--bh-grid)") {
+                throw new Error("the " + name + " axis's grid must read --bh-grid, got " + axisOpts.grid.stroke);
+            }
+        }
+    }
+    // Cache hit rate is information-blue, never success-green (plan 108 §6.4, DESIGN-V2 §3:167) —
+    // a rule that is invisible to a hex comparison the moment two tokens happen to agree.
+    const seriesToken = (call, i) => call.opts.series[i].stroke;
+    if (seriesToken(tokenCalls[0], 1) !== "token(--bh-neutral-solid)") {
+        throw new Error("the duration series must read --bh-neutral-solid, got " + seriesToken(tokenCalls[0], 1));
+    }
+    if (seriesToken(tokenCalls[1], 1) !== "token(--bh-info-solid)") {
+        throw new Error("cache hit rate must read --bh-info-solid (information, not success), got " + seriesToken(tokenCalls[1], 1));
+    }
+    if (seriesToken(tokenCalls[2], 2) !== "token(--bh-failure-solid)") {
+        throw new Error("the failures series must read --bh-failure-solid, got " + seriesToken(tokenCalls[2], 2));
+    }
+    // Back to the fallback path for everything below, so this stub stays scoped to the pass above.
+    delete context.getComputedStyle;
+    delete documentStub.documentElement;
 
     context.uPlot = undefined;
 

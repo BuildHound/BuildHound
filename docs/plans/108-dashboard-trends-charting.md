@@ -251,8 +251,10 @@ role with tabular numerals (§4:188).
 4. Chart color, grid, axis and type follow DESIGN-V2 tokens in both themes; cache-hit-rate is
    information-blue, not success-green; every mark clears 3:1 and every label 4.5:1.
 5. `./gradlew :buildhound-server:test` green, including the three-pass smoke harness, the
-   `/uplot.js` route test and the vendored-bytes regression test — with `DashboardRoutesTest.kt:45`
-   and `:46` unchanged (CSP not widened).
+   `/uplot.js` route test and the vendored-bytes regression test — with the two CSP guards in
+   `DashboardRoutesTest.kt` unchanged (CSP not widened): the anchored `style-src 'sha256-…'`
+   regex and the `assertFalse(csp.contains("unsafe"))` beneath it. (Named rather than numbered:
+   they were cited as `:45`/`:46`, and an added comment has since moved them to `:49`/`:50`.)
 6. Browser verification: `#/trends` loads with **zero CSP violations in the console**, both themes
    checked, keyboard reach into the value table confirmed, screenshots attached.
 7. `benchmarkView` migrated; `trendChart`/`cohortChart`/`COHORT_COLORS` and the `{day, durationMs}`
@@ -289,9 +291,11 @@ the legend swatches, and command targets measured 31 px. Neither is visible to `
 ### 7.1 Contrast record (exit criterion 4)
 
 Measured against `--bh-surface` (`#FFFDF9` light, `#1D1A16` dark), the `.chart-card` background every
-chart is drawn on. Ratios are WCAG 2.1 relative-luminance, computed from the token values in
-`index.html`; the tick-text row is additionally confirmed by canvas pixel sampling in a running
-server (the dominant colour in both axis gutters, ~4.4k px light / ~4.7k px dark).
+chart is drawn on. Ratios are WCAG 2.1 relative-luminance computed from the token values in
+`index.html` — that arithmetic, and the harness assertions built on it, are what hold this table
+up. Canvas pixel sampling in a running server agreed (tick text was the dominant colour in both
+axis gutters, ~4.4k px light / ~4.7k px dark), but it is corroboration and nothing rests on it:
+sampling is precisely what reported the pre-fix colour correctly while the defect shipped anyway.
 
 | Surface | Token | Light | Dark | Floor | |
 |---|---|---|---|---|---|
@@ -320,12 +324,25 @@ one token named "axis" was the only one that was not a mark. 12px tick text ship
 / 3.59:1 dark against a 4.5:1 floor; `palette.label` already existed and was dead. Fix: `stroke`
 moves to `palette.label`; the marks stay on their tokens.
 
-Regression cover: `dashboard-smoke.js` now asserts both halves — that both axes' `stroke` is the
-muted token while `ticks`/`grid` keep theirs, and that both themes' tokens clear their floors
-arithmetically, reading the values from `index.html` (passed as argv[4]) rather than restating them.
-Five mutations were run against it and each failed the harness: `stroke` back on `palette.axis`;
-marks moved onto the text token; a y-axis-only half-fix; a dark `--bh-text-muted` dimmed to 2.88:1;
-and the harness run without argv[4].
+Regression cover: `dashboard-smoke.js` reads the token values from `index.html` (passed as argv[4])
+rather than restating them, and asserts three things — every token in the table above clears its
+floor in both themes; both axes draw text in the muted token while `ticks`/`grid` keep theirs; and,
+in a pass that stubs `getComputedStyle` to echo the requested property name back, each surface
+reads the token it is *supposed* to read. That last pass exists because comparing resolved hex
+cannot tell `--bh-text-muted` from `--bh-neutral-solid` — §2 pins them to the same value in both
+themes — so a wire to the wrong-but-equal token would otherwise read as correct.
+
+Every assertion was mutation-tested; each of these failed the harness: `stroke` back on
+`palette.axis`; marks moved onto the text token; a y-axis-only half-fix; axis text on
+`palette.neutral` (right colour, wrong token); cache hit rate recoloured to success-green;
+`--bh-info-solid` dropped to 1.20:1; `--bh-failure-solid` dropped to 1.28:1 in dark; a dark
+`--bh-text-muted` dimmed to 2.88:1; and the harness run without argv[4].
+
+The floor loop covering all six chart tokens, and the token-identity pass, were both added in
+response to the §3.1 code review, which demonstrated that the first version of this cover passed
+while `--bh-info-solid` sat at 1.20:1 and while the axis was wired to the wrong token. The
+measurement grid's exemption is now reconciled into `docs/brand/DESIGN-V2.md` §9 rather than being
+argued only here, per the CLAUDE.md rule on intentional divergences.
 
 ## 8. Divergences from this plan (recorded during implementation)
 
