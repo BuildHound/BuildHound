@@ -27,6 +27,12 @@ files both claim number 092. Reconciling the index is its own chore:
   rehydration — **open**; a warm-daemon configuration-cache hit can still replay a
   previously-enabled capture toggle even when the current build's config has it off. Design and
   a `@Disabled` acceptance test exist; the fix hasn't landed.
+- [105](105-composite-action-ci-and-nightly-sample-benchmark.md) — composite action in CI + nightly
+  sample benchmark — **open** on its exit criterion 6 (benchmark rows on the production dashboard),
+  which was blocked by a defect in its own implementation; see
+  [109](109-nightly-benchmark-init-script-pickup.md).
+- [109](109-nightly-benchmark-init-script-pickup.md) — nightly benchmark init-script pickup repair —
+  **open**; the fix is in, verification is a post-merge `workflow_dispatch` plus a dashboard read.
 - [106](106-overhead-harness-repair.md) — overhead-harness repair — **open**; the harness itself is
   fixed and producing real measurements, but its first run reports a genuine budget breach
   (§7) that needs its own plan, and the numbers are local-macOS only until a CI run lands.

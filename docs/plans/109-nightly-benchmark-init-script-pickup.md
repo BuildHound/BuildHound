@@ -2,15 +2,17 @@
 
 ## 1. Source
 
-Defect in the shipped implementation of [105](implemented/105-composite-action-ci-and-nightly-sample-benchmark.md)
+Defect in the shipped implementation of [105](105-composite-action-ci-and-nightly-sample-benchmark.md)
 (composite action in CI + nightly sample benchmark), reported by the owner 2026-08-14:
 
 > currently nightly benchmarks have run 4 times but none have been uploaded to the production or
 > staging dashboards.
 
-Plan 105 exit criterion 5 — "production `#/benchmark` shows rows for the dispatched run's seed ref"
-— was never actually met; the workflow was merged on green jobs. This plan closes it and removes
-the reason it could be missed.
+Plan 105's exit criterion 6 — one `workflow_dispatch` run, and production `#/benchmark` showing
+rows for each `(pilot, scenario, isolation)` under a single seed ref — is why that plan is still
+open in `docs/plans/`. Four scheduled runs have now had the chance to satisfy it and could not:
+the defect below makes it unsatisfiable. This plan removes the defect and the reason four nights of
+it went unnoticed; 105 then closes on its own terms.
 
 ## 2. Diagnosis (empirical, not inferred)
 
@@ -200,7 +202,7 @@ make an unrelated scenario edit fail the nightly for the wrong reason.
    confirmed by the check's own logic against the archived `profile.log` of run `31770996903`,
    which must be rejected by it.
 4. Production `#/benchmark` shows rows for the dispatched run's seed ref, across the pilots whose
-   cells passed — plan 105's exit criterion 5, actually met this time.
+   cells passed — which is plan 105's exit criterion 6, and closes that plan too.
 5. The init script's header comment and `docs/recipes/benchmark-and-experiments.md` describe the
    mechanism the workflow actually uses.
 
