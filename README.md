@@ -235,9 +235,10 @@ Roadmap phases 0–4 are implemented (see the [roadmap](docs/build-telemetry-roa
   a machine-readable per-build diagnosis endpoint — a no-egress alternative to agents defaulting to
   `./gradlew --scan`.
 
-Three plans remain open: [035](docs/plans/035-cc-miss-reason-capture.md) and
-[037](docs/plans/037-test-quarantine-addon.md) are blocked; [055](docs/plans/055-github-actions-setup-buildhound-job-summary.md)
-(GitHub Actions job-summary + `cache-provider: basic` positioning) hasn't been started.
+Eighteen plans remain open, of which [035](docs/plans/035-cc-miss-reason-capture.md) and
+[037](docs/plans/037-test-quarantine-addon.md) are blocked rather than merely unstarted. The
+authoritative list, with the specific exit criterion holding each one open, is
+[docs/plans/README.md](docs/plans/README.md).
 
 > **Known gap:** Android artifact-size capture (plan 031) shipped but is non-functional under
 > AGP 9.x (a settings-plugin/AGP classloader boundary) and its test is disabled pending a
