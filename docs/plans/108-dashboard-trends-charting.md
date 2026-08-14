@@ -271,7 +271,10 @@ none of which a single sample build would produce. What it showed:
 
 - All five charts mount; canvas pixel sampling confirms the DESIGN-V2 solids in **both** themes
   (dark `#A89D8E`/`#6FA8FF`/`#E5646A`/`#2B261F`/`#7D705F`, light `#6F655A`/`#2A6FD1`/`#C22E33`/
-  `#E7DED3`/`#96897B`).
+  `#E7DED3`/`#96897B`). **Correction (post-review):** this bullet originally read that sampling
+  had *confirmed* the axis colour, but what it had actually sampled was a defect — the tick text
+  was painted in `--bh-control-border`, below the 4.5:1 floor. Sampling the pixels was never the
+  weak step; accepting the sampled value as intended was. See the contrast table below.
 - **Zero CSP violations** across full re-renders in both themes with a `securitypolicyviolation`
   listener attached; the served policy is unchanged and still hashes-only.
 - Cache-hit rate breaks at the null days rather than dipping to zero; the cohort value table spans
@@ -283,6 +286,47 @@ none of which a single sample build would produce. What it showed:
 Two defects were found only here and are fixed: the page-wide `svg { width: 100% }` rule stretched
 the legend swatches, and command targets measured 31 px. Neither is visible to `./gradlew`.
 
+### 7.1 Contrast record (exit criterion 4)
+
+Measured against `--bh-surface` (`#FFFDF9` light, `#1D1A16` dark), the `.chart-card` background every
+chart is drawn on. Ratios are WCAG 2.1 relative-luminance, computed from the token values in
+`index.html`; the tick-text row is additionally confirmed by canvas pixel sampling in a running
+server (the dominant colour in both axis gutters, ~4.4k px light / ~4.7k px dark).
+
+| Surface | Token | Light | Dark | Floor | |
+|---|---|---|---|---|---|
+| Axis tick text + axis label | `--bh-text-muted` | **5.61:1** | **6.50:1** | 4.5:1 | pass |
+| Tick marks, cursor crosshair | `--bh-control-border` | 3.35:1 | 3.59:1 | 3:1 | pass |
+| Average duration / artifact / benchmark series | `--bh-neutral-solid` | 5.61:1 | 6.50:1 | 3:1 | pass |
+| Cache hit rate series | `--bh-info-solid` | 4.81:1 | 7.20:1 | 3:1 | pass |
+| Failures series | `--bh-failure-solid` | 5.54:1 | 5.25:1 | 3:1 | pass |
+| Success | `--bh-success-solid` | 4.83:1 | 7.39:1 | 3:1 | pass |
+| Measurement grid | `--bh-grid` | 1.31:1 | 1.16:1 | — | see below |
+
+**The measurement grid is deliberately exempt, and this is an interpretation of criterion 4's
+"every mark", not a measured pass.** DESIGN-V2 §9:294 sets 3:1 for *essential graphical objects*,
+and DESIGN-V2:131 defines the measurement grid as `#E7DED3`/`#2B261F` — values that cannot reach
+3:1 on the adjacent surface by construction, so the design system plainly does not hold the grid to
+that bar. It carries no data: every value it helps read is also printed as an axis label (4.5:1) and
+in the keyboard-reachable value table. Raising it to 3:1 would turn a background rule into a mark
+that competes with the series. Read literally — "every mark" including decoration — criterion 4
+would be unsatisfiable against the brand's own token values.
+
+**The defect this record exists to close.** `dashboard.js` built one uPlot `axis` object and spread
+it into both axes with `stroke: palette.axis` (`--bh-control-border`). uPlot's naming is the trap:
+its axis draw loop reads `axis.stroke` and hands it to the text setter as `fillStyle` for **both**
+the axis label and the tick values, while `grid.stroke`/`ticks.stroke` are the drawn marks. So the
+one token named "axis" was the only one that was not a mark. 12px tick text shipped at 3.35:1 light
+/ 3.59:1 dark against a 4.5:1 floor; `palette.label` already existed and was dead. Fix: `stroke`
+moves to `palette.label`; the marks stay on their tokens.
+
+Regression cover: `dashboard-smoke.js` now asserts both halves — that both axes' `stroke` is the
+muted token while `ticks`/`grid` keep theirs, and that both themes' tokens clear their floors
+arithmetically, reading the values from `index.html` (passed as argv[4]) rather than restating them.
+Five mutations were run against it and each failed the harness: `stroke` back on `palette.axis`;
+marks moved onto the text token; a y-axis-only half-fix; a dark `--bh-text-muted` dimmed to 2.88:1;
+and the harness run without argv[4].
+
 ## 8. Divergences from this plan (recorded during implementation)
 
 1. **Pass 3 of the smoke harness uses a recording stub, not the real vendored library.** The plan
@@ -293,6 +337,11 @@ the legend swatches, and command targets measured 31 px. Neither is visible to `
    (time-scale x values, honest nulls, shared cohort domain), which is where charting bugs live,
    and the vendored bytes get their own `VendoredAssetsTest` instead. `DashboardScriptTest` is
    therefore unchanged. Browser verification covers what neither can.
+   **Amended (post-review):** `DashboardScriptTest` did gain one argv after all — `index.html`, so
+   the harness can read the DESIGN-V2 token values from the file that declares them instead of
+   restating them (§7.1). It is the token *values* being loaded, not the charting library, so the
+   reasoning above is untouched: nothing is stubbed, and the file is read off the same classpath as
+   the other resources, keeping it a declared input of the test task.
 2. **Builds per day is two labelled series, not one bar recoloured on failure.** The plan carried
    the old "failures highlighted" framing. Plotting `builds` and `failures` as separate labelled
    series shows *how many* failed rather than only *that* something did, and stops meaning resting

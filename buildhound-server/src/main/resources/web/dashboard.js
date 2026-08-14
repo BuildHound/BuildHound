@@ -1297,8 +1297,13 @@
         pruneCharts();
         try {
             const palette = chartPalette();
+            // uPlot's naming is a trap: `axis.stroke` is the fill the draw loop hands the text
+            // setter for the tick values and the axis label, so it carries the 4.5:1 text token,
+            // not the boundary one. `grid.stroke` and `ticks.stroke` are the drawn marks and keep
+            // theirs (plan 108 §3.5). Wiring `stroke` to palette.axis put 12px tick text at
+            // 3.35:1 light / 3.59:1 dark.
             const axis = {
-                stroke: palette.axis,
+                stroke: palette.label,
                 grid: { stroke: palette.grid, width: 1 },
                 ticks: { stroke: palette.axis, width: 1 },
                 font: palette.font,

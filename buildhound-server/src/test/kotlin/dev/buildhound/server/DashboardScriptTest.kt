@@ -25,8 +25,13 @@ class DashboardScriptTest {
         // The shared timeline renderer rides in on the buildhound-report dependency; the
         // harness loads it as a global before dashboard.js, like the browser does (plan 017).
         val timeline = dir.resolve("timeline.js").also { it.writeBytes(resource("dev/buildhound/report/timeline.js")) }
+        // index.html owns the DESIGN-V2 token values (plan 108 §6.4). The harness reads them from
+        // here rather than restating them, so a token edit that drops a chart colour under its
+        // WCAG floor fails this test instead of shipping. Loaded off the classpath like the rest,
+        // so it stays a declared input of this task.
+        val page = dir.resolve("index.html").also { it.writeBytes(resource("web/index.html")) }
 
-        val process = ProcessBuilder("node", harness.toString(), script.toString(), timeline.toString())
+        val process = ProcessBuilder("node", harness.toString(), script.toString(), timeline.toString(), page.toString())
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.readBytes().decodeToString()

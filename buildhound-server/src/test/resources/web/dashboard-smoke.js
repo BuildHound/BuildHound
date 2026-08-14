@@ -85,6 +85,42 @@ function clickButton(node, label) {
     button.listeners.click[0]();
 }
 
+// --- DESIGN-V2 token contrast (plan 108 §6.4) -------------------------------------------------
+// The chart's colours are plain strings here, never painted pixels, so a contrast regression is
+// invisible to every other assertion in this file. These two helpers close that: the token values
+// are read from the page that actually defines them (index.html, argv[4]) and held to the WCAG
+// floors arithmetically, and the chart assertions below bridge them to what dashboard.js hands
+// the library. Each token is declared exactly twice — once in `:root`, once in the dark
+// `@media` block, in that order — which is what makes "first is light, second is dark" safe.
+function readThemeTokens(path, names) {
+    if (!path) throw new Error("index.html was not passed to the harness (argv[4]) — token assertions cannot run");
+    const css = fs.readFileSync(path, "utf8");
+    const light = {}, dark = {};
+    for (const name of names) {
+        const found = css.match(new RegExp("--" + name + ":\\s*(#[0-9A-Fa-f]{6})", "g")) || [];
+        if (found.length !== 2) {
+            throw new Error("expected exactly two --" + name + " declarations (light then dark), found " + found.length);
+        }
+        const hex = decl => decl.slice(decl.indexOf("#")).toUpperCase();
+        light[name] = hex(found[0]);
+        dark[name] = hex(found[1]);
+    }
+    return { light: light, dark: dark };
+}
+
+// WCAG 2.1 relative luminance and contrast ratio (§1.4.3 / §1.4.11).
+function contrastRatio(foreground, background) {
+    const luminance = hex => {
+        const channel = offset => {
+            const value = parseInt(hex.slice(offset, offset + 2), 16) / 255;
+            return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+    };
+    const a = luminance(foreground), b = luminance(background);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
 const store = {};
 const localStore = {}; // localStorage backing (plan 101) — kept separate from sessionStorage's `store`
 const responses = {
@@ -998,6 +1034,48 @@ const tick = () => new Promise(resolve => setTimeout(resolve, 0));
     }
     if (!cohortCall.data.slice(1).some(s => s.some(v => v === null))) {
         throw new Error("a cohort with no build on a shared day must hold null there, not be re-indexed");
+    }
+
+    // Axis contrast (plan 108 §6.4: every mark clears 3:1, every label 4.5:1). uPlot's naming is
+    // the trap this guards: `axis.stroke` is the fill its draw loop hands the text setter for the
+    // tick values and the axis label, while `grid.stroke` and `ticks.stroke` are the drawn marks.
+    // One `axis` object was spread into BOTH axes with `stroke` on the control-boundary token, so
+    // 12px tick text shipped at 3.35:1 — hence both axes are asserted here, not just the first.
+    //
+    // No getComputedStyle exists in this context, so dashboard.js resolves each token to its
+    // literal fallback: comparing those against index.html's real declarations pins the wire and
+    // catches the fallbacks drifting from the tokens in the same assertion.
+    const TOKENS = readThemeTokens(process.argv[4], ["bh-surface", "bh-grid", "bh-control-border", "bh-text-muted"]);
+    for (const theme of ["light", "dark"]) {
+        const t = TOKENS[theme];
+        // .chart-card sits on --bh-surface, so that is what every chart colour is read against.
+        const textRatio = contrastRatio(t["bh-text-muted"], t["bh-surface"]);
+        if (textRatio < 4.5) {
+            throw new Error("axis tick text (" + theme + " --bh-text-muted " + t["bh-text-muted"] + ") is "
+                + textRatio.toFixed(2) + ":1 on --bh-surface, under the 4.5:1 floor for small text");
+        }
+        const markRatio = contrastRatio(t["bh-control-border"], t["bh-surface"]);
+        if (markRatio < 3) {
+            throw new Error("tick marks and the cursor crosshair (" + theme + " --bh-control-border "
+                + t["bh-control-border"] + ") are " + markRatio.toFixed(2) + ":1 on --bh-surface, under 3:1");
+        }
+    }
+    // Both sides are normalised: a future lowercase literal is the same colour, not a failure.
+    const asHex = value => String(value).toUpperCase();
+    for (const [name, axisOpts] of [["x", duration.opts.axes[0]], ["y", duration.opts.axes[1]]]) {
+        if (asHex(axisOpts.stroke) !== TOKENS.light["bh-text-muted"]) {
+            throw new Error("the " + name + " axis's tick TEXT must be drawn in --bh-text-muted ("
+                + TOKENS.light["bh-text-muted"] + "), got " + axisOpts.stroke
+                + " — uPlot's axis.stroke is text fill, not the mark colour");
+        }
+        // The marks stay where they were: moving them onto the text token would be a silent
+        // regression in the other direction (the boundary token is what DESIGN-V2 assigns them).
+        if (asHex(axisOpts.ticks.stroke) !== TOKENS.light["bh-control-border"]) {
+            throw new Error("the " + name + " axis's tick MARKS must stay on --bh-control-border, got " + axisOpts.ticks.stroke);
+        }
+        if (asHex(axisOpts.grid.stroke) !== TOKENS.light["bh-grid"]) {
+            throw new Error("the " + name + " axis's grid must stay on the --bh-grid measurement grid, got " + axisOpts.grid.stroke);
+        }
     }
 
     // Keyboard parity for the pointer-driven series toggle (DESIGN-V2 §8).
