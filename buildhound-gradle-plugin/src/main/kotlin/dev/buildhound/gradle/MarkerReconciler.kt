@@ -24,8 +24,15 @@ internal object MarkerReconciler {
         // Oldest first, so the longest-lost build surfaces first and the cap is deterministic.
         val sorted = markers.sortedBy { it.startedAtMs }
         val (expired, live) = sorted.partition { nowMs - it.startedAtMs > ttlMs }
-        // Live overflow beyond `max` is neither reconciled nor pruned this build — the next build
-        // drains it (each build clears up to `max` and adds none of its own), so the dir converges.
+        // Live overflow beyond `max` is neither reconciled nor pruned this build. That USED to
+        // converge on its own, because every reconciled marker was then deleted and the window
+        // advanced by `max` each build. Since plan 110 a marker whose upload was skipped for a
+        // server-configuration gap is retained, so it re-occupies its slot: with more than `max`
+        // live markers the same oldest ones are re-selected until they either publish or hit the
+        // TTL, and the overflow can be pruned without ever being visited. Deliberate — the cap is
+        // what keeps this bounded on the always-on finalizer path — and the cost is a local
+        // `interrupted/` mirror, never the marker itself or publication (once a server exists,
+        // uploads free `max` slots per build).
         return Plan(reconcile = live.take(max), prune = expired.map { it.buildId })
     }
 }

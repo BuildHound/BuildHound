@@ -754,8 +754,8 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
      * server, then upload/spool it through the same [UploadGate]/[PayloadUploader] as a normal
      * build of the dead build's own mode.
      *
-     * @return whether the caller may delete the start marker. False only when the upload was
-     *   skipped for a *server-configuration* gap ([UploadGate.Cause.isServerConfigGap]) — the
+     * @return whether the caller may delete the start marker. False only when a server-configuration
+     *   gap was the *sole* blocker ([UploadGate.Decision.Skip.retryWhenServerConfigured]) — the
      *   machine could not publish and a later build may be able to, so the marker survives to drive
      *   that retry (plan 110). A consent or standing-choice skip returns true and the marker is
      *   dropped as before: re-offering those on a later build would publish something the user
@@ -814,7 +814,7 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 true
             }
             is UploadGate.Decision.Skip ->
-                if (decision.cause.isServerConfigGap) {
+                if (decision.retryWhenServerConfigured) {
                     logger.info(
                         "[buildhound] interrupted build {} kept for a later build to publish: {}",
                         payload.buildId,

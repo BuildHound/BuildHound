@@ -3,7 +3,9 @@ package dev.buildhound.gradle
 import dev.buildhound.commons.payload.BuildMode
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class UploadGateTest {
 
@@ -67,17 +69,46 @@ class UploadGateTest {
     }
 
     /**
-     * The split plan 110's marker retention keys on. A configuration gap means the machine *could
-     * not* publish and a later build may be able to; everything else is a decision not to publish,
-     * and re-offering those would push out something the user declined — including, for
-     * [UploadGate.Cause.LOCAL_OPT_IN_MISSING], a build recorded before consent existed.
+     * What plan 110's marker retention keys on: a server-configuration gap that was the **sole**
+     * blocker. `decide` reports the first blocker, and the server check comes first, so a payload can
+     * be reported as `NO_SERVER` while consent would have refused it too — that must not be
+     * retryable, or a `~/.buildhound/optin` created later would publish a build recorded before
+     * consent existed.
      */
     @Test
-    fun `only a missing or unusable server url counts as a configuration gap`() {
-        assertEquals(
-            setOf(UploadGate.Cause.NO_SERVER, UploadGate.Cause.SERVER_URL_NOT_HTTP),
-            UploadGate.Cause.entries.filter { it.isServerConfigGap }.toSet(),
-            "retention must not widen to a consent or standing-choice skip",
+    fun `a skip is retryable only when the server gap is the sole blocker`() {
+        // CI with no server: nothing else objects, so a later build with a server may publish it.
+        assertTrue(
+            assertIs<UploadGate.Decision.Skip>(decide(serverUrl = null)).retryWhenServerConfigured,
+        )
+        assertTrue(
+            assertIs<UploadGate.Decision.Skip>(decide(serverUrl = "ftp://host")).retryWhenServerConfigured,
+        )
+        // LOCAL with no server AND no opt-in — the plugin's DEFAULT configuration. Reported as
+        // NO_SERVER because that is the first blocker, but consent would have refused it as well.
+        val masked = assertIs<UploadGate.Decision.Skip>(decide(serverUrl = null, mode = BuildMode.LOCAL))
+        assertEquals(UploadGate.Cause.NO_SERVER, masked.cause, "the reported blocker is unchanged")
+        assertFalse(
+            masked.retryWhenServerConfigured,
+            "a build consent would also have blocked must never become retryable",
+        )
+        // Same, for the standing choice.
+        assertFalse(
+            assertIs<UploadGate.Decision.Skip>(
+                decide(serverUrl = null, mode = BuildMode.LOCAL, localBuildsEnabled = false, optInFileExists = true),
+            )
+                .retryWhenServerConfigured,
+        )
+        // LOCAL that consent permits, blocked only by the missing server.
+        assertTrue(
+            assertIs<UploadGate.Decision.Skip>(
+                decide(serverUrl = null, mode = BuildMode.LOCAL, requireOptInFile = false),
+            )
+                .retryWhenServerConfigured,
+        )
+        // A consent skip is never retryable.
+        assertFalse(
+            assertIs<UploadGate.Decision.Skip>(decide(mode = BuildMode.LOCAL)).retryWhenServerConfigured,
         )
     }
 }

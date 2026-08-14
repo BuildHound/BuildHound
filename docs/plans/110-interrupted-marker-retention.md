@@ -114,6 +114,21 @@ The split is deliberate, and it is a privacy decision as much as a tidiness one:
 So the change never widens what leaves the machine; it only defers publication of builds that were
 always eligible.
 
+**The cause alone is not enough to express that, and the first cut of this plan got it wrong (review
+finding B1, fixed before merge).** `UploadGate.decide` reports the *first* blocker, and the server
+check runs before the mode/consent rules — so in the plugin's **default** configuration (offline,
+`requireOptInFile = true`, no opt-in marker) a `LOCAL` build is blocked by the missing server *and*
+by consent, and was reported as `NO_SERVER`. Keying retention on the cause therefore retained exactly
+the builds this section promises to drop, and a developer who later configured a server and created
+the opt-in marker published builds recorded before they consented. Reproduced end-to-end before
+fixing: the stub ingest server received the pre-consent payload.
+
+The decision therefore carries `Skip.retryWhenServerConfigured`, true only when a server gap was the
+**sole** blocker — `decide` evaluates the mode rules regardless of server presence and reports the
+first blocker while answering the retry question honestly. Which blocker is *named* stays as it was,
+so an offline user is still told "no server configured" rather than being sent to look for an opt-in
+file they also need.
+
 ### 4.3 Not paying synthesis twice
 
 A retained marker is re-visited by every subsequent build. `routeInterruptedBuild` currently
@@ -173,6 +188,17 @@ misleading — it will be retried. Retained skips say so; deleted skips keep the
   The only behavioural change is *when* an already-eligible build is uploaded.
 - **A retained marker for a build that will never publish** lingers up to the TTL. That is the
   existing bound for every marker, not a new class of garbage.
+- **Above `MAX_RECONCILE` live markers, the newest are no longer mirrored on their first visit**
+  (review finding N1). `MarkerReconciler.plan` takes the oldest 20 of the live set; before this plan
+  every visited marker was deleted, so the window advanced by 20 each build, and the class comment
+  says as much ("each build clears up to `max` and adds none of its own, so the dir converges").
+  Retained markers now re-occupy their slots, so a burst of more than 20 crashes between builds can
+  leave the overflow un-mirrored until the TTL prunes it. Accepted, not fixed: the casualty is a
+  local `interrupted/*.json` that nothing reads, the marker itself stays in `started/` for the full
+  TTL, and publication is unaffected — once a server exists, uploads free 20 slots per build and the
+  backlog drains. Raising the cap or visiting every live marker would remove the bound the class
+  exists to provide, on the always-on finalizer path. The comment and this plan now say so instead of
+  claiming convergence.
 - **PR scope.** Plan 109's PR now mixes a CI-pipeline repair with a plugin behaviour change (§1). If
   that proves hard to review as one unit, the split is mechanical — these commits touch no file that
   109 touches.

@@ -55,6 +55,13 @@ class LostBuildFunctionalTest {
             """
             plugins { id("dev.buildhound") }
             rootProject.name = "lost-build-fixture"
+            buildhound {
+                // seedMarker writes "mode":"local", and `requireOptInFile` defaults to true — so
+                // without this the seeded markers are blocked by CONSENT, not by the missing server,
+                // and the retention cases below would silently stop testing retention. The
+                // consent path has its own cases that set this deliberately.
+                localBuilds { requireOptInFile = false }
+            }
             """.trimIndent(),
         )
         File(projectDir, "build.gradle.kts").writeText("""tasks.register("hello") { doLast { println("hello") } }""")
@@ -178,6 +185,58 @@ class LostBuildFunctionalTest {
             "a consent skip must still consume the marker",
         )
         assertTrue(received.isEmpty(), "nothing may be published without the opt-in marker, got: $received")
+    }
+
+    /**
+     * The privacy invariant plan 110 §4.2 claims: a build the consent rule would have blocked must
+     * never become publishable later.
+     *
+     * The trap is that `UploadGate.decide` reports the FIRST blocker. Offline — the plugin's default
+     * — a `LOCAL` build with no `~/.buildhound/optin` is blocked by *both* the missing server and the
+     * missing consent, and if the missing server is the one reported, retention keeps the marker. A
+     * developer who later configures a server and opts in would then publish builds recorded before
+     * they ever consented.
+     */
+    @Test
+    fun `an offline build the consent rule would block is not published after a later opt-in`() {
+        // Run 1: no server, and `requireOptInFile` at its DEFAULT of true — not setUpPlainProject(),
+        // which opts out of it precisely so the retention cases stay about the server. This fixture
+        // is the plugin's stock configuration, which is the whole point of the scenario.
+        File(projectDir, "settings.gradle.kts").writeText(
+            """
+            plugins { id("dev.buildhound") }
+            rootProject.name = "lost-build-fixture"
+            """.trimIndent(),
+        )
+        File(projectDir, "build.gradle.kts").writeText("""tasks.register("hello") { doLast { println("hello") } }""")
+        seedMarker("pre-consent")
+        runner("hello").build()
+        assertFalse(
+            File(startedDir(), "pre-consent.json").exists(),
+            "a marker that consent would also have blocked must not be retained",
+        )
+
+        // Run 2: the developer onboards — a server appears AND they create the opt-in marker.
+        val optIn = File(projectDir, "optin-marker").apply { writeText("") }
+        File(projectDir, "settings.gradle.kts").writeText(
+            """
+            plugins { id("dev.buildhound") }
+            rootProject.name = "lost-build-fixture"
+            buildhound {
+                server { url = "${serverUrl()}" }
+                localBuilds { requireOptInFile = true }
+            }
+            """.trimIndent(),
+        )
+        // -P rather than gradle.properties: an absolute path in a properties file is
+        // escape-mangled on Windows.
+        val result = runner("hello", "-Pbuildhound.optin.file=${optIn.invariantSeparatorsPath}").build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        assertTrue(
+            received.none { it.contains(""""buildId":"pre-consent"""") },
+            "a build recorded before consent existed must never be published, got: $received",
+        )
     }
 
     /**
