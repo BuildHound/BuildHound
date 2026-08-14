@@ -2,9 +2,9 @@
 
 ## 1. Source
 
-`docs/overhead-budget.md` and plan [034](implemented/034-plugin-overhead-budget.md) (the
+`docs/overhead-budget.md` and plan [034](034-plugin-overhead-budget.md) (the
 "never slow the build *noticeably*" guardrail); plan
-[104](104-machine-specs-and-resource-usage.md) exit criterion 5, which cannot be met while the
+[104](../104-machine-specs-and-resource-usage.md) exit criterion 5, which cannot be met while the
 job measures nothing. Bug report: the `overhead-budget` job reports **success without running the
 benchmark** (reproduced on `main` at `be8c255`, Actions run 31323612781 — green in ~17 s).
 

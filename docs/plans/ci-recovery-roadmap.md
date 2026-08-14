@@ -2,9 +2,9 @@
 
 **Goal:** every defect in `docs/ci-pipeline-research.md` fixed and one full
 **review → staging → production** delivery proven live.
-**Plans executed, in order:** [088](088-ci-staging-review-bugfixes.md) →
-[089](089-review-cleanup-reconciler-authority.md) →
-[090](090-promotion-chain-collapse.md) → [091](091-dokploy-client-shrink.md).
+**Plans executed, in order:** [088](implemented/088-ci-staging-review-bugfixes.md) →
+[089](implemented/089-review-cleanup-reconciler-authority.md) →
+[090](implemented/090-promotion-chain-collapse.md) → [091](implemented/091-dokploy-client-shrink.md).
 This file is written for an orchestrator agent with **no memory of the research
 conversation**. Everything needed is here, in the four plan files, and in
 `docs/ci-pipeline-research.md` (evidence + tradeoffs; read §2 and §5 first).
