@@ -5,14 +5,14 @@ JUnit XML (053)`, f8e75c0; capping/mixed-mode review fixes in d11e823)
 
 ## Source
 
-- Research finding **F3**, [`docs/research/ingest-corpus-analysis.md`](../research/ingest-corpus-analysis.md)
+- Research finding **F3**, [`docs/research/ingest-corpus-analysis.md`](../../research/ingest-corpus-analysis.md)
   §3 — "Official advice to disable JUnit XML silently kills plan-024 test telemetry."
-- Source article: [`docs/research/processed/Improve the Performance of Gradle Builds.md`](../research/processed/Improve%20the%20Performance%20of%20Gradle%20Builds.md)
+- Source article: [`docs/research/processed/Improve the Performance of Gradle Builds.md`](../../research/processed/Improve%20the%20Performance%20of%20Gradle%20Builds.md)
   — Gradle's own guide recommends `reports.junitXml.required = false` on `Test` tasks "if you
   use a Build Scan." A team following it loses **all** BuildHound test telemetry (plan
-  [024](implemented/024-test-collection.md)) with zero signal — a latent product risk, not a feature idea.
-- Spec [§3.5](../build-telemetry-spec.md) (test collection parses JUnit XML), [§3.7](../build-telemetry-spec.md)
-  (no absolute paths in payload), [§4](../build-telemetry-spec.md) (payload schema, additive-only).
+  [024](024-test-collection.md)) with zero signal — a latent product risk, not a feature idea.
+- Spec [§3.5](../../build-telemetry-spec.md) (test collection parses JUnit XML), [§3.7](../../build-telemetry-spec.md)
+  (no absolute paths in payload), [§4](../../build-telemetry-spec.md) (payload schema, additive-only).
   Cross-cutting rec §3 in the finding flags F3 as "a latent risk worth an issue today."
 
 ## Scope
@@ -29,7 +29,7 @@ JUnit XML (053)`, f8e75c0; capping/mixed-mode review fixes in d11e823)
   **`#/tests` page**: "Test telemetry unavailable — JUnit XML disabled on `:app:test`."
 - Docs (finding's "Do" (b)/(c)): a user-facing note — *keep `junitXml.required = true`, disable
   the HTML report for the perf win instead* — plus an architecture decision-log row and a
-  standing-risk entry in [`build-telemetry-research.md §6`](../build-telemetry-research.md).
+  standing-risk entry in [`build-telemetry-research.md §6`](../../build-telemetry-research.md).
 
 **Out**
 

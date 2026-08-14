@@ -4,19 +4,19 @@
 
 ## 1. Source
 
-- Roadmap [phase 4 item 3](../build-telemetry-roadmap.md): reserved `extensions` payload map,
+- Roadmap [phase 4 item 3](../../build-telemetry-roadmap.md): reserved `extensions` payload map,
   `BuildHoundCollectorRegistry` in commons, `/v1/addons/<id>/…` namespace.
-- Research [plugin-ecosystem-gap-analysis.md §6](../research/plugin-ecosystem-gap-analysis.md)
+- Research [plugin-ecosystem-gap-analysis.md §6](../../research/plugin-ecosystem-gap-analysis.md)
   (the five-point addon architecture) and §2.4/§2.5 (the two first consumers).
-- Research [test-distribution-addon.md §2.1/§2.6/§2.7](../research/test-distribution-addon.md)
+- Research [test-distribution-addon.md §2.1/§2.6/§2.7](../../research/test-distribution-addon.md)
   (sharding's demands on this foundation: `extensions["testSharding"]`, namespaced endpoint,
   unit-key ownership in commons).
-- Spec [§4](../build-telemetry-spec.md) (payload, additive), [§5](../build-telemetry-spec.md)
-  (tenancy, token scopes), [§8](../build-telemetry-spec.md) (size cap, hashed tokens),
-  [§3.7](../build-telemetry-spec.md) (privacy).
-- Architecture [§2](../architecture.md) (CC safety, never-fail, public contracts),
-  [§3](../architecture.md) (additive schema), [§5](../architecture.md) (persistence boundary,
-  tenancy), [§6](../architecture.md) (security/privacy), decision log [§7](../architecture.md).
+- Spec [§4](../../build-telemetry-spec.md) (payload, additive), [§5](../../build-telemetry-spec.md)
+  (tenancy, token scopes), [§8](../../build-telemetry-spec.md) (size cap, hashed tokens),
+  [§3.7](../../build-telemetry-spec.md) (privacy).
+- Architecture [§2](../../architecture.md) (CC safety, never-fail, public contracts),
+  [§3](../../architecture.md) (additive schema), [§5](../../architecture.md) (persistence boundary,
+  tenancy), [§6](../../architecture.md) (security/privacy), decision log [§7](../../architecture.md).
 
 This plan is the **sole owner** of the payload `extensions` map
 (`extensions: Map<String, JsonElement>` on `BuildPayload`) and of `BuildHoundCollectorRegistry`

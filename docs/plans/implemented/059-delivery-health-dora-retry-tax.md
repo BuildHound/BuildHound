@@ -13,19 +13,19 @@ below (already present) records the same-PR deltas from the original design.
   page: DORA proxies + the retry tax"). Sources: Develocity 360's build-observability-as-DORA-
   foundation pitch + the IEEE flakiness study (Parry et al. 2022 — "rerun the failing build" is
   the most common flakiness response), from the `docs/research/processed/` corpus.
-- Spec [§1 non-goals](../build-telemetry-spec.md) (`spec:13`): **Git/DORA analytics is a v1
+- Spec [§1 non-goals](../../build-telemetry-spec.md) (`spec:13`): **Git/DORA analytics is a v1
   non-goal.** This plan stays inside that boundary — it collects nothing new, mines no git
   history or deployment data, and labels every metric a *proxy over already-ingested build data*.
   The coarse fleet `successRate` KPI already ships (plan 032); this refines it per branch/pipeline.
-- Read-side rollup discipline: plan [010](implemented/010-query-api-rollups.md) (on-read,
-  tenant-scoped), plan [032](implemented/032-bottlenecks-landing-page.md) (`BottleneckCalculator`
+- Read-side rollup discipline: plan [010](010-query-api-rollups.md) (on-read,
+  tenant-scoped), plan [032](032-bottlenecks-landing-page.md) (`BottleneckCalculator`
   two-store parity, fleet `successRate` `KpiDelta`, dashboard landing conventions, no-migration
-  default), plan [036](implemented/036-flaky-detection.md) (`store.flaky`, `FlakyRecord`,
-  `#/flaky`), plan [028](implemented/028-azure-devops-connector.md) (`ci_runs`, `queuedMs`,
-  `GradleShare.percent`, `CiSpanStore.findRun`), plans [041](implemented/041-ci-connectors-gha-gitlab.md)
-  + [027](implemented/027-ci-env-breadth.md) (`ci.attributes["runAttempt"]`),
-  plan [033](implemented/033-lost-build-accounting.md) (INTERRUPTED synthetic-duration exclusion),
-  plan [025](implemented/025-regression-engine-v1.md) (`RegressionEngine.requestedTasksSignature`/
+  default), plan [036](036-flaky-detection.md) (`store.flaky`, `FlakyRecord`,
+  `#/flaky`), plan [028](028-azure-devops-connector.md) (`ci_runs`, `queuedMs`,
+  `GradleShare.percent`, `CiSpanStore.findRun`), plans [041](041-ci-connectors-gha-gitlab.md)
+  + [027](027-ci-env-breadth.md) (`ci.attributes["runAttempt"]`),
+  plan [033](033-lost-build-accounting.md) (INTERRUPTED synthetic-duration exclusion),
+  plan [025](025-regression-engine-v1.md) (`RegressionEngine.requestedTasksSignature`/
   `median`). Sibling read-side slice: plan [057](057-tag-cohort-comparison.md).
 
 ## Scope

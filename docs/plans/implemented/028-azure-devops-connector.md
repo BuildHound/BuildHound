@@ -4,20 +4,20 @@
 
 ## 1. Source
 
-- [build-telemetry-roadmap.md](../build-telemetry-roadmap.md) Phase 3, bullet 1:
+- [build-telemetry-roadmap.md](../../build-telemetry-roadmap.md) Phase 3, bullet 1:
   "AzureDevOpsConnector (Timeline pull, optional service hooks) → CI span tree + queue
   time, 'Gradle share of pipeline'".
-- [build-telemetry-spec.md](../build-telemetry-spec.md) §5 "CI connector SPI (backend
+- [build-telemetry-spec.md](../../build-telemetry-spec.md) §5 "CI connector SPI (backend
   side)" (the `CiConnector` interface, `CiRun`/`CiSpan`/`queuedMs` normalized tree,
   `ci_spans` table, `NoopConnector` shipping in v1), §2 architecture diagram
   (`CiConnector SPI ◄─ AzureDevOpsConnector`), §6 dashboard "Build detail (… + CI span
   tree …)".
-- [architecture.md](../architecture.md) §5 (server: `BuildStore` persistence boundary,
+- [architecture.md](../../architecture.md) §5 (server: `BuildStore` persistence boundary,
   multi-tenancy, `buildHoundModule` route testability), §6 (tokens env-only, hashed at
   rest), §4 (OCI env-only config).
-- Research: [plugin-ecosystem-gap-analysis.md §6](../research/plugin-ecosystem-gap-analysis.md)
+- Research: [plugin-ecosystem-gap-analysis.md §6](../../research/plugin-ecosystem-gap-analysis.md)
   (server connector namespace/registration discipline), §4.4 (Azure env mapping origin);
-  [dashboard-ux-research.md §4.2.8](../research/dashboard-ux-research.md) (cross-linking /
+  [dashboard-ux-research.md §4.2.8](../../research/dashboard-ux-research.md) (cross-linking /
   provenance links, CI span tree on build detail, honest degraded states).
 
 ## 2. Scope

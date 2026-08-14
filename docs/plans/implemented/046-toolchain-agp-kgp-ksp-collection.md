@@ -4,7 +4,7 @@
 
 ## 1. Source
 
-Follow-up filed by [plan 032](implemented/032-bottlenecks-landing-page.md) §6 (lines 66–68,
+Follow-up filed by [plan 032](032-bottlenecks-landing-page.md) §6 (lines 66–68,
 252–255): the server toolchain-adoption view already renders `agp`/`kgp`/`ksp` as an explicit
 "not collected yet" degraded panel, because those `ToolchainInfo` fields
 (`buildhound-commons/.../payload/BuildPayload.kt`, `ToolchainInfo`) exist in the schema but the

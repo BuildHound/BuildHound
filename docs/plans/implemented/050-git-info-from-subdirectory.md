@@ -4,8 +4,8 @@
 
 Feature request: the dashboard *test & compare* build dropdown shows **"no branch"** for
 local builds, even though the VCS pipeline (collect → send → show) already exists end to end
-(plans [004](implemented/004-vcs-collector.md), [015](implemented/015-vcs-exec-timeout.md),
-[027](implemented/041-ci-connectors-gha-gitlab.md) links, and the server/report/dashboard
+(plans [004](004-vcs-collector.md), [015](015-vcs-exec-timeout.md),
+[027](041-ci-connectors-gha-gitlab.md) links, and the server/report/dashboard
 readers). Root cause: `GitExec` sets `GIT_CEILING_DIRECTORIES=<rootDir parent>` (a plan-004
 review finding — "never discover an enclosing, unrelated repository"), which also blocks the
 **legitimate** case where the Gradle root is a *subdirectory* of the repository (included /

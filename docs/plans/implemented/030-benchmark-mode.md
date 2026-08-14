@@ -4,22 +4,22 @@
 
 ## 1. Source
 
-- Roadmap [phase 3, "Benchmark mode" bullet](../build-telemetry-roadmap.md): gradle-profiler
+- Roadmap [phase 3, "Benchmark mode" bullet](../../build-telemetry-roadmap.md): gradle-profiler
   scheduled pipeline + Telltale's cache-isolation/tag-correlated methodology + the
   build-validation-scripts experiment recipes, feeding the comparison engine. Exit: "nightly
   benchmark series on the pilot".
-- Spec: [§7](../build-telemetry-spec.md) (scheduled gradle-profiler pipeline; scenarios
+- Spec: [§7](../../build-telemetry-spec.md) (scheduled gradle-profiler pipeline; scenarios
   clean/no-op/incremental-non-ABI/config-cache-hit; `mode=benchmark, scenario, iteration` tags),
-  [§2](../build-telemetry-spec.md) (side channel "gradle-profiler pipeline → tagged builds"),
-  [§4](../build-telemetry-spec.md) (`mode`/`tags`), [§6](../build-telemetry-spec.md) (Trends/Comparisons).
-- Research: [Telltale.md](../research/repos/Telltale.md) (twelve isolation modes via
+  [§2](../../build-telemetry-spec.md) (side channel "gradle-profiler pipeline → tagged builds"),
+  [§4](../../build-telemetry-spec.md) (`mode`/`tags`), [§6](../../build-telemetry-spec.md) (Trends/Comparisons).
+- Research: [Telltale.md](../../research/repos/Telltale.md) (twelve isolation modes via
   `GRADLE_HOME_CACHE_EXCLUDES`, seed-then-measure, tag correlation, profiler scenario generation,
-  percentiles over noisy runs); [Bagan.md](../research/repos/Bagan.md) (N-iteration percentile
+  percentiles over noisy runs); [Bagan.md](../../research/repos/Bagan.md) (N-iteration percentile
   comparison; experiment tagging validates the mode/scenario/iteration model; negative lessons on
   hardcoded wiring and duration-only analysis);
-  [cache-miss-input-fingerprints.md §3](../research/cache-miss-input-fingerprints.md) (the three
+  [cache-miss-input-fingerprints.md §3](../../research/cache-miss-input-fingerprints.md) (the three
   experiment pairs feeding the compare endpoint);
-  [plugin-ecosystem-gap-analysis.md §4.4](../research/plugin-ecosystem-gap-analysis.md)
+  [plugin-ecosystem-gap-analysis.md §4.4](../../research/plugin-ecosystem-gap-analysis.md)
   (`BUILDHOUND_*` env-override pattern).
 
 ## 2. Scope
@@ -77,7 +77,7 @@ exports `BUILDHOUND_BENCHMARK_{SCENARIO,ITERATION,ISOLATION,SEED_REF}`; a new `B
 `Serializable CollectedBenchmark?` (null when unset). Env is read in the ValueSource, never at apply
 time — nothing becomes a CC fingerprint input (architecture §2 rule 9), same discipline as
 `CiValueSource`. Reuses CCUD's `BUILDHOUND_*` override idea
-([gap-analysis §4.4](../research/plugin-ecosystem-gap-analysis.md); dovetails with plan 027).
+([gap-analysis §4.4](../../research/plugin-ecosystem-gap-analysis.md); dovetails with plan 027).
 `scenario`/`isolationMode` are validated against a fixed allowlist in the source so a typo cannot
 mint a new series (cardinality-in-code guardrail).
 
@@ -125,7 +125,7 @@ modes (full-cache, no-build-cache) and leaves the rest as recipe opt-ins. `BUILD
 mapped from a secret exactly as `buildhound-gradle-steps.yml:24-27` (no secrets in the template; no
 OpenAI/BigQuery side channel — explicit negative lesson from Telltale/Bagan).
 `docs/recipes/benchmark-and-experiments.md`: the four scenarios, reading a low-noise series, and the
-three build-validation pairs ([fingerprints §3](../research/cache-miss-input-fingerprints.md)) —
+three build-validation pairs ([fingerprints §3](../../research/cache-miss-input-fingerprints.md)) —
 same-sha CI↔CI, CI↔local, two-checkout relocatability — each "run the pair, tag both
 `buildhound.tags.put("experiment","exp05")`, open them on the comparisons page (plan 022)". The
 handoff to the comparison engine is documented, not code-coupled.

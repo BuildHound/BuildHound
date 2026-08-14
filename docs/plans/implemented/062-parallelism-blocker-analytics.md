@@ -17,12 +17,12 @@ remains explicitly deferred (see Out/deferred below and the architecture.md deci
   (the Plaid 335-node/1106-edge example where weighted-**degree** centrality surfaced
   `generateDebugFeatureTransitiveDep`, the hub the single longest chain misses; `TaskDependencyGraphPublisher`
   GEXF prior art) and `Talaiot at Scale.md`.
-- Builds on plans [038](implemented/038-internal-adapters.md) (edge list + `criticalPathMs`),
-  [039](implemented/039-addon-foundation.md) (`extensions` map + core/addon decoupling),
-  [022](implemented/022-input-fingerprints-compare.md) (per-build sibling-endpoint precedent),
-  [017](implemented/017-task-timeline.md) (task `startMs`), [032](implemented/032-bottlenecks-landing-page.md)
-  (Bottlenecks families), [026](implemented/026-server-rollups-project-cost.md) (rollup parity),
-  [019](implemented/019-cardinality-size-caps.md) (`PayloadCapper`). Spec §5 (query read routes), §6
+- Builds on plans [038](038-internal-adapters.md) (edge list + `criticalPathMs`),
+  [039](039-addon-foundation.md) (`extensions` map + core/addon decoupling),
+  [022](022-input-fingerprints-compare.md) (per-build sibling-endpoint precedent),
+  [017](017-task-timeline.md) (task `startMs`), [032](032-bottlenecks-landing-page.md)
+  (Bottlenecks families), [026](026-server-rollups-project-cost.md) (rollup parity),
+  [019](019-cardinality-size-caps.md) (`PayloadCapper`). Spec §5 (query read routes), §6
   (dashboard pages).
 
 ## Scope

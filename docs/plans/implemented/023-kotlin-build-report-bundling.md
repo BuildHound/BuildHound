@@ -4,16 +4,16 @@
 
 ## 1. Source
 
-- [Spec §3.4](../build-telemetry-spec.md) (Kotlin build reports: validate gradle.properties
+- [Spec §3.4](../../build-telemetry-spec.md) (Kotlin build reports: validate gradle.properties
   wiring, never mutate KGP properties, bundle in the Finalizer, schema-version tagged),
-  [§4](../build-telemetry-spec.md) (`kotlin` payload field), [§6](../build-telemetry-spec.md)
-  (Kotlin dashboard view), [§3.7](../build-telemetry-spec.md) (scrubbing of new free text).
-- [Roadmap phase 2b](../build-telemetry-roadmap.md): "Kotlin build-report bundling (json dir)
+  [§4](../../build-telemetry-spec.md) (`kotlin` payload field), [§6](../../build-telemetry-spec.md)
+  (Kotlin dashboard view), [§3.7](../../build-telemetry-spec.md) (scrubbing of new free text).
+- [Roadmap phase 2b](../../build-telemetry-roadmap.md): "Kotlin build-report bundling (json dir)
   + Kotlin dashboard panel."
-- Research: [comparison-to-spec.md](../research/comparison-to-spec.md) §2.3/§5 item 5 (zero
+- Research: [comparison-to-spec.md](../../research/comparison-to-spec.md) §2.3/§5 item 5 (zero
   prior art — greenfield collector over an unstable format) and §4 item 10 (specify the
   format-tolerance strategy *before* the bundler lands: name-keyed lookup, unknown-field
-  tolerance, per-version fixtures); [plugin-ecosystem-gap-analysis.md](../research/plugin-ecosystem-gap-analysis.md)
+  tolerance, per-version fixtures); [plugin-ecosystem-gap-analysis.md](../../research/plugin-ecosystem-gap-analysis.md)
   §7 (Kotlin reports listed as spec'd-not-built).
 
 ## 2. Scope

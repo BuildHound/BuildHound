@@ -4,22 +4,22 @@
 
 ## 1. Source
 
-- Roadmap [phase 4 item 5](../build-telemetry-roadmap.md): "OSS-launch hardening: self-host
+- Roadmap [phase 4 item 5](../../build-telemetry-roadmap.md): "OSS-launch hardening: self-host
   docs, API docs, optional MCP surface, retention config UI, Marketplace extension for Azure
   if adoption warrants." Phase-4 exit: "an outside team can self-host."
-- Spec [§5](../build-telemetry-spec.md): one Docker image + compose for self-host; per-project
+- Spec [§5](../../build-telemetry-spec.md): one Docker image + compose for self-host; per-project
   retention overrides; **retention defaults** (task/kotlin/ci-span raw 90d → build-level 13mo →
   daily aggregates indefinite; nightly downsample + purge jobs); `GET /v1/…` query API
   "public, documented, versioned (agent/MCP-friendly)"; Admin page "retention, salt rotation".
-- Spec [§8](../build-telemetry-spec.md): self-host compose documented à la Tuist; Apache-2.0;
+- Spec [§8](../../build-telemetry-spec.md): self-host compose documented à la Tuist; Apache-2.0;
   public docs site; hashed tokens; schema validated + size-capped.
-- Architecture [§4 OCI rules](../architecture.md) (multi-stage, non-root, digest-pinned bases,
-  SBOM/signing planned, small context) and [§5 server](../architecture.md) (persistence
+- Architecture [§4 OCI rules](../../architecture.md) (multi-stage, non-root, digest-pinned bases,
+  SBOM/signing planned, small context) and [§5 server](../../architecture.md) (persistence
   boundary, tenancy, on-read rollups) — this plan is the container-hardening review the roadmap
-  requires against §4, and the decision log [§7](../architecture.md).
-- Research [comparison-to-spec.md §3](../research/comparison-to-spec.md) (retention/downsampling,
+  requires against §4, and the decision log [§7](../../architecture.md).
+- Research [comparison-to-spec.md §3](../../research/comparison-to-spec.md) (retention/downsampling,
   admin APIs, and salt issuance named as unbuilt product-layer work; pilot risk concentrates
-  here) and [plugin-ecosystem-gap-analysis.md §3](../research/plugin-ecosystem-gap-analysis.md)
+  here) and [plugin-ecosystem-gap-analysis.md §3](../../research/plugin-ecosystem-gap-analysis.md)
   (eBay's **User Query** summarizer → the query API doubles as the MCP tool surface).
 
 This plan is the **last** phase-4 slice and documents/depends on the surfaces shipped by

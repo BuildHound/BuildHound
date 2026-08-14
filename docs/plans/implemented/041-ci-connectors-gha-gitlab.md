@@ -4,20 +4,20 @@
 
 ## 1. Source
 
-- [build-telemetry-roadmap.md](../build-telemetry-roadmap.md) Phase 4, item 4: "GitHub
+- [build-telemetry-roadmap.md](../../build-telemetry-roadmap.md) Phase 4, item 4: "GitHub
   Actions + GitLab CI connectors; composite action / CI includes; public 'write your own
   provider/connector' docs." Phase-4 exit: "an outside team can … connect an unsupported
   CI via the SPI."
-- [build-telemetry-spec.md](../build-telemetry-spec.md) §5 "CI connector SPI (backend
+- [build-telemetry-spec.md](../../build-telemetry-spec.md) §5 "CI connector SPI (backend
   side)": the `CiConnector` interface, `CiRun`/`CiSpan`/`queuedMs` normalized tree, "GitHub
   Actions / GitLab CI connectors are v1.x fast-follows implementing the same interface";
   §3.3 (plugin-side `CiEnvironmentProvider` SPI, "add your CI in 30 lines"); §7 "Equivalent
   GitHub Actions composite / GitLab include follow the connector order."
-- [architecture.md](../architecture.md) §5 (server: `BuildStore`/`CiSpanStore` boundary,
+- [architecture.md](../../architecture.md) §5 (server: `BuildStore`/`CiSpanStore` boundary,
   multi-tenancy, `buildHoundModule` route testability, instance-local enrichment queue),
   §6 (tokens env-only/hashed, SSRF host allowlist), §8 (`CiEnvironmentProvider` is a
   documented public contract), §2 rule 8.
-- Research: [plugin-ecosystem-gap-analysis.md §4.4](../research/plugin-ecosystem-gap-analysis.md)
+- Research: [plugin-ecosystem-gap-analysis.md §4.4](../../research/plugin-ecosystem-gap-analysis.md)
   (GitLab env mapping origin), §6 (server connector namespace/registration discipline),
   §4.5 (URL redaction, host-gating).
 

@@ -13,16 +13,16 @@
 
 ## 1. Source
 
-- Roadmap [phase 3](../build-telemetry-roadmap.md): "APK/AAB size capture using
+- Roadmap [phase 3](../../build-telemetry-roadmap.md): "APK/AAB size capture using
   AndroidArtifactsSizeReport's `onVariants`/`toListenTo` mechanics → spec §4 `artifacts`
   field + trend view."
-- Spec [§4](../build-telemetry-spec.md) declares the payload field
+- Spec [§4](../../build-telemetry-spec.md) declares the payload field
   `"artifacts": { "apk": [ { "variant": "release", "sizeBytes": 0, "type": "AAB" } ] }`;
-  [§5](../build-telemetry-spec.md) lists an `apk_sizes` core table and PR-vs-baseline
-  APK-size delta; [§6](../build-telemetry-spec.md) Trends page.
-- Research: [AndroidArtifactsSizeReport.md](../research/repos/AndroidArtifactsSizeReport.md)
+  [§5](../../build-telemetry-spec.md) lists an `apk_sizes` core table and PR-vs-baseline
+  APK-size delta; [§6](../../build-telemetry-spec.md) Trends page.
+- Research: [AndroidArtifactsSizeReport.md](../../research/repos/AndroidArtifactsSizeReport.md)
   (reference mechanics, CC- and isolated-projects-proven on Gradle 9.2.1) and
-  [comparison-to-spec.md §2.3](../research/comparison-to-spec.md) (adopt the mechanics
+  [comparison-to-spec.md §2.3](../../research/comparison-to-spec.md) (adopt the mechanics
   wholesale; emit structured records, not filename-encoded keys; react to AGP from the
   settings context; do not delete task outputs).
 
@@ -79,7 +79,7 @@ and `val artifacts: ArtifactSizes? = null` on `BuildPayload`; `SCHEMA_VERSION` s
 Spec §4 nests under `apk`; we emit `android` because the list mixes
 APK/AAB/AAR and the `type` field already disambiguates — the spec example is corrected to
 match in the same PR (recording the drift, per
-[comparison-to-spec.md §4 item 12](../research/comparison-to-spec.md)). Additive rules
+[comparison-to-spec.md §4 item 12](../../research/comparison-to-spec.md)). Additive rules
 (architecture §3.2): the field defaults to `null`, so an old payload with no `artifacts`
 key decodes unchanged and a new payload's block is simply ignored by any older reader via
 `ignoreUnknownKeys` — no version change is needed. The v1 golden is never edited; a new

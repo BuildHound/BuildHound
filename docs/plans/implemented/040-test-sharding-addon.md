@@ -30,17 +30,17 @@
 
 ## 1. Source
 
-- Roadmap [Phase 4 item 3](../build-telemetry-roadmap.md) — "Addon foundation + `dev.buildhound.test-sharding`
+- Roadmap [Phase 4 item 3](../../build-telemetry-roadmap.md) — "Addon foundation + `dev.buildhound.test-sharding`
   … server LPT plan over 30-day p90 per-class timings, `BUILDHOUND_SHARD_INDEX` interface, run-all-on-failure
   fallback, pinned `module/class` join key".
-- Research: [research/test-distribution-addon.md](../research/test-distribution-addon.md) (whole doc — the Tuist
+- Research: [research/test-distribution-addon.md](../../research/test-distribution-addon.md) (whole doc — the Tuist
   model, both source-verified defects to invert, join-key contract, privacy interaction §2.7) and
-  [research/plugin-ecosystem-gap-analysis.md §6](../research/plugin-ecosystem-gap-analysis.md) (addon packaging,
+  [research/plugin-ecosystem-gap-analysis.md §6](../../research/plugin-ecosystem-gap-analysis.md) (addon packaging,
   server contract, mutation boundary).
-- Spec [§3.5 test granularity](../build-telemetry-spec.md) (class-fqn keyed timings — the timing source this
-  balances over) and [§3.7 privacy](../build-telemetry-spec.md) (pseudonymization interaction).
-- Architecture [§2 rules 2/3/5/11](../architecture.md) (CC safety, never-fail, laziness, bounded subprocess/HTTP),
-  [§5 server](../architecture.md) (tenant-scoped, token-authed endpoints), [§6](../architecture.md) (token wiring).
+- Spec [§3.5 test granularity](../../build-telemetry-spec.md) (class-fqn keyed timings — the timing source this
+  balances over) and [§3.7 privacy](../../build-telemetry-spec.md) (pseudonymization interaction).
+- Architecture [§2 rules 2/3/5/11](../../architecture.md) (CC safety, never-fail, laziness, bounded subprocess/HTTP),
+  [§5 server](../../architecture.md) (tenant-scoped, token-authed endpoints), [§6](../../architecture.md) (token wiring).
 
 ## 2. Scope
 

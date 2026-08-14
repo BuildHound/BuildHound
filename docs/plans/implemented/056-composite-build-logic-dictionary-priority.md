@@ -16,7 +16,7 @@ builds are the agent-prescribed default." Sources: the 880-star `awesome-android
 as what AI assistants impose on multi-module Android projects) and Gradle's *Best Practices for
 Structuring Builds* (prescribes it as preferred). F6 reprioritizes the **deferred**
 [045](045-composite-task-dictionary.md) (task `type`/`cacheable` dictionary lost in composites);
-its predecessor [044](implemented/044-composite-build-config-data-loss.md) already fixed the *test-telemetry*
+its predecessor [044](044-composite-build-config-data-loss.md) already fixed the *test-telemetry*
 consumer of the same freeze. This plan raises 045 and closes it.
 
 ## Scope
@@ -25,7 +25,7 @@ consumer of the same freeze. This plan raises 045 and closes it.
 
 - Un-defer plan 045 and pick its **option (b)** — move the type/cacheable join off the collector's
   hot `onFinish` path into the finalizer — *refined* to deliver the dictionary via a **Flow-action
-  parameter** (the [046](implemented/046-toolchain-agp-kgp-ksp-collection.md) channel), not a sidecar. Justified
+  parameter** (the [046](046-toolchain-agp-kgp-ksp-collection.md) channel), not a sidecar. Justified
   below.
 - Extend `CompositeBuildTestCollectionFunctionalTest` (`buildhound-gradle-plugin/src/functionalTest`)
   to assert **non-null `tasks[].type`/`cacheable`** and **non-null `derived.cacheableHitRate`** on

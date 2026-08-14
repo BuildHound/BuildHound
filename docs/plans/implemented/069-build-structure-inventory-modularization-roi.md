@@ -25,7 +25,7 @@ This plan ships the **collection half only** — the declared build-structure tr
 already-computed-but-never-shipped `isolatedProjects` flag. Collection is temporally upstream of
 analysis: the module-count trend and modularization rules render nothing until this data has
 ridden across many builds, so they ship in a follow-up that consumes it — the same
-collection-before-analysis ordering as fingerprints (plan [022](implemented/022-input-fingerprints-compare.md))
+collection-before-analysis ordering as fingerprints (plan [022](022-input-fingerprints-compare.md))
 → the comparison endpoint.
 
 ## Scope
@@ -66,7 +66,7 @@ Modules: `buildhound-gradle-plugin` (collection), `buildhound-commons` (schema +
   script's `include(...)` calls run, so `apply()` is too early (F19 narrowing). Walk
   `settings.rootProject` — a `ProjectDescriptor`, **not** a `Project` — into an `AtomicReference`
   mailbox (the `toolchainHolder`/`taskMetadataHolder` pattern, plans
-  [046](implemented/046-toolchain-agp-kgp-ksp-collection.md)/[016](implemented/016-task-type-cacheable-capture.md)):
+  [046](046-toolchain-agp-kgp-ksp-collection.md)/[016](016-task-type-cacheable-capture.md)):
   `projectCount`, `maxDepth` (path-segment count), `settings.gradle.includedBuilds.size`, and a
   serializable `path → (buildFilePath, hasChildren)` map. Descriptors are settings-level metadata, so
   the walk is **not** a cross-project access — unlike the plan-016 task dictionary it stays populated
@@ -86,13 +86,13 @@ Modules: `buildhound-gradle-plugin` (collection), `buildhound-commons` (schema +
   `projectsLoaded`. Only the hook name changes; the design and risk analysis below are unaffected.
 - **Execution-time probes — `BuildStructureValueSource`.** A new `ValueSource` on the
   `FingerprintValueSource` pattern (plan 022) + the capture-location/read-at-execution split of plan
-  [024](implemented/024-test-collection.md): params carry the captured map + counts + `rootDir`
+  [024](024-test-collection.md): params carry the captured map + counts + `rootDir`
   (all serializable). `obtain()` runs every `.exists()`: `emptyIntermediateCandidates` =
   `hasChildren && !buildFile.exists()` (the `allprojects{}`-configured aggregator with no own build
   file — sorted + capped), `buildSrcPresent` (`<rootDir>/buildSrc`), `sourcesInRoot` (`<rootDir>/src`).
   Absolute `buildFilePath`s live **only** as a transient ValueSource param (baked into the local CC
   entry, exactly like `VcsValueSource`'s `rootDir` at `BuildHoundSettingsPlugin.kt:185`, plan
-  [050](implemented/050-git-info-from-subdirectory.md)); the shipped block carries Gradle paths + counts + booleans only.
+  [050](050-git-info-from-subdirectory.md)); the shipped block carries Gradle paths + counts + booleans only.
 - **Plumbing.** Register the value source under the existing `masterEnabled` gate. Add
   `TelemetryFinalizerAction.Parameters.buildStructure` (`@Optional`) and an `isolatedProjectsActive`
   scalar set from `buildFeatures.isolatedProjects.active.getOrElse(false)` — parallel to

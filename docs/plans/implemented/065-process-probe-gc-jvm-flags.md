@@ -15,10 +15,10 @@ tuning-card smoke coverage (065 review fixes)); see "Implementation notes" below
   Gradle's "the most effective optimization is upgrading the daemon JVM"; JEP 519 Compact
   Object Headers (~22 % heap, JDK 24+); ParallelGC-vs-G1 throughput trade-off; Kotlin daemon
   `kotlin.daemon.jvmargs` tuning.
-- Builds on [plan 029](implemented/029-process-probe.md) (process probe, spec §3.6),
-  [plan 022](implemented/022-input-fingerprints-compare.md) (`gradle.maxWorkers` **hash**),
-  [plan 032](implemented/032-bottlenecks-landing-page.md) (toolchain + bottleneck rollups),
-  [plan 030](implemented/030-benchmark-mode.md) (benchmark series). Spec §3.6 (process probe),
+- Builds on [plan 029](029-process-probe.md) (process probe, spec §3.6),
+  [plan 022](022-input-fingerprints-compare.md) (`gradle.maxWorkers` **hash**),
+  [plan 032](032-bottlenecks-landing-page.md) (toolchain + bottleneck rollups),
+  [plan 030](030-benchmark-mode.md) (benchmark series). Spec §3.6 (process probe),
   §3.7 (privacy), §4 (payload schema); roadmap phase 3.
 
 ## Scope

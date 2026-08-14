@@ -4,20 +4,20 @@
 
 ## 1. Source
 
-- [Roadmap phase 2a](../build-telemetry-roadmap.md): "tag/value cardinality + size caps in
+- [Roadmap phase 2a](../../build-telemetry-roadmap.md): "tag/value cardinality + size caps in
   assembler/scrubber", and the cross-phase guardrail "cardinality and payload-size budgets
   enforced in code, not docs".
-- [Spec §3.9](../build-telemetry-spec.md): the locked overflow strategy — "hard cap with
+- [Spec §3.9](../../build-telemetry-spec.md): the locked overflow strategy — "hard cap with
   overflow strategy (drop per-task execution reasons first, then truncate task array with
-  summary counts — never drop the build envelope)"; [spec §5](../build-telemetry-spec.md)
-  caps only the metric CLI today (100 measures/run, key+value ≤ 300 chars); [spec §8](../build-telemetry-spec.md)
+  summary counts — never drop the build envelope)"; [spec §5](../../build-telemetry-spec.md)
+  caps only the metric CLI today (100 measures/run, key+value ≤ 300 chars); [spec §8](../../build-telemetry-spec.md)
   promises "payload schema validated + size-capped".
 - Research: Talaiot ships `generateBuildId = false` by default because unbounded cardinality
-  wrecked its InfluxDB backends ([research/repos/Talaiot.md](../research/repos/Talaiot.md)) —
-  the scar this guardrail exists to avoid. [research/comparison-to-spec.md §4](../research/comparison-to-spec.md)
+  wrecked its InfluxDB backends ([research/repos/Talaiot.md](../../research/repos/Talaiot.md)) —
+  the scar this guardrail exists to avoid. [research/comparison-to-spec.md §4](../../research/comparison-to-spec.md)
   item 7 names the gap directly: "spec §3.4's `tags.put(...)`/`value(...)` DSL has no caps at
   all. Mirror the Datadog-style limits on the plugin side and enforce them in the
-  scrubber/assembler." [research/plugin-ecosystem-gap-analysis.md](../research/plugin-ecosystem-gap-analysis.md)
+  scrubber/assembler." [research/plugin-ecosystem-gap-analysis.md](../../research/plugin-ecosystem-gap-analysis.md)
   independently demands bounded volume (Talaiot's min-duration filters, §1 context).
 
 ## 2. Scope

@@ -12,12 +12,12 @@ Research finding **F14 — Configuration-cache economics & reuse diagnostics**
 configuration-cache guidance ("enable on CI for parallelism/early breakage; do not focus on cache
 reuse"; store 270 MB → 65 MB after dedup). Spec §3.2 (start-parameters + heuristics, refined later),
 §3.7 (pseudonymization), §3.9 (truncate + count). Builds on plans
-[016](implemented/016-task-type-cacheable-capture.md) (`configurationMs`, config dictionary),
-[022](implemented/022-input-fingerprints-compare.md) (salted build fingerprints),
-[026](implemented/026-server-rollups-project-cost.md) (server rollups),
-[028](implemented/028-azure-devops-connector.md) (CI correlation),
-[033](implemented/033-lost-build-accounting.md) (`userId`/marker), and
-[038](implemented/038-internal-adapters.md) (internal-adapters `derived` inputs).
+[016](016-task-type-cacheable-capture.md) (`configurationMs`, config dictionary),
+[022](022-input-fingerprints-compare.md) (salted build fingerprints),
+[026](026-server-rollups-project-cost.md) (server rollups),
+[028](028-azure-devops-connector.md) (CI correlation),
+[033](033-lost-build-accounting.md) (`userId`/marker), and
+[038](038-internal-adapters.md) (internal-adapters `derived` inputs).
 
 ## Scope
 
