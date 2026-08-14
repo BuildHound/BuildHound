@@ -209,9 +209,11 @@ jobs:
       #
       # The redirect marker is a DIAGNOSTIC inside the failure branch, never a per-build assertion,
       # and must stay one. `settingsEvaluated` does not run on a configuration-cache hit, so the
-      # marker appears only on CC-miss builds — in a cc_hit cell, the cold-home first build and no
-      # other (the CC entry replays the redirected target, which is why the uploads still happen).
-      # Requiring one marker per upload would redden every cc_hit cell.
+      # marker appears on CC-miss builds only, while the uploads continue because the CC entry
+      # replays the redirected target. The archived `android-legacy-agp · cc_hit · full_cache` cell
+      # of run 31770996903 is 2 `cc=MISS_STORED` builds to 3 `cc=HIT`, so requiring one marker per
+      # upload would redden it. (Counted, not assumed: a review verifier claimed gradle-profiler's
+      # per-build system property makes every build in such a cell a miss. That cell says otherwise.)
       #
       # Runs only on a successful benchmark (default success() condition), so a profiler crash still
       # surfaces as itself rather than as a publication failure.
