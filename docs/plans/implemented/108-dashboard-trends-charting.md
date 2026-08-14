@@ -307,6 +307,16 @@ sampling is precisely what reported the pre-fix colour correctly while the defec
 | Success | `--bh-success-solid` | 4.83:1 | 7.39:1 | 3:1 | pass |
 | Measurement grid | `--bh-grid` | 1.31:1 | 1.16:1 | — | see below |
 
+Criterion 4's "every label" also covers the chart card's HTML text, not just the canvas. Those
+were measured too, and none of them sits on a boundary token the way the axis did — the defect had
+exactly one instance:
+
+| Text | Role | Light | Dark |
+|---|---|---|---|
+| Caption, description, `Show values` disclosure | `--bh-text-secondary` | 7.86:1 | 9.54:1 |
+| Empty state | `--bh-text-muted` | 5.61:1 | 6.50:1 |
+| Value-table cells | inherited body colour (pre-V2 idiom) | 16.79:1 | 14.22:1 |
+
 **The measurement grid is deliberately exempt, and this is an interpretation of criterion 4's
 "every mark", not a measured pass.** DESIGN-V2 §9:294 sets 3:1 for *essential graphical objects*,
 and DESIGN-V2:131 defines the measurement grid as `#E7DED3`/`#2B261F` — values that cannot reach
