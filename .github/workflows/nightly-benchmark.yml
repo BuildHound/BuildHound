@@ -233,6 +233,14 @@ jobs:
           failed=$(grep -c "\[buildhound\] upload failed" "$log" || true)
           rejected=$(grep -c "\[buildhound\] server rejected" "$log" || true)
           drained=$(grep -c "\[buildhound\] drained" "$log" || true)
+          # A POST is necessary but not sufficient. The server files a payload under #/benchmark only
+          # when mode is BENCHMARK and the benchmark block is present (BuildStore's series filter), so
+          # a payload that uploaded with the wrong label is the same user-visible outcome this whole
+          # plan exists to prevent: green cell, empty dashboard. BenchmarkValueSource logs
+          # "benchmark mode not activated" at warn and drops to CI mode when a BUILDHOUND_BENCHMARK_*
+          # value falls outside its allowlist — a matrix or scenario rename does exactly that.
+          labelled=$(grep -c "mode=BENCHMARK" "$log" || true)
+          unlabelled=$(grep -c "benchmark mode not activated" "$log" || true)
           # Each condition states what it actually observed. The old single message asserted
           # "published nothing" for every failure mode, which is a lie about a cell that published
           # four payloads and spooled a fifth.
@@ -246,8 +254,11 @@ jobs:
           if [ "$failed" -ne 0 ]; then
             why="${why:+$why; }$failed upload(s) spooled after a failed POST, $drained drain(s) logged — the final build's spool is never retried"
           fi
+          if [ "$unlabelled" -ne 0 ] || { [ "$uploaded" -ne 0 ] && [ "$labelled" -lt "$uploaded" ]; }; then
+            why="${why:+$why; }$uploaded upload(s) but only $labelled build(s) labelled mode=BENCHMARK — these rows do not reach #/benchmark"
+          fi
           if [ -n "$why" ]; then
-            echo "::error title=BuildHound benchmark::$PILOT · $SCENARIO · $ISOLATION — $why (uploaded=$uploaded, failed=$failed, rejected=$rejected)"
+            echo "::error title=BuildHound benchmark::$PILOT · $SCENARIO · $ISOLATION — $why (uploaded=$uploaded, failed=$failed, rejected=$rejected, benchmark-labelled=$labelled)"
             echo "❌ $PILOT · $SCENARIO · $ISOLATION — $why" >> "$GITHUB_STEP_SUMMARY"
             # Name the cause, since the three that produce a silent cell need different repairs.
             if ! grep -q "sample benchmark init: telemetry redirected" "$log"; then

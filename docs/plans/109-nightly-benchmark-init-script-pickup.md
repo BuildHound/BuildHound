@@ -108,9 +108,15 @@ mechanism and neither covered the join.
 
 **Out**
 
-- The two failing matrix cells (`android-legacy-agp · cc_hit · no_build_cache`, `nowinandroid ·
-  clean · full_cache`). Real, independent, and diagnosable only once a publishing nightly exists to
-  compare against — own plan.
+- `nowinandroid · clean · full_cache`, which failed with a real
+  `org.gradle.tooling.BuildException` from the measured build — independent of publication, its own
+  plan.
+- `android-legacy-agp · cc_hit · no_build_cache` was originally deferred with it, wrongly (review
+  finding): it died 18s in at `curl: (22) The requested URL returned error: 429` inside
+  `Install gradle-profiler`, before any Gradle build ran. Nothing about it depended on a publishing
+  nightly. The download had no retry, so the very `workflow_dispatch` that is supposed to verify
+  this plan could lose cells the same way — a bounded `--retry` is therefore **in** scope (§4.4).
+  The identical un-retried download in `ci.yml`'s `overhead-budget` job is out of scope here.
 - Draining the spooled payloads from the four dead nights. The workspaces are gone; those builds
   are unrecoverable. The series starts at the first fixed run.
 - The shipped consumer template `buildhound-ci-assets/profiler-pipeline/github-nightly-benchmark.yml`.
@@ -198,6 +204,31 @@ the marker is emitted on CC-miss builds only — visible in the archived `androi
 which has `cc=HIT` builds among its five. Those hits still upload, because the CC entry stored on
 the cold-home first build carries the redirected Flow-action parameters. A future "improvement"
 requiring one marker per upload would redden every `cc_hit` cell; the comment in the step says so.
+
+### 4.4 What the pre-merge review changed
+
+The §3 reviews (4 clean-context reviewers, 2 adversarial verifiers per finding, completeness critic)
+produced four repairs to §4.2's check and one to the profiler download. Recorded here because each
+is a hole this plan's own reasoning left:
+
+- **Server rejections were uncounted.** `PayloadUploader` has three terminal states, not two:
+  `Rejected` (a 4xx) logs `[buildhound] server rejected …` and **deletes** the payload rather than
+  spooling it. The check counted `payload uploaded` and `upload failed` only, so a cell that
+  uploaded four and had one rejected exited 0 with a green summary line over a permanent loss. The
+  gate was asymmetric in exactly the wrong direction — red on the recoverable case, green on the
+  unrecoverable one.
+- **A POST is necessary but not sufficient.** The server files a row under `#/benchmark` only when
+  the payload is labelled `mode=BENCHMARK` with a benchmark block; `BenchmarkValueSource` drops to CI
+  mode and logs `benchmark mode not activated` at `warn` when a `BUILDHOUND_BENCHMARK_*` value falls
+  outside its allowlist — which a matrix or scenario rename does. That is the same user-visible
+  outcome this plan exists to prevent (green cell, empty dashboard) reachable by a different route,
+  so the check now also asserts the label.
+- **The failure message contradicted its own counters**, asserting "published nothing" for a cell
+  that published four payloads and spooled a fifth. Each condition now reports what it observed.
+- **A credentials-absent run was blamed on the init script.** With `BUILDHOUND_SAMPLE_*` absent the
+  script *does* apply and takes its documented DISABLED branch, printing no redirect marker — which
+  looked identical to "never applied". The diagnostic now names both causes.
+- **The profiler download is retried** (§3 Out, the 429).
 
 ## 5. Test strategy
 
