@@ -118,7 +118,11 @@ jobs:
           PROFILER_SHA256: "74f39882a444d6d5616d35b3e9197f7423cd252f63f339bd3e01f662573b319c"
         run: |
           set -euo pipefail
-          curl -fsSL -o gradle-profiler.zip \
+          # --retry: Maven Central answered 429 to one cell of the 2026-08-14 nightly, which died
+          # here at 18s with `curl: (22) ... error: 429` before running a single build. curl treats
+          # 429 as a transient error, so this is the whole fix; the SHA-256 below still gates what
+          # a retry is allowed to hand us.
+          curl -fsSL --retry 5 --retry-delay 3 -o gradle-profiler.zip \
             "https://repo1.maven.org/maven2/org/gradle/profiler/gradle-profiler/${PROFILER_VERSION}/gradle-profiler-${PROFILER_VERSION}.zip"
           echo "${PROFILER_SHA256}  gradle-profiler.zip" | sha256sum -c -
           unzip -q gradle-profiler.zip
@@ -221,15 +225,40 @@ jobs:
             exit 1
           fi
           # grep -c exits 1 on zero matches; `|| true` keeps that out of `set -e`'s way.
+          # All four of PayloadUploader's terminal states are counted. `rejected` is the one that
+          # cost this check its first review finding: a 4xx DELETES the payload rather than spooling
+          # it, so a cell that uploads three and has one rejected would otherwise print a green
+          # "3 payload(s) published" over a permanent loss.
           uploaded=$(grep -c "\[buildhound\] payload uploaded" "$log" || true)
           failed=$(grep -c "\[buildhound\] upload failed" "$log" || true)
-          if [ "$uploaded" -eq 0 ] || [ "$failed" -ne 0 ]; then
-            echo "::error title=BuildHound benchmark::$PILOT · $SCENARIO · $ISOLATION measured but did not publish ($uploaded uploaded, $failed failed) — the series has no rows for this cell"
-            echo "❌ $PILOT · $SCENARIO · $ISOLATION — measured, published nothing ($uploaded uploaded, $failed failed)" >> "$GITHUB_STEP_SUMMARY"
-            # The redirect marker separates "the init script never applied" (plan 109's defect) from
-            # "it applied and the server rejected us", which are different repairs.
+          rejected=$(grep -c "\[buildhound\] server rejected" "$log" || true)
+          drained=$(grep -c "\[buildhound\] drained" "$log" || true)
+          # Each condition states what it actually observed. The old single message asserted
+          # "published nothing" for every failure mode, which is a lie about a cell that published
+          # four payloads and spooled a fifth.
+          why=""
+          if [ "$uploaded" -eq 0 ]; then
+            why="published nothing"
+          fi
+          if [ "$rejected" -ne 0 ]; then
+            why="${why:+$why; }$rejected payload(s) rejected by the server and permanently dropped"
+          fi
+          if [ "$failed" -ne 0 ]; then
+            why="${why:+$why; }$failed upload(s) spooled after a failed POST, $drained drain(s) logged — the final build's spool is never retried"
+          fi
+          if [ -n "$why" ]; then
+            echo "::error title=BuildHound benchmark::$PILOT · $SCENARIO · $ISOLATION — $why (uploaded=$uploaded, failed=$failed, rejected=$rejected)"
+            echo "❌ $PILOT · $SCENARIO · $ISOLATION — $why" >> "$GITHUB_STEP_SUMMARY"
+            # Name the cause, since the three that produce a silent cell need different repairs.
             if ! grep -q "sample benchmark init: telemetry redirected" "$log"; then
-              echo "::error title=BuildHound benchmark::the init script never applied — the ingest target was never redirected off the sample's committed localhost URL"
+              if [ "$uploaded" -eq 0 ] && [ "$failed" -eq 0 ] && [ "$rejected" -eq 0 ]; then
+                # No POST was attempted at all: either the init script never reached these builds
+                # (plan 109's defect) or it applied and took its credentials-absent branch, which
+                # disables the upload by design. `Report ingest wiring` above distinguishes them.
+                echo "::error title=BuildHound benchmark::no upload was attempted — the init script either never applied, or applied with BUILDHOUND_SAMPLE_* absent (see the Report ingest wiring step)"
+              else
+                echo "::error title=BuildHound benchmark::the init script never applied — the ingest target was never redirected off the sample's committed localhost URL"
+              fi
             fi
             exit 1
           fi
