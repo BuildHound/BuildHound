@@ -210,8 +210,16 @@ class SampleBenchmarkInitScriptFunctionalTest {
                     "BUILDHOUND_SAMPLE_TOKEN" to "sample-init-token",
                 ),
                 scaffolding,
+                // --info surfaces the gate's own skip reason. Without it these assertions cannot
+                // tell "upload disabled" from "upload merely not redirected": the fixture's
+                // committed target is a dead port, so `received` is empty either way.
+                "--info",
             ).build()
 
+            assertTrue(
+                result.output.contains("upload skipped: no server configured"),
+                "the scaffolding gate must leave NO target for '$scaffolding':\n${result.output}",
+            )
             assertTrue(
                 result.output.contains("is gradle-profiler scaffolding, not a measured build"),
                 "expected the scaffolding gate for '$scaffolding':\n${result.output}",
@@ -225,6 +233,43 @@ class SampleBenchmarkInitScriptFunctionalTest {
                 "'$scaffolding' is not a measurement and must publish nothing, got: $received",
             )
         }
+    }
+
+    /**
+     * The scaffolding gate must leave the upload with NO target — including no fallback one.
+     *
+     * `Property.set(null)` is Gradle's *unset*: it discards the explicit value and reverts to the
+     * **convention**. `BuildHoundSettingsPlugin` gives `server.url` a convention from
+     * `ConfigOverrides` (`buildhound.server.url`, else `BUILDHOUND_SERVER_URL`) while `server.token`
+     * is excluded by construction, so unsetting both restores the URL and drops the token — the
+     * precise "URL without token" state the rest of this script exists to prevent, since
+     * `UploadGate` keys on the URL alone and `PayloadUploader` merely omits the `Authorization`
+     * header. Clearing must therefore use an absent *provider*, not `set(null)`.
+     *
+     * The other six tests are structurally blind to this: `neutralCiEnv()` strips every
+     * `BUILDHOUND_*` key, so their fixture never has a convention to revert to.
+     */
+    @Test
+    fun `scaffolding clear does not fall back to a convention url`() {
+        setUpProject()
+
+        val result = runner(
+            mapOf(
+                // The convention source. No BUILDHOUND_SAMPLE_* pair on purpose: this is the
+                // documented hand-run/stray-init.d shape, not the nightly's.
+                "BUILDHOUND_SERVER_URL" to injectedUrl(),
+            ),
+            "clean",
+        ).build()
+
+        // No task-outcome assertion: `clean` on a never-built fixture is UP_TO_DATE, and the
+        // outcome is irrelevant here — `.build()` already proves the invocation succeeded, and what
+        // this test is about is what it did or did not send.
+        assertTrue(
+            received.isEmpty(),
+            "a scaffolding invocation must not publish, least of all unauthenticated to a " +
+                "convention URL, got: $received",
+        )
     }
 
     /**

@@ -226,8 +226,11 @@ drives more Gradle invocations than the ones it measures, and every one of them 
 
 The server cannot separate them: `benchmarkSeriesOf` emits one `BenchmarkPoint` per payload,
 `summarize` takes p50/p90/min across all of them, and `iteration` is null on every row because
-gradle-profiler exports no `BUILDHOUND_BENCHMARK_ITERATION`. So 5 of 9 rows in every `clean` cell —
-and the `min` of *every* cell, since `:help` is the shortest build there is — would be scaffolding.
+gradle-profiler exports no `BUILDHOUND_BENCHMARK_ITERATION`. In general a `clean` cell publishes
+`1 + 2 × (warm-ups + iterations)` rows of which `1 + warm-ups + iterations` are scaffolding — 5 of 9
+for the two pilots at `iterations = 3`, 4 of 7 for `nowinandroid`, which runs `iterations = 2`. And
+the `min` of *every* cell, `clean` or not, would be the `:help` build, that being the shortest build
+there is.
 
 This mislabelling is plan 105's design and has been on `main` since it merged; it is in scope here
 because **this** change is what first carries those rows to the dashboard, and because exit criterion
