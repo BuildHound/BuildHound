@@ -102,7 +102,9 @@ mechanism and neither covered the join.
   - a post-run publication check that reads `profile.log` and fails the cell when the measured
     builds did not upload.
 - `.github/buildhound-sample-benchmark.init.gradle.kts`: header comment says `-I`, which is no
-  longer how any caller applies it. Correct it to the mechanism in use.
+  longer how any caller applies it. Correct it to the mechanism in use. **And** gate the redirect so
+  gradle-profiler's non-measurement invocations do not publish (§4.5) — added mid-PR after the
+  pre-merge review, because this fix is what first makes those rows reach the dashboard.
 - `docs/recipes/benchmark-and-experiments.md`: documents the `~/.gradle/init.d/` install as the
   mechanism; it has to describe the real one.
 
@@ -191,9 +193,8 @@ just no longer the *only* signal, and it no longer claims that publication happe
 
 ### 4.3 Warm-up builds count
 
-`warm-ups = 1` per scenario, and warm-up builds upload too (plan 105 §3.3, accepted). So a passing
-cell publishes `warm-ups + iterations` payloads, plus one for gradle-profiler's own build-inspection
-invocation — 5, in the archived `springboot-legacy · no_op` log. The check asserts ≥1
+`warm-ups = 1` per scenario, and warm-up builds upload too (plan 105 §3.3, accepted). With the §4.5
+gate in place a passing cell publishes exactly `warm-ups + iterations` payloads. The check asserts ≥1
 `payload uploaded`, not an exact count: `iterations` differs per scenario file and pinning the
 arithmetic in a shell step would make an unrelated scenario edit fail the nightly for the wrong
 reason.
@@ -204,6 +205,52 @@ the marker is emitted on CC-miss builds only — visible in the archived `androi
 which has `cc=HIT` builds among its five. Those hits still upload, because the CC entry stored on
 the cold-home first build carries the redirected Flow-action parameters. A future "improvement"
 requiring one marker per upload would redden every `cc_hit` cell; the comment in the step says so.
+
+### 4.5 Not publishing gradle-profiler's scaffolding builds
+
+Raised by the completeness critic and confirmed against the archived artifacts: gradle-profiler
+drives more Gradle invocations than the ones it measures, and every one of them inherits the job's
+`BUILDHOUND_BENCHMARK_*` env. In `benchmark-springboot-legacy-no_build_cache-clean` of run
+`31770996903`, **9** payloads were written, all labelled `mode=BENCHMARK`:
+
+| Invocation | Count | Tasks |
+|---|---|---|
+| build inspection (`* Inspecting the build`) | 1 | `:help` |
+| `cleanup-tasks` before each build | 4 | `clean` |
+| warm-up + measured builds | 4 | `assemble` |
+
+The server cannot separate them: `benchmarkSeriesOf` emits one `BenchmarkPoint` per payload,
+`summarize` takes p50/p90/min across all of them, and `iteration` is null on every row because
+gradle-profiler exports no `BUILDHOUND_BENCHMARK_ITERATION`. So 5 of 9 rows in every `clean` cell —
+and the `min` of *every* cell, since `:help` is the shortest build there is — would be scaffolding.
+
+This mislabelling is plan 105's design and has been on `main` since it merged; it is in scope here
+because **this** change is what first carries those rows to the dashboard, and because exit criterion
+4 below is "production `#/benchmark` shows rows" — rows that would be majority scaffolding for
+`clean`.
+
+The discriminator was measured, not assumed. A throwaway project under gradle-profiler 0.24.0 with a
+probe init script logging `settings.startParameter.taskNames` per invocation:
+
+```
+[probe] tasks=[:help]    -> SKIP (scaffolding)
+[probe] tasks=[clean]    -> SKIP (scaffolding)
+[probe] tasks=[assemble] -> PUBLISH (measured)
+[probe] tasks=[clean]    -> SKIP (scaffolding)
+[probe] tasks=[assemble] -> PUBLISH (measured)
+```
+
+So the init script disables the upload when every requested task is scaffolding (`help`/`clean`,
+compared on the leaf name so `:app:clean` is caught; an empty task list counts as scaffolding).
+
+It **clears** `server.url`/`server.token` rather than merely declining to redirect. Declining would
+leave the sample's committed `http://localhost:8080` in place, arming a POST that cannot succeed —
+and §4.2's check reads a failed POST as a broken cell, so the data-quality fix would have bought a
+false alarm on every scaffolding build instead.
+
+Failure direction, deliberately: an unrecognised *cleanup* task would publish a scaffolding row again
+(silent). An unrecognised *measured* task — someone benchmarking `clean` itself — publishes nothing,
+which §4.2 turns red. The dangerous case is the loud one.
 
 ### 4.4 What the pre-merge review changed
 
@@ -238,11 +285,18 @@ is a hole this plan's own reasoning left:
 - `SampleBenchmarkInitScriptFunctionalTest` is unchanged. Its `-I` application is correct for what
   it tests (§2.1); the pickup regression is now guarded in the workflow, which is where pickup
   lives.
-- **The fix is not proven by CI.** As plan 105 §4 already stated and this defect demonstrates, green
-  jobs are not evidence. Verification is a `workflow_dispatch` run after merge to `main`, then
-  reading production `#/benchmark` for rows under that run's `seedRef` with the expected
-  `(scenario, isolationMode)` pairs. The publication check in §4.2 makes the *next* regression of
-  this kind loud, but it does not substitute for looking at the dashboard once.
+- **Pickup is proven locally.** The central claim — that an init script in
+  `<gradle-user-home>/init.d/` is applied to the builds gradle-profiler runs when that home is passed
+  via `--gradle-user-home` — was verified rather than reasoned about, since nothing in CI covers it
+  and `SampleBenchmarkInitScriptFunctionalTest` applies the script with `-I` and structurally cannot.
+  A throwaway Gradle project, gradle-profiler 0.24.0 (the pinned version, same SHA-256), a named
+  `--gradle-user-home` containing a probe script in `init.d/`: the probe's marker fired on all five
+  invocations of a `clean` scenario. That is the mechanism this plan turns on.
+- **Whether the real pipeline publishes is still not proven by CI.** As plan 105 §4 stated and this
+  defect demonstrates, green jobs are not evidence. Verification is a `workflow_dispatch` run after
+  merge to `main`, then reading production `#/benchmark` for rows under that run's `seedRef` with the
+  expected `(scenario, isolationMode)` pairs. The publication check in §4.2 makes the *next*
+  regression of this kind loud; it does not substitute for looking at the dashboard once.
 
 ## 6. Exit criteria
 
@@ -257,6 +311,11 @@ is a hole this plan's own reasoning left:
    cells passed — which is plan 105's exit criterion 6, and closes that plan too.
 5. The init script's header comment and `docs/recipes/benchmark-and-experiments.md` describe the
    mechanism the workflow actually uses.
+6. Only measured builds publish: a dispatched `clean` cell shows `warm-ups + iterations` uploads, not
+   `warm-ups + iterations + cleanups + 1`, and `#/benchmark`'s `min` for that cell is a real
+   `assemble`. Guarded at PR time by `SampleBenchmarkInitScriptFunctionalTest` (6 tests — the two new
+   ones cover both directions of the gate, since a gate that skipped everything would satisfy the
+   skip test alone).
 
 ## 7. Risks
 
