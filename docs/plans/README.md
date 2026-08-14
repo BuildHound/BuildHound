@@ -19,8 +19,10 @@ The list below is **exhaustive** as of 2026-08-14: every `NNN-*.md` file in this
 appears, with the exit criterion that keeps it here. It was reconciled by verifying each plan's
 own exit criteria against the tree, treating a criterion that can only be observed live (a CI
 run, a deployed environment) or performed by the owner as met **only where some document records
-the observation**. Two different files still claim number 092 — a real collision, left as-is
-because both filenames are distinct. [109](109-nightly-benchmark-init-script-pickup.md) and
+the observation**. Two different files still claim number 092 — the Portal release plan below and
+[092-windows-guh-tempdir-locks](implemented/092-windows-guh-tempdir-locks.md) in `implemented/`.
+The collision is left as-is: both filenames are distinct, so nothing actually clashes.
+[109](109-nightly-benchmark-init-script-pickup.md) and
 [110](110-interrupted-marker-retention.md) landed after that pass; their entries below restate
 their own plans' outstanding criteria rather than an independent verification.
 
@@ -36,10 +38,6 @@ Open — plugin, commons, server:
 - [075](075-internal-adapters-cc-hit-toggle-rehydration.md) — internal-adapters CC-hit toggle
   rehydration. A warm-daemon CC hit can still replay a previously-enabled capture toggle. Design
   and a `@Disabled` acceptance test exist; the fix hasn't landed.
-- [092](092-windows-guh-tempdir-locks.md) — Windows daemon-locked Gradle User Home. The fix
-  landed and the first green Windows run is recorded (architecture §7), but criterion 2
-  ("no new failures on the Linux/macOS/floor/CC-off legs") is recorded nowhere — and those jobs
-  are not required status checks, so the merge itself does not stand in as evidence.
 - [092](092-gradle-plugin-portal-release.md) — Gradle Plugin Portal release. Criteria 1 and 5
   (credentialed `publishPlugins --validate-only` at a fixed non-SNAPSHOT version; pre-approval
   and publish digests matching) are unrecorded, and no release tag exists. Its
@@ -58,9 +56,10 @@ Open — plugin, commons, server:
   behind `workflow_dispatch`, so it neither passes nor runs.
 - [105](105-composite-action-ci-and-nightly-sample-benchmark.md) — composite action in CI plus a
   nightly sample benchmark. Criterion 6 (production build/benchmark rows under one seed ref) was
-  blocked by a defect in its own implementation — the nightly run never picked up the init script,
-  so nothing published. [109](109-nightly-benchmark-init-script-pickup.md) repairs that and closes
-  this criterion with it.
+  blocked by a defect in its own implementation: the post-merge `workflow_dispatch` did run and
+  report success (Actions run 31526516760), but the nightly job never picked up the init script, so
+  nothing published and no rows appeared. [109](109-nightly-benchmark-init-script-pickup.md) repairs
+  that and closes this criterion with it.
 - [109](109-nightly-benchmark-init-script-pickup.md) — nightly benchmark init-script pickup repair.
   The fix is in; criterion 4 (production `#/benchmark` rows for the dispatched run's seed ref) needs
   a post-merge `workflow_dispatch` plus a dashboard read.
@@ -80,8 +79,8 @@ corrected parts of them):
 - [083](083-dokploy-environment-delivery.md) — release delivery and review lifecycle. Criterion
   1's manual-dispatch gate no longer exists (deliberately replaced by
   [090](implemented/090-promotion-chain-collapse.md)) and criterion 3's manager-file scrub gate
-  was deleted by [089](implemented/089-review-cleanup-reconciler-authority.md). Needs closing as
-  superseded, on the [045](implemented/045-composite-task-dictionary.md) precedent, or rewriting.
+  was deleted by [089](implemented/089-review-cleanup-reconciler-authority.md). Both criteria are
+  therefore unmeetable as written: the artifacts they name no longer exist in the tree.
 - [084](084-shell-dokploy-delivery-client.md) — shell Dokploy delivery client. The Python client
   is gone and the shell surface is complete and reviewed; criterion 5's "with Dokploy's persisted
   isolated-deployment setting" is unrecorded, and `deploy/dokploy/README.md` still lists isolated
@@ -102,7 +101,7 @@ corrected parts of them):
   prerequisite (a staging site **Application** with a registry pull relation) is recorded as
   having *failed*, and 097 then tore the Application and its ID variable down. The delivery
   contract the tree enforces is Compose, and a policy test now asserts the Application API is
-  absent from the client. Needs closing as abandoned rather than implemented.
+  absent from the client — so criteria 1 and 3 name artifacts the tree actively forbids.
 - [099](099-owner-provisioned-review-token.md) — owner-provisioned review dashboard token. The
   workflow prefers the `review`-environment variable with the per-run fallback intact; the plan
   itself still calls the owner-browse confirmation a "Remaining human check".
@@ -116,8 +115,11 @@ Swept to [implemented/](implemented/) on 2026-08-14 after the exit-criteria veri
 [100](implemented/100-prod-staging-token-rotation-verification.md) (prod/staging token rotation),
 [102](implemented/102-html-filter-end-tag-regexes.md) (HTML end-tag regexes),
 [103](implemented/103-dashboard-style-hash-tag-pairing.md) (dashboard style-hash tag pairing),
-[106](implemented/106-overhead-harness-repair.md) (overhead-harness repair), and
-[107](implemented/107-dashboard-machine-specs-and-resource-usage.md) (dashboard machine specs).
+[106](implemented/106-overhead-harness-repair.md) (overhead-harness repair),
+[107](implemented/107-dashboard-machine-specs-and-resource-usage.md) (dashboard machine specs), and
+[092](implemented/092-windows-guh-tempdir-locks.md) (Windows daemon-locked Gradle User Home) — the
+last of these settled by re-reading PR 49's own check rollup, which shows the Linux, macOS, Gradle
+8.14 floor and config-cache-off legs all green alongside the recorded Windows run.
 106's former "open" note here was stale on both counts: two reference-runner CI runs are recorded
 in its §7, and the budget breach it surfaced is excluded by its own §2 Out — that breach is
 tracked on [104](104-machine-specs-and-resource-usage.md)'s criterion 5 above.
