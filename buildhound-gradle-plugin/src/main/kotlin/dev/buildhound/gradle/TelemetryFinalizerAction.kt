@@ -713,8 +713,12 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
             for (buildId in plan.prune) runCatching { byId[buildId]?.delete() }
             for (marker in plan.reconcile) {
                 runCatching {
-                    routeInterruptedBuild(parameters, marker)
-                    byId[marker.buildId]?.delete()
+                    // Delete only once the lost build is durably handled (plan 110). A skip for a
+                    // *server-configuration* gap leaves the marker in place so a later build that
+                    // does have a server can publish it; the TTL prune above bounds how long that
+                    // can go on. A consent or standing-choice skip still deletes — see
+                    // routeInterruptedBuild.
+                    if (routeInterruptedBuild(parameters, marker)) byId[marker.buildId]?.delete()
                 }
                     .onFailure {
                         // Genuine error (e.g. disk) → leave the marker for a later build (TTL
@@ -748,16 +752,46 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
      * Persist a reconciled `INTERRUPTED` build locally (a distinct per-buildId file — never
      * clobbering the current build's `build-payload.json`) so a lost build is visible even with no
      * server, then upload/spool it through the same [UploadGate]/[PayloadUploader] as a normal
-     * build of the dead build's own mode (a local build with no opt-in is written locally and not
-     * uploaded).
+     * build of the dead build's own mode.
+     *
+     * @return whether the caller may delete the start marker. False only when the upload was
+     *   skipped for a *server-configuration* gap ([UploadGate.Cause.isServerConfigGap]) — the
+     *   machine could not publish and a later build may be able to, so the marker survives to drive
+     *   that retry (plan 110). A consent or standing-choice skip returns true and the marker is
+     *   dropped as before: re-offering those on a later build would publish something the user
+     *   declined, and a `~/.buildhound/optin` created *after* the fact must not retroactively
+     *   consent to a build recorded before it (spec §3.7).
      */
-    private fun routeInterruptedBuild(parameters: Parameters, marker: StartMarker) {
-        val payload =
-            PayloadAssembler.assembleInterrupted(marker, scrubRoots(parameters.rootDir.orNull))
-        val json = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
+    private fun routeInterruptedBuild(parameters: Parameters, marker: StartMarker): Boolean {
         val localDir = File(parameters.outputDir.get(), "interrupted").apply { mkdirs() }
-        File(localDir, "${payload.buildId}.json")
-            .writeText(prettyJson.encodeToString(BuildPayload.serializer(), payload))
+        val mirror = File(localDir, "${marker.buildId}.json")
+        // A retained marker is re-visited by every later build, so do not pay assembly twice. The
+        // mirror is written with `prettyJson`, which is `BuildHoundJson.payload` plus prettyPrint —
+        // an encoding-only setting — so it decodes with the wire configuration and re-encodes to
+        // the compact wire form. Missing mirror (its own mtime TTL pruned it while the marker
+        // survived) falls back to synthesizing.
+        val payload =
+            mirror
+                .takeIf { it.isFile }
+                ?.let {
+                    runCatching {
+                        BuildHoundJson.payload.decodeFromString(
+                            BuildPayload.serializer(),
+                            it.readText(),
+                        )
+                    }
+                        .getOrNull()
+                }
+                ?: PayloadAssembler.assembleInterrupted(
+                    marker,
+                    scrubRoots(parameters.rootDir.orNull),
+                )
+                    .also {
+                        mirror.writeText(
+                            prettyJson.encodeToString(BuildPayload.serializer(), it),
+                        )
+                    }
+        val json = BuildHoundJson.payload.encodeToString(BuildPayload.serializer(), payload)
         val decision =
             UploadGate.decide(
                 enabled = true,
@@ -767,20 +801,34 @@ class TelemetryFinalizerAction : FlowAction<TelemetryFinalizerAction.Parameters>
                 requireOptInFile = parameters.requireOptInFile.getOrElse(true),
                 optInFileExists = optInMarkerExists(parameters.optInFile.orNull),
             )
-        when (decision) {
-            is UploadGate.Decision.Upload ->
+        return when (decision) {
+            is UploadGate.Decision.Upload -> {
                 PayloadUploader(
                         baseUrl = decision.url,
                         token = parameters.serverToken.orNull,
                         spoolDir = File(parameters.outputDir.get(), "spool"),
                     )
                     .use { uploader -> uploader.uploadOrSpool(payload.buildId, json) }
+                // Sent or spooled: either way the payload is durably handled and the marker's job
+                // is done — the spool has its own retry.
+                true
+            }
             is UploadGate.Decision.Skip ->
-                logger.info(
-                    "[buildhound] interrupted build {} kept local: {}",
-                    payload.buildId,
-                    decision.reason,
-                )
+                if (decision.cause.isServerConfigGap) {
+                    logger.info(
+                        "[buildhound] interrupted build {} kept for a later build to publish: {}",
+                        payload.buildId,
+                        decision.reason,
+                    )
+                    false
+                } else {
+                    logger.info(
+                        "[buildhound] interrupted build {} kept local: {}",
+                        payload.buildId,
+                        decision.reason,
+                    )
+                    true
+                }
         }
     }
 
