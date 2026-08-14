@@ -13,37 +13,114 @@ Plans 000–080 are implemented and live there, except [035](035-cc-miss-reason-
 [075](075-internal-adapters-cc-hit-toggle-rehydration.md) below — including
 [045](implemented/045-composite-task-dictionary.md), which was
 superseded/closed by [056](implemented/056-composite-build-logic-dictionary-priority.md) rather
-than shipping standalone, but whose own exit criteria were met by that work. The five plans called
-out below are **not** an exhaustive list of what is active here — a pre-existing drift this plan
-notes rather than sweeps: [104](104-machine-specs-and-resource-usage.md) is also open (exit
-criterion 5), several numbered plans in this directory are unlisted entirely, and two different
-files both claim number 092. Reconciling the index is its own chore:
+than shipping standalone, but whose own exit criteria were met by that work.
 
-- [035](035-cc-miss-reason-capture.md) — CC miss-reason capture — **blocked**, not implementable
-  as specified.
-- [037](037-test-quarantine-addon.md) — test-quarantine addon — **blocked**, deferred behind
-  gate #3 (flaky-detection precision validation against real pilot data).
+The list below is **exhaustive** as of 2026-08-14: every `NNN-*.md` file in this directory
+appears, with the exit criterion that keeps it here. It was reconciled by verifying each plan's
+own exit criteria against the tree, treating a criterion that can only be observed live (a CI
+run, a deployed environment) or performed by the owner as met **only where some document records
+the observation**. Two different files still claim number 092 — a real collision, left as-is
+because both filenames are distinct. [109](109-nightly-benchmark-init-script-pickup.md) and
+[110](110-interrupted-marker-retention.md) landed after that pass; their entries below restate
+their own plans' outstanding criteria rather than an independent verification.
+
+Blocked — not implementable as specified:
+
+- [035](035-cc-miss-reason-capture.md) — CC miss-reason capture. Gradle writes no
+  machine-readable miss reason before the Flow finalizer runs; no code shipped.
+- [037](037-test-quarantine-addon.md) — test-quarantine addon. Deferred behind locked gate #3
+  (flaky-detection precision ≥ 0.90 on real pilot data), which is recorded as un-run.
+
+Open — plugin, commons, server:
+
 - [075](075-internal-adapters-cc-hit-toggle-rehydration.md) — internal-adapters CC-hit toggle
-  rehydration — **open**; a warm-daemon configuration-cache hit can still replay a
-  previously-enabled capture toggle even when the current build's config has it off. Design and
-  a `@Disabled` acceptance test exist; the fix hasn't landed.
-- [105](105-composite-action-ci-and-nightly-sample-benchmark.md) — composite action in CI + nightly
-  sample benchmark — **open** on its exit criterion 6 (benchmark rows on the production dashboard),
-  which was blocked by a defect in its own implementation; see
-  [109](109-nightly-benchmark-init-script-pickup.md).
-- [109](109-nightly-benchmark-init-script-pickup.md) — nightly benchmark init-script pickup repair —
-  **open**; the fix is in, verification is a post-merge `workflow_dispatch` plus a dashboard read.
-- [106](106-overhead-harness-repair.md) — overhead-harness repair — **open**; the harness itself is
-  fixed and producing real measurements, but its first run reports a genuine budget breach
-  (§7) that needs its own plan, and the numbers are local-macOS only until a CI run lands.
-- [092](092-gradle-plugin-portal-release.md) — Gradle Plugin Portal release — **open**; prepares
-  `dev.buildhound` for a protected, reproducible Portal publication. Its dependency-verification
-  scope was later dropped repo-wide (2026-07-21 architecture decision log; see the plan's own
-  status update) — the rest of the plan's scope is unaffected.
+  rehydration. A warm-daemon CC hit can still replay a previously-enabled capture toggle. Design
+  and a `@Disabled` acceptance test exist; the fix hasn't landed.
+- [092](092-windows-guh-tempdir-locks.md) — Windows daemon-locked Gradle User Home. The fix
+  landed and the first green Windows run is recorded (architecture §7), but criterion 2
+  ("no new failures on the Linux/macOS/floor/CC-off legs") is recorded nowhere — and those jobs
+  are not required status checks, so the merge itself does not stand in as evidence.
+- [092](092-gradle-plugin-portal-release.md) — Gradle Plugin Portal release. Criteria 1 and 5
+  (credentialed `publishPlugins --validate-only` at a fixed non-SNAPSHOT version; pre-approval
+  and publish digests matching) are unrecorded, and no release tag exists. Its
+  dependency-verification scope was dropped repo-wide (2026-07-21 architecture decision log; see
+  the plan's own status update) — the rest of the plan's scope is unaffected.
+- [098](098-dashboard-ingest-token-generation.md) — dashboard ingest-token minting with a 6-hour
+  activation window. Code, tests and migration V16 are in; criterion 2 ("migration applies on a
+  fresh TimescaleDB via compose") is recorded nowhere, and the integration test runs plain
+  Postgres by its own docstring.
+- [101](101-persistent-dashboard-login-read-tokens.md) — persistent dashboard login via scoped
+  read tokens. Self-declares `Status: open`; the manual browser verification of the persistence
+  behaviours (survival across restart, all-scope session-only, Forget, 401 wipe) is unrecorded.
+- [104](104-machine-specs-and-resource-usage.md) — machine specs and resource usage in the
+  report. Exit criterion 5 is recorded **failed** by the plan itself: the reference-runner
+  overhead run measured a finalizer Δ of 591.5 ms against a 150 ms cap, and the job is now parked
+  behind `workflow_dispatch`, so it neither passes nor runs.
+- [105](105-composite-action-ci-and-nightly-sample-benchmark.md) — composite action in CI plus a
+  nightly sample benchmark. Criterion 6 (production build/benchmark rows under one seed ref) was
+  blocked by a defect in its own implementation — the nightly run never picked up the init script,
+  so nothing published. [109](109-nightly-benchmark-init-script-pickup.md) repairs that and closes
+  this criterion with it.
+- [109](109-nightly-benchmark-init-script-pickup.md) — nightly benchmark init-script pickup repair.
+  The fix is in; criterion 4 (production `#/benchmark` rows for the dispatched run's seed ref) needs
+  a post-merge `workflow_dispatch` plus a dashboard read.
+- [110](110-interrupted-marker-retention.md) — retain an interrupted build's marker until it can
+  publish. Criterion 6 is a §3 review round covering the plugin change, which the earlier 109 rounds
+  do not.
+
+Open — site and Dokploy delivery (081–087, 096; each predates the CI-recovery track below, which
+corrected parts of them):
+
+- [081](081-dokploy-long-lived-stack.md) — long-lived stack and encrypted recovery. No recorded
+  fresh-volume restore drill and no measured RPO/RTO; architecture §7 still calls 24h/4h
+  provisional. Backup-failure and disk-pressure alerting are unrecorded.
+- [082](082-buildhound-main-site.md) — public main site. Live since 2026-07-18, but the V2 mark
+  gate is still an open, unrecorded release gate (`DESIGN-V2.md`, `brand/v2/QA.md` both ask for a
+  result recorded in `DESIGN-V2.md`; none exists).
+- [083](083-dokploy-environment-delivery.md) — release delivery and review lifecycle. Criterion
+  1's manual-dispatch gate no longer exists (deliberately replaced by
+  [090](implemented/090-promotion-chain-collapse.md)) and criterion 3's manager-file scrub gate
+  was deleted by [089](implemented/089-review-cleanup-reconciler-authority.md). Needs closing as
+  superseded, on the [045](implemented/045-composite-task-dictionary.md) precedent, or rewriting.
+- [084](084-shell-dokploy-delivery-client.md) — shell Dokploy delivery client. The Python client
+  is gone and the shell surface is complete and reviewed; criterion 5's "with Dokploy's persisted
+  isolated-deployment setting" is unrecorded, and `deploy/dokploy/README.md` still lists isolated
+  review networking among the staging verifications owed.
+- [085](085-dokploy-isolated-review-deployments.md) — isolated review deployments. Criterion 6
+  (PR 24's review deploy plus both public smoke URLs passing) is unrecorded; the only recorded PR
+  24 outcomes are failures.
+- [086](086-dokploy-role-placement-readiness.md) — role placement and review readiness. 086's own
+  review deploy never passed — the first green review needed
+  [088](implemented/088-ci-staging-review-bugfixes.md)'s `traefik.swarm.network` fix on PR #42,
+  not PR 24 — and its clean-context review outcome is unrecorded.
+- [087](087-staging-environment-credentials.md) — staging environment credentials. The manifest
+  split and checksum binding are in and tested; two of the three owner mitigations criterion 2
+  depends on (disable staging build-error notifications, restrict Dokploy log access/retention)
+  appear only as imperative policy text, never as an observation that they were done.
+- [096](096-site-review-staging-delivery.md) — site review and staging delivery. Superseded by
+  [097](implemented/097-site-compose-delivery.md), but **not** on the 045 precedent: 096's own
+  prerequisite (a staging site **Application** with a registry pull relation) is recorded as
+  having *failed*, and 097 then tore the Application and its ID variable down. The delivery
+  contract the tree enforces is Compose, and a policy test now asserts the Application API is
+  absent from the client. Needs closing as abandoned rather than implemented.
+- [099](099-owner-provisioned-review-token.md) — owner-provisioned review dashboard token. The
+  workflow prefers the `review`-environment variable with the per-run fallback intact; the plan
+  itself still calls the owner-browse confirmation a "Remaining human check".
 
 Plans [093](implemented/093-dogfood-buildhound-telemetry.md) (dogfood telemetry) and
 [094](implemented/094-multi-env-build-data-publication.md) (multi-environment publication) are
 implemented; 094's credentialed paths stay dormant until the owner actions in its §6 are done.
+
+Swept to [implemented/](implemented/) on 2026-08-14 after the exit-criteria verification above:
+[095](implemented/095-robots-header-release-gate.md) (robots-header release gate),
+[100](implemented/100-prod-staging-token-rotation-verification.md) (prod/staging token rotation),
+[102](implemented/102-html-filter-end-tag-regexes.md) (HTML end-tag regexes),
+[103](implemented/103-dashboard-style-hash-tag-pairing.md) (dashboard style-hash tag pairing),
+[106](implemented/106-overhead-harness-repair.md) (overhead-harness repair), and
+[107](implemented/107-dashboard-machine-specs-and-resource-usage.md) (dashboard machine specs).
+106's former "open" note here was stale on both counts: two reference-runner CI runs are recorded
+in its §7, and the budget breach it surfaced is excluded by its own §2 Out — that breach is
+tracked on [104](104-machine-specs-and-resource-usage.md)'s criterion 5 above.
 
 CI recovery track (research: `docs/ci-pipeline-research.md`; orchestrator runbook:
 [ci-recovery-roadmap.md](ci-recovery-roadmap.md)) — strictly sequential:
