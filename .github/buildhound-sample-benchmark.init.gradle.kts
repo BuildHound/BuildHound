@@ -103,8 +103,20 @@ settingsEvaluated {
                 // localhost URL in place would arm an upload that cannot succeed, and the workflow's
                 // publication check reads a failed POST as a broken cell — so "skip the redirect"
                 // would trade a data-quality bug for a false alarm on every scaffolding build.
-                url.set(null as String?)
-                token.set(null as String?)
+                //
+                // An absent PROVIDER, not `set(null)`. `Property.set(null)` is Gradle's *unset*: it
+                // discards the explicit value and reverts to the convention — and
+                // BuildHoundSettingsPlugin gives `server.url` one (from `buildhound.server.url` /
+                // BUILDHOUND_SERVER_URL via ConfigOverrides) while `server.token` is excluded by
+                // construction. So unsetting both restores the URL and drops the token: the exact
+                // "URL without token" state this script's token gate exists to prevent, which
+                // `UploadGate` arms and `PayloadUploader` sends with no Authorization header.
+                // Reproduced with `set(null)` before this line was written — the fixture received an
+                // unauthenticated payload — and covered by
+                // `scaffolding clear does not fall back to a convention url`.
+                val absent = settings.providers.provider { null as String? }
+                url.set(absent)
+                token.set(absent)
                 log.lifecycle(
                     "[buildhound] sample benchmark init: $requestedTasks is gradle-profiler " +
                         "scaffolding, not a measured build — upload disabled for this invocation",

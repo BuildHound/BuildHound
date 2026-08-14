@@ -66,8 +66,9 @@ and warm-up builds upload too, so rows carry `iteration=null` for both warm-ups 
 What does *not* appear is gradle-profiler's scaffolding. It runs a `:help` build to inspect the
 project before a scenario starts, and one `cleanup-tasks` build before each measured build; all of
 them inherit the job's `BUILDHOUND_BENCHMARK_*` env, so all of them would otherwise publish as
-benchmark rows the server cannot tell apart from a measurement — 5 of the 9 payloads in a `clean`
-cell, and the `min` of every cell would be the `:help` build. The init script disables the upload for
+benchmark rows the server cannot tell apart from a measurement — a majority of a `clean` cell's
+payloads (5 of 9 at `iterations = 3`, 4 of 7 for `nowinandroid` at 2), and the `min` of every cell
+would be the `:help` build. The init script disables the upload for
 any invocation whose requested tasks are all scaffolding (plan 109 §4.5).
 
 ## Reading a low-noise series

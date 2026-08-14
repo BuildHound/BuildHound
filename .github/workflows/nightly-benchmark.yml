@@ -254,7 +254,10 @@ jobs:
             why="${why:+$why; }$rejected payload(s) rejected by the server and permanently dropped"
           fi
           if [ "$failed" -ne 0 ]; then
-            why="${why:+$why; }$failed upload(s) spooled after a failed POST, $drained drain(s) logged — the final build's spool is never retried"
+            # Not "spooled": the grep prefix also matches PayloadUploader's
+            # "upload failed and spooling failed", where the payload is simply gone. Report the
+            # counts and let $drained say how many came back, rather than asserting a fate.
+            why="${why:+$why; }$failed failed POST(s), $drained drain(s) logged"
           fi
           if [ "$unlabelled" -ne 0 ] || { [ "$uploaded" -ne 0 ] && [ "$labelled" -lt "$uploaded" ]; }; then
             why="${why:+$why; }$uploaded upload(s) but only $labelled build(s) labelled mode=BENCHMARK — these rows do not reach #/benchmark"
