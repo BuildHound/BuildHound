@@ -4,9 +4,18 @@
  * CI-only redirection of a samples/<pilot> build's telemetry to a real ingest server, so the samples keep
  * their committed local-development configuration (`server.url = "http://localhost:8080"` plus the
  * local-dev token) and no pipeline needs to edit them. Used by
- * .github/workflows/nightly-benchmark.yml:
+ * .github/workflows/nightly-benchmark.yml, which installs this file into the init.d of the Gradle
+ * user home the profiler is told to use:
  *
- *   gradle-profiler ... (scenario gradle-args: -I <this script>)
+ *   cp <this script> "$BENCHMARK_GRADLE_USER_HOME/init.d/"
+ *   gradle-profiler --benchmark --gradle-user-home "$BENCHMARK_GRADLE_USER_HOME" ...
+ *
+ * Both halves are load-bearing (plan 109). gradle-profiler does NOT use ~/.gradle — it runs every
+ * measured build against a dedicated Gradle user home — and Gradle reads init.d only from the home
+ * actually in use, so an install into ~/.gradle/init.d applies to nothing the profiler runs. That
+ * mistake published four nightlies' worth of correctly-labelled telemetry to the samples' committed
+ * localhost URL. A hand-run `./gradlew` takes `-I <this script>` instead (samples/README.md), which
+ * is also how SampleBenchmarkInitScriptFunctionalTest applies it.
  *
  * Sibling of .github/buildhound-dogfood.init.gradle.kts (plan 093), and deliberately NOT the same
  * script — the two inject at different points and cannot be merged:

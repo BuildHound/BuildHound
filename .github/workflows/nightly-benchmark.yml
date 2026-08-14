@@ -15,8 +15,8 @@ name: nightly-benchmark
 #    publishToMavenLocal bootstrap is needed here — unlike the root-build dogfood path in ci.yml.
 #  - The samples keep their committed local-development config (server.url = http://localhost:8080).
 #    The ingest target is injected by .github/buildhound-sample-benchmark.init.gradle.kts, installed
-#    into the runner's ~/.gradle/init.d below — the CI-injection pattern the dogfood path already
-#    uses, so no sample file is edited for CI's benefit.
+#    into the init.d of the Gradle user home the PROFILER uses — see the install step below; that
+#    home is named explicitly here, and it is NOT ~/.gradle (plan 109).
 #  - No setup-gradle cache restore: each job starts with a cold Gradle user home and the scenario's
 #    warm-up build warms it. Cross-run cache restore would add variance the series can't attribute.
 
@@ -78,6 +78,12 @@ jobs:
       PILOT: ${{ matrix.pilot }}
       ISOLATION: ${{ matrix.isolation }}
       SCENARIO: ${{ matrix.scenario }}
+      # The Gradle user home every measured build runs against, named by us rather than left to
+      # gradle-profiler's default (plan 109 §4.1). Two things depend on it being explicit: the init
+      # script below is installed into ITS init.d, and `--gradle-user-home` on the profiler makes
+      # the two halves impossible to drift apart. Deliberately OUTSIDE profiler-out/, which is
+      # uploaded wholesale as an artifact.
+      BENCHMARK_GRADLE_USER_HOME: ${{ github.workspace }}/benchmark-gradle-home
     steps:
       - uses: actions/checkout@v7
 
@@ -124,11 +130,18 @@ jobs:
       # gradle-args. It redirects the sample's committed localhost demo server to the env-provided
       # ingest target; on a build with no `buildhound` extension (the included plugin build) it is a
       # no-op. Empty/absent BUILDHOUND_SAMPLE_SERVER_URL => the upload is skipped, not retargeted.
+      #
+      # It goes into BENCHMARK_GRADLE_USER_HOME/init.d, NOT ~/.gradle/init.d. Gradle reads init.d
+      # only from the Gradle user home actually in use, and gradle-profiler does not use ~/.gradle —
+      # it runs every measured build against a dedicated home. Installing into ~/.gradle meant the
+      # script was never on any measured build's init-script path: four nightlies benchmarked
+      # correctly, kept the sample's localhost target, and published nothing (plan 109 §2).
       - name: Install BuildHound sample init script
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.gradle/init.d"
-          cp .github/buildhound-sample-benchmark.init.gradle.kts "$HOME/.gradle/init.d/"
+          mkdir -p "$BENCHMARK_GRADLE_USER_HOME/init.d"
+          cp .github/buildhound-sample-benchmark.init.gradle.kts "$BENCHMARK_GRADLE_USER_HOME/init.d/"
+          echo "init script installed into $BENCHMARK_GRADLE_USER_HOME/init.d"
 
       # Make the credential-absent path OBSERVABLE. Everything else about a non-publishing run is
       # silent by design: UploadGate's "no server configured" skip logs at info (invisible at
@@ -143,7 +156,10 @@ jobs:
             echo "::warning title=BuildHound benchmark::no ingest target configured — this job measures but publishes nothing (check vars.BUILDHOUND_PROD_SERVER_URL / secrets.BUILDHOUND_PROD_INGEST_TOKEN)"
             echo "⚠️ no ingest target configured — measured, published nothing" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "✅ ingest target configured — benchmark builds publish to production" >> "$GITHUB_STEP_SUMMARY"
+            # "configured", not "published": this step runs before any build. Whether telemetry
+            # actually reached the server is asserted after the benchmark, by `Verify telemetry
+            # published` — the distinction plan 109 §2.1 exists because of.
+            echo "✅ ingest target configured — publication asserted after the benchmark" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # The isolation mechanism from profiler-pipeline/isolation-modes.md. The checkout is fresh per
@@ -166,10 +182,52 @@ jobs:
         run: |
           set -euo pipefail
           gradle-profiler --benchmark \
+            --gradle-user-home "$BENCHMARK_GRADLE_USER_HOME" \
             --project-dir "samples/$PILOT" \
             --scenario-file "buildhound-ci-assets/profiler-scenarios/samples/$PILOT.scenarios" \
             --output-dir "profiler-out/$PILOT-$ISOLATION-$SCENARIO" \
             "$SCENARIO"
+
+      # The check plan 105 §5 needed and did not have (plan 109 §4.2). "Silent non-publication" was
+      # mitigated by `Report ingest wiring` above, which asserts the credentials are SET — they were
+      # set, correctly, on four consecutive nights that published nothing. This assertion is keyed on
+      # the POST instead, read out of gradle-profiler's own build log.
+      #
+      # Positive, not merely the absence of a failure: a build that skipped the upload entirely
+      # (UploadGate's "no server configured", logged at info and thus invisible) prints NEITHER the
+      # success nor the failure line, and must be caught. Every layer below this is quiet by design —
+      # the gate's info-level skip, the plugin's never-fail-a-build posture, the job's
+      # continue-on-error — so a green cell is not evidence of anything without it.
+      #
+      # ≥1 upload, not an exact count: a passing cell publishes warm-ups + iterations payloads, and
+      # those counts live in the per-pilot scenario file. Pinning the arithmetic here would make an
+      # unrelated scenario edit fail the nightly for the wrong reason.
+      #
+      # Runs only on a successful benchmark (default success() condition), so a profiler crash still
+      # surfaces as itself rather than as a publication failure.
+      - name: Verify telemetry published
+        run: |
+          set -euo pipefail
+          log="profiler-out/$PILOT-$ISOLATION-$SCENARIO/profile.log"
+          if [ ! -f "$log" ]; then
+            echo "::error title=BuildHound benchmark::$log missing — cannot verify publication for $PILOT · $SCENARIO · $ISOLATION"
+            echo "❌ $PILOT · $SCENARIO · $ISOLATION — no profiler log, publication unverifiable" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          # grep -c exits 1 on zero matches; `|| true` keeps that out of `set -e`'s way.
+          uploaded=$(grep -c "\[buildhound\] payload uploaded" "$log" || true)
+          failed=$(grep -c "\[buildhound\] upload failed" "$log" || true)
+          if [ "$uploaded" -eq 0 ] || [ "$failed" -ne 0 ]; then
+            echo "::error title=BuildHound benchmark::$PILOT · $SCENARIO · $ISOLATION measured but did not publish ($uploaded uploaded, $failed failed) — the series has no rows for this cell"
+            echo "❌ $PILOT · $SCENARIO · $ISOLATION — measured, published nothing ($uploaded uploaded, $failed failed)" >> "$GITHUB_STEP_SUMMARY"
+            # The redirect marker separates "the init script never applied" (plan 109's defect) from
+            # "it applied and the server rejected us", which are different repairs.
+            if ! grep -q "sample benchmark init: telemetry redirected" "$log"; then
+              echo "::error title=BuildHound benchmark::the init script never applied — the ingest target was never redirected off the sample's committed localhost URL"
+            fi
+            exit 1
+          fi
+          echo "✅ $PILOT · $SCENARIO · $ISOLATION — $uploaded payload(s) published" >> "$GITHUB_STEP_SUMMARY"
 
       # continue-on-error makes a failed cell conclude "success" at the run level, which also
       # suppresses GitHub's scheduled-failure mail (infra review). That posture is deliberate — a

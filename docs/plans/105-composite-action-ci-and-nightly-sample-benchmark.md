@@ -223,3 +223,12 @@ builds upload too, so a series carries `iteration=null` rows for both warm-ups a
 6. **Post-merge**: one `workflow_dispatch` run, and production `#/benchmark` shows rows for each
    `(pilot, scenario, isolation)` under a single seed ref. Until then this plan stays in
    `docs/plans/` (not `implemented/`).
+
+**Status 2026-08-14 — criterion 6 is blocked by a defect in this plan's own implementation, now
+tracked as [109](109-nightly-benchmark-init-script-pickup.md).** The workflow installed the §3.3
+init script into `~/.gradle/init.d`, which gradle-profiler never reads: it runs measured builds
+against its own Gradle user home. Four scheduled nights benchmarked correctly and published
+nothing, keeping the samples' committed `localhost:8080` target. §5's "silent non-publication" risk
+was real and its mitigation was placed upstream of the failure — it asserted the credentials were
+set, and they were. 109 moves the init script into the home the profiler is told to use and adds a
+check keyed on the upload itself; criterion 6 is verified there.

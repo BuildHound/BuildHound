@@ -42,10 +42,20 @@ per-pilot scenario files under `buildhound-ci-assets/profiler-scenarios/samples/
 The samples themselves are not modified for CI: they keep `server.url = "http://localhost:8080"` and
 the local-dev token. The workflow installs
 [`.github/buildhound-sample-benchmark.init.gradle.kts`](../../.github/buildhound-sample-benchmark.init.gradle.kts)
-into the runner's `~/.gradle/init.d/`, and it re-points `server.url`/`server.token` from
+into the `init.d/` of the Gradle user home it then passes to `gradle-profiler --gradle-user-home`,
+and it re-points `server.url`/`server.token` from
 `BUILDHOUND_SAMPLE_SERVER_URL`/`BUILDHOUND_SAMPLE_TOKEN` in `settingsEvaluated` — *after* the
 sample's own `buildhound { }` block. `beforeSettings` (what the dogfood script uses for the root
 build, which has no DSL of its own) is too early here: the sample's literal would overwrite it.
+
+Two details of that install are load-bearing, and getting one wrong is silent (plan 109).
+gradle-profiler does not run builds against `~/.gradle`; it uses a dedicated Gradle user home, and
+Gradle reads `init.d` only from the home in use — so the script has to go into the home the profiler
+is *told* to use, which is why the workflow names it explicitly instead of relying on the profiler's
+default. And because the plugin never fails a build, a script that never applies costs you the whole
+series without reddening anything: the workflow's `Verify telemetry published` step therefore greps
+gradle-profiler's `profile.log` for `[buildhound] payload uploaded` and fails the cell without it.
+Checking that the ingest credentials are *set* is not the same check, and does not substitute.
 
 `springboot-legacy` runs `no_build_cache` only — its committed config has the build cache off, so
 `full_cache` would be a false label.
