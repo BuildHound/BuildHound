@@ -63,6 +63,13 @@ Checking that the ingest credentials are *set* is not the same check, and does n
 Caveat when reading these series: gradle-profiler does not export `BUILDHOUND_BENCHMARK_ITERATION`,
 and warm-up builds upload too, so rows carry `iteration=null` for both warm-ups and measured runs.
 
+What does *not* appear is gradle-profiler's scaffolding. It runs a `:help` build to inspect the
+project before a scenario starts, and one `cleanup-tasks` build before each measured build; all of
+them inherit the job's `BUILDHOUND_BENCHMARK_*` env, so all of them would otherwise publish as
+benchmark rows the server cannot tell apart from a measurement — 5 of the 9 payloads in a `clean`
+cell, and the `min` of every cell would be the `:help` build. The init script disables the upload for
+any invocation whose requested tasks are all scaffolding (plan 109 §4.5).
+
 ## Reading a low-noise series
 
 Same-machine runs are noisy, so the `#/benchmark` view shows **percentiles over N iterations

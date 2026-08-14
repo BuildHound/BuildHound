@@ -78,6 +78,39 @@ settingsEvaluated {
             val url = server.javaClass.getMethod("getUrl").invoke(server) as Property<String>
             @Suppress("UNCHECKED_CAST")
             val token = server.javaClass.getMethod("getToken").invoke(server) as Property<String>
+            // gradle-profiler drives more Gradle invocations than the ones it measures, and every
+            // one of them inherits the job's BUILDHOUND_BENCHMARK_* env — so without this gate they
+            // all publish as benchmark rows that the server cannot tell apart from a measurement
+            // (one BenchmarkPoint per payload, and `iteration` is null on all of them because
+            // gradle-profiler exports no BUILDHOUND_BENCHMARK_ITERATION). In a `clean` cell that is
+            // 5 scaffolding rows out of 9, and the cell's `min` becomes the `:help` build.
+            //
+            // Measured directly against gradle-profiler 0.24.0 rather than assumed — the requested
+            // task names separate them cleanly:
+            //   build inspection ("Inspecting the build")      -> [:help]
+            //   cleanup before each build (`cleanup-tasks`)    -> [clean]
+            //   the measured build                             -> the scenario's own tasks
+            // An invocation whose requested tasks are ALL scaffolding is therefore not published.
+            // The leaf name is compared so that `:app:clean` is still recognised; an empty task list
+            // (an invocation that runs nothing) counts as scaffolding too.
+            val scaffoldingTasks = setOf("help", "clean")
+            val requestedTasks = settings.startParameter.taskNames
+            val isScaffolding =
+                requestedTasks.isEmpty() ||
+                    requestedTasks.all { it.substringAfterLast(':') in scaffoldingTasks }
+            if (isScaffolding) {
+                // CLEAR, rather than merely declining to redirect. Leaving the sample's committed
+                // localhost URL in place would arm an upload that cannot succeed, and the workflow's
+                // publication check reads a failed POST as a broken cell — so "skip the redirect"
+                // would trade a data-quality bug for a false alarm on every scaffolding build.
+                url.set(null as String?)
+                token.set(null as String?)
+                log.lifecycle(
+                    "[buildhound] sample benchmark init: $requestedTasks is gradle-profiler " +
+                        "scaffolding, not a measured build — upload disabled for this invocation",
+                )
+                return@runCatching
+            }
             // Blank is treated as absent: a CI expression that collapsed to '' must mean "do not
             // publish", not "publish to the empty URL".
             val urlEnv = settings.providers.environmentVariable("BUILDHOUND_SAMPLE_SERVER_URL")

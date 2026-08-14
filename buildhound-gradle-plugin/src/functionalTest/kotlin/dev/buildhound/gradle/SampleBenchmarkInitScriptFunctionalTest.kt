@@ -95,6 +95,11 @@ class SampleBenchmarkInitScriptFunctionalTest {
         )
         File(projectDir, "build.gradle.kts").writeText(
             """
+            // `base` for the sake of the scaffolding-gate tests: it supplies the real `clean` task a
+            // gradle-profiler cleanup invocation runs, which is one of the two task names the init
+            // script treats as scaffolding. The samples all have it via their own plugins.
+            plugins { base }
+
             tasks.register("hello") {
                 doLast { println("hello from sample init fixture") }
             }
@@ -178,6 +183,74 @@ class SampleBenchmarkInitScriptFunctionalTest {
             result.output.contains("are not both set — this build's telemetry upload is DISABLED"),
             "expected the loud warn:\n${result.output}",
         )
+    }
+
+    /**
+     * gradle-profiler drives more invocations than it measures: a `:help` build to inspect the
+     * project, and one `cleanup-tasks` build before each measured build. All of them inherit the
+     * nightly's `BUILDHOUND_BENCHMARK_*` env, so all of them would publish as benchmark rows the
+     * server cannot distinguish from a measurement — 5 of the 9 payloads in a `clean` cell. The
+     * requested task names are what separates them (measured against gradle-profiler 0.24.0:
+     * `[:help]`, `[clean]`, and the scenario's own tasks respectively).
+     *
+     * The upload must be *disabled*, not merely left un-redirected: falling back to the fixture's
+     * own URL would arm a POST, and in CI a failed POST is what the workflow's publication check
+     * reads as a broken cell.
+     */
+    @Test
+    fun `profiler scaffolding invocations publish nothing`() {
+        setUpProject()
+
+        for (scaffolding in listOf("help", "clean")) {
+            received.clear()
+
+            val result = runner(
+                mapOf(
+                    "BUILDHOUND_SAMPLE_SERVER_URL" to injectedUrl(),
+                    "BUILDHOUND_SAMPLE_TOKEN" to "sample-init-token",
+                ),
+                scaffolding,
+            ).build()
+
+            assertTrue(
+                result.output.contains("is gradle-profiler scaffolding, not a measured build"),
+                "expected the scaffolding gate for '$scaffolding':\n${result.output}",
+            )
+            assertFalse(
+                result.output.contains("telemetry redirected to the BUILDHOUND_SAMPLE_* ingest target"),
+                "'$scaffolding' must not be redirected:\n${result.output}",
+            )
+            assertTrue(
+                received.isEmpty(),
+                "'$scaffolding' is not a measurement and must publish nothing, got: $received",
+            )
+        }
+    }
+
+    /**
+     * The other half of the gate: a real measured build must still publish. Without this, a gate
+     * that skipped everything would pass the test above and silently reproduce the very defect
+     * plan 109 exists to fix.
+     */
+    @Test
+    fun `a measured build is still published when a scaffolding task is only part of the request`() {
+        setUpProject()
+
+        val result = runner(
+            mapOf(
+                "BUILDHOUND_SAMPLE_SERVER_URL" to injectedUrl(),
+                "BUILDHOUND_SAMPLE_TOKEN" to "sample-init-token",
+            ),
+            "clean",
+            "hello",
+        ).build()
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
+        assertTrue(
+            result.output.contains("telemetry redirected to the BUILDHOUND_SAMPLE_* ingest target"),
+            "a request that does real work must still be redirected:\n${result.output}",
+        )
+        assertEquals(1, received.size, "expected one upload, got ${received.size}")
     }
 
     /** A build that does not apply BuildHound at all: the hook must no-op, never throw. */
