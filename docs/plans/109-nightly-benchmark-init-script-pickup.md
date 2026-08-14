@@ -201,10 +201,15 @@ reason.
 
 The redirect marker is deliberately *not* a per-build assertion, only a diagnostic printed when the
 upload check has already failed. `settingsEvaluated` does not run on a configuration-cache hit, so
-the marker is emitted on CC-miss builds only — visible in the archived `android-legacy-agp` log,
-which has `cc=HIT` builds among its five. Those hits still upload, because the CC entry stored on
-the cold-home first build carries the redirected Flow-action parameters. A future "improvement"
-requiring one marker per upload would redden every `cc_hit` cell; the comment in the step says so.
+the marker is emitted on CC-miss builds only, while the uploads continue because the CC entry
+replays the redirected Flow-action parameters. Counted in the archived
+`android-legacy-agp · cc_hit · full_cache` cell of run `31770996903`: 2 `cc=MISS_STORED` builds to
+3 `cc=HIT`. A future "improvement" requiring one marker per upload would redden every `cc_hit` cell;
+the comment in the step says so.
+
+(A review verifier asserted the opposite — that gradle-profiler's per-build system property makes
+every build in a `cc_hit` cell a miss. That cell's own log refutes it, which is why the ratio above
+is quoted from the artifact rather than reasoned about.)
 
 ### 4.5 Not publishing gradle-profiler's scaffolding builds
 
