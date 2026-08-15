@@ -47,8 +47,31 @@ class LostBuildFunctionalTest {
 
     private fun serverUrl() = "http://127.0.0.1:${server.address.port}"
 
+    /**
+     * The opt-in marker every run in this class is judged against — inside the fixture, never the
+     * developer's real `~/.buildhound/optin`. `optInMarkerExists` falls back to
+     * `$user.home/.buildhound/optin` when `buildhound.optin.file` is unset, and TestKit does not stub
+     * `user.home`, so an unpinned run reads whatever the host has. That would make the consent
+     * assertions below pass or fail by accident of the machine. Same convention, and the same
+     * reasoning, as `UploadFunctionalTest.ciArgs` (plan 008).
+     */
+    private fun optInFile() = File(projectDir, "optin-marker")
+
     private fun runner(vararg arguments: String): GradleRunner =
-        GradleRunner.create().withProjectDir(projectDir).withPluginClasspath().withArguments(*arguments, "--configuration-cache")
+        GradleRunner.create()
+            .withProjectDir(projectDir)
+            .withPluginClasspath()
+            // Strips the CI markers *and* every BUILDHOUND_* variable. The second half is
+            // load-bearing here: `server.url` carries a ConfigOverrides convention
+            // (BUILDHOUND_SERVER_URL), so on a developer machine that exports one, these fixtures
+            // would acquire a real ingest target — the consent cases would stop testing consent, and
+            // a synthetic `pre-consent` payload could be POSTed to a live server.
+            .withEnvironment(neutralCiEnv())
+            .withArguments(
+                *arguments,
+                "-Pbuildhound.optin.file=${optInFile().invariantSeparatorsPath}",
+                "--configuration-cache",
+            )
 
     private fun setUpPlainProject() {
         File(projectDir, "settings.gradle.kts").writeText(
@@ -217,7 +240,7 @@ class LostBuildFunctionalTest {
         )
 
         // Run 2: the developer onboards — a server appears AND they create the opt-in marker.
-        val optIn = File(projectDir, "optin-marker").apply { writeText("") }
+        optInFile().writeText("")
         File(projectDir, "settings.gradle.kts").writeText(
             """
             plugins { id("dev.buildhound") }
@@ -228,9 +251,7 @@ class LostBuildFunctionalTest {
             }
             """.trimIndent(),
         )
-        // -P rather than gradle.properties: an absolute path in a properties file is
-        // escape-mangled on Windows.
-        val result = runner("hello", "-Pbuildhound.optin.file=${optIn.invariantSeparatorsPath}").build()
+        val result = runner("hello").build()
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":hello")?.outcome)
         assertTrue(

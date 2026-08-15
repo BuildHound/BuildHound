@@ -87,15 +87,20 @@ that is never publishable is pruned by the TTL.
 
 ### 4.1 A typed skip cause
 
-`Decision.Skip(reason)` becomes `Decision.Skip(reason, cause)` with:
+`Decision.Skip(reason)` becomes `Decision.Skip(reason, cause, retryWhenServerConfigured)`:
 
 | Cause | Reason today | Marker |
 |---|---|---|
 | `TELEMETRY_DISABLED` | `telemetry disabled` | delete |
-| `NO_SERVER` | `no server configured` | **keep** |
-| `SERVER_URL_NOT_HTTP` | `server url is not http(s)` | **keep** |
+| `NO_SERVER` | `no server configured` | **keep — but only when the server gap is the sole blocker (§4.2)** |
+| `SERVER_URL_NOT_HTTP` | `server url is not http(s)` | **keep — same qualification** |
 | `LOCAL_UPLOADS_DISABLED` | `local uploads disabled` | delete |
 | `LOCAL_OPT_IN_MISSING` | `local opt-in marker missing (~/.buildhound/optin)` | delete |
+
+The qualification is not cosmetic: in the plugin's default configuration (offline,
+`requireOptInFile = true`, no marker) the reported cause is `NO_SERVER` and the marker is
+nevertheless **deleted**, because consent would have refused it too. The cause names the blocker
+that was reported; `retryWhenServerConfigured` decides the marker. §4.2 is the authority.
 
 A typed cause rather than `reason.startsWith("no server")`: the reason strings are user-facing log
 text and are expected to be reworded, which would silently flip retention behaviour.
@@ -111,8 +116,18 @@ The split is deliberate, and it is a privacy decision as much as a tidiness one:
   published. Delete, exactly as today.
 - `LOCAL_UPLOADS_DISABLED` / `TELEMETRY_DISABLED` — a standing choice not to publish. Delete.
 
-So the change never widens what leaves the machine; it only defers publication of builds that were
-always eligible.
+So the change never widens *what* leaves the machine or *where* it goes; it defers publication of
+builds whose own configuration permitted it.
+
+Stated precisely, because the loose version ("builds that were always eligible") overclaims:
+eligibility is re-derived from the **current** build's configuration on every reconcile pass, not
+recorded at crash time — `UploadGate.decide` is called with `marker.mode` but with the live
+`localBuildsEnabled` / `requireOptInFile` / `optInFileExists`. So a developer who crashes offline
+*without* consent, then creates `~/.buildhound/optin`, then configures a server, does publish a
+build recorded before they consented. That ordering behaves identically before and after this plan
+(and this plan strictly narrows the retained set), and spec §3.9 states the consent gate as an
+upload-time condition with no record-time rule — so it is out of scope here rather than introduced
+here. Recording it because a reader of §4.2 would otherwise take the stronger guarantee.
 
 **The cause alone is not enough to express that, and the first cut of this plan got it wrong (review
 finding B1, fixed before merge).** `UploadGate.decide` reports the *first* blocker, and the server
