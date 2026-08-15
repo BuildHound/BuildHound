@@ -235,7 +235,7 @@ Roadmap phases 0–4 are implemented (see the [roadmap](docs/build-telemetry-roa
   a machine-readable per-build diagnosis endpoint — a no-egress alternative to agents defaulting to
   `./gradlew --scan`.
 
-Eighteen plans remain open, of which [035](docs/plans/035-cc-miss-reason-capture.md) and
+Nineteen plans remain open, of which [035](docs/plans/035-cc-miss-reason-capture.md) and
 [037](docs/plans/037-test-quarantine-addon.md) are blocked rather than merely unstarted. The
 authoritative list, with the specific exit criterion holding each one open, is
 [docs/plans/README.md](docs/plans/README.md).
