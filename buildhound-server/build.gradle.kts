@@ -9,8 +9,9 @@ description = "Multi-tenant ingestion service and dashboard backend (Ktor)"
 
 // JDK 26 builds the code AND is the bytecode/API target for this module (plan 111) — the
 // plugin, commons and report stay at Java 21. `buildhound.toolchain` remains the local escape
-// hatch, but it has a floor of 26 here: a JDK 21 toolchain cannot compile to release 26, so
-// -Pbuildhound.toolchain=21 makes this module uncompilable rather than merely slower.
+// hatch, but it has a floor of 26 here: this module's release pins are hardcoded to 26
+// independently of buildToolchain, so ANY buildhound.toolchain value below 26 (21, 24, 25 …)
+// makes it uncompilable rather than merely slower.
 val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26
 
 java {
@@ -33,10 +34,11 @@ kotlin {
 
 
 tasks.withType<JavaCompile>().configureEach {
-    // Kotlin is API-capped by -Xjdk-release; this is the javac equivalent so the first
-    // .java file added can't silently link against >26 APIs (review finding). Modules that
-    // stay at 21 keep their own pin, so moving code here from commons is a compile error,
-    // not a runtime NoSuchMethodError (plan 111).
+    // Kotlin is API-capped by -Xjdk-release above — that is the pin doing the real work in
+    // this Kotlin-only module. This is the javac equivalent, inert until the first .java file
+    // is added, at which point it stops that file silently linking against >26 APIs (review
+    // finding). Modules that stay at 21 keep their own -Xjdk-release pin, so moving code here
+    // from commons is a compile error, not a runtime NoSuchMethodError (plan 111).
     options.release.set(26)
 }
 

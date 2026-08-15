@@ -163,9 +163,12 @@ special event.
 - JVM 21 floor for every module **except `buildhound-server`, which targets JVM 26**
   (owner decisions, see architecture decision log — plan 011 for the 21 floor, plan 111 for
   the server's 26 target); the plugin therefore requires Gradle running on JDK 21+. The
-  server ships on a JRE we control, so its floor constrains nobody outside the image. The build itself uses a JDK 26
-  toolchain (auto-provisioned; bytecode/API stay 21 via `-Xjdk-release=21`) — set
-  `buildhound.toolchain=21` in your user gradle.properties if 26 can't be provisioned.
+  server ships on a JRE we control, so its floor constrains nobody outside the image. The build
+  itself uses a JDK 26 toolchain (auto-provisioned); bytecode/API stay 21 via
+  `-Xjdk-release=21` in every module **except `buildhound-server`, which uses
+  `-Xjdk-release=26`**. Set `buildhound.toolchain=21` in your user gradle.properties if 26
+  can't be provisioned — but note that `buildhound-server` **floors the same property at 26**
+  and will not compile below it (plan 111), so that workaround is no longer whole-repo.
 - Coordinates (naming decision #6): Maven group `dev.buildhound`, plugin id
   `dev.buildhound`, packages `dev.buildhound.*`, env-var prefix `BUILDHOUND_`.
   Casing: **BuildHound** in prose/class names, `buildhound` in ids/modules/DSL.
