@@ -183,7 +183,9 @@ misleading — it will be retried. Retained skips say so; deleted skips keep the
   existing caps. If the overhead harness shows this on the finalizer axis, the fallback is to retain
   only for non-`LOCAL` modes, where a server is expected.
 - **A changed contract.** §2.1. Anyone reading `interrupted/` as "everything that was lost" is
-  unaffected — the mirror is still written on the first visit; only the marker's lifetime changes.
+  mostly unaffected — the mirror is still written the first time a marker is *visited*, and only the
+  marker's lifetime changes. "Visited" is the caveat, not "created": see the `MAX_RECONCILE` bullet
+  below, which is the one case where a marker can be pruned before it is ever mirrored.
 - **Privacy.** No new data, no new destination, and §4.2 keeps consent-gated builds unpublishable.
   The only behavioural change is *when* an already-eligible build is uploaded.
 - **A retained marker for a build that will never publish** lingers up to the TTL. That is the
