@@ -74,8 +74,16 @@ regression net. Verification is empirical and must prove the target actually mov
 - **Toolchain resolution inside the image** (above). Mitigated by proving the docker build locally
   before merge; if vendor matching fails the fix is to relax the vendor pin for the container path,
   not to restore `-Pbuildhound.toolchain=21` (which cannot work at release 26).
-- **Base-image CVE surface changes** with the digest bump — `image-scan` covers it; a
-  `security-reviewer-infra` pass on the new digests is part of §3.
+- **Base-image CVE surface changes** with the digest bump. ⚠️ **Corrected after the security
+  review:** `image-scan` does **not** cover the JRE. Trivy reports targets for the Ubuntu apt
+  layer and for each jar, but the Temurin runtime is neither — Syft lists it in the SBOM while
+  Trivy never emits a vulnerability count for it. That gap is pre-existing, not introduced here,
+  but it means the JVM component of this bump is unscanned. Compounding it, the `image-scan` job
+  sets `ignore-unfixed: true` and `continue-on-error: true`.
+- **JDK 26 is not an LTS release.** Adoptium's roadmap ends Temurin 26 support in **Sep 2026**;
+  21 runs to at least Dec 2029 and 25 (LTS) to at least Sep 2031. Combined with the scanner gap
+  above, an unpatched JVM CVE after Sep 2026 would be both unfixable upstream and invisible in CI.
+  Owner decision required — see the PR discussion.
 - **Split floors are a footgun**: a future contributor moving code between commons and server can
   now introduce a 26-only API into a 21 module. The javac `options.release` pin on each module is
   the guard that makes that a compile error rather than a runtime `NoSuchMethodError`.

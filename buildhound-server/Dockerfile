@@ -26,10 +26,16 @@ COPY buildhound-internal-adapters/build.gradle.kts buildhound-internal-adapters/
 # No -Pbuildhound.toolchain override (plan 111): this module now targets release 26, which a
 # JDK 21 toolchain cannot produce. The base image IS a JDK 26, so Gradle's toolchain
 # auto-detection satisfies the requirement locally and no per-image JDK download returns.
+# auto-download=false makes that structural rather than empirical (security review): if the
+# base image and the module's toolchain requirement ever drift apart, the build fails loudly
+# instead of silently fetching a JDK (and its checksum) from api.foojay.io at image-build time.
+# A build-time-only trust boundary — the runtime stage COPYs just the installed dist — but a
+# compromised build JDK could taint the compiled jars, so close it structurally.
 # The BuildKit cache mount keeps the Gradle user home (dependency downloads, wrapper
 # dist) across builds even when these layers invalidate; requires BuildKit/buildx.
 RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
-    ./gradlew --no-daemon :buildhound-server:dependencies --quiet > /dev/null || true
+    ./gradlew --no-daemon -Dorg.gradle.java.installations.auto-download=false \
+        :buildhound-server:dependencies --quiet > /dev/null || true
 
 COPY buildhound-commons/ buildhound-commons/
 COPY buildhound-server/ buildhound-server/
@@ -41,7 +47,8 @@ COPY buildhound-server/ buildhound-server/
 COPY buildhound-report/ buildhound-report/
 COPY docs/api/openapi.yaml docs/api/openapi.yaml
 RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
-    ./gradlew --no-daemon :buildhound-server:installDist
+    ./gradlew --no-daemon -Dorg.gradle.java.installations.auto-download=false \
+        :buildhound-server:installDist
 
 FROM eclipse-temurin:26-jre-jammy@sha256:f0904b754d3a44ff1db98aa87ece03cdba2435f300ff942ad14c60ca4c19ee83
 
