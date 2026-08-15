@@ -82,7 +82,7 @@ publish, no `mavenLocal` — a plugin change is recompiled on the next build):
 ```kotlin
 // settings.gradle.kts
 pluginManagement {
-    includeBuild("/path/to/Gradle-build-monitoring")   // dev: consume the plugin from source
+    includeBuild("/path/to/BuildHound")                // dev: consume the plugin from source
 }
 plugins {
     id("dev.buildhound")                               // dev (version supplied by the included build)

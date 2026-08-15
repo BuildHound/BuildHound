@@ -48,7 +48,7 @@ LABEL org.opencontainers.image.title="buildhound-server" \
       org.opencontainers.image.description="BuildHound ingestion service" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.url="https://buildhound.dev" \
-      org.opencontainers.image.source="https://github.com/aegis123/Gradle-build-monitoring"
+      org.opencontainers.image.source="https://github.com/BuildHound/BuildHound"
 
 RUN groupadd --system --gid 10001 buildhound \
     && useradd --system --uid 10001 --gid buildhound --home-dir /nonexistent --shell /usr/sbin/nologin buildhound
