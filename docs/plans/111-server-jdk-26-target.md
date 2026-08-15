@@ -82,6 +82,26 @@ regression net. Verification is empirical and must prove the target actually mov
 - No schema, payload, endpoint, or data-collection change — §3.2 review surface is limited to the
   base image and the build config.
 
+## Verification record (2026-08-15)
+
+Run locally before the PR, on the rebased branch:
+
+- `./gradlew build` — **BUILD SUCCESSFUL** (19m 15s).
+- Class-file major versions: `buildhound-server` **70** (Java 26); `buildhound-commons`,
+  `buildhound-gradle-plugin`, `buildhound-report`, `buildhound-internal-adapters`,
+  `buildhound-mcp`, `buildhound-addon-test-sharding` all **65** (Java 21). The split is real,
+  not just configured.
+- `docker build -f buildhound-server/Dockerfile -t buildhound-server .` from the repo root —
+  succeeded. **The Risks section's main hazard did not materialise:** the log contains no foojay
+  lookup and no JDK download, so Gradle matched the base image's own JDK 26 against the
+  `JvmVendorSpec.ADOPTIUM` pin. Removing `-Pbuildhound.toolchain=21` cost no network dependency.
+  (One earlier attempt failed at `# syntax=docker/dockerfile:1` with `DeadlineExceeded` resolving
+  the BuildKit frontend from Docker Hub — a registry-reachability blip, unrelated to this change;
+  it cleared on retry.)
+- Container smoke: `java -version` reports **Temurin 26.0.1+8**; `/health`, `/`, `/timeline.js`,
+  `/dashboard.js`, `/uplot.js`, `/openapi.yaml`, `/docs` all return 200 — JRE 26 running release-26
+  bytecode end to end.
+
 ## Exit criteria
 
 Green `./gradlew build`; class-file major version confirms 26 for server classes and 21 for

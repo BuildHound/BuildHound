@@ -7,13 +7,16 @@ plugins {
 
 description = "Multi-tenant ingestion service and dashboard backend (Ktor)"
 
-// JDK 26 builds the code; bytecode/API stay Java 21 (plan 011).
+// JDK 26 builds the code AND is the bytecode/API target for this module (plan 111) — the
+// plugin, commons and report stay at Java 21. `buildhound.toolchain` remains the local escape
+// hatch, but it has a floor of 26 here: a JDK 21 toolchain cannot compile to release 26, so
+// -Pbuildhound.toolchain=21 makes this module uncompilable rather than merely slower.
 val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26
 
 java {
-    // Keeps the variant attribute at JVM 21 — the runtime image is a JRE 21.
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    // Keeps the variant attribute at JVM 26 — the runtime image is a JRE 26 (plan 111).
+    sourceCompatibility = JavaVersion.VERSION_26
+    targetCompatibility = JavaVersion.VERSION_26
 }
 
 kotlin {
@@ -22,17 +25,19 @@ kotlin {
         if (buildToolchain == 26) vendor.set(JvmVendorSpec.ADOPTIUM)
     }
     compilerOptions {
-        // The OCI runtime image stays JRE 21.
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
-        freeCompilerArgs.add("-Xjdk-release=21")
+        // The OCI runtime image is a JRE 26 (plan 111).
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_26)
+        freeCompilerArgs.add("-Xjdk-release=26")
     }
 }
 
 
 tasks.withType<JavaCompile>().configureEach {
     // Kotlin is API-capped by -Xjdk-release; this is the javac equivalent so the first
-    // .java file added can't silently link against >21 APIs (review finding).
-    options.release.set(21)
+    // .java file added can't silently link against >26 APIs (review finding). Modules that
+    // stay at 21 keep their own pin, so moving code here from commons is a compile error,
+    // not a runtime NoSuchMethodError (plan 111).
+    options.release.set(26)
 }
 
 application {

@@ -6,9 +6,9 @@
 # Best practices applied (docs/architecture.md §OCI): multi-stage build, JRE-only runtime,
 # non-root user, OCI annotations, no secrets in layers. Base images are **digest-pinned** (plan 042):
 # the tag stays for humans, the @sha256 makes the base immutable. Refresh the digest (and re-scan) when
-# bumping — resolve with `docker buildx imagetools inspect eclipse-temurin:21-jdk-jammy`.
+# bumping — resolve with `docker buildx imagetools inspect eclipse-temurin:26-jdk-jammy`.
 
-FROM eclipse-temurin:21-jdk-jammy@sha256:9d8dcf999b0bce2453e913823595a5ff2a4e8e9e5d5241b45280d0ff069818ec AS build
+FROM eclipse-temurin:26-jdk-jammy@sha256:adafe495e9bded1d3585c9a12bb7bcdba746443337b84cdbdfc48d3350850c28 AS build
 WORKDIR /workspace
 
 # Copy the wrapper and build configuration first so dependency resolution layers cache
@@ -23,12 +23,13 @@ COPY buildhound-report/build.gradle.kts buildhound-report/
 # so settings.gradle.kts references it even in this minimal context. Only its build script is needed —
 # the server depends on neither the plugin nor this module, so no source is compiled here.
 COPY buildhound-internal-adapters/build.gradle.kts buildhound-internal-adapters/
-# -Pbuildhound.toolchain=21: bytecode is release-21 either way; skipping the per-image
-# JDK 26 download removes a network dependency (the other CI jobs prove the 26 path).
+# No -Pbuildhound.toolchain override (plan 111): this module now targets release 26, which a
+# JDK 21 toolchain cannot produce. The base image IS a JDK 26, so Gradle's toolchain
+# auto-detection satisfies the requirement locally and no per-image JDK download returns.
 # The BuildKit cache mount keeps the Gradle user home (dependency downloads, wrapper
 # dist) across builds even when these layers invalidate; requires BuildKit/buildx.
 RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
-    ./gradlew --no-daemon -Pbuildhound.toolchain=21 :buildhound-server:dependencies --quiet > /dev/null || true
+    ./gradlew --no-daemon :buildhound-server:dependencies --quiet > /dev/null || true
 
 COPY buildhound-commons/ buildhound-commons/
 COPY buildhound-server/ buildhound-server/
@@ -40,9 +41,9 @@ COPY buildhound-server/ buildhound-server/
 COPY buildhound-report/ buildhound-report/
 COPY docs/api/openapi.yaml docs/api/openapi.yaml
 RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
-    ./gradlew --no-daemon -Pbuildhound.toolchain=21 :buildhound-server:installDist
+    ./gradlew --no-daemon :buildhound-server:installDist
 
-FROM eclipse-temurin:21-jre-jammy@sha256:d63bd8d9b171999cbed8576f2c76e874dd4856791a358536e5c4d407e77edc13
+FROM eclipse-temurin:26-jre-jammy@sha256:f0904b754d3a44ff1db98aa87ece03cdba2435f300ff942ad14c60ca4c19ee83
 
 LABEL org.opencontainers.image.title="buildhound-server" \
       org.opencontainers.image.description="BuildHound ingestion service" \
