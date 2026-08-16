@@ -42,7 +42,7 @@ flowchart TD
 |---|---|---|---|
 | `buildhound-commons` | Kotlin Multiplatform (jvm today; js/native later) | 21 | Payload schema (kotlinx-serialization), `CiEnvironmentProvider` + addon SPIs — the contract everything builds against |
 | `buildhound-gradle-plugin` | Kotlin/JVM + `java-gradle-plugin` | 21 | Settings plugin: collectors, finalizer, uploader |
-| `buildhound-server` | Kotlin/JVM + Ktor, `application` | 21 | Ingest + query API, storage, rollups, regression + flaky engines, CI connectors, retention, dashboard |
+| `buildhound-server` | Kotlin/JVM + Ktor, `application` | **25** | Ingest + query API, storage, rollups, regression + flaky engines, CI connectors, retention, dashboard |
 | `buildhound-report` | Kotlin/JVM (js candidate) | 21 | Standalone HTML artifact template + renderer, embedded into the plugin and served to the dashboard |
 | `buildhound-internal-adapters` | Kotlin/JVM + `gradleApi()` (bundled with core, plan 074) | 21 | The one quarantined internal-Gradle-API module: cache origin/keys, critical-path/avoided-time, deprecation + WARN-log warnings (contributes `extensions[]`). Bundled onto the core plugin's classpath but **dormant** until a `buildhound { internalAdapters { } }` toggle is set |
 | `buildhound-addon-test-sharding` | Kotlin/JVM + `java-gradle-plugin` (opt-in addon) | 21 | Server-balanced test sharding across CI shards |
@@ -86,9 +86,24 @@ remaining opt-in modules (`addon-test-sharding`, `buildhound-mcp`) never touch t
 server — they attach through commons SPIs.*
 
 **JVM floors:** every module targets JVM 21 (owner decision, deviating from spec §3.1's
-Java 11+; see decision log). Consequence for the compatibility matrix: the plugin
-requires consumers to run Gradle on JDK 21+ — the TestKit matrix tests Gradle versions on
-a 21+ daemon JVM only.
+Java 11+; see decision log) **except `buildhound-server`, which targets JVM 25 (LTS)** (plan 111) —
+it ships as an OCI image on a JRE we control, so nothing external constrains it. Consequence
+for the compatibility matrix: the plugin requires consumers to run Gradle on JDK 21+ — the
+TestKit matrix tests Gradle versions on a 21+ daemon JVM only — and that is unaffected by the
+server's floor. A JVM-25 consumer reading the JVM-21 `buildhound-commons`/`buildhound-report`
+producers is allowed by Gradle's `org.gradle.jvm.version` attribute, so the split needs no
+shim. Each module keeps its own Kotlin `-Xjdk-release` pin (the javac `options.release` pin
+beside it is the counterpart for `.java` sources, inert while a module is Kotlin-only), so
+moving code from a 21 module into the server (or back) fails at compile time rather than at
+runtime. A new module must set **both** — `options.release` alone caps nothing in Kotlin.
+
+**Base-image bumps carry two non-obvious costs**, both found by review after CI went red: the Temurin
+`*-jre` images stopped shipping `curl`/`wget` after 21 (the deploy healthchecks used the exec form,
+so a bump is a deploy outage, not a degraded state), and `gradle/gradle-daemon-jvm.properties` pins
+the Gradle **daemon** JVM at 21 — satisfied invisibly while the build base *was* a JDK 21, and
+otherwise fetched unverified from an `api.foojay.io` redirect. Both are now closed in the Dockerfile;
+check an EOL window and both of these on any future base bump, and verify with `--no-cache` (the
+BuildKit cache mount hides a provisioning failure behind a warm layer).
 
 ## 2. Gradle plugin best practices (binding)
 
@@ -444,6 +459,7 @@ consumed verbatim by plans 037 (quarantine) and 040 (sharding):
 | 2026-07-02 | `buildhound-ci-assets` is not a Gradle module | Its consumers are CI steps without a JVM |
 | 2026-07-02 | Flow API + `ServiceReference` validated against Gradle 8.14 + CC (incl. reuse) | TestKit functional tests green — riskiest assumption of the roadmap spike confirmed |
 | 2026-07-02 | Wrapper `distributionUrl` kept on services.gradle.org | Standard, checksum-verifiable path |
+| 2026-08-15 | **`buildhound-server` targets JVM 25 (LTS); every other module stays at 21** (plan 111). `jvmTarget=25`, `-Xjdk-release=25` (the pin that actually caps the API in a Kotlin-only module), javac `release=25` (its counterpart, inert until a `.java` source appears), variant attribute 25; the build toolchain stays at JDK 26 repo-wide (a 26 toolchain emits release 25 — the support window that matters is the JRE we ship, not the compiler), the runtime image moves to digest-pinned `eclipse-temurin:25-jre-jammy`, a digest-pinned JDK 21 is COPYed in for the Gradle daemon JVM, and the deploy healthchecks move off `curl` (absent from `*-jre` images after 21) onto a bash `/dev/tcp` probe, and both `-Pbuildhound.toolchain=21` overrides are removed from the Dockerfile because a JDK 21 toolchain cannot compile to release 26. `buildhound.toolchain` therefore has an effective floor of 26 for this module only. Kotlin 2.4.10 supports `JvmTarget.JVM_26` (verified against the shipped `kotlin-gradle-plugin-api` enum, not from memory). CI needed no change — every job that compiles the server already installs JDK 26. | Owner request (2026-08-15): move the backend to a current JDK, keep the plugin on 21. **25 over 26**: 26 is non-LTS with Adoptium support ending Sep 2026 (~1 month out), while 25 runs to at least Sep 2031 — and the review proved Trivy never scans the JRE component at all, so an unpatchable JVM CVE would also have been invisible. **Narrows the two 2026-07-02 rows below**, whose "consumer floor and JRE-21 server image unchanged" no longer holds for the server. The consumer floor itself is untouched: `buildhound-commons`, `buildhound-report`, `buildhound-internal-adapters`, the addons and the plugin all stay at 21, because commons is the plugin's contract and report is embedded into the plugin at build time — raising either would raise the floor for every consumer. `buildhound-mcp` also stays at 21 deliberately: it runs on the *user's* JVM over stdio, so bumping it would impose JDK 26 on users rather than on infrastructure we operate |
 | 2026-07-02 | JVM 21 floor for **all** modules, superseding spec §3.1's "Java 11+ runtime for the plugin" | Owner decision: build with at least Java 21. Plugin consumers must run Gradle on JDK 21+ |
 | 2026-07-02 | Build toolchain is JDK 26 (foojay-provisioned), emitted bytecode/API stay Java 21 (`jvmTarget=21`, `-Xjdk-release=21`, plugin source/target 21); `buildhound.toolchain` property is the local escape hatch | Owner request (plan 011); consumer floor and JRE-21 server image unchanged |
 | 2026-07-02 | Gradle support floor is 8.14 (JDK-21 requirement; `BuildFeatures` needs 8.5+), tested by a dedicated CI floor job | Supersedes spec §3.1's "Gradle 8.0+" |

@@ -26,7 +26,7 @@ CI assets. Apache-2.0.
   the `functionalTest` source set. Must stay configuration-cache safe.
 - `buildhound-server` — Ktor ingest service (`POST /v1/builds`, `/health`), storage behind
   `BuildStore`. OCI image via `buildhound-server/Dockerfile`, local stack via
-  `deploy/compose.yaml` (TimescaleDB). JVM 21.
+  `deploy/compose.yaml` (TimescaleDB). JVM 25 (LTS) — the one module not on the 21 floor.
 - `buildhound-report` — standalone HTML artifact (zero network — enforced by test), embedded
   into the plugin at build time.
 - `buildhound-ci-assets` — deliberately **not** a Gradle module: Azure YAML template, shell
@@ -160,10 +160,16 @@ special event.
 
 ## Conventions
 
-- JVM 21 floor for **all** modules (owner decision, see architecture decision log); the
-  plugin therefore requires Gradle running on JDK 21+. The build itself uses a JDK 26
-  toolchain (auto-provisioned; bytecode/API stay 21 via `-Xjdk-release=21`) — set
-  `buildhound.toolchain=21` in your user gradle.properties if 26 can't be provisioned.
+- JVM 21 floor for every module **except `buildhound-server`, which targets JVM 25 (LTS)**
+  (owner decisions, see architecture decision log — plan 011 for the 21 floor, plan 111 for
+  the server's 25 target); the plugin therefore requires Gradle running on JDK 21+. The
+  server ships on a JRE we control, so its floor constrains nobody outside the image. The build
+  itself uses a JDK 26 toolchain (auto-provisioned) for every module — build toolchain and
+  bytecode target are separate; bytecode/API stay 21 via `-Xjdk-release=21` everywhere except
+  `buildhound-server`, which uses `-Xjdk-release=25`. Set `buildhound.toolchain=21` in your
+  user gradle.properties if 26 can't be provisioned — but note `buildhound-server` **floors
+  that property at 25** and will not compile below it (plan 111), so the workaround is no
+  longer whole-repo.
 - Coordinates (naming decision #6): Maven group `dev.buildhound`, plugin id
   `dev.buildhound`, packages `dev.buildhound.*`, env-var prefix `BUILDHOUND_`.
   Casing: **BuildHound** in prose/class names, `buildhound` in ids/modules/DSL.

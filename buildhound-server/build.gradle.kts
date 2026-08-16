@@ -7,13 +7,19 @@ plugins {
 
 description = "Multi-tenant ingestion service and dashboard backend (Ktor)"
 
-// JDK 26 builds the code; bytecode/API stay Java 21 (plan 011).
+// JDK 26 builds the code (repo-wide convention, unchanged); this module's bytecode/API target
+// is Java 25 LTS (plan 111) while the plugin, commons and report stay at Java 21. Build
+// toolchain and target are deliberately different: a JDK 26 toolchain emits release 25 fine,
+// and the support window that matters is the JRE we ship, not the compiler we build with.
+// `buildhound.toolchain` remains the local escape hatch, but it has a floor of 25 here: this
+// module's release pins are hardcoded to 25 independently of buildToolchain, so any
+// buildhound.toolchain value below 25 makes it uncompilable rather than merely slower.
 val buildToolchain = (findProperty("buildhound.toolchain") as? String)?.toIntOrNull() ?: 26
 
 java {
-    // Keeps the variant attribute at JVM 21 — the runtime image is a JRE 21.
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    // Keeps the variant attribute at JVM 25 — the runtime image is a JRE 25 LTS (plan 111).
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
 }
 
 kotlin {
@@ -22,17 +28,20 @@ kotlin {
         if (buildToolchain == 26) vendor.set(JvmVendorSpec.ADOPTIUM)
     }
     compilerOptions {
-        // The OCI runtime image stays JRE 21.
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
-        freeCompilerArgs.add("-Xjdk-release=21")
+        // The OCI runtime image is a JRE 25 LTS (plan 111).
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25)
+        freeCompilerArgs.add("-Xjdk-release=25")
     }
 }
 
 
 tasks.withType<JavaCompile>().configureEach {
-    // Kotlin is API-capped by -Xjdk-release; this is the javac equivalent so the first
-    // .java file added can't silently link against >21 APIs (review finding).
-    options.release.set(21)
+    // Kotlin is API-capped by -Xjdk-release above — that is the pin doing the real work in
+    // this Kotlin-only module. This is the javac equivalent, inert until the first .java file
+    // is added, at which point it stops that file silently linking against >25 APIs (review
+    // finding). Modules that stay at 21 keep their own -Xjdk-release pin, so moving code here
+    // from commons is a compile error, not a runtime NoSuchMethodError (plan 111).
+    options.release.set(25)
 }
 
 application {
