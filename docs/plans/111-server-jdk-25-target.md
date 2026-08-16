@@ -1,11 +1,14 @@
-# 111 — Server module targets JDK 26 (plugin stays 21)
+# 111 — Server module targets JDK 25 LTS (plugin stays 21)
 
 **Status: open.**
 
 ## Source
 
 Feature request (owner, 2026-08-15): "update JDK to use version 26 — only change for the
-backend/server modules, the plugin should stay on jdk 21". Narrows the 2026-07-02 decision-log
+backend/server modules, the plugin should stay on jdk 21". **Retargeted to 25 LTS by owner
+decision after the security review** surfaced that 26 is non-LTS with Adoptium support ending
+Sep 2026 (~1 month out) while 25 runs to at least Sep 2031, and that Trivy never scans the JRE
+component of the image at all — so an unpatchable JVM CVE would also have been invisible. Narrows the 2026-07-02 decision-log
 entries (plan 011), which set a JVM 21 floor for **all** modules and a JDK 26 build toolchain
 emitting Java 21 bytecode, explicitly leaving "consumer floor and JRE-21 server image unchanged".
 Both are partially superseded here — for `buildhound-server` only.
@@ -15,9 +18,11 @@ Both are partially superseded here — for `buildhound-server` only.
 **In:**
 - `buildhound-server` emits **Java 26** bytecode: `jvmTarget = JVM_26`, `-Xjdk-release=26`,
   `options.release = 26`, `source/targetCompatibility = 26`.
-- `buildhound-server/Dockerfile`: both stages to `eclipse-temurin:26-*-jammy` (digest-pinned,
-  digests resolved 2026-08-15), and **both** `-Pbuildhound.toolchain=21` overrides removed —
-  a JDK-21 toolchain cannot compile to release 26.
+- `buildhound-server/Dockerfile`: runtime to `eclipse-temurin:25-jre-jammy`, build stage to
+  `26-jdk-jammy`, a COPYed digest-pinned `21-jdk-jammy` for the daemon JVM (all digest-pinned,
+  resolved 2026-08-15), both `-Pbuildhound.toolchain=21` overrides removed (a JDK-21 toolchain
+  cannot compile to release 25), plus `auto-download=false` and an explicit
+  `installations.paths` so a future drift fails loudly instead of reaching for foojay.
 - `docs/architecture.md`: module-table JVM floor for the server, plus a decision-log entry
   referencing the two 2026-07-02 rows it narrows.
 - `CLAUDE.md` Conventions: "JVM 21 floor for **all** modules" is no longer true — reword to
@@ -92,23 +97,31 @@ regression net. Verification is empirical and must prove the target actually mov
 
 ## Verification record (2026-08-15)
 
-Run locally before the PR, on the rebased branch:
+**Superseded twice — recorded honestly, because both corrections came from review, not from the
+original verification.**
 
-- `./gradlew build` — **BUILD SUCCESSFUL** (19m 15s).
-- Class-file major versions: `buildhound-server` **70** (Java 26); `buildhound-commons`,
-  `buildhound-gradle-plugin`, `buildhound-report`, `buildhound-internal-adapters`,
-  `buildhound-mcp`, `buildhound-addon-test-sharding` all **65** (Java 21). The split is real,
-  not just configured.
-- `docker build -f buildhound-server/Dockerfile -t buildhound-server .` from the repo root —
-  succeeded. **The Risks section's main hazard did not materialise:** the log contains no foojay
-  lookup and no JDK download, so Gradle matched the base image's own JDK 26 against the
-  `JvmVendorSpec.ADOPTIUM` pin. Removing `-Pbuildhound.toolchain=21` cost no network dependency.
-  (One earlier attempt failed at `# syntax=docker/dockerfile:1` with `DeadlineExceeded` resolving
-  the BuildKit frontend from Docker Hub — a registry-reachability blip, unrelated to this change;
-  it cleared on retry.)
-- Container smoke: `java -version` reports **Temurin 26.0.1+8**; `/health`, `/`, `/timeline.js`,
-  `/dashboard.js`, `/uplot.js`, `/openapi.yaml`, `/docs` all return 200 — JRE 26 running release-26
-  bytecode end to end.
+*First pass (JDK 26).* `./gradlew build` green; class-file major 70 for the server and 65 for the
+other seven modules; image built; container served `/health` and every resource route. All true,
+and all insufficient:
+
+- The "no foojay lookup in the build log" check **cannot** detect toolchain provisioning, which
+  prints nothing. A 541 MB JDK was being fetched with the log clean. Absence of log evidence was
+  read as evidence of absence.
+- The green rebuild that "proved" the `auto-download=false` guard was a **warm BuildKit cache**
+  serving a JDK provisioned by the earlier unguarded build. CI, with a cold cache, went red:
+  `Cannot find a Java installation … matching {languageVersion=21}`.
+- The container smoke curls from the *host* into a published port, so it can never detect a
+  missing in-container binary — which is exactly how the `curl`-less JRE slipped through.
+
+*Second pass (JDK 25 LTS, current).* Verification rules that follow from the above, and must be
+used for any future base bump:
+
+1. `docker build --no-cache` — a warm cache hides toolchain-resolution failures.
+2. Assert on the **filesystem**, not the log: no `jdks/` directory may appear in the Gradle user
+   home during the image build.
+3. Execute the healthcheck **inside** the container (`docker exec`), never from the host.
+4. Class-file major must read **69** (Java 25) for the server and **65** for every other module.
+5. Check the base image's EOL window against today's date before pinning it.
 
 ## Exit criteria
 

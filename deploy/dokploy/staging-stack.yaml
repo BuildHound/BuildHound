@@ -21,7 +21,11 @@ services:
         tmpfs:
           size: 67108864
     healthcheck:
-      test: [CMD, curl, -fsS, "http://127.0.0.1:8080/health"]
+      # JRE 25/26 base images ship no curl or wget (the JRE 21 base did) and this is the exec
+      # form, so there is no shell PATH fallback — an outage on deploy, not a degraded state,
+      # because stop-first + failure_action:pause leaves zero healthy replicas. bash 5.1 IS
+      # present, so /dev/tcp probes /health with no added attack surface (security review).
+      test: [CMD, bash, -c, "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
       interval: 15s
       timeout: 5s
       retries: 4

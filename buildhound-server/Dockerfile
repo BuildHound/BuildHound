@@ -6,9 +6,13 @@
 # Best practices applied (docs/architecture.md §OCI): multi-stage build, JRE-only runtime,
 # non-root user, OCI annotations, no secrets in layers. Base images are **digest-pinned** (plan 042):
 # the tag stays for humans, the @sha256 makes the base immutable. Refresh the digest (and re-scan) when
-# bumping — resolve with `docker buildx imagetools inspect eclipse-temurin:26-jdk-jammy`.
+# bumping — resolve with `docker buildx imagetools inspect eclipse-temurin:25-jre-jammy`.
 
 FROM eclipse-temurin:26-jdk-jammy@sha256:adafe495e9bded1d3585c9a12bb7bcdba746443337b84cdbdfc48d3350850c28 AS build
+
+# The Gradle daemon JVM (gradle/gradle-daemon-jvm.properties, toolchainVersion=21) — digest-pinned
+# and copied, never downloaded. See the note above the priming RUN.
+COPY --from=eclipse-temurin:21-jdk-jammy@sha256:55fb9bf738f5d9b4a6c01b39337e3070d3e27370dd3c478fd1d5d3cd2233c6d8 /opt/java/openjdk /opt/java/jdk21
 WORKDIR /workspace
 
 # Copy the wrapper and build configuration first so dependency resolution layers cache
@@ -23,18 +27,27 @@ COPY buildhound-report/build.gradle.kts buildhound-report/
 # so settings.gradle.kts references it even in this minimal context. Only its build script is needed —
 # the server depends on neither the plugin nor this module, so no source is compiled here.
 COPY buildhound-internal-adapters/build.gradle.kts buildhound-internal-adapters/
-# No -Pbuildhound.toolchain override (plan 111): this module now targets release 26, which a
-# JDK 21 toolchain cannot produce. The base image IS a JDK 26, so Gradle's toolchain
-# auto-detection satisfies the requirement locally and no per-image JDK download returns.
-# auto-download=false makes that structural rather than empirical (security review): if the
-# base image and the module's toolchain requirement ever drift apart, the build fails loudly
-# instead of silently fetching a JDK (and its checksum) from api.foojay.io at image-build time.
-# A build-time-only trust boundary — the runtime stage COPYs just the installed dist — but a
-# compromised build JDK could taint the compiled jars, so close it structurally.
+# No -Pbuildhound.toolchain override (plan 111): this module targets release 25, which a JDK 21
+# toolchain cannot produce. The build base is a JDK 26, which satisfies the module's toolchain.
+#
+# TWO Java installations are needed here, and missing the second one broke CI once:
+#   * the JDK 26 build base   -> satisfies the module's `jvmToolchain` (compiles to release 25)
+#   * a JDK 21 at /opt/java/jdk21 -> satisfies gradle/gradle-daemon-jvm.properties, which pins
+#     the Gradle DAEMON JVM at 21 repo-wide. On main the build base WAS a JDK 21, so this was
+#     invisible; any base bump exposes it, and Gradle then fetches a ~200 MB JDK from an
+#     api.foojay.io redirect that carries no checksum — an unverified binary that becomes the
+#     JVM compiling the shipped artifact. Copying it from a digest-pinned image keeps the whole
+#     build offline and immutable (security review).
+#
+# auto-download=false is the guard that keeps it that way: if either installation ever stops
+# matching, the build fails loudly instead of silently reaching for foojay. Note this failure
+# hides behind the BuildKit cache mount — a warm cache serves a previously-provisioned JDK, so
+# a green rebuild proves nothing. Verify base-image changes with `docker build --no-cache`.
 # The BuildKit cache mount keeps the Gradle user home (dependency downloads, wrapper
 # dist) across builds even when these layers invalidate; requires BuildKit/buildx.
 RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
     ./gradlew --no-daemon -Dorg.gradle.java.installations.auto-download=false \
+        -Dorg.gradle.java.installations.paths=/opt/java/jdk21 \
         :buildhound-server:dependencies --quiet > /dev/null || true
 
 COPY buildhound-commons/ buildhound-commons/
@@ -48,9 +61,10 @@ COPY buildhound-report/ buildhound-report/
 COPY docs/api/openapi.yaml docs/api/openapi.yaml
 RUN --mount=type=cache,target=/root/.gradle,sharing=locked \
     ./gradlew --no-daemon -Dorg.gradle.java.installations.auto-download=false \
+        -Dorg.gradle.java.installations.paths=/opt/java/jdk21 \
         :buildhound-server:installDist
 
-FROM eclipse-temurin:26-jre-jammy@sha256:f0904b754d3a44ff1db98aa87ece03cdba2435f300ff942ad14c60ca4c19ee83
+FROM eclipse-temurin:25-jre-jammy@sha256:5bd5dbe00f40ea149de434a75029713765a2912cfc1fd770cc7c7aff007384ea
 
 LABEL org.opencontainers.image.title="buildhound-server" \
       org.opencontainers.image.description="BuildHound ingestion service" \
