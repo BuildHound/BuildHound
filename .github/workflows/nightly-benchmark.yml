@@ -91,7 +91,7 @@ jobs:
       # 8.14.5 (android-legacy-agp) cannot RUN on 26 (plan 011). Same pattern as ci.yml's
       # build-floor / overhead-budget jobs. The Android pilots use the runner image's preinstalled
       # SDK via ANDROID_HOME / ANDROID_SDK_ROOT.
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: |
